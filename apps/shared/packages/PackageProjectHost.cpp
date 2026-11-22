@@ -170,6 +170,19 @@ namespace Horo::Application::Internal {
         return impl_->current->InstalledRecord();
     }
 
+    /** @copydoc PackageProjectHost::RemovalRegistrations */
+    Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>> PackageProjectHost::RemovalRegistrations(
+        const std::filesystem::path &root, const std::uint64_t generation) const {
+        using Evidence = Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>>;
+        if (auto valid = impl_->Lane(); valid.HasError())
+            return Evidence::Failure(valid.ErrorValue());
+        if (root != impl_->policy.projectRoot || generation == 0 || generation != impl_->generation)
+            return Evidence::Failure(Failure("packages.host.project_stale"));
+        if (auto admitted = impl_->Admission(); admitted.HasError())
+            return Evidence::Failure(admitted.ErrorValue());
+        return impl_->current->RemovalRegistrations();
+    }
+
     /** @copydoc PackageProjectHost::ActivationTrustRequired */
     bool PackageProjectHost::ActivationTrustRequired(const std::filesystem::path &root) const {
         if (Generation() == 0 || root != impl_->policy.projectRoot || !impl_->current || impl_->Admission().HasError())

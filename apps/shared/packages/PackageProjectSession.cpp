@@ -1,15 +1,43 @@
 #include "PackageProjectSession.h"
 
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "PackageBehaviorReferences.h"
 
 #include <algorithm>
 #include <new>
 
 namespace Horo::Application::Internal {
     namespace {
+        using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
+        constexpr std::size_t MaximumObservedRoles = 4'096;
+
         /** @brief Explicit owner lifetime failures, distinct from portable package diagnostics. */
         Error SessionError(const char *code) {
             return Error{ErrorCode{code}, ErrorDomainId{"packages.host"}};
+        }
+
+        /** @brief Preserves previously observed behavior IDs across role reactivation for the same artifact. */
+        Result<void> MergeRegistration(PackageRemovalRegistrationEvidence &evidence, Registration observed) {
+            auto match = std::ranges::find_if(evidence.registrations, [&observed](const auto &previous) {
+                return previous.package == observed.package && previous.version == observed.version &&
+                       previous.artifact == observed.artifact && previous.moduleId == observed.moduleId;
+            });
+            if (match != evidence.registrations.end()) {
+                observed.behaviors.insert(observed.behaviors.end(), match->behaviors.begin(), match->behaviors.end());
+                std::ranges::sort(observed.behaviors);
+                const auto duplicates = std::ranges::unique(observed.behaviors);
+                observed.behaviors.erase(duplicates.begin(), duplicates.end());
+            }
+            if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors)
+                return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
+            if (match != evidence.registrations.end())
+                *match = std::move(observed);
+            else {
+                if (evidence.registrations.size() == MaximumObservedRoles)
+                    return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
+                evidence.registrations.push_back(std::move(observed));
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -22,6 +50,37 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Packages::PackageLifecycleService> lifecycle;
         std::unique_ptr<PackageApplication> application;
         Packages::GameplayPackageModuleHost *gameplayModules{};
+        std::shared_ptr<const PackageRemovalRegistrationEvidence> removalEvidence;
+        std::optional<Error> registrationFailure;
+        std::uint64_t observedActivation{};
+
+        /** @brief Retains only owned descriptors from the exact published activation; a failed capture blocks evidence admission. */
+        void ObserveRegistrations() {
+            if (!gameplayModules || registrationFailure)
+                return;
+            const auto active = lifecycle->Active();
+            if (!active || active->generation == observedActivation)
+                return;
+            try {
+                auto observed = gameplayModules->CaptureActiveRegistrations(*lifecycle);
+                if (observed.HasError()) {
+                    registrationFailure = std::move(observed).ErrorValue();
+                    return;
+                }
+                auto next = removalEvidence ? std::make_shared<PackageRemovalRegistrationEvidence>(*removalEvidence)
+                                            : std::make_shared<PackageRemovalRegistrationEvidence>();
+                for (auto &entry : std::move(observed).Value()) {
+                    if (auto merged = MergeRegistration(*next, std::move(entry)); merged.HasError()) {
+                        registrationFailure = std::move(merged).ErrorValue();
+                        return;
+                    }
+                }
+                removalEvidence = std::move(next);
+                observedActivation = active->generation;
+            } catch (const std::bad_alloc &) {
+                registrationFailure = SessionError("packages.host.registration_evidence_storage");
+            }
+        }
     };
 
     /** @copydoc PackageProjectSession::Create */
@@ -98,6 +157,18 @@ namespace Horo::Application::Internal {
         return Outcome::Success(impl_->install->InstalledRecord());
     }
 
+    /** @copydoc PackageProjectSession::RemovalRegistrations */
+    Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>> PackageProjectSession::RemovalRegistrations() const {
+        using Evidence = Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Evidence::Failure(SessionError("packages.host.owner_lane"));
+        if (impl_->closed)
+            return Evidence::Failure(SessionError("packages.host.closed"));
+        if (impl_->registrationFailure)
+            return Evidence::Failure(*impl_->registrationFailure);
+        return Evidence::Success(impl_->removalEvidence);
+    }
+
     /** @copydoc PackageProjectSession::DecisionCatalogGeneration */
     std::uint64_t PackageProjectSession::DecisionCatalogGeneration() const noexcept {
         if (std::this_thread::get_id() != impl_->owner || impl_->closed || !impl_->gameplayModules)
@@ -139,7 +210,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(SessionError("packages.host.owner_lane"));
         if (impl_->closed)
             return Result<void>::Failure(SessionError("packages.host.closed"));
-        return impl_->application->Pump(boundary);
+        impl_->ObserveRegistrations();
+        auto pumped = impl_->application->Pump(boundary);
+        impl_->ObserveRegistrations();
+        return pumped;
     }
 
     /** @copydoc PackageProjectSession::Close */

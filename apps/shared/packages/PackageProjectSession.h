@@ -15,6 +15,7 @@ namespace Horo::Packages {
 }
 
 namespace Horo::Application::Internal {
+    struct PackageRemovalRegistrationEvidence;
     struct PackageRemovalSources;
     /** @brief Short-lived exact Decision declaration leases acquired on the package owner lane. */
     using PackageDecisionNodeLeaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
@@ -123,6 +124,10 @@ namespace Horo::Application::Internal {
          * publisher/deployment trust and native lifetime. No store, restore, activation or XR dependency is introduced.
          */
         [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord() const;
+        /** @brief Copies the exact package registrations observed in this project session, including withdrawn roles.
+         * @return Inert evidence transferable to a removal worker, or typed observation failure.
+         * @details The evidence carries no module lease and makes no claim about registrations never observed in this session. */
+        [[nodiscard]] Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>> RemovalRegistrations() const;
         /** @brief Observes the already published gameplay role activation on the owner lane.
          * @return Exact generation or zero when no configured gameplay role is active. */
         [[nodiscard]] std::uint64_t DecisionCatalogGeneration() const noexcept;

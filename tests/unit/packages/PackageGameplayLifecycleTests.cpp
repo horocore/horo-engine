@@ -13,6 +13,7 @@
 #include "HostSignatureDocument.h"
 #include "OpenXRProductSigningTestSupport.h"
 #include "PackageApplicationServiceTestSupport.h"
+#include "PackageBehaviorReferences.h"
 #include "PackageHostPolicy.h"
 #include "PackageLifecycleTestSupport.h"
 #include "PackageProjectHost.h"
@@ -436,6 +437,9 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     }
     REQUIRE(application);
     CHECK_FALSE(host->DecisionCatalog(root));
+    const auto unobserved = host->RemovalRegistrations(root, host->Generation());
+    REQUIRE(unobserved.HasValue());
+    CHECK_FALSE(unobserved.Value());
     Horo::Editor::PackageModalSession modal{application};
     const auto generation = modal.Open();
     REQUIRE(generation.HasValue());
@@ -483,6 +487,16 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     REQUIRE(pump(disable.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
     CHECK_FALSE(host->DecisionCatalog(root));
     CHECK(host->AcquireDecisionNodes(root, *stamp).HasError());
+    const auto retained = host->RemovalRegistrations(root, stamp->project);
+    REQUIRE(retained.HasValue());
+    REQUIRE(retained.Value());
+    REQUIRE(retained.Value()->registrations.size() == 1);
+    const auto &registration = retained.Value()->registrations.front();
+    CHECK(registration.activationGeneration == stamp->activation);
+    CHECK(registration.package == fixture.enabled.package);
+    REQUIRE(registration.behaviors.size() == 1);
+    CHECK(registration.behaviors.front().Value() == "game.tests.package_behavior");
+    CHECK(host->RemovalRegistrations(root, stamp->project + 1).HasError());
     REQUIRE(modal.Close(generation.Value()).HasValue());
     REQUIRE(host->Close().HasValue());
 }

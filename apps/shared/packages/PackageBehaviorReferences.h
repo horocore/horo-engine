@@ -8,6 +8,12 @@ namespace Horo::Assets {
 }
 
 namespace Horo::Application::Internal {
+    /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
+     * @details Retains previously observed behavior IDs and the latest observed service descriptors per exact package artifact and role. */
+    struct PackageRemovalRegistrationEvidence final {
+        std::vector<Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
+    };
+
     /** @brief Borrowed project inputs for the saved-reference checks within the mutation lease. */
     struct PackageRemovalSources final {
         const Assets::IAssetRegistrySource &assets;
