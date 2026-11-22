@@ -178,6 +178,20 @@ namespace Horo::Navigation {
             request.filter = Id<NavigationFilterId>(99);
             CHECK(backend.Value()->FindPath(request, {}).HasError());
         }
+        SECTION("provider storage is admitted at the reported reservation and fails one byte below it") {
+            const auto prepared = PrepareRecastDetourCookedNavigationQueryBackend(info);
+            REQUIRE(prepared.HasValue());
+            const auto reservation = prepared.Value().reservedBytes;
+            REQUIRE(reservation > 0);
+            REQUIRE(reservation < info.maximumOwnedBytes);
+
+            info.maximumOwnedBytes = reservation - 1;
+            RequireError(PrepareRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::CapacityExceeded);
+            info.maximumOwnedBytes = reservation;
+            const auto exact = PrepareRecastDetourCookedNavigationQueryBackend(info);
+            REQUIRE(exact.HasValue());
+            CHECK(exact.Value().reservedBytes == reservation);
+        }
         SECTION("complete multi-partition topology cannot be collapsed into one flat native mesh") {
             info.tiles = set.tiles;
             RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
@@ -340,6 +354,38 @@ namespace Horo::Navigation {
         if (failed)
             CHECK(rejected->message == "qualification provider failed");
         CheckLastGoodGeneration(host, previous.Value(), cached);
+    }
+
+    TEST_CASE("Native provider reservations let scenes replace topology while readers retain an older generation",
+              "[unit][navigation][data_qualification][native][reload]") {
+        const NavigationDataQualificationCorpus corpus;
+        const auto authored = DecodeNavigationDefinitionRecord(corpus.Record()).Value();
+        const auto set = CookCorpus(corpus);
+        const auto payload = EncodeNavigationCookedTileSet(set, 64U * 1024U).Value();
+        const NavigationAssetBackendFactory factory = [&authored](const auto &descriptor, const auto surfaces, const auto budget) {
+            using Prepared = Result<NavigationPreparedAssetBackend>;
+            REQUIRE(surfaces.size() == 1);
+            auto info = CookedProviderInfo(*surfaces.front().partition, authored, descriptor.world, descriptor.topology);
+            info.maximumOwnedBytes = budget;
+            auto backend = PrepareRecastDetourCookedNavigationQueryBackend(info);
+            if (backend.HasError())
+                return Prepared::Failure(backend.ErrorValue());
+            auto prepared = std::move(backend).Value();
+            return Prepared::Success({std::move(prepared.backend), prepared.reservedBytes});
+        };
+        AssetTestSupport::Harness host{{.maximumReservedProviderBytes = AssetTestSupport::ProviderReservation}, factory};
+        host.Update(EnvelopeFor(set, payload));
+        REQUIRE_FALSE(host.Activate(AssetTestSupport::Definition(1, 1, {}, true, Id<SurfaceId>(1), Id<NavigationAgentProfileId>(1))));
+        auto previous = host.participant->Acquire().Value();
+        const auto reservation = host.participant->Snapshot().reservedProviderBytes;
+        REQUIRE(reservation > 0);
+        REQUIRE(reservation <= AssetTestSupport::ProviderReservation / 2);
+
+        REQUIRE_FALSE(host.Activate(AssetTestSupport::Definition(2, 2, {}, true, Id<SurfaceId>(1), Id<NavigationAgentProfileId>(1))));
+        REQUIRE(previous.IsRevoked());
+        CHECK(host.participant->Snapshot().reservedProviderBytes == 2 * reservation);
+        previous = {};
+        CHECK(host.participant->Snapshot().reservedProviderBytes == reservation);
     }
 
     TEST_CASE("An uncomposed navigation provider cannot activate the valid corpus or publish a fallback world",

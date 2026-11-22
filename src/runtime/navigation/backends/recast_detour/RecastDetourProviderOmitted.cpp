@@ -13,6 +13,11 @@ namespace Horo::Navigation {
         return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(MakeError(NavigationErrors::OperationUnsupported));
     }
 
+    /** @copydoc PrepareRecastDetourCookedNavigationQueryBackend */
+    Result<RecastDetourPreparedQueryBackend> PrepareRecastDetourCookedNavigationQueryBackend(const RecastDetourCookedProviderCreateInfo &) {
+        return Result<RecastDetourPreparedQueryBackend>::Failure(MakeError(NavigationErrors::OperationUnsupported));
+    }
+
     /** @copydoc CreateRecastDetourNavigationMeshBuilder */
     Result<std::unique_ptr<INavigationMeshBuilder>> CreateRecastDetourNavigationMeshBuilder() {
         return Result<std::unique_ptr<INavigationMeshBuilder>>::Failure(MakeError(NavigationErrors::OperationUnsupported));

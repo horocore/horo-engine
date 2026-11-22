@@ -86,6 +86,20 @@ namespace Horo::Navigation {
         std::uint64_t capabilityRevision{};
     };
 
+    /** @brief Prepared native query owner and the bounded storage reservation used to admit it. */
+    struct RecastDetourPreparedQueryBackend final {
+        std::unique_ptr<INavigationQueryBackend> backend; /**< Fully initialized immutable query provider. */
+        std::size_t reservedBytes{};                      /**< Provider budget retained until this backend is destroyed. */
+    };
+
+    /** @brief Prepare a provider and report its reservation independently of the caller's budget ceiling.
+     * @param info Exact admitted portable closure and native resource limits.
+     * @return Prepared backend with its positive reservation, or a typed error before publication.
+     * @see CreateRecastDetourCookedNavigationQueryBackend
+     */
+    [[nodiscard]] Result<RecastDetourPreparedQueryBackend> PrepareRecastDetourCookedNavigationQueryBackend(
+        const RecastDetourCookedProviderCreateInfo &info);
+
     /** @brief Creates a Detour query owner from an exact supported portable NavMesh closure.
      * @param info Exact already-admitted closure and native resource limits, borrowed during this call only.
      * @return Owned provider, or a typed error before publication. Multiple tiles, empty geometry, links, or adjacency

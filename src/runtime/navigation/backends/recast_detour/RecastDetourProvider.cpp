@@ -50,6 +50,12 @@ namespace Horo::Navigation {
             Math::Vec3 maximum;
         };
 
+        /** @brief Fully owned Detour mesh and its allocated serialized tile storage. */
+        struct PreparedMesh final {
+            NavMeshPtr mesh;
+            std::size_t tileBytes{};
+        };
+
         struct PolygonEdge final {
             std::uint32_t first{};
             std::uint32_t second{};
@@ -59,10 +65,11 @@ namespace Horo::Navigation {
         };
 
         using QueryBackend = Result<std::unique_ptr<INavigationQueryBackend>>;
+        using PreparedBackend = Result<RecastDetourPreparedQueryBackend>;
 
         /** @brief Reports shapes the flat native provider cannot represent without changing traversal semantics. */
-        [[nodiscard]] QueryBackend UnsupportedCookedShape(const char *reason) {
-            return QueryBackend::Failure(MakeError(NavigationErrors::OperationUnsupported, reason));
+        [[nodiscard]] PreparedBackend UnsupportedCookedShape(const char *reason) {
+            return PreparedBackend::Failure(MakeError(NavigationErrors::OperationUnsupported, reason));
         }
 
         [[nodiscard]] Result<void> ValidateCreateInfo(const RecastDetourProviderCreateInfo &info) {
@@ -72,8 +79,6 @@ namespace Horo::Navigation {
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
             if (!Detail::HasValidQuerySettings(info))
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
-            if (!Detail::HasValidMemoryBudget(info))
-                return Failure<void>(NavigationErrors::CapacityExceeded);
             if (!std::ranges::all_of(info.vertices, [](const Math::Vec3 vertex) {
                 return Math::IsFinite(vertex);
             }))
@@ -329,7 +334,8 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<NavMeshPtr> BuildNavMesh(const RecastDetourProviderCreateInfo &info, const NativeTopologyInput &input) {
+        [[nodiscard]] Result<PreparedMesh> BuildNavMesh(const RecastDetourProviderCreateInfo &info, const NativeTopologyInput &input,
+                                                        const std::size_t availableBytes) {
             dtNavMeshCreateParams parameters{};
             parameters.verts = input.vertices.data();
             parameters.vertCount = static_cast<int>(info.vertices.size());
@@ -352,22 +358,23 @@ namespace Horo::Navigation {
             unsigned char *rawTileData{};
             int tileDataSize{};
             if (!dtCreateNavMeshData(&parameters, &rawTileData, &tileDataSize) || rawTileData == nullptr || tileDataSize <= 0)
-                return Failure<NavMeshPtr>(NavigationErrors::ProviderFailed);
+                return Failure<PreparedMesh>(NavigationErrors::ProviderFailed);
             TileDataPtr tileData{rawTileData};
-            if (static_cast<std::size_t>(tileDataSize) > info.maximumOwnedBytes)
-                return Failure<NavMeshPtr>(NavigationErrors::CapacityExceeded);
+            const auto tileBytes = static_cast<std::size_t>(tileDataSize);
+            if (tileBytes > availableBytes)
+                return Failure<PreparedMesh>(NavigationErrors::CapacityExceeded);
 
             NavMeshPtr mesh{dtAllocNavMesh()};
             if (!mesh)
-                return Failure<NavMeshPtr>(NavigationErrors::CapacityExceeded);
+                return Failure<PreparedMesh>(NavigationErrors::CapacityExceeded);
             if (const dtStatus initialized = mesh->init(tileData.get(), tileDataSize, DT_TILE_FREE_DATA); dtStatusFailed(initialized))
-                return Failure<NavMeshPtr>(dtStatusDetail(initialized, DT_OUT_OF_MEMORY) ? NavigationErrors::CapacityExceeded
-                                                                                         : NavigationErrors::ProviderFailed);
+                return Failure<PreparedMesh>(dtStatusDetail(initialized, DT_OUT_OF_MEMORY) ? NavigationErrors::CapacityExceeded
+                                                                                           : NavigationErrors::ProviderFailed);
             if (tileData.release() != rawTileData)
-                return Failure<NavMeshPtr>(NavigationErrors::ProviderFailed);
+                return Failure<PreparedMesh>(NavigationErrors::ProviderFailed);
             if (const auto normalized = NormalizeBoundingVolumeTraversalCount(*mesh, info.polygons.size()); normalized.HasError())
-                return Result<NavMeshPtr>::Failure(normalized.ErrorValue());
-            return Result<NavMeshPtr>::Success(std::move(mesh));
+                return Result<PreparedMesh>::Failure(normalized.ErrorValue());
+            return Result<PreparedMesh>::Success({std::move(mesh), tileBytes});
         }
 
         [[nodiscard]] Result<std::vector<QuerySlot>> BuildQuerySlots(const RecastDetourProviderCreateInfo &info, const dtNavMesh &mesh) {
@@ -433,35 +440,39 @@ namespace Horo::Navigation {
         }
 
         /** @brief Shares native admission for raw callers and the exact cooked adapter. */
-        QueryBackend CreateQueryBackend(const RecastDetourProviderCreateInfo &info, const NavigationTileBuildResult *cooked) {
+        PreparedBackend CreateQueryBackend(const RecastDetourProviderCreateInfo &info, const NavigationTileBuildResult *cooked) {
             if (const auto validated = ValidateCreateInfo(info); validated.HasError())
-                return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(validated.ErrorValue());
+                return PreparedBackend::Failure(validated.ErrorValue());
+            const auto reserved = Detail::OwnedStorageReservation(info);
+            if (!reserved || *reserved >= info.maximumOwnedBytes || info.maximumOwnedBytes > RecastDetourProviderHardLimits::OwnedBytes)
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
             try {
                 auto areaRegistry = NavigationAreaRegistry::Create(info.areas, info.filters);
                 if (areaRegistry.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(areaRegistry.ErrorValue());
+                    return PreparedBackend::Failure(areaRegistry.ErrorValue());
                 for (const GroundedNavigationPolygon &polygon : info.polygons) {
                     if (const auto resolved = areaRegistry.Value().ResolveArea(polygon.area); resolved.HasError())
-                        return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(resolved.ErrorValue());
+                        return PreparedBackend::Failure(resolved.ErrorValue());
                 }
                 auto translated = TranslateTopology(info, cooked);
                 if (translated.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(translated.ErrorValue());
-                auto mesh = BuildNavMesh(info, translated.Value());
+                    return PreparedBackend::Failure(translated.ErrorValue());
+                auto mesh = BuildNavMesh(info, translated.Value(), info.maximumOwnedBytes - *reserved);
                 if (mesh.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(mesh.ErrorValue());
+                    return PreparedBackend::Failure(mesh.ErrorValue());
+                auto native = std::move(mesh).Value();
                 auto centers = BuildPolygonCenters(info);
                 if (centers.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(centers.ErrorValue());
-                auto references = BuildPolygonReferences(*mesh.Value(), info.polygons.size());
+                    return PreparedBackend::Failure(centers.ErrorValue());
+                auto references = BuildPolygonReferences(*native.mesh, info.polygons.size());
                 if (references.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(references.ErrorValue());
-                auto slots = BuildQuerySlots(info, *mesh.Value());
+                    return PreparedBackend::Failure(references.ErrorValue());
+                auto slots = BuildQuerySlots(info, *native.mesh);
                 if (slots.HasError())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(slots.ErrorValue());
+                    return PreparedBackend::Failure(slots.ErrorValue());
                 std::vector<Math::Vec3> vertices{info.vertices.begin(), info.vertices.end()};
                 std::vector<GroundedNavigationPolygon> polygons{info.polygons.begin(), info.polygons.end()};
-                RecastDetourQueryBackendData data{.mesh = std::move(mesh).Value(),
+                RecastDetourQueryBackendData data{.mesh = std::move(native.mesh),
                                                   .slots = std::move(slots).Value(),
                                                   .vertices = std::move(vertices),
                                                   .polygons = std::move(polygons),
@@ -469,10 +480,20 @@ namespace Horo::Navigation {
                                                   .polygonCenters = std::move(centers).Value(),
                                                   .polygonReferences = std::move(references).Value(),
                                                   .areaRegistry = std::move(areaRegistry).Value()};
-                return MakeRecastDetourNavigationQueryBackend(info, std::move(data));
+                auto backend = MakeRecastDetourNavigationQueryBackend(info, std::move(data));
+                if (backend.HasError())
+                    return PreparedBackend::Failure(backend.ErrorValue());
+                return PreparedBackend::Success({std::move(backend).Value(), *reserved + native.tileBytes});
             } catch (const std::bad_alloc &) {
-                return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
             }
+        }
+
+        /** @brief Preserve the provider-only API for callers without a shared residency budget. */
+        QueryBackend ExtractBackend(PreparedBackend prepared) {
+            if (prepared.HasError())
+                return QueryBackend::Failure(prepared.ErrorValue());
+            return QueryBackend::Success(std::move(prepared).Value().backend);
         }
 
         /** @brief Identity-ordered comparison of every authored build value retained by the cooked codec. */
@@ -509,36 +530,36 @@ namespace Horo::Navigation {
 
     /** @copydoc CreateRecastDetourNavigationQueryBackend */
     QueryBackend CreateRecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info) {
-        return CreateQueryBackend(info, nullptr);
+        return ExtractBackend(CreateQueryBackend(info, nullptr));
     }
 
-    /** @copydoc CreateRecastDetourCookedNavigationQueryBackend */
-    QueryBackend CreateRecastDetourCookedNavigationQueryBackend(const RecastDetourCookedProviderCreateInfo &info) {
+    /** @copydoc PrepareRecastDetourCookedNavigationQueryBackend */
+    PreparedBackend PrepareRecastDetourCookedNavigationQueryBackend(const RecastDetourCookedProviderCreateInfo &info) {
         if (info.tiles.size() != 1)
             return UnsupportedCookedShape("The cooked Detour provider requires one selected tile.");
         if (!info.tiles.front())
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::NavMeshArtifactInvalid);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::NavMeshArtifactInvalid);
         const auto &tile = *info.tiles.front();
         const auto &key = tile.Key();
         if (!info.profile.IsValid() || !info.surface.surface.IsValid() || key.profile != info.profile ||
             key.surface != info.surface.surface || key.scope != info.surface.scope)
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::StaleSnapshot);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::StaleSnapshot);
         const auto profiles = info.definition.Profiles();
         const auto authored = std::ranges::find(profiles, info.profile, &NavigationAgentProfileDescriptor::id);
         if (authored == profiles.end())
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::AgentDescriptorInvalid);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::AgentDescriptorInvalid);
         const auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
         if (descriptor.HasError())
-            return QueryBackend::Failure(descriptor.ErrorValue());
+            return PreparedBackend::Failure(descriptor.ErrorValue());
         if (BuildGeometryFields(descriptor.Value().geometry) != BuildGeometryFields(authored->buildGeometry))
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::StaleSnapshot);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::StaleSnapshot);
         const auto &cooked = tile.Topology();
         if (cooked.IsEmpty() || !cooked.offMeshLinks.empty())
             return UnsupportedCookedShape("Empty cooked geometry and off-mesh links cannot be represented by the flat provider.");
         if (cooked.vertices.size() > RecastDetourProviderHardLimits::Vertices ||
             cooked.polygons.size() > RecastDetourProviderHardLimits::Polygons ||
             cooked.polygons.size() >= info.maximumOwnedBytes / sizeof(GroundedNavigationPolygon))
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
         try {
             std::vector<GroundedNavigationPolygon> polygons;
             polygons.reserve(cooked.polygons.size());
@@ -553,9 +574,19 @@ namespace Horo::Navigation {
                 std::ranges::copy(indices, grounded.vertexIndices.begin());
                 polygons.push_back(grounded);
             }
-            return CreateQueryBackend(CookedCreateInfo(info, descriptor.Value().geometry, cooked, polygons), &cooked);
+            auto prepared = CreateQueryBackend(CookedCreateInfo(info, descriptor.Value().geometry, cooked, polygons), &cooked);
+            if (prepared.HasError())
+                return prepared;
+            auto backend = std::move(prepared).Value();
+            backend.reservedBytes += std::span{polygons}.size_bytes();
+            return PreparedBackend::Success(std::move(backend));
         } catch (const std::bad_alloc &) {
-            return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
+            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
         }
+    }
+
+    /** @copydoc CreateRecastDetourCookedNavigationQueryBackend */
+    QueryBackend CreateRecastDetourCookedNavigationQueryBackend(const RecastDetourCookedProviderCreateInfo &info) {
+        return ExtractBackend(PrepareRecastDetourCookedNavigationQueryBackend(info));
     }
 }  // namespace Horo::Navigation

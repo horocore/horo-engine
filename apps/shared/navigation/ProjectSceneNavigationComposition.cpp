@@ -82,8 +82,8 @@ namespace Horo::Application::Internal {
                                                    "The selected Detour provider requires one tile for the admitted surface."));
             const auto &geometry = partition.descriptor.geometry;
             const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
-            const auto reservation = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
-            auto backend = Nav::CreateRecastDetourCookedNavigationQueryBackend(
+            const auto providerBudget = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
+            auto backend = Nav::PrepareRecastDetourCookedNavigationQueryBackend(
                 {.world = world.world,
                  .topology = world.topology,
                  .surface = selection.surface,
@@ -93,11 +93,12 @@ namespace Horo::Application::Internal {
                  .nearestPointHalfExtents = {horizontal, geometry.heightMeters, horizontal},
                  .queryLimits = selection.policy.MaximumQuery().limits,
                  .maximumConcurrentQueries = selection.policy.Capacities().maximumConcurrentQueries,
-                 .maximumOwnedBytes = reservation,
+                 .maximumOwnedBytes = providerBudget,
                  .capabilityRevision = selection.policy.Revision().Value()});
             if (backend.HasError())
                 return Prepared::Failure(backend.ErrorValue());
-            return Prepared::Success({std::move(backend).Value(), reservation});
+            auto prepared = std::move(backend).Value();
+            return Prepared::Success({std::move(prepared.backend), prepared.reservedBytes});
         }
 
         Result<std::unique_ptr<Assets::AssetPayloadCache>> CreateNavigationTileCache(const Nav::NavigationProjectProfile &policy) {
