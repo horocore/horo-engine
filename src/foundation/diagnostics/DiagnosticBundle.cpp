@@ -393,8 +393,7 @@ namespace Horo::Diagnostics {
                     auto redacted = RedactDiagnosticText(entry.archivePath, bytes, request.summaryOnlyNamespaces);
                     if (!redacted.has_value())
                         return Result<PreparedBundleData>::Failure(
-                            MakeBundleError(ObservabilityErrors::BundleReadFailed, "A redacted diagnostic input must contain valid JSON or "
-                                                                                   "complete JSONL records within the nesting limit."));
+                            MakeBundleError(ObservabilityErrors::BundleReadFailed, "Invalid or too deeply nested JSON/JSONL."));
                     bytes = std::move(*redacted);
                 }
                 if (bytes.size() > request.maxInputBytes - std::min(request.maxInputBytes, totalPreparedBytes))

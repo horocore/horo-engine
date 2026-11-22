@@ -363,7 +363,9 @@ TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before 
     const auto input = session.directory / "nested";
     const auto output = session.directory / "bundle.zip";
     std::filesystem::path entry = "crash/nested.json";
-    SECTION("JSON crash metadata") {}
+    SECTION("JSON crash metadata") {
+        // Exercise the default JSON entry.
+    }
     SECTION("JSONL crash metadata without a trailing newline") {
         entry.replace_extension(".jsonl");
     }
