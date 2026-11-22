@@ -1240,7 +1240,9 @@ namespace Horo::AI {
             auto expected = QueryExecutionStatus::StaleInputs;
             int cancelledRequests = 0;
             SECTION("capture invalidation prevents provider admission") {
-                probe.onGenerate = [&] { probe.current = false; };
+                probe.onGenerate = [&] {
+                    probe.current = false;
+                };
                 advance();
                 CHECK(probe.generated == 1);
                 CHECK(probe.attempts == 0);
@@ -1255,7 +1257,9 @@ namespace Horo::AI {
             }
             SECTION("replacement during polling cannot publish the completed candidate") {
                 advance();
-                probe.onPoll = [&] { probe.current = false; };
+                probe.onPoll = [&] {
+                    probe.current = false;
+                };
             }
             SECTION("cancellation during polling takes precedence even if the candidate completed") {
                 advance();
