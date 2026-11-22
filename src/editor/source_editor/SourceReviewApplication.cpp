@@ -298,7 +298,53 @@ namespace Horo::Editor {
             sources.push_back(std::move(current).Value());
             return true;
         }
+
+        /** @brief Captures structural changes from one successful grouped application. */
+        bool CaptureSavedFileGroup(const SourceDocumentService &documents, const SourceFileReviewBatch &group,
+                                   std::span<const SourceReviewTrashEntry> trash, SavedSourceReview &receipt) {
+            if (!TrashReceiptsCurrent(group, trash) || group.renames.size() != group.renamedFrom.size())
+                return false;
+            const auto capture = [&](const SourceDocumentSnapshot &source) {
+                return CaptureSavedSource(documents, source, receipt.sources);
+            };
+            if (!std::ranges::all_of(group.drafts, capture) || !std::ranges::all_of(group.renames, capture))
+                return false;
+            for (const auto &original : group.renamedFrom)
+                receipt.removed.push_back(original.Identity().key.source);
+            for (const auto &entry : trash)
+                receipt.removed.push_back(entry.source.Identity().key.source);
+            return true;
+        }
     }  // namespace
+
+    /** @copydoc SavedSourceReview::VerifyDisk */
+    Result<void> SavedSourceReview::VerifyDisk(const std::filesystem::path &root, const DurableFileSystem &files,
+                                               const CancellationToken &cancellation) const {
+        const auto cancelled = [] {
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::Cancelled));
+        };
+        if (cancellation.IsCancellationRequested())
+            return cancelled();
+        if (!audit || (sources.empty() && removed.empty()))
+            return Result<void>::Failure(MakeError(Proposals::Errors::Invalid));
+        if (!sources.empty()) {
+            const auto observed = SourceBatchDiskEvidence::Capture(root, sources, files, cancellation);
+            if (observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+        }
+        for (const auto &path : removed) {
+            const auto state = Proposals::ObserveSourceDestination(path, root, files, cancellation);
+            if (cancellation.IsCancellationRequested())
+                return cancelled();
+            if (state != Proposals::SourcePathState::Absent)
+                return Result<void>::Failure(MakeError(Proposals::Errors::StaleBase));
+        }
+        if (cancellation.IsCancellationRequested())
+            return cancelled();
+        if (!std::ranges::all_of(sources, &SourceDocumentSnapshot::IsCurrent))
+            return Result<void>::Failure(MakeError(Proposals::Errors::StaleBase));
+        return Result<void>::Success();
+    }
 
     /** @copydoc QueueSourceReviewApplication */
     bool QueueSourceReviewApplication(const std::string_view project, const Proposals::ReviewDecisions &decisions,
@@ -366,17 +412,11 @@ namespace Horo::Editor {
             return !item.changed || capture(item.snapshot);
         }))
             return stale();
-        if (fileGroup_) {
-            if (!TrashReceiptsCurrent(*fileGroup_, fileGroupTrash_) || fileGroup_->renames.size() != fileGroup_->renamedFrom.size() ||
-                !std::ranges::all_of(fileGroup_->drafts, capture) || !std::ranges::all_of(fileGroup_->renames, capture))
-                return stale();
-            for (const auto &original : fileGroup_->renamedFrom)
-                removed(original);
-            for (const auto &entry : fileGroupTrash_)
-                removed(entry.source);
-        }
-        if ((draft_.Revision() && !capture(draft_)) || (renamed_.Revision() && !capture(renamed_)))
+        if (fileGroup_ && !CaptureSavedFileGroup(documents, *fileGroup_, fileGroupTrash_, receipt))
             return stale();
+        for (const auto *source : {&draft_, &renamed_})
+            if (source->Revision() && !capture(*source))
+                return stale();
         if (beforeRename_.Revision())
             removed(beforeRename_);
         if (deleted_)

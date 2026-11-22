@@ -35,6 +35,16 @@ namespace Horo::Editor {
         std::shared_ptr<const Proposals::SourceReviewAudit> audit;
         std::vector<SourceDocumentSnapshot> sources;
         std::vector<SourceDocumentId> removed;
+
+        /** @brief Checks the saved bytes and removed names without changing the workspace.
+         * @param root Authorized canonical project root.
+         * @param files Host filesystem authority.
+         * @param cancellation Observer for the enclosing validation operation.
+         * @return Success for current matching evidence, or a typed stale, disk, or cancellation error.
+         * @details Runs on an I/O worker. A successful observation is only valid for that checkpoint.
+         */
+        [[nodiscard]] Result<void> VerifyDisk(const std::filesystem::path &root, const DurableFileSystem &files,
+                                              const CancellationToken &cancellation) const;
     };
 
     /** @brief Queues an exact source review only within the current workspace and an idle command slot. */

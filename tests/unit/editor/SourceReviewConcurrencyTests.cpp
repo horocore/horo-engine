@@ -488,6 +488,7 @@ namespace {
                 CHECK(receipt.Value().sources.empty());
                 REQUIRE(receipt.Value().removed.size() == 1);
                 CHECK(receipt.Value().removed.front() == identity.key.source);
+                CHECK(receipt.Value().VerifyDisk(project.directory, files, lifetime.Token()).HasValue());
             } else {
                 CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
                 CHECK(reviews.Status().disposition == SourceReviewDisposition::Stale);
@@ -663,6 +664,9 @@ namespace {
             CHECK(receipt.Value().sources.front().Identity().key.source == destination);
             REQUIRE(receipt.Value().removed.size() == 1);
             CHECK(receipt.Value().removed.front() == identity.key.source);
+            REQUIRE(receipt.Value().VerifyDisk(project.directory, files, lifetime.Token()).HasValue());
+            project.Put("replacement", "code.cpp");
+            CHECK(receipt.Value().VerifyDisk(project.directory, files, lifetime.Token()).HasError());
         }
         SECTION("Document undo reverses text while the confirmed path stays current") {
             const auto undo = open.Documents().Undo(identity.instance, current.Revision());
@@ -974,10 +978,21 @@ namespace {
             REQUIRE(receipt.Value().sources.size() == 2);
             CHECK(receipt.Value().removed.empty());
             CHECK(std::ranges::all_of(receipt.Value().sources, &SourceDocumentSnapshot::IsCurrent));
+            REQUIRE(receipt.Value().VerifyDisk(workspace.project.directory, workspace.files, workspace.lifetime.Token()).HasValue());
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            const auto stopped = receipt.Value().VerifyDisk(workspace.project.directory, workspace.files, cancelled.Token());
+            REQUIRE(stopped.HasError());
+            CHECK(stopped.ErrorValue().code.Value() == SourceDocumentErrors::Cancelled.code.Value());
+            workspace.project.Put("other", "b.cpp");
+            CHECK(receipt.Value().VerifyDisk(workspace.project.directory, workspace.files, workspace.lifetime.Token()).HasError());
+            CHECK(receipt.Value().sources.back().IsCurrent());
+            workspace.project.Put("agent", "b.cpp");
             REQUIRE(workspace.documents.Close(workspace.a.instance).HasValue());
             REQUIRE(workspace.documents.Close(workspace.b.instance).HasValue());
             CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
             CHECK(workspace.reviews.CaptureSavedReview(workspace.documents).HasError());
+            CHECK(receipt.Value().VerifyDisk(workspace.project.directory, workspace.files, workspace.lifetime.Token()).HasError());
         }
         SECTION("Editing and restoring identical bytes invalidates the saved validation revision") {
             const auto saved = workspace.documents.Save({workspace.b.instance, applied[1].Revision(), {}}, workspace.files);
