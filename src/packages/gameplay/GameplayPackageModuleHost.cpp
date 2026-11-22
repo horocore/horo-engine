@@ -348,13 +348,13 @@ namespace Horo::Packages {
                 const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
                 if (!state || !OwnsPublishedActivation(*state, *active))
                     return Inventory::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
-                const auto &module = *state->selectedModule;
+                const auto &loaded = *state->selectedModule;
                 const auto &locked = state->verified.Package().lock;
-                auto &inventory = registrations.emplace_back(
-                    RegistrationInventory{locked.package, locked.version, locked.artifactDigest, report.generation, report.module});
-                for (const auto &behavior : module.Registry().Registrations())
+                auto &inventory =
+                    registrations.emplace_back(locked.package, locked.version, locked.artifactDigest, report.generation, report.module);
+                for (const auto &behavior : loaded.Registry().Registrations())
                     inventory.behaviors.push_back(behavior.descriptor.typeId);
-                for (const auto &service : module.Services().Registrations())
+                for (const auto &service : loaded.Services().Registrations())
                     inventory.services.push_back(service.descriptor);
             }
             return Inventory::Success(std::move(registrations));

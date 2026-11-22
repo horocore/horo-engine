@@ -2,7 +2,10 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Scene/SceneSource.h"
 #include "PackageApplicationServiceTestSupport.h"
+#include "PackageBehaviorReferences.h"
 #include "PackageProjectHost.h"
 
 #include <fstream>
@@ -137,6 +140,7 @@ namespace {
         JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
         ControlledSource source{graph.bytes};
         std::unique_ptr<PackageProjectHost> host;
+        std::shared_ptr<const Platform::IProjectReadFiles> projectReadFiles;
 
         HostFixture() {
             const auto root = std::filesystem::canonical(project.Path());
@@ -194,15 +198,23 @@ namespace {
             return {std::istreambuf_iterator<char>{input}, {}};
         }
 
-        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource() const {
+        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource() {
             auto native = Platform::CreateNativeProjectReadFiles(std::filesystem::canonical(project.Path()), "package-removal-test", 1);
             REQUIRE(native.HasValue());
-            auto registry =
-                CreateProjectAssetRegistrySource(std::move(native).Value(), {.projectIdentity = "package-removal-test",
-                                                                             .projectGeneration = 1,
-                                                                             .deadline = std::chrono::steady_clock::time_point::max()});
+            projectReadFiles = std::move(native).Value();
+            auto registry = CreateProjectAssetRegistrySource(projectReadFiles, ReadContext());
             REQUIRE(registry.HasValue());
             return std::move(registry).Value();
+        }
+
+        static Platform::ProjectReadContext ReadContext() {
+            return {.projectIdentity = "package-removal-test",
+                    .projectGeneration = 1,
+                    .deadline = std::chrono::steady_clock::time_point::max()};
+        }
+
+        PackageRemovalSources RemovalSources(const Assets::IAssetRegistrySource &assets) const {
+            return {assets, *projectReadFiles, ReadContext(), {}};
         }
 
         std::shared_ptr<PackageApplication> Acquire() {
@@ -235,7 +247,8 @@ namespace {
 
         SECTION("Failed replacement restores the exact previous request and allows retry") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
-            CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets).HasError());
+            CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
+                      .HasError());
             REQUIRE(std::filesystem::exists(journal));
             CHECK(fixture.Read("packages.json") != oldRequest);
             {
@@ -253,12 +266,14 @@ namespace {
             CHECK(fixture.Read("packages.lock") == oldLock);
             CHECK_FALSE(std::filesystem::exists(journal));
             files.SetLockWrite(MetadataFiles::LockWrite::Normal);
-            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets).HasValue());
+            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
+                        .HasValue());
         }
 
         SECTION("Committed lock with an uncertain flush keeps the new pair") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
-            const auto committed = PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets);
+            const auto committed =
+                PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets));
             REQUIRE(committed.HasValue());
             CHECK(committed.Value().recoveryDiagnostic.has_value());
             CHECK(std::filesystem::exists(journal));
@@ -289,12 +304,14 @@ namespace {
         {
             const auto sceneSave = mutations.TryAcquire(save);
             REQUIRE(sceneSave.HasValue());
-            const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, observed);
+            const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files,
+                                                              fixture.RemovalSources(observed));
             REQUIRE(blocked.HasError());
             CHECK(blocked.ErrorValue().code.Value() == "project.migration.locked");
             CHECK(fixture.Read("packages.json") != edited);
         }
-        const auto conflict = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, observed);
+        const auto conflict =
+            PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(observed));
         REQUIRE(conflict.HasError());
         CHECK(conflict.ErrorValue().code.Value() == "packages.host.metadata_conflict");
         CHECK(fixture.Read("packages.json") == edited);
@@ -314,12 +331,14 @@ namespace {
         const auto oldLock = fixture.Read("packages.lock");
         const auto oldRequest = fixture.Read("packages.json");
         fixture.Write("packages.json", oldRequest + "\n");
-        REQUIRE(PublishPackageProjectRemoval(policy, before.Value(), fixture.graph.package, files, *assets).HasError());
+        REQUIRE(
+            PublishPackageProjectRemoval(policy, before.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets)).HasError());
         CHECK(fixture.Read("packages.json") == oldRequest + "\n");
         const auto approved = PreparePackageProject(policy, files, {});
         REQUIRE(approved.HasValue());
         files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
-        REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files, *assets).HasError());
+        REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
+                    .HasError());
         const auto edited = fixture.Read("packages.json") + "\n";
         fixture.Write("packages.json", edited);
         const auto conflicted = PreparePackageProject(policy, files, {});
@@ -328,6 +347,81 @@ namespace {
         CHECK(fixture.Read("packages.json") == edited);
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+    }
+
+    TEST_CASE("Package removal reports the saved Scene and Prefab attachments of a departing behavior", "[packages][application][host]") {
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto type = Gameplay::BehaviorTypeId::Parse("game.tests.package_behavior").Value();
+        const Gameplay::BehaviorComponent behavior{.instanceId = {3}, .typeId = type, .enabled = false};
+        const auto &locked = expected.Value().application.lockedPlan->Packages().front();
+        std::array owners{Packages::GameplayPackageModuleHost::RegistrationInventory{locked.package,
+                                                                                     locked.version,
+                                                                                     locked.artifactDigest,
+                                                                                     1,
+                                                                                     "game.tests",
+                                                                                     {type},
+                                                                                     {}}};
+        auto sources = fixture.RemovalSources(*assets);
+        sources.registrations = owners;
+
+        const auto writeAsset = [&](const char *filename, const Assets::AssetId &asset, const char *kind, std::string_view bytes) {
+            auto path = policy.projectRoot / "Assets" / filename;
+            {
+                std::ofstream output{path, std::ios::binary};
+                output << bytes;
+                REQUIRE(output.good());
+            }
+            path += ".horo";
+            std::ofstream metadata{path};
+            metadata << nlohmann::json{{"schemaVersion", 1}, {"assetId", asset.ToString()}, {"assetType", kind}};
+            REQUIRE(metadata.good());
+        };
+        const auto sceneAsset = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0e").Value();
+        SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Scene Object"};
+        object.components.behaviors = {behavior};
+        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}});
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", scene);
+        const auto prefabAsset = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0f").Value();
+        Prefab::PrefabObjectNode root{.name = "Prefab Root", .behaviors = {behavior}};
+        const auto prefab =
+            Prefab::PrefabDocument::Create({.projectVersion = ParseHoroVersion("1.2.3").Value(), .assetId = prefabAsset, .objects = {root}},
+                                           Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(prefab.HasValue());
+        const auto prefabBytes = prefab.Value().SerializeCanonical();
+        REQUIRE(prefabBytes.HasValue());
+        writeAsset("Example.prefab", prefabAsset, "core.prefab", prefabBytes.Value());
+
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().code.Value() == "packages.host.behavior_in_use");
+        const auto &details = blocked.ErrorValue().diagnostics;
+        REQUIRE(details.size() == 2);
+        CHECK(details[0].location.source == "Assets/Scene.horoasset");
+        CHECK(details[0].path == "7/3");
+        CHECK(details[1].location.source == "Assets/Example.prefab");
+        CHECK(details[1].path == "0/3");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+
+        owners.front().artifact = {};
+        const auto stale = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == "packages.host.behavior_ownership_stale");
+        owners.front().artifact = locked.artifactDigest;
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", "{");
+        const auto unreadable = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(unreadable.HasError());
+        CHECK(unreadable.ErrorValue().code.Value() == "packages.host.scene_reference_unreadable");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
     TEST_CASE("Package removal reports every affected native asset importer before changing metadata", "[packages][application][host]") {
@@ -355,7 +449,8 @@ namespace {
 
         const auto oldRequest = fixture.Read("packages.json");
         const auto oldLock = fixture.Read("packages.lock");
-        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, *assets);
+        const auto blocked =
+            PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(*assets));
         REQUIRE(blocked.HasError());
         CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
         const auto &diagnostics = blocked.ErrorValue().diagnostics;
@@ -368,7 +463,8 @@ namespace {
         CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
 
         writeAsset("Invalid.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0c", 23);
-        const auto incomplete = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, *assets);
+        const auto incomplete =
+            PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(*assets));
         REQUIRE(incomplete.HasError());
         CHECK(incomplete.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
         CHECK(fixture.Read("packages.json") == oldRequest);

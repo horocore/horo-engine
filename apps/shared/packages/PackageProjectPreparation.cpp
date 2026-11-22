@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Packages/PackageRestoreErrors.h"
+#include "PackageBehaviorReferences.h"
 #include "PackageProjectSession.h"
 
 #include <algorithm>
@@ -322,26 +323,35 @@ namespace Horo::Application::Internal {
             return Publication::Success({});
         }
 
-        /** @brief Reports each asset that would lose its current reimport provider. */
-        Result<void> CheckImporterReferences(const Assets::IAssetRegistrySource &assets,
-                                             const Packages::PackageRemovalGraphPreview &impact) {
-            const auto references = InspectPackageRemovalImporters(assets, impact);
-            if (references.HasError())
-                return Result<void>::Failure(references.ErrorValue());
-            if (references.Value().empty())
+        /** @brief Reports both supported reference categories before creating the new metadata. */
+        Result<void> CheckRemovalReferences(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                            const Packages::PackageRemovalGraphPreview &impact) {
+            const auto importers = InspectPackageRemovalImporters(sources.assets, impact);
+            if (importers.HasError())
+                return Result<void>::Failure(importers.ErrorValue());
+            const auto behaviors =
+                InspectPackageBehaviorReferences(sources.assets, sources.files, sources.context, sources.registrations, lock, impact);
+            if (behaviors.HasError())
+                return Result<void>::Failure(behaviors.ErrorValue());
+            if (importers.Value().empty() && behaviors.Value().empty())
                 return Result<void>::Success();
-            Error blocked{ErrorCode{"packages.host.importer_in_use"}, ErrorDomainId{"packages.host"}};
-            for (const auto &reference : references.Value())
-                blocked.diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_in_use"}, DiagnosticSeverity::Error,
-                                                 std::string{reference.package.Value()}, SourceLocation{"packages.host"},
-                                                 reference.assetPath);
+            constexpr auto ImporterInUse = "packages.host.importer_in_use";
+            constexpr auto BehaviorInUse = "packages.host.behavior_in_use";
+            Error blocked{ErrorCode{importers.Value().empty() ? BehaviorInUse : ImporterInUse}, ErrorDomainId{"packages.host"}};
+            for (const auto &reference : importers.Value())
+                blocked.diagnostics.emplace_back(DiagnosticCode{ImporterInUse}, DiagnosticSeverity::Error, reference.package.Value(),
+                                                 SourceLocation{"packages.host"}, reference.assetPath);
+            for (const auto &reference : behaviors.Value())
+                blocked.diagnostics.emplace_back(DiagnosticCode{BehaviorInUse}, DiagnosticSeverity::Error,
+                                                 reference.package.Value() + ": " + std::string{reference.type.Value()},
+                                                 SourceLocation{reference.assetPath},
+                                                 std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
             return Result<void>::Failure(std::move(blocked));
         }
 
         /** @brief Constructs replacement documents after checking departing importers against current assets. */
         Result<MetadataDocuments> PrepareRemovalDocuments(const MetadataDocuments &previous, const Packages::PackageLockfileLimits &limits,
-                                                          const Packages::HoroPackageId &package,
-                                                          const Assets::IAssetRegistrySource &assets) {
+                                                          const Packages::HoroPackageId &package, const PackageRemovalSources &sources) {
             using Prepared = Result<MetadataDocuments>;
             const auto validated = ValidateDocuments(previous.request, previous.lock, limits);
             if (validated.HasError())
@@ -349,7 +359,7 @@ namespace Horo::Application::Internal {
             const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
             if (plan.HasError())
                 return Prepared::Failure(plan.ErrorValue());
-            if (auto references = CheckImporterReferences(assets, plan.Value().graph); references.HasError())
+            if (auto references = CheckRemovalReferences(sources, validated.Value().lock, plan.Value().graph); references.HasError())
                 return Prepared::Failure(references.ErrorValue());
             MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
             if (!next.Fits(limits))
@@ -398,7 +408,7 @@ namespace Horo::Application::Internal {
     Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                     const PreparedPackageProject &expected,
                                                                     const Packages::HoroPackageId &package, DurableFileSystem &files,
-                                                                    const Assets::IAssetRegistrySource &assets) {
+                                                                    const PackageRemovalSources &sources) {
         using Publication = Result<PackageMetadataPublication>;
         const auto directory = MetadataPath(policy.projectRoot);
         if (directory.HasError())
@@ -417,7 +427,7 @@ namespace Horo::Application::Internal {
             return Publication::Failure(previous.ErrorValue());
         if (!previous.Value().Matches(expected))
             return Publication::Failure(MetadataConflict());
-        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, assets);
+        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, sources);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
         if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value()); stable.HasError())

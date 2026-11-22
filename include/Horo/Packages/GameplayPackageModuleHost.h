@@ -93,7 +93,7 @@ namespace Horo::Packages {
             PackageVersion version;
             Sha256Digest artifact;
             std::uint64_t activationGeneration;
-            std::string module;
+            std::string moduleId;
             std::vector<Gameplay::BehaviorTypeId> behaviors;
             std::vector<Gameplay::GameplayServiceDescriptor> services;
         };

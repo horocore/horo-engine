@@ -15,6 +15,7 @@ namespace Horo::Packages {
 }
 
 namespace Horo::Application::Internal {
+    struct PackageRemovalSources;
     /** @brief Short-lived exact Decision declaration leases acquired on the package owner lane. */
     using PackageDecisionNodeLeaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
 
@@ -74,15 +75,16 @@ namespace Horo::Application::Internal {
     /** @brief Publishes the pair for an approved removal and keeps an undo journal until the pair is durable.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.
-     * @param assets Read source bound to the same project's current assets.
-     * @pre The caller has checked other references and executable ownership for this snapshot and approved this removal.
+     * @param sources Read authorities for the same project and exact registration evidence.
+     * @pre The caller has checked remaining reference classes, completeness of registration evidence and executable ownership,
+     * and approved this removal.
      * @details Acquires the shared project mutation lease before recovery or reference scans and retains it through publication.
      * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                                   const PreparedPackageProject &expected,
                                                                                   const Packages::HoroPackageId &package,
                                                                                   DurableFileSystem &files,
-                                                                                  const Assets::IAssetRegistrySource &assets);
+                                                                                  const PackageRemovalSources &sources);
 
     /** @brief Owns all project package authorities; aliasing application leases pin this entire owner.
      * @details Create/Pump/Close and final destruction belong to one host lane. The host retains its explicit session until

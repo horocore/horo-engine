@@ -6,15 +6,16 @@ configure_file(shared/packages/PackageProjectSession.h "${HORO_PACKAGE_HOST_HEAD
 configure_file(shared/packages/PackageProjectHost.h "${HORO_PACKAGE_HOST_HEADERS}/PackageProjectHost.h" COPYONLY)
 configure_file(shared/packages/PackageHostPolicy.h "${HORO_PACKAGE_HOST_HEADERS}/PackageHostPolicy.h" COPYONLY)
 configure_file(shared/packages/ApprovedGameplayPackageHost.h "${HORO_PACKAGE_HOST_HEADERS}/ApprovedGameplayPackageHost.h" COPYONLY)
+configure_file(shared/packages/PackageBehaviorReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageBehaviorReferences.h" COPYONLY)
 add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.cpp shared/packages/PackageProjectPreparation.cpp
-    shared/packages/PackageProjectRemovalReferences.cpp
+    shared/packages/PackageProjectRemovalReferences.cpp shared/packages/PackageBehaviorReferences.cpp
     shared/packages/PackageProjectHost.cpp shared/packages/PackageProjectMetadata.cpp shared/packages/PackageHostPolicy.cpp
     shared/packages/ApprovedGameplayPackageHost.cpp)
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
 target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
 target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication
     PRIVATE HoroEngine::PackageGameplayHost HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets
-        HoroEngine::ProjectMutationGuard)
+        HoroEngine::ProjectMutationGuard HoroEngine::ProjectReadFilesApi HoroEngine::SceneSource HoroEngine::PrefabAuthoring)
 
 # One application-owned signature document codec, shared by the package CLI and
 # explicit installed-host bootstrap. The staged interface is never installed.
