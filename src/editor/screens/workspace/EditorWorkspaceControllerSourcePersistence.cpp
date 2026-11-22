@@ -89,6 +89,8 @@ namespace Horo::Editor {
         host.RefreshDocuments();
         RefreshUiCanvasProjection();
         auto &sources = m_viewModel.sourceDocuments;
+        m_viewModel.appliedReviewSource = {};
+        const auto active = host.ActiveDocument();
         std::size_t index = 0;
         for (const auto &tab : host.DocumentTabs()) {
             if (tab.identity.key.kind != DocumentKind::Source)
@@ -102,6 +104,8 @@ namespace Horo::Editor {
                     sources.emplace_back();
                 continue;
             }
+            if (active == tab.identity.instance && m_sourceReviews.IsAppliedSource(source.Value()))
+                m_viewModel.appliedReviewSource = source.Value();
             const auto first = sources.begin() + static_cast<std::ptrdiff_t>(slot);
             if (const auto cached = std::find_if(first, sources.end(),
                                                  [&](const SourceDocumentSnapshot &candidate) {

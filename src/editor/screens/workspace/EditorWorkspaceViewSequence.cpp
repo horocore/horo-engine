@@ -16,14 +16,16 @@
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Shows diagnostics of the unchanged source bytes behind an open proposal review. */
+        /** @brief Shows language evidence for a proposal baseline or its exact applied buffer. */
         void DrawSourceReviewDiagnostics(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
-                                         const SourceEditorView &presentation) {
-            if (presentation.widget.ReviewStatus() != SourceReviewStatus::Ready)
+                                         const SourceEditorView &presentation, const bool applied) {
+            const bool reviewing = presentation.widget.ReviewStatus() == SourceReviewStatus::Ready;
+            if (!reviewing && !applied)
                 return;
             const auto &locale = context.localization;
-            const auto counts = presentation.ReviewDiagnostics(source);
-            const auto text = counts ? std::format("{} · {} {} · {} {}", locale.Get("editor", "workspace.source_review.source_diagnostics"),
+            const auto counts = presentation.CurrentDiagnostics(source);
+            const auto *label = reviewing ? "workspace.source_review.source_diagnostics" : "workspace.source_review.applied_diagnostics";
+            const auto text = counts ? std::format("{} · {} {} · {} {}", locale.Get("editor", label),
                                                    locale.Get("editor", "workspace.source_review.errors"), counts->errors,
                                                    locale.Get("editor", "workspace.source_review.warnings"), counts->warnings)
                                      : locale.Get("editor", "workspace.source_review.diagnostics_unavailable");
@@ -493,7 +495,8 @@ namespace Horo::Editor {
         const bool scriptFocus = DrawScriptDiagnosticJump(m_context, source, projection, widget);
         DrawSourceLanguageActions(m_context, source, widget, viewModel, outCommand);
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
-        DrawSourceReviewDiagnostics(m_context, source, *presentation);
+        DrawSourceReviewDiagnostics(m_context, source, *presentation,
+                                    source.IsCurrent() && source.SharesStateWith(viewModel.appliedReviewSource));
         const bool focus =
             languageFocus || scriptFocus || m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();

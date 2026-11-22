@@ -213,6 +213,7 @@ namespace {
             "workspace.source_review.conflict",
             "workspace.source_review.dismiss",
             "workspace.source_review.source_diagnostics",
+            "workspace.source_review.applied_diagnostics",
             "workspace.source_review.errors",
             "workspace.source_review.warnings",
             "workspace.source_review.diagnostics_unavailable",

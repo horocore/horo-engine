@@ -114,7 +114,7 @@ TEST_CASE("Source review retains language diagnostics only for its current sourc
     view.Publish(source);
     const auto overlay = Overlay(source, {{0, "a", "A"}});
     REQUIRE(view.widget.PresentReview(overlay));
-    CHECK_FALSE(view.ReviewDiagnostics(source));
+    CHECK_FALSE(view.CurrentDiagnostics(source));
 
     const auto diagnostics = [](const SourceDocumentSnapshot &forSource) {
         return std::make_shared<const Language::LanguageResult>(
@@ -123,31 +123,31 @@ TEST_CASE("Source review retains language diagnostics only for its current sourc
                                          {{{0, 1}, Error, "error"}, {{1, 2}, Warning, "warning"}, {{2, 3}, Hint, "hint"}}}});
     };
     view.PublishDiagnostics(source, diagnostics(other));
-    CHECK_FALSE(view.ReviewDiagnostics(source));
+    CHECK_FALSE(view.CurrentDiagnostics(source));
 
     view.PublishDiagnostics(source,
                             std::make_shared<const Language::LanguageResult>(
                                 Language::LanguageResult{.context = {.source = source}, .payload = Language::LanguageDiagnostics{}}));
-    const auto clean = view.ReviewDiagnostics(source);
+    const auto clean = view.CurrentDiagnostics(source);
     REQUIRE(clean);
     CHECK(clean->errors == 0);
     CHECK(clean->warnings == 0);
 
     const auto exact = diagnostics(source);
     view.PublishDiagnostics(source, exact);
-    const auto counts = view.ReviewDiagnostics(source);
+    const auto counts = view.CurrentDiagnostics(source);
     REQUIRE(counts);
     CHECK(counts->errors == 1);
     CHECK(counts->warnings == 1);
-    CHECK_FALSE(view.ReviewDiagnostics(other));
+    CHECK_FALSE(view.CurrentDiagnostics(other));
     CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().SharesStateWith(source));
 
     const auto change = fixture.documents.Documents().Edit(source.Identity().instance, {source.Revision(), 0, 1, "b"});
     REQUIRE(change.HasValue());
-    CHECK_FALSE(view.ReviewDiagnostics(source));
+    CHECK_FALSE(view.CurrentDiagnostics(source));
     view.Publish(change.Value());
     view.PublishDiagnostics(change.Value(), exact);
-    CHECK_FALSE(view.ReviewDiagnostics(change.Value()));
+    CHECK_FALSE(view.CurrentDiagnostics(change.Value()));
     CHECK(view.widget.ReviewStatus() == SourceReviewStatus::Conflicted);
 }
 

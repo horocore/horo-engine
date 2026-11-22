@@ -81,6 +81,36 @@ namespace {
         }
     };
 
+    TEST_CASE("Applied source validation follows exact changed buffers and retires after edits or undo", "[editor][source][review]") {
+        ReviewWorkspace workspace;
+        const auto before = workspace.Snapshots();
+        CHECK_FALSE(workspace.reviews.IsAppliedSource(before[0]));
+        REQUIRE(workspace.Process(workspace.Queue("validation", "changed")));
+        workspace.Drain();
+        const auto applied = workspace.Snapshots();
+        REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        CHECK_FALSE(workspace.reviews.IsAppliedSource(before[0]));
+        CHECK(workspace.reviews.IsAppliedSource(applied[0]));
+        CHECK(workspace.reviews.IsAppliedSource(applied[1]));
+        CHECK(applied[0].Dirty());
+        CHECK(applied[1].Dirty());
+
+        SECTION("Editing one buffer retires only its validation receipt") {
+            const auto edited = workspace.documents.Edit(workspace.a.instance, {applied[0].Revision(), 0, 1, "C"});
+            REQUIRE(edited.HasValue());
+            CHECK_FALSE(workspace.reviews.IsAppliedSource(applied[0]));
+            CHECK_FALSE(workspace.reviews.IsAppliedSource(edited.Value()));
+            CHECK(workspace.reviews.IsAppliedSource(applied[1]));
+        }
+        SECTION("Group undo retires all applied validation receipts") {
+            EditorWorkspaceViewCommandData undo;
+            REQUIRE(workspace.reviews.QueueUndo(workspace.lifetime.Token(), undo));
+            REQUIRE(workspace.Process(undo));
+            CHECK_FALSE(workspace.reviews.IsAppliedSource(applied[0]));
+            CHECK_FALSE(workspace.reviews.IsAppliedSource(workspace.Snapshots()[0]));
+        }
+    }
+
     TEST_CASE("Redacted source review history survives reopening without restoring edit authority", "[editor][source][review][history]") {
         ReviewWorkspace workspace;
         ProjectMutationCoordinator mutations{workspace.files};

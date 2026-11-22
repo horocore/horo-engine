@@ -1058,6 +1058,7 @@
     "workspace.source_review.conflict": { "text": "The source changed. Request a new proposal to review it." },
     "workspace.source_review.dismiss": { "text": "Dismiss review" },
     "workspace.source_review.source_diagnostics": { "text": "Current source diagnostics" },
+    "workspace.source_review.applied_diagnostics": { "text": "Applied source diagnostics" },
     "workspace.source_review.errors": { "text": "Errors" },
     "workspace.source_review.warnings": { "text": "Warnings" },
     "workspace.source_review.diagnostics_unavailable": { "text": "No language diagnostics for this source revision." },

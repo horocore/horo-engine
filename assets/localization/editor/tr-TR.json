@@ -1058,6 +1058,7 @@
     "workspace.source_review.conflict": { "text": "Kaynak değişti. İncelemek için yeni bir öneri isteyin." },
     "workspace.source_review.dismiss": { "text": "İncelemeyi kapat" },
     "workspace.source_review.source_diagnostics": { "text": "Güncel kaynak tanıları" },
+    "workspace.source_review.applied_diagnostics": { "text": "Uygulanan kaynağın tanıları" },
     "workspace.source_review.errors": { "text": "Hata" },
     "workspace.source_review.warnings": { "text": "Uyarı" },
     "workspace.source_review.diagnostics_unavailable": { "text": "Bu kaynak revizyonu için dil tanısı yok." },

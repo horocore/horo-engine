@@ -80,6 +80,11 @@ namespace Horo::Editor {
                                              const ProjectMutationCoordinator *mutations, DurableFileSystem *files);
         /** @brief Reads the latest feedback and whether every changed document still permits group undo. */
         [[nodiscard]] Proposals::SourceTransactionStatus Status() const noexcept;
+        /** @brief Identifies an unchanged live buffer published by the latest applied review.
+         * @param source Current source publication from the workspace document owner.
+         * @return True for a changed edit, draft, or rename whose exact application receipt remains current.
+         */
+        [[nodiscard]] bool IsAppliedSource(const SourceDocumentSnapshot &source) const noexcept;
         /** @brief Stages one grouped undo when its receipt remains current. */
         [[nodiscard]] bool QueueUndo(const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) const;
 

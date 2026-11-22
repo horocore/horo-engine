@@ -31,11 +31,11 @@ namespace Horo::Editor {
         void Publish(const SourceDocumentSnapshot &source);
         /** @brief Presents diagnostics for the exact source publication, or clears retired decorations. */
         void PublishDiagnostics(const SourceDocumentSnapshot &source, std::shared_ptr<const Language::LanguageResult> result);
-        /** @brief Returns a read-only baseline for a live review of the supplied source.
+        /** @brief Returns read-only counts for the supplied current source.
          * @param source The current authoritative source publication.
-         * @return Counts when that exact revision has language evidence and a current review.
+         * @return Counts when that exact revision has language evidence.
          */
-        [[nodiscard]] std::optional<SourceReviewDiagnosticCounts> ReviewDiagnostics(const SourceDocumentSnapshot &source) const;
+        [[nodiscard]] std::optional<SourceReviewDiagnosticCounts> CurrentDiagnostics(const SourceDocumentSnapshot &source) const;
         /** @brief Selects an exact language destination once in this presentation. */
         [[nodiscard]] bool ApplyLanguageFocus(const SourceDocumentSnapshot &source,
                                               const std::shared_ptr<const Language::LanguageSourceFocus> &focus);

@@ -315,6 +315,23 @@ namespace Horo::Editor {
                 Disposition()};
     }
 
+    /** @copydoc SourceReviewTransactions::IsAppliedSource */
+    bool SourceReviewTransactions::IsAppliedSource(const SourceDocumentSnapshot &source) const noexcept {
+        if (!audit_ || reverted_ || !source.IsCurrent())
+            return false;
+        const auto matches = [&source](const SourceDocumentSnapshot &candidate) {
+            return source.SharesStateWith(candidate);
+        };
+        const auto &edits = fileGroup_ ? fileGroup_->edits : batch_;
+        if (std::ranges::any_of(edits.Items(), [&matches](const SourceBatchItem &item) {
+            return item.changed && matches(item.snapshot);
+        }))
+            return true;
+        if (fileGroup_)
+            return std::ranges::any_of(fileGroup_->drafts, matches) || std::ranges::any_of(fileGroup_->renames, matches);
+        return matches(draft_) || matches(renamed_);
+    }
+
     /** @copydoc SourceReviewTransactions::Disposition */
     Proposals::SourceReviewDisposition SourceReviewTransactions::Disposition() const noexcept {
         using enum Proposals::SourceReviewDisposition;

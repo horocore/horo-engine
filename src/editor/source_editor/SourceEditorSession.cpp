@@ -60,10 +60,9 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc SourceEditorView::ReviewDiagnostics */
-    std::optional<SourceReviewDiagnosticCounts> SourceEditorView::ReviewDiagnostics(const SourceDocumentSnapshot &source) const {
-        if (widget.ReviewStatus() != SourceReviewStatus::Ready || !diagnostics || !source.IsCurrent() ||
-            !source.SharesStateWith(diagnostics->context.source))
+    /** @copydoc SourceEditorView::CurrentDiagnostics */
+    std::optional<SourceReviewDiagnosticCounts> SourceEditorView::CurrentDiagnostics(const SourceDocumentSnapshot &source) const {
+        if (!diagnostics || !source.IsCurrent() || !source.SharesStateWith(diagnostics->context.source))
             return std::nullopt;
         return diagnosticCounts_;
     }

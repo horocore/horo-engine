@@ -1256,6 +1256,7 @@ namespace Horo::Editor {
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        SourceDocumentSnapshot appliedReviewSource; /**< Exact active buffer from the latest live source review receipt. */
         std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
         std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
         std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;

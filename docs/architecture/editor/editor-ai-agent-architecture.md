@@ -1136,6 +1136,10 @@ source revision behind the proposal. The counts come from the existing language
 service publication. They describe the current buffer and never certify the
 proposed replacement text. When the source changes, the original review
 conflicts and its counts are withdrawn.
+After the user applies a review, an open source tab can show the language
+findings for its exact applied buffer. A later edit retires this association.
+The buffer remains in the source owner and applying the review grants no build
+or test authority.
 
 The workspace can also capture up to sixteen selected IDs from the current
 ordinary Scene for a separate local-model review. The capture identifies the
