@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -327,41 +328,70 @@ namespace Horo::Application::Internal {
             return Publication::Success({});
         }
 
-        /** @brief Reports supported reference categories before creating the new metadata. */
+        /** @brief Keeps the most relevant scan failure while preserving diagnostics from independent scans. */
+        void RecordRemovalFailure(std::optional<Error> &blocking, Error failure) {
+            if (!blocking) {
+                blocking = std::move(failure);
+                return;
+            }
+            if (failure.diagnostics.empty()) {
+                blocking->diagnostics.emplace_back(DiagnosticCode{failure.code.Value()}, DiagnosticSeverity::Error,
+                                                   std::move(failure.message), SourceLocation{failure.domain.Value()}, "");
+                return;
+            }
+            std::ranges::move(failure.diagnostics, std::back_inserter(blocking->diagnostics));
+        }
+
+        /** @brief Converts confirmed references to the same diagnostics used for incomplete inventory. */
+        void AppendImporterReferences(std::vector<Diagnostic> &diagnostics, std::span<const PackageImporterReference> references) {
+            for (const auto &reference : references)
+                diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_in_use"}, DiagnosticSeverity::Error,
+                                         reference.package.Value(), SourceLocation{"packages.host"}, reference.assetPath);
+        }
+
+        /** @brief Retains the asset, object, and attachment identity for each confirmed use. */
+        void AppendBehaviorReferences(std::vector<Diagnostic> &diagnostics, std::span<const PackageBehaviorReference> references) {
+            for (const auto &reference : references)
+                diagnostics.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
+                                         reference.package.Value() + ": " + std::string{reference.type.Value()},
+                                         SourceLocation{reference.assetPath},
+                                         std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
+        }
+
+        /** @brief Reports confirmed references even when another reference category cannot be fully inspected. */
         Result<void> CheckRemovalReferences(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
                                             const Packages::PackageRemovalGraphPreview &impact) {
+            std::optional<Error> blocking;
             if (auto coverage = CheckRemovalRegistrationCoverage(sources, lock, impact); coverage.HasError())
-                return coverage;
-            const auto importers = InspectPackageRemovalImporters(sources.assets, impact);
+                RecordRemovalFailure(blocking, std::move(coverage).ErrorValue());
+
+            std::vector<Diagnostic> references;
+            auto importers = InspectPackageRemovalImporters(sources.assets, impact);
             if (importers.HasError())
-                return Result<void>::Failure(importers.ErrorValue());
-            const auto behaviors =
+                RecordRemovalFailure(blocking, std::move(importers).ErrorValue());
+            else
+                AppendImporterReferences(references, importers.Value());
+
+            auto behaviors =
                 InspectPackageBehaviorReferences(sources.assets, sources.files, sources.context, sources.registrations, lock, impact);
             if (behaviors.HasError())
-                return Result<void>::Failure(behaviors.ErrorValue());
+                RecordRemovalFailure(blocking, std::move(behaviors).ErrorValue());
+            else
+                AppendBehaviorReferences(references, behaviors.Value());
+
             auto services = InspectPackageServiceReferences(sources, lock, impact);
             if (services.HasError())
-                return Result<void>::Failure(services.ErrorValue());
-            if (importers.Value().empty() && behaviors.Value().empty() && services.Value().empty())
+                RecordRemovalFailure(blocking, std::move(services).ErrorValue());
+            else
+                std::ranges::move(services.Value(), std::back_inserter(references));
+
+            if (!blocking && references.empty())
                 return Result<void>::Success();
-            constexpr auto ImporterInUse = "packages.host.importer_in_use";
-            constexpr auto BehaviorInUse = "packages.host.behavior_in_use";
-            Error blocked{services.Value().empty() ? ErrorCode{BehaviorInUse} : ErrorCode{services.Value().front().code.Value()},
-                          ErrorDomainId{"packages.host"}};
-            if (!behaviors.Value().empty())
-                blocked.code = ErrorCode{BehaviorInUse};
-            if (!importers.Value().empty())
-                blocked.code = ErrorCode{ImporterInUse};
-            blocked.diagnostics = std::move(services).Value();
-            for (const auto &reference : importers.Value())
-                blocked.diagnostics.emplace_back(DiagnosticCode{ImporterInUse}, DiagnosticSeverity::Error, reference.package.Value(),
-                                                 SourceLocation{"packages.host"}, reference.assetPath);
-            for (const auto &reference : behaviors.Value())
-                blocked.diagnostics.emplace_back(DiagnosticCode{BehaviorInUse}, DiagnosticSeverity::Error,
-                                                 reference.package.Value() + ": " + std::string{reference.type.Value()},
-                                                 SourceLocation{reference.assetPath},
-                                                 std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
-            return Result<void>::Failure(std::move(blocked));
+            if (!blocking)
+                return Result<void>::Failure(Error{ErrorCode{references.front().code.Value()}, ErrorDomainId{"packages.host"},
+                                                   ErrorSeverity::Error, "", std::move(references)});
+            std::ranges::move(references, std::back_inserter(blocking->diagnostics));
+            return Result<void>::Failure(std::move(*blocking));
         }
 
         /** @brief Constructs replacement documents after checking departing importers against current assets. */

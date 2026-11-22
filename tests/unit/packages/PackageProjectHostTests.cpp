@@ -424,7 +424,8 @@ namespace {
         CHECK(unobserved.ErrorValue().diagnostics.front().path == "com.horo.application-fixture.native");
         sources.registrations = owners;
 
-        const auto writeAsset = [&](const char *filename, const Assets::AssetId &asset, const char *kind, std::string_view bytes) {
+        const auto writeAsset = [&](const char *filename, const Assets::AssetId &asset, const char *kind, std::string_view bytes,
+                                    std::string_view importer = {}) {
             auto path = policy.projectRoot / "Assets" / filename;
             {
                 std::ofstream output{path, std::ios::binary};
@@ -433,7 +434,10 @@ namespace {
             }
             path += ".horo";
             std::ofstream metadata{path};
-            metadata << nlohmann::json{{"schemaVersion", 1}, {"assetId", asset.ToString()}, {"assetType", kind}};
+            nlohmann::json sidecar{{"schemaVersion", 1}, {"assetId", asset.ToString()}, {"assetType", kind}};
+            if (!importer.empty())
+                sidecar["importerPackageId"] = importer;
+            metadata << sidecar;
             REQUIRE(metadata.good());
         };
         const auto sceneAsset = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0e").Value();
@@ -471,6 +475,16 @@ namespace {
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
         owners.front().artifact = locked.artifactDigest;
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", scene, locked.package.Value());
+        sources.registrations = {};
+        const auto missing = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
+        REQUIRE(missing.ErrorValue().diagnostics.size() == 2);
+        CHECK(missing.ErrorValue().diagnostics[1].code.Value() == "packages.host.importer_in_use");
+        CHECK(missing.ErrorValue().diagnostics[1].path == "Assets/Scene.horoasset");
+
+        sources.registrations = owners;
         writeAsset("Scene.horoasset", sceneAsset, "core.scene", "{");
         const auto unreadable = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(unreadable.HasError());
