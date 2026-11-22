@@ -48,6 +48,7 @@
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "ScenePhysicsHost.h"
@@ -4726,7 +4727,8 @@ namespace Horo::Editor {
             }
         }
         const std::array accessibilitySettings{Runtime::Ui::MakeUiVisualAccessibilityContribution(),
-                                               Accessibility::MakeVisualSafetyContribution()};
+                                               Accessibility::MakeVisualSafetyContribution(),
+                                               Gameplay::MakeGameplayAccessibilityContribution()};
         for (const auto &contribution : accessibilitySettings)
             for (const auto &descriptor : contribution.settings)
                 if (const auto registered = configurationSchema.Register(descriptor); registered.HasError())

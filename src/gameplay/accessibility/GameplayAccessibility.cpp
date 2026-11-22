@@ -1,62 +1,87 @@
 #include "Horo/Gameplay/GameplayAccessibility.h"
 
-#include <array>
-
 namespace Horo::Gameplay {
     namespace {
-        /** @brief Inert domain key metadata, initialized during explicit contribution composition. */
-        const std::array<SettingKey, 7> &Keys() {
-            static const std::array<SettingKey, 7> keys{SettingKey{"accessibility.gameplay.aim_assist"},
-                                                        SettingKey{"accessibility.gameplay.auto_aim_snap"},
-                                                        SettingKey{"accessibility.gameplay.aggression_reduction"},
-                                                        SettingKey{"accessibility.gameplay.reaction_time_multiplier"},
-                                                        SettingKey{"accessibility.gameplay.skip_qte"},
-                                                        SettingKey{"accessibility.gameplay.post_hit_invulnerability_ms"},
-                                                        SettingKey{"accessibility.gameplay.damage_multiplier"}};
-            return keys;
+        /** @brief One numeric preference's key, neutral value and authoritative limits. */
+        struct NumericAssist {
+            SettingKey key;
+            std::int64_t neutral;
+            SettingIntegerRange range;
+        };
+
+        /** @brief Inert gameplay configuration metadata shared by schema and tick capture. */
+        struct AssistSettings {
+            NumericAssist aim{SettingKey{"accessibility.gameplay.aim_assist"}, 0, {0, 1000}};
+            SettingKey snap{"accessibility.gameplay.auto_aim_snap"};
+            NumericAssist aggression{SettingKey{"accessibility.gameplay.aggression_reduction"}, 0, {0, 1000}};
+            NumericAssist reaction{SettingKey{"accessibility.gameplay.reaction_time_multiplier"}, 1000, {1000, 10000}};
+            SettingKey skipQte{"accessibility.gameplay.skip_qte"};
+            NumericAssist invulnerability{SettingKey{"accessibility.gameplay.post_hit_invulnerability_ms"}, 0, {0, 60000}};
+            NumericAssist damage{SettingKey{"accessibility.gameplay.damage_multiplier"}, 1000, {0, 10000}};
+        };
+
+        /** @brief Initializes key storage on first use without registering settings. */
+        const AssistSettings &Settings() {
+            static const AssistSettings settings;
+            return settings;
+        }
+
+        /** @brief Builds a user preference descriptor with the gameplay source policy. */
+        SettingDescriptor Describe(const SettingKey &key, const SettingValueType type, SettingValue value,
+                                   SettingValidation validation = {}) {
+            return {.key = key,
+                    .type = type,
+                    .defaultValue = std::move(value),
+                    .scope = SettingScope::User,
+                    .reloadPolicy = ReloadPolicy::NextFrame,
+                    .sensitivity = SettingSensitivity::Public,
+                    .sourcePolicy =
+                        ConfigurationSourcePolicy{ConfigurationSourceMask::User | ConfigurationSourceMask::Session |
+                                                      ConfigurationSourceMask::Invocation | ConfigurationSourceMask::PackagedProfile,
+                                                  false},
+                    .validation = std::move(validation)};
+        }
+
+        /** @brief Publishes the bounds used by fixed tick capture to configuration ingress. */
+        SettingDescriptor Describe(const NumericAssist &assist) {
+            return Describe(assist.key, SettingValueType::Integer, assist.neutral, assist.range);
         }
 
         /** @brief Reads one exact typed domain value without allocation or fallback to another settings store. */
-        template <typename T> const T *Value(const ConfigurationSnapshot &snapshot, const std::size_t index) noexcept {
-            const auto *entry = snapshot.FindResolved(Keys()[index]);
+        template <typename T> const T *Value(const ConfigurationSnapshot &snapshot, const SettingKey &key) noexcept {
+            const auto *entry = snapshot.FindResolved(key);
             return entry ? std::get_if<T>(&entry->value) : nullptr;
+        }
+
+        /** @brief Checks snapshots supplied by hosts that may have composed their own schema. */
+        const std::int64_t *BoundedValue(const ConfigurationSnapshot &snapshot, const NumericAssist &assist) noexcept {
+            const auto *value = Value<std::int64_t>(snapshot, assist.key);
+            return value && *value >= assist.range.minimum && *value <= assist.range.maximum ? value : nullptr;
         }
     }  // namespace
 
     /** @copydoc MakeGameplayAccessibilityContribution */
     ModuleConfigurationContribution MakeGameplayAccessibilityContribution() {
-        ModuleConfigurationContribution contribution{.module = ModuleId{"horo.gameplay.accessibility"},
-                                                     .ownerPrefix = "accessibility.gameplay"};
-        const auto &keys = Keys();
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-            const bool boolean = i == 1 || i == 4;
-            SettingValue value = std::int64_t{0};
-            if (boolean)
-                value = false;
-            else if (i == 3 || i == 6)
-                value = std::int64_t{1000};
-            contribution.settings.push_back(
-                {keys[i], boolean ? SettingValueType::Boolean : SettingValueType::Integer, std::move(value), SettingScope::User,
-                 ReloadPolicy::NextFrame, SettingSensitivity::Public,
-                 ConfigurationSourcePolicy{ConfigurationSourceMask::User | ConfigurationSourceMask::Session |
-                                               ConfigurationSourceMask::Invocation | ConfigurationSourceMask::PackagedProfile,
-                                           false}});
-        }
-        return contribution;
+        const auto &settings = Settings();
+        return {.module = ModuleId{"horo.gameplay.accessibility"},
+                .ownerPrefix = "accessibility.gameplay",
+                .settings = {Describe(settings.aim), Describe(settings.snap, SettingValueType::Boolean, false),
+                             Describe(settings.aggression), Describe(settings.reaction),
+                             Describe(settings.skipQte, SettingValueType::Boolean, false), Describe(settings.invulnerability),
+                             Describe(settings.damage)}};
     }
 
     /** @copydoc GameplayAssistTickSnapshot::Capture */
     Result<GameplayAssistTickSnapshot> GameplayAssistTickSnapshot::Capture(ConfigurationSnapshot snapshot) {
-        const auto *aim = Value<std::int64_t>(snapshot, 0);
-        const auto *snap = Value<bool>(snapshot, 1);
-        const auto *aggression = Value<std::int64_t>(snapshot, 2);
-        const auto *reaction = Value<std::int64_t>(snapshot, 3);
-        const auto *qte = Value<bool>(snapshot, 4);
-        const auto *invulnerability = Value<std::int64_t>(snapshot, 5);
-        const auto *damage = Value<std::int64_t>(snapshot, 6);
-        if (!aim || !snap || !aggression || !reaction || !qte || !invulnerability || !damage || *aim < 0 || *aim > 1000 ||
-            *aggression < 0 || *aggression > 1000 || *reaction < 1000 || *reaction > 10000 || *invulnerability < 0 ||
-            *invulnerability > 60000 || *damage < 0 || *damage > 10000)
+        const auto &settings = Settings();
+        const auto *aim = BoundedValue(snapshot, settings.aim);
+        const auto *snap = Value<bool>(snapshot, settings.snap);
+        const auto *aggression = BoundedValue(snapshot, settings.aggression);
+        const auto *reaction = BoundedValue(snapshot, settings.reaction);
+        const auto *qte = Value<bool>(snapshot, settings.skipQte);
+        const auto *invulnerability = BoundedValue(snapshot, settings.invulnerability);
+        const auto *damage = BoundedValue(snapshot, settings.damage);
+        if (!aim || !snap || !aggression || !reaction || !qte || !invulnerability || !damage)
             return Result<GameplayAssistTickSnapshot>::Failure(MakeError(GameplayAccessibilityErrors::InvalidSettings));
         GameplayAssistPreferences preferences{static_cast<float>(*aim) / 1000,      *snap, static_cast<float>(*aggression) / 1000,
                                               static_cast<float>(*reaction) / 1000, *qte,  static_cast<float>(*invulnerability) / 1000,

@@ -490,6 +490,9 @@ cross-domain notification rather than state storage.
   compares its revision to the retained one, and captures updated values when
   needed. Notifications only hint that a revision changed; coalescing, loss, late
   subscription or stale/out-of-order notifications cannot prevent refresh.
+- The Editor composition root registers the gameplay-owned preference descriptors
+  in the process configuration schema. Numeric settings use the same bounds at
+  configuration ingress and at tick capture.
 - One snapshot governs the entire tick. No settings callback mutates gameplay
   mid-tick. All local consumers share the tick's captured revision.
 - Desired preferences persist in user settings. Applying an assist still respects

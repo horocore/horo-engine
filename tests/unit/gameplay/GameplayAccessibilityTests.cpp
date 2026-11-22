@@ -7,12 +7,15 @@
 
 namespace Horo::Gameplay {
     namespace {
-        ConfigurationSchema Schema() {
+        ConfigurationSchema Schema(const bool validate = true) {
             ConfigurationSchema schema;
             const auto contribution = MakeGameplayAccessibilityContribution();
             REQUIRE(contribution.ownerPrefix == "accessibility.gameplay");
-            for (const auto &setting : contribution.settings)
+            for (auto setting : contribution.settings) {
+                if (!validate)
+                    setting.validation = {};
                 REQUIRE(schema.Register(setting).HasValue());
+            }
             REQUIRE(schema.Seal().HasValue());
             return schema;
         }
@@ -51,10 +54,30 @@ namespace Horo::Gameplay {
         REQUIRE(tick2.Value().Preferences().postHitInvulnerabilitySeconds == 0.25F);
         REQUIRE(tick2.Value().Preferences().damageMultiplier == 0.5F);
         inputs.user[SettingKey{"accessibility.gameplay.damage_multiplier"}].value = std::int64_t{-1};
-        const auto invalid = ConfigurationResolver::Resolve(schema, inputs, 3).Value();
+        REQUIRE(ConfigurationResolver::Resolve(schema, inputs, 3).HasError());
+        const auto invalid = ConfigurationResolver::Resolve(Schema(false), inputs, 3).Value();
         REQUIRE(GameplayAssistTickSnapshot::Capture(invalid).HasError());
         REQUIRE(tick2.Value().Revision() == 2);
         REQUIRE(tick2.Value().Preferences().damageMultiplier == 0.5F);
+    }
+
+    TEST_CASE("Gameplay assist bounds reject invalid user drafts before publication", "[gameplay][accessibility][configuration]") {
+        ConfigurationService service{Schema()};
+        const SettingKey reaction{"accessibility.gameplay.reaction_time_multiplier"};
+        const auto initial = service.Snapshot();
+        ConfigurationDraft draft{.baseRevision = initial.Revision(),
+                                 .proposedValues = {{reaction, std::int64_t{999}}},
+                                 .source = ConfigurationSource::User};
+
+        REQUIRE(service.Prepare(draft).HasError());
+        REQUIRE(service.Snapshot().Revision() == initial.Revision());
+        REQUIRE(std::get<std::int64_t>(service.Snapshot().Get(reaction)) == 1000);
+
+        draft.proposedValues.at(reaction) = std::int64_t{10000};
+        REQUIRE(service.Commit(draft).HasValue());
+        const auto captured = GameplayAssistTickSnapshot::Capture(service.Snapshot());
+        REQUIRE(captured.HasValue());
+        REQUIRE(captured.Value().Preferences().reactionTimeMultiplier == 10);
     }
 
     TEST_CASE("Gameplay hint allocation failure permits retry without changing authoritative preferences",
