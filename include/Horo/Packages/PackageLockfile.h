@@ -57,6 +57,7 @@ namespace Horo::Packages {
         std::vector<PackagePlatform> platforms;
         std::vector<LockedPackageReference> dependencies;
         std::vector<std::string> contributions;
+        [[nodiscard]] bool operator==(const LockedPackage &) const = default;
     };
 
     /** @brief Exact effects of withdrawing one root from the locked dependency graph, before checking project and runtime references. */

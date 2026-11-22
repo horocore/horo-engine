@@ -361,6 +361,13 @@ Update validation checks:
 
 Trust escalation requires explicit approval.
 
+The resolver's `PackageUpdatePreview` compares the complete current and
+candidate lockfiles after validating each against its portable request. It
+returns the exact old and new entries for added, removed, or changed packages,
+including same-version artifact replacements, and distinguishes request-only
+changes. The preview is inert. Artifact verification, reference checks, trust
+approval, and migration belong to the transaction that applies the candidate.
+
 ## Uninstall Policy
 
 Before uninstall:

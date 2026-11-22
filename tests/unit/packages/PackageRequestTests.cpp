@@ -19,11 +19,12 @@ namespace {
 
     /** @brief Generates a strict actual lock with independent source/version and the supplied intent commitment. */
     ValidatedPackageLockfileV1 Lock(const Sha256Digest hash, const std::string_view version = "1.2.0",
-                                    const std::string_view source = "horo.public", const std::string_view packageName = "com.horo.assets") {
+                                    const std::string_view source = "horo.public", const std::string_view packageName = "com.horo.assets",
+                                    const std::string_view artifactBytes = "artifact") {
         const auto package = HoroPackageId::Parse(packageName).Value();
         const auto parsedVersion = PackageVersion::Parse(version).Value();
         const auto parsedSource = HoroPackageSourceId::Parse(source).Value();
-        const auto artifact = ComputeSha256(std::as_bytes(std::span{"artifact", 8}));
+        const auto artifact = ComputeSha256(std::as_bytes(std::span{artifactBytes}));
         const PackageResolutionPlan plan{{{package, parsedVersion, parsedSource, artifact, {}}}};
         const PackageLockArtifact evidence{package, parsedVersion, parsedSource, artifact, artifact, artifact, 1, {}, {"assets"}};
         auto lock = ValidatedPackageLockfileV1::Generate(plan, std::span{&package, 1U}, hash, std::span{&evidence, 1U});
@@ -88,6 +89,61 @@ TEST_CASE("Package removal prepares a matching request and lock without replacin
     CHECK(parsed.Value().Roots().empty());
     CHECK(parsed.Value().Packages().empty());
     CHECK(last.Value().request.ValidateLock(parsed.Value()).HasValue());
+}
+
+TEST_CASE("Package update preview verifies both intents and retains exact changed entries", "[packages][request][update]") {
+    const auto current = ValidatedPackageRequest::Parse(Intent().dump()).Value();
+    const auto original = Lock(current.Digest());
+    SECTION("updated versions and same-version artifact replacements are both visible") {
+        const auto candidate = Lock(current.Digest(), "1.3.0", "horo.public", "com.horo.assets", "replacement");
+        const auto preview = PackageUpdatePreview::Prepare(current, original, current, candidate);
+        REQUIRE(preview.HasValue());
+        CHECK_FALSE(preview.Value().requestChanged);
+        REQUIRE(preview.Value().changes.size() == 1);
+        CHECK(preview.Value().changes.front().current == original.Packages().front());
+        CHECK(preview.Value().changes.front().candidate == candidate.Packages().front());
+
+        const auto republished = Lock(current.Digest(), "1.2.0", "horo.public", "com.horo.assets", "replacement");
+        const auto sameVersion = PackageUpdatePreview::Prepare(current, original, current, republished);
+        REQUIRE(sameVersion.HasValue());
+        REQUIRE(sameVersion.Value().changes.size() == 1);
+        CHECK(sameVersion.Value().changes.front().candidate == republished.Packages().front());
+    }
+    SECTION("root replacement reports an addition and a removal in package order") {
+        auto next = Intent();
+        auto &roots = next["dependencies"];
+        auto removed = roots.at("com.horo.assets");
+        roots.erase("com.horo.assets");
+        roots["com.horo.another"] = std::move(removed);
+        const auto request = ValidatedPackageRequest::Parse(next.dump()).Value();
+        const auto candidate = Lock(request.Digest(), "1.2.0", "horo.public", "com.horo.another");
+        const auto preview = PackageUpdatePreview::Prepare(current, original, request, candidate);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().requestChanged);
+        const auto &changes = preview.Value().changes;
+        REQUIRE(changes.size() == 2);
+        CHECK_FALSE(changes[0].current.has_value());
+        CHECK(changes[0].candidate == candidate.Packages().front());
+        CHECK(changes[1].current == original.Packages().front());
+        CHECK_FALSE(changes[1].candidate.has_value());
+        CHECK(PackageUpdatePreview::Prepare(current, original, request, original).HasError());
+        CHECK(PackageUpdatePreview::Prepare(request, original, request, candidate).HasError());
+    }
+    SECTION("a request-only edit is distinguished from a no-op") {
+        const auto unchanged = PackageUpdatePreview::Prepare(current, original, current, original);
+        REQUIRE(unchanged.HasValue());
+        CHECK_FALSE(unchanged.Value().requestChanged);
+        CHECK(unchanged.Value().changes.empty());
+
+        auto next = Intent();
+        next["dependencies"]["com.horo.assets"]["version"] = "1.2.0";
+        const auto request = ValidatedPackageRequest::Parse(next.dump()).Value();
+        const auto candidate = Lock(request.Digest());
+        const auto preview = PackageUpdatePreview::Prepare(current, original, request, candidate);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().requestChanged);
+        CHECK(preview.Value().changes.empty());
+    }
 }
 
 TEST_CASE("Package removal can withdraw an unselected optional root", "[packages][request][removal]") {

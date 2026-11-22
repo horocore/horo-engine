@@ -230,6 +230,43 @@ namespace Horo::Packages {
         return Result<void>::Success();
     }
 
+    /** @copydoc PackageUpdatePreview::Prepare */
+    Result<PackageUpdatePreview> PackageUpdatePreview::Prepare(const ValidatedPackageRequest &current,
+                                                               const ValidatedPackageLockfileV1 &currentLock,
+                                                               const ValidatedPackageRequest &candidate,
+                                                               const ValidatedPackageLockfileV1 &candidateLock) {
+        using Output = Result<PackageUpdatePreview>;
+        if (const auto valid = current.ValidateLock(currentLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        if (const auto valid = candidate.ValidateLock(candidateLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+
+        PackageUpdatePreview preview{.requestChanged = current.Digest() != candidate.Digest()};
+        auto before = currentLock.Packages();
+        auto after = candidateLock.Packages();
+        while (!before.empty() && !after.empty()) {
+            const auto &prior = before.front();
+            const auto &next = after.front();
+            if (prior.package < next.package) {
+                preview.changes.push_back({prior, std::nullopt});
+                before = before.subspan(1);
+            } else if (next.package < prior.package) {
+                preview.changes.push_back({std::nullopt, next});
+                after = after.subspan(1);
+            } else {
+                if (prior != next)
+                    preview.changes.push_back({prior, next});
+                before = before.subspan(1);
+                after = after.subspan(1);
+            }
+        }
+        for (const auto &prior : before)
+            preview.changes.push_back({prior, std::nullopt});
+        for (const auto &next : after)
+            preview.changes.push_back({std::nullopt, next});
+        return Output::Success(std::move(preview));
+    }
+
     /** @copydoc PackageRemovalPlan::Prepare */
     Result<PackageRemovalPlan> PackageRemovalPlan::Prepare(const ValidatedPackageRequest &current, const ValidatedPackageLockfileV1 &locked,
                                                            const HoroPackageId &package) {
