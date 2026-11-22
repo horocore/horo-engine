@@ -40,6 +40,10 @@ namespace Horo::AI {
         constexpr std::uint64_t NavigationSurfaceGenerator = AuthoredPointFirst + MaximumBuiltinAuthoredQueryPoints;
         constexpr std::uint64_t NavigationSurfaceRadius = NavigationSurfaceGenerator + 1;
         constexpr std::uint64_t NavigationSurfaceMaximum = NavigationSurfaceGenerator + 2;
+        constexpr std::uint64_t DistanceScoreCurve = NavigationSurfaceMaximum + 1;
+        constexpr std::uint64_t DistanceScoreDirection = NavigationSurfaceMaximum + 2;
+        constexpr std::uint64_t DistanceScoreThreshold = NavigationSurfaceMaximum + 3;
+
         constexpr std::size_t PointAxisBytes = sizeof(std::int64_t);
         constexpr std::size_t PointBytes = 3 * PointAxisBytes;
 
@@ -142,6 +146,11 @@ namespace Horo::AI {
             return options;
         }
 
+        bool ValidDistanceSettings(const QueryPointDistanceTest &settings) noexcept {
+            return settings.radiusMillimeters > 0 && settings.scoreWeight > 0 && settings.response.IsValid() &&
+                   (settings.preferNearer || settings.response == QueryDistanceScoreResponse{});
+        }
+
         /** @brief Encodes only the native editable controls for one distance stage. */
         std::vector<QueryPropertyValue> DistanceProperties(const QueryPointDistanceTest settings) {
             std::vector<QueryPropertyValue> properties{{QueryPropertyId::Create(DistanceRadius).Value(),
@@ -149,6 +158,15 @@ namespace Horo::AI {
                                                        {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
             if (settings.scoreWeight != QueryPointDistanceTest{}.scoreWeight)
                 properties.emplace_back(QueryPropertyId::Create(DistanceScoreWeight).Value(), std::uint64_t{settings.scoreWeight});
+            const QueryDistanceScoreResponse defaults;
+            if (settings.response.curve != defaults.curve)
+                properties.emplace_back(QueryPropertyId::Create(DistanceScoreCurve).Value(),
+                                        static_cast<std::uint64_t>(settings.response.curve));
+            if (settings.response.direction != defaults.direction)
+                properties.emplace_back(QueryPropertyId::Create(DistanceScoreDirection).Value(),
+                                        static_cast<std::uint64_t>(settings.response.direction));
+            if (settings.response.threshold != defaults.threshold)
+                properties.emplace_back(QueryPropertyId::Create(DistanceScoreThreshold).Value(), settings.response.threshold);
             EncodePointCenter(properties, settings.center);
             return properties;
         }
@@ -264,6 +282,28 @@ namespace Horo::AI {
             if (!value || *value > std::numeric_limits<std::uint32_t>::max())
                 return {};
             return static_cast<std::uint32_t>(*value);
+        }
+
+        std::optional<QueryDistanceScoreResponse> ReadDistanceResponse(const QueryPlanStage &stage) {
+            QueryDistanceScoreResponse response;
+            const auto curve =
+                UnsignedProperty(stage, QueryPropertyId::Create(DistanceScoreCurve).Value(), static_cast<std::uint32_t>(response.curve));
+            const auto direction = UnsignedProperty(stage, QueryPropertyId::Create(DistanceScoreDirection).Value(),
+                                                    static_cast<std::uint32_t>(response.direction));
+            if (!curve || *curve >= static_cast<std::uint32_t>(QueryScoreCurve::Count) || !direction ||
+                *direction >= static_cast<std::uint32_t>(QueryScoreDirection::Count))
+                return std::nullopt;
+            response.curve = static_cast<QueryScoreCurve>(*curve);
+            response.direction = static_cast<QueryScoreDirection>(*direction);
+            const auto threshold =
+                std::ranges::find(stage.properties, QueryPropertyId::Create(DistanceScoreThreshold).Value(), &QueryPropertyValue::id);
+            if (threshold != stage.properties.end()) {
+                const auto *value = std::get_if<double>(&threshold->value);
+                if (!value)
+                    return std::nullopt;
+                response.threshold = *value;
+            }
+            return response;
         }
 
         Result<QueryPointNavigationStageSettings> ReadNavigationSettings(const QueryPlanStage &stage) {
@@ -584,7 +624,10 @@ namespace Horo::AI {
                                    .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), Unsigned64, true},
                                                   {QueryPropertyId::Create(DistancePreferNearer).Value(), Boolean, true},
                                                   {QueryPropertyId::Create(DistanceScoreWeight).Value(), Unsigned64, false},
-                                                  {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
+                                                  {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false},
+                                                  {QueryPropertyId::Create(DistanceScoreCurve).Value(), Unsigned64, false},
+                                                  {QueryPropertyId::Create(DistanceScoreDirection).Value(), Unsigned64, false},
+                                                  {QueryPropertyId::Create(DistanceScoreThreshold).Value(), Float64, false}},
                                    .contextChoice = centers,
                                },
                                QueryTestDescriptor{
@@ -673,7 +716,7 @@ namespace Horo::AI {
     Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &asset, QueryStageId stage,
                                                               QueryPointDistanceTest settings) {
         using Edited = Result<EnvironmentQueryAsset>;
-        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || !HasBuiltinPointStages(asset))
+        if (!stage.IsValid() || !ValidDistanceSettings(settings) || !HasBuiltinPointStages(asset))
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         const auto stages = asset.Stages();
         const auto last = std::ranges::max_element(stages, {}, &QueryAssetStage::executionOrder);
@@ -1008,6 +1051,11 @@ namespace Horo::AI {
         return verified.HasError() ? Edited::Failure(verified.ErrorValue()) : std::move(captured);
     }
 
+    bool QueryDistanceScoreResponse::IsValid() const noexcept {
+        return curve < QueryScoreCurve::Count && direction < QueryScoreDirection::Count && std::isfinite(threshold) && threshold >= 0 &&
+               threshold <= 1 && (curve == QueryScoreCurve::Threshold || threshold == QueryDistanceScoreResponse{}.threshold);
+    }
+
     /** @copydoc BuiltinPointDistanceQuery::Capture */
     Result<BuiltinPointDistanceQuery> BuiltinPointDistanceQuery::Capture(const QueryPlanStage &stage, const QuerySchemaRegistry &registry) {
         using Captured = Result<BuiltinPointDistanceQuery>;
@@ -1021,9 +1069,13 @@ namespace Horo::AI {
         const auto scoringProperty =
             std::ranges::find(stage.properties, QueryPropertyId::Create(DistancePreferNearer).Value(), &QueryPropertyValue::id);
         const auto *scoring = scoringProperty == stage.properties.end() ? nullptr : std::get_if<bool>(&scoringProperty->value);
-        if (radius.value_or(0) == 0 || weight.value_or(0) == 0 || !scoring)
+        const auto response = ReadDistanceResponse(stage);
+        if (!radius || !weight || !scoring || !response)
             return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, *scoring, *weight, stage.selectedContext}});
+        const QueryPointDistanceTest settings{*radius, *scoring, *weight, stage.selectedContext, *response};
+        if (!ValidDistanceSettings(settings))
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        return Captured::Success(BuiltinPointDistanceQuery{stage.id, settings});
     }
 
     /** @copydoc BuiltinPointDistanceQuery::Rule */
@@ -1032,7 +1084,9 @@ namespace Horo::AI {
         if (settings_.preferNearer)
             rule.score = QueryScoreRange{.maximum = settings_.radiusMillimeters / 1000.0,
                                          .weight = static_cast<double>(settings_.scoreWeight),
-                                         .direction = QueryScoreDirection::Lower};
+                                         .curve = settings_.response.curve,
+                                         .direction = settings_.response.direction,
+                                         .threshold = settings_.response.threshold};
         return rule;
     }
 

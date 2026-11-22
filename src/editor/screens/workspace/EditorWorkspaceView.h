@@ -168,6 +168,7 @@ namespace Horo::Editor {
                 std::uint64_t weight{};
                 AI::QueryContextId center;
                 std::vector<AI::QueryPointContextOption> centers;
+                AI::QueryDistanceScoreResponse response;
             };
 
             EnvironmentQueryDocumentFence fence;
@@ -206,6 +207,8 @@ namespace Horo::Editor {
         void DrawAuthoredPointFields(EnvironmentQueryFields &fields) const;
         /** @brief Draws the controls for the document's current generator. */
         void DrawPointGeneratorFields(EnvironmentQueryFields &fields, const AI::BuiltinPointQuerySettings &current) const;
+        /** @brief Draws the score direction and curve of one enabled distance stage. */
+        void DrawEnvironmentQueryDistanceResponse(AI::QueryDistanceScoreResponse &response) const;
         /** @brief Draws the existing distance stages and returns the identity selected for removal. */
         [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
         /** @brief Draws external provider choices and emits at most one structural edit. */

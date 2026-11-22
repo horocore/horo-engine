@@ -3,7 +3,7 @@
  * @brief Typed input and host capability for initial point-lattice query authoring.
  */
 
-#include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/AI/EnvironmentQueryScoring.h"
 #include "Horo/Math/WorldCoordinate64.h"
 
 #include <array>
@@ -23,12 +23,23 @@ namespace Horo::AI {
         QueryContextId center;                   /**< An invalid identity selects the registered default. */
     };
 
-    /** @brief Filters lattice candidates by distance from a captured location, with optional nearest-first scoring. */
+    /** @brief Authored response over the distance stage's fixed zero-to-radius range. */
+    struct QueryDistanceScoreResponse final {
+        QueryScoreCurve curve{QueryScoreCurve::Linear};
+        QueryScoreDirection direction{QueryScoreDirection::Lower};
+        double threshold{0.5};
+
+        [[nodiscard]] bool IsValid() const noexcept;
+        bool operator==(const QueryDistanceScoreResponse &) const noexcept = default;
+    };
+
+    /** @brief Filters point candidates by distance and optionally ranks the survivors. */
     struct QueryPointDistanceTest final {
         std::uint32_t radiusMillimeters{};
-        bool preferNearer{};
+        bool preferNearer{};          /**< Legacy scoring opt-in. The default response prefers nearer points. */
         std::uint32_t scoreWeight{1}; /**< Positive relative weight when nearest-first scoring is enabled. */
         QueryContextId center;        /**< An invalid identity selects the registered default. */
+        QueryDistanceScoreResponse response;
     };
 
     /** @brief Stable location choice and its optional provider-owned authoring label. */

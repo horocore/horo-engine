@@ -22,6 +22,7 @@
 #include <format>
 #include <limits>
 #include <set>
+#include <type_traits>
 #include <variant>
 
 namespace Horo::Editor {
@@ -967,7 +968,8 @@ namespace Horo::Editor {
                 : positiveUint32(step) && outer <= AI::MaximumQueryLatticeOuterSteps && (!annulus || inner <= outer);
         return generatorValid && maximum > 0 && maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
                (!navigation || IsPathScoringValid()) && std::ranges::all_of(distances, [positiveUint32](const Distance &distance) {
-            return positiveUint32(distance.radius) && positiveUint32(distance.weight);
+            return positiveUint32(distance.radius) && positiveUint32(distance.weight) &&
+                   (!distance.preferNearer || distance.response.IsValid());
         });
     }
 
@@ -993,7 +995,9 @@ namespace Horo::Editor {
             settings.distanceTests.emplace_back(distance.stage,
                                                 AI::QueryPointDistanceTest{static_cast<std::uint32_t>(distance.radius),
                                                                            distance.preferNearer,
-                                                                           static_cast<std::uint32_t>(distance.weight), distance.center});
+                                                                           static_cast<std::uint32_t>(distance.weight), distance.center,
+                                                                           distance.preferNearer ? distance.response
+                                                                                                 : AI::QueryDistanceScoreResponse{}});
         if (visibility)
             settings.visibility.emplace(visibility->stage, queryChannel.Bytes());
         if (navigation)
@@ -1054,6 +1058,35 @@ namespace Horo::Editor {
         return {};
     }
 
+    void EditorWorkspaceView::DrawEnvironmentQueryDistanceResponse(AI::QueryDistanceScoreResponse &response) const {
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        const auto choice = [&](std::string_view label, const char *id, const auto &labels, auto &selected) {
+            const auto active = static_cast<std::size_t>(selected);
+            Ui::FieldLabel(text(label).c_str(), fonts);
+            if (!ImGui::BeginCombo(id, text(labels[active]).c_str()))
+                return;
+            for (std::size_t index = 0; index < labels.size(); ++index) {
+                if (ImGui::Selectable(text(labels[index]).c_str(), index == active))
+                    selected = static_cast<std::remove_cvref_t<decltype(selected)>>(index);
+            }
+            ImGui::EndCombo();
+        };
+        constexpr std::array curves{"workspace.environment_query.curve_linear", "workspace.environment_query.curve_smoothstep",
+                                    "workspace.environment_query.curve_threshold"};
+        constexpr std::array directions{"workspace.environment_query.prefer_farther", "workspace.environment_query.create_prefer_nearer"};
+        choice("workspace.environment_query.score_direction", "##direction", directions, response.direction);
+        choice("workspace.environment_query.score_curve", "##curve", curves, response.curve);
+        if (response.curve == AI::QueryScoreCurve::Threshold) {
+            Ui::FieldLabel(text("workspace.environment_query.threshold").c_str(), fonts);
+            ImGui::InputDouble("##threshold", &response.threshold);
+        } else {
+            response.threshold = AI::QueryDistanceScoreResponse{}.threshold;
+        }
+    }
+
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDistanceStages */
     std::optional<AI::QueryStageId> EditorWorkspaceView::DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const {
         std::optional<AI::QueryStageId> remove;
@@ -1070,9 +1103,12 @@ namespace Horo::Editor {
             static_cast<void>(
                 Ui::DrawUnsignedPropRow(text("workspace.environment_query.create_radius").c_str(), "##radius", distance.radius, fonts));
             static_cast<void>(
-                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &distance.preferNearer, fonts));
-            static_cast<void>(
-                Ui::DrawUnsignedPropRow(text("workspace.environment_query.score_weight").c_str(), "##weight", distance.weight, fonts));
+                Ui::CheckboxControl(text("workspace.environment_query.score_distance").c_str(), &distance.preferNearer, fonts));
+            if (distance.preferNearer) {
+                static_cast<void>(
+                    Ui::DrawUnsignedPropRow(text("workspace.environment_query.score_weight").c_str(), "##weight", distance.weight, fonts));
+                DrawEnvironmentQueryDistanceResponse(distance.response);
+            }
             if (Ui::Button({.label = text("workspace.environment_query.remove_distance_test").c_str(),
                             .variant = Ui::ButtonVariant::Secondary,
                             .font = fonts.sans}))
@@ -1228,7 +1264,7 @@ namespace Horo::Editor {
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
                 fields.distances.emplace_back(entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight,
-                                              entry.test.center, entry.centers);
+                                              entry.test.center, entry.centers, entry.test.response);
         }
         ImGui::PushID(fields.widgetId.c_str());
         const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {

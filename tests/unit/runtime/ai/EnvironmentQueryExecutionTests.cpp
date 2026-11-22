@@ -791,11 +791,33 @@ namespace Horo::AI {
             auto authored = CreateBuiltinAuthoredPointQuery(query, stage, result, "Authored cover points", points, 3);
             REQUIRE(authored.HasValue());
             std::size_t first = 0;
+            std::size_t best = points.size();
+            std::optional<std::uint32_t> minimumScore;
+            std::optional<std::uint32_t> maximumScore;
             SECTION("equal scores retain authored order") {}
             SECTION("a distance stage can rank the same points") {
                 authored = AddBuiltinPointDistanceTest(authored.Value(), MakeIdentity<QueryStageId>(204), {6000, true});
                 REQUIRE(authored.HasValue());
                 first = 2;
+            }
+            SECTION("a cooked Smoothstep stage can prefer farther points within its filter radius") {
+                const QueryPointDistanceTest distance{.radiusMillimeters = 6000,
+                                                      .preferNearer = true,
+                                                      .response = {QueryScoreCurve::SmoothStep, QueryScoreDirection::Higher}};
+                authored = AddBuiltinPointDistanceTest(authored.Value(), MakeIdentity<QueryStageId>(204), distance);
+                REQUIRE(authored.HasValue());
+                minimumScore = 925000;
+                maximumScore = 927000;
+            }
+            SECTION("a cooked threshold returns best N in authored order across equal scores") {
+                const QueryPointDistanceTest distance{.radiusMillimeters = 6000,
+                                                      .preferNearer = true,
+                                                      .response = {QueryScoreCurve::Threshold, QueryScoreDirection::Higher, 0.14}};
+                authored = AddBuiltinPointDistanceTest(authored.Value(), MakeIdentity<QueryStageId>(204), distance);
+                REQUIRE(authored.HasValue());
+                best = 2;
+                minimumScore = QueryScoringPlan::ScoreKeyScale;
+                maximumScore = QueryScoringPlan::ScoreKeyScale;
             }
             const auto cooked = EnvironmentQueryCookedCodec::Encode(authored.Value(), registry);
             REQUIRE(cooked.HasValue());
@@ -825,7 +847,7 @@ namespace Horo::AI {
 
             const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {1, 1}};
             auto execution = AdmitBuiltinPointQuery(plan.Value(), registry, view, {agent, contexts.Value()},
-                                                    {.submittedTick = 4, .deadlineTick = 44, .maximumCandidates = 3, .bestCount = 3});
+                                                    {.submittedTick = 4, .deadlineTick = 44, .maximumCandidates = 3, .bestCount = best});
             REQUIRE(execution.HasValue());
             RunPointQuery(*execution.Value(), 5);
             const auto *published = execution.Value()->Published();
@@ -837,8 +859,16 @@ namespace Horo::AI {
             CHECK(published->generator.revision == contexts.Value()->Revision());
             CHECK(published->generated == points.size());
             CHECK(published->invalidCoordinates == 0);
-            REQUIRE(published->winners.size() == points.size());
+            REQUIRE(published->winners.size() == best);
             CHECK(published->winners.front().item == QueryGeneratedItem{points[first]});
+            if (minimumScore) {
+                CHECK(published->winners.front().score.scoreKey >= *minimumScore);
+                CHECK(published->winners.front().score.scoreKey <= *maximumScore);
+            }
+            if (best == 2) {
+                CHECK(published->winners[1].item == QueryGeneratedItem{points[1]});
+                CHECK(published->winners[1].score.scoreKey == QueryScoringPlan::ScoreKeyScale);
+            }
         }
 
         TEST_CASE("Adaptive native EQS republishes a matching shortlist before spending provider work", "[unit][ai][eqs][cache]") {

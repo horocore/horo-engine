@@ -267,6 +267,39 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("EQS distance authoring refuses invalid responses and preserves the default wire shape", "[unit][ai][eqs][generator]") {
+            const auto id = MakeIdentity<QueryId>(2);
+            const auto stage = MakeIdentity<QueryStageId>(3);
+            const auto result = MakeIdentity<QueryResultSchemaId>(4);
+            const auto test = MakeIdentity<QueryStageId>(5);
+            const auto registry = CaptureBuiltinQuerySchema().Value();
+            const auto base = CreateBuiltinLatticeQuery(id, stage, result, "Distance", {100, 1}, 3);
+            REQUIRE(base.HasValue());
+            const auto legacy = AddBuiltinPointDistanceTest(base.Value(), test, {500, true});
+            REQUIRE(legacy.HasValue());
+            CHECK(legacy.Value().Stages().back().properties.size() == 2);
+            auto captured = ReadBuiltinPointQuerySettings(legacy.Value(), registry);
+            REQUIRE(captured.HasValue());
+            auto settings = std::move(captured).Value();
+            auto &distance = settings.distanceTests.front().test;
+            CHECK(distance.response == QueryDistanceScoreResponse{});
+            distance.response = {QueryScoreCurve::Threshold, QueryScoreDirection::Higher, 0.25};
+            const auto edited = EditBuiltinPointQuerySettings(legacy.Value(), registry, settings);
+            REQUIRE(edited.HasValue());
+            const auto encoded = EnvironmentQueryCookedCodec::Encode(edited.Value(), registry);
+            REQUIRE(encoded.HasValue());
+            const auto plan = EnvironmentQueryCookedCodec::Decode(encoded.Value(), registry);
+            REQUIRE(plan.HasValue());
+            const auto restored = BuiltinPointDistanceQuery::Capture(plan.Value().Stages().back(), registry);
+            REQUIRE(restored.HasValue());
+            CHECK(restored.Value().Settings().response == distance.response);
+            distance.response.threshold = std::numeric_limits<double>::infinity();
+            ExpectError(AddBuiltinPointDistanceTest(base.Value(), test, distance), AIErrors::EnvironmentQuerySchemaInvalid);
+            distance.response.threshold = 0.5;
+            distance.preferNearer = false;
+            ExpectError(EditBuiltinPointQuerySettings(legacy.Value(), registry, settings), AIErrors::EnvironmentQuerySchemaInvalid);
+        }
+
         TEST_CASE("EQS rejects restored distance weights outside the supported range", "[unit][ai][eqs][generator]") {
             const auto schema = CaptureBuiltinQuerySchema();
             REQUIRE(schema.HasValue());
