@@ -23,6 +23,8 @@ TRANSPORT = "37"
 DIGEST = "a" * 64
 PROVENANCE_DIGEST = "b" * 64
 SOURCE_REVISION = "c" * 40
+HOST_IMAGE_DIGEST = "9" * 64
+LOADER_IMAGE_DIGEST = "8" * 64
 PACKAGE = "/data/app/~~hash/example==/base.apk"
 LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window=5 presentation=8 "
              "factsRevision=5 extent=1280x720 nativeAvailable=1 ready=1 hasWindow=1 hasPresentation=1 "
@@ -129,8 +131,9 @@ class AndroidDeployTests(unittest.TestCase):
             return response if isinstance(response, tuple) else (0, response)
 
         stdout = io.StringIO()
+        images = (project.OpenXRDiagnosticImages("arm64-v8a", HOST_IMAGE_DIGEST, LOADER_IMAGE_DIGEST),) if "openxrProfile" in profile else ()
         artifact = project.VerifiedAndroidArtifact(Path("a package ü.apk"), profile, DIGEST, PROVENANCE_DIGEST, SOURCE_REVISION,
-                                                   frozenset({"arm64-v8a"}))
+                                                   frozenset({"arm64-v8a"}), images)
         with patch.object(project, "deploy_artifact", return_value=artifact), \
                 patch.object(project, "android_deploy_host", return_value="linux-x64"), \
                 patch.object(project, "deploy_process", side_effect=run), \
@@ -282,6 +285,8 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["status"], report["stage"]), (0, "diagnostic_complete", "diagnostics"))
         self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
         self.assertEqual(report["artifact"]["openxr"], profile["openxrProfile"])
+        self.assertEqual(report["artifact"]["openxrImages"],
+                         {"abi": "arm64-v8a", "diagnosticHostSha256": HOST_IMAGE_DIGEST, "loaderSha256": LOADER_IMAGE_DIGEST})
         self.assertEqual(report["qualification"]["runtime"],
                          {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"})
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
@@ -289,6 +294,20 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertIn(("shell", "am", "force-stop", "--user", "10", profile["applicationId"]), commands)
         self.assertNotIn("private", json.dumps(report))
+
+    def test_openxr_image_evidence_uses_the_verified_native_entries_for_each_abi(self):
+        _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a", "x86_64"])
+        library = f"lib{profile['nativeLibrary']}.so"
+        inspection = {"contents": [
+            {"name": f"lib/arm64-v8a/{library}", "sha256": HOST_IMAGE_DIGEST},
+            {"name": f"lib/arm64-v8a/{project.OPENXR_LOADER_NAME}", "sha256": LOADER_IMAGE_DIGEST},
+            {"name": f"lib/x86_64/{library}", "sha256": DIGEST},
+            {"name": f"lib/x86_64/{project.OPENXR_LOADER_NAME}", "sha256": PROVENANCE_DIGEST},
+            {"name": "assets/private/location", "sha256": "0" * 64},
+        ]}
+        self.assertEqual(project.verified_openxr_images(profile, inspection, frozenset({"x86_64", "arm64-v8a"})),
+                         (project.OpenXRDiagnosticImages("arm64-v8a", HOST_IMAGE_DIGEST, LOADER_IMAGE_DIGEST),
+                          project.OpenXRDiagnosticImages("x86_64", DIGEST, PROVENANCE_DIGEST)))
 
     def test_openxr_discovery_rejects_ambiguous_or_wrong_abi_evidence_and_stops(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE

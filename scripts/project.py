@@ -1014,6 +1014,18 @@ def deploy_tool(sdk: Path, name: str) -> str:
 
 
 @dataclass(frozen=True)
+class OpenXRDiagnosticImages:
+    """Digests of the verified native diagnostic and bundled loader for one APK ABI."""
+
+    abi: str
+    diagnostic_host_sha256: str
+    loader_sha256: str
+
+    def report(self) -> dict[str, str]:
+        return {"abi": self.abi, "diagnosticHostSha256": self.diagnostic_host_sha256, "loaderSha256": self.loader_sha256}
+
+
+@dataclass(frozen=True)
 class VerifiedAndroidArtifact:
     path: Path
     profile: dict
@@ -1021,6 +1033,17 @@ class VerifiedAndroidArtifact:
     provenance_sha256: str
     source_revision: str
     abis: frozenset[str]
+    openxr_images: tuple[OpenXRDiagnosticImages, ...] = ()
+
+
+def verified_openxr_images(profile: dict, inspection: dict, abis: frozenset[str]) -> tuple[OpenXRDiagnosticImages, ...]:
+    """Select only the named OpenXR binaries from the verified signed APK inspection."""
+    if "openxrProfile" not in profile:
+        return ()
+    host_library = f"lib{profile['nativeLibrary']}.so"
+    entries = {record["name"]: record["sha256"] for record in inspection["contents"]}
+    return tuple(OpenXRDiagnosticImages(abi, entries[f"lib/{abi}/{host_library}"], entries[f"lib/{abi}/{OPENXR_LOADER_NAME}"])
+                 for abi in sorted(abis))
 
 
 def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
@@ -1063,7 +1086,8 @@ def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
     activity = profile["applicationId"] + "." + PACKAGE_ACTIVITY
     if re.findall(r"^launchable-activity: name='([^']+)'", badging, re.MULTILINE) != [activity]:
         raise AndroidDeployError("artifact_activity_mismatch")
-    return VerifiedAndroidArtifact(package, profile, actual["apkSha256"], actual["provenanceSha256"], revision, abis)
+    return VerifiedAndroidArtifact(package, profile, actual["apkSha256"], actual["provenanceSha256"], revision, abis,
+                                   verified_openxr_images(profile, actual, abis))
 
 
 @dataclass(frozen=True)
@@ -1627,6 +1651,14 @@ def check_deployment_apk(artifact: dict, expected_sha256: str | None) -> None:
         raise AndroidDeployError("deployment_apk_digest_mismatch")
 
 
+def select_openxr_device_images(artifact: VerifiedAndroidArtifact, abi: str) -> dict[str, str]:
+    """Report the two verified native images for the selected device ABI."""
+    selected = next((images for images in artifact.openxr_images if images.abi == abi), None)
+    if selected is None:
+        raise AndroidDeployError("openxr_device_images_unavailable")
+    return selected.report()
+
+
 def check_openxr_discovery(runtime: dict, observation: dict, abi: str) -> None:
     """Admit the exact cold-process runtime observation without claiming a device smoke result."""
     if observation["abi"] != abi:
@@ -1719,6 +1751,8 @@ def android_deploy_main(argv=None) -> int:
                 raise AndroidDeployError("device_connection_mismatch")
             current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
+            if openxr:
+                report["artifact"]["openxrImages"] = select_openxr_device_images(artifact, abi)
             user = str(current_user)
             report["stage"] = "install"
             if device.process_id(application) is not None:

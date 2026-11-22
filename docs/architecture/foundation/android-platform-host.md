@@ -362,6 +362,8 @@ from the verified cold process, validates its runtime result and ABI, and stops
 that exact diagnostic process before reporting `diagnostic_complete`. The
 observation records only the diagnostic stage, native result and numeric
 runtime version. The report keeps physical XR qualification separate.
+The OpenXR artifact section includes the verified diagnostic host and loader
+digests for the selected Android ABI.
 
 Use `--expect-apk-sha256` to bind a run to an independently selected APK.
 An APK mismatch stops before device access. Use `--expect-runtime-version`
