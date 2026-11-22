@@ -22,6 +22,99 @@
 namespace {
     using namespace Horo::Editor::SceneDocumentTestSupport;
 
+    TEST_CASE("Reviewed Scene replacements publish once through canonical history", "[unit][editor][scene-review]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const SceneTransactionSession session{Assets::AssetId::FromBytes({1}), 1};
+        const SceneSource::SceneObjectSnapshot first{.id = {1}, .name = "First"};
+        const SceneSource::SceneObjectSnapshot second{.id = {2}, .name = "Second"};
+        auto owner = SceneDocumentTransactions::Create(session, {first, second}).Value();
+        auto current = [&] {
+            const auto snapshot = owner.Snapshot().Value();
+            return SceneTransactionContext{snapshot.session, snapshot.revision, snapshot.state, true, {}};
+        };
+        const auto opening = current();
+        auto renamed = first;
+        renamed.name = "Renamed";
+        const auto fingerprint = [](const auto &object) {
+            return FingerprintSceneObjectContent(object, MaximumSceneObjectFingerprintBytes).Value();
+        };
+        const std::vector<SceneObjectReplacement> changes{
+            {.object = first.id, .priorContent = fingerprint(first), .desired = renamed},
+            {.object = second.id, .priorContent = fingerprint(second)},
+        };
+        auto result = owner.PreviewReplacements(opening, changes);
+        REQUIRE(result.HasValue());
+        auto preview = std::move(result).Value();
+        REQUIRE(preview.Changes().size() == 2);
+        CHECK(preview.Changes()[0].desired->name == "Renamed");
+        CHECK_FALSE(preview.Changes()[1].desired);
+        CHECK(current().revision == opening.revision);
+        CHECK_FALSE(owner.IsDirty().Value());
+        CHECK(owner.Replay(opening, false).HasError());
+
+        SECTION("one approval and one undo cover both edits") {
+            const auto applied = owner.ApplyReviewedReplacements(opening, std::move(preview));
+            REQUIRE(applied.HasValue());
+            CHECK(applied.Value().committed);
+            CHECK(applied.Value().revision == opening.revision + 1);
+            const auto after = owner.Snapshot().Value();
+            REQUIRE(after.objects.size() == 1);
+            CHECK(after.objects.front().name == "Renamed");
+            CHECK(after.dirty);
+            CHECK(owner.ApplyReviewedReplacements(current(), std::move(preview)).HasError());
+            REQUIRE(owner.Replay(current(), false).HasValue());
+            CHECK(owner.Snapshot().Value().objects.size() == 2);
+            CHECK(owner.Snapshot().Value().objects.front().name == "First");
+            CHECK_FALSE(owner.IsDirty().Value());
+            CHECK(owner.Replay(current(), false).HasError());
+            REQUIRE(owner.Replay(current(), true).HasValue());
+            CHECK(owner.Snapshot().Value().objects.front().name == "Renamed");
+        }
+        SECTION("approval may be denied") {
+            auto declined = opening;
+            declined.canEdit = false;
+            CHECK(owner.ApplyReviewedReplacements(declined, std::move(preview)).HasError());
+            CHECK_FALSE(owner.IsDirty().Value());
+        }
+        SECTION("a different owner with the same session values cannot use the review") {
+            auto other = SceneDocumentTransactions::Create(session, {first, second}).Value();
+            CHECK(other.ApplyReviewedReplacements(opening, std::move(preview)).HasError());
+            CHECK_FALSE(other.IsDirty().Value());
+        }
+        SECTION("intervening publication invalidates the whole review") {
+            REQUIRE(owner.Execute(opening, std::span{changes}.first(1)).HasValue());
+            CHECK(owner.ApplyReviewedReplacements(current(), std::move(preview)).HasError());
+            CHECK(owner.Snapshot().Value().objects.size() == 2);
+        }
+        SECTION("conflicting batches fail before review") {
+            auto duplicate = changes;
+            duplicate.push_back(changes.front());
+            CHECK(owner.PreviewReplacements(opening, std::move(duplicate)).HasError());
+            CHECK_FALSE(owner.IsDirty().Value());
+        }
+        SECTION("a cancelled proposal cannot be applied with fresh approval") {
+            CancellationSource proposal;
+            auto proposed = opening;
+            proposed.cancellation = proposal.Token();
+            auto pending = owner.PreviewReplacements(proposed, changes);
+            REQUIRE(pending.HasValue());
+            proposal.RequestCancellation();
+            CHECK(owner.ApplyReviewedReplacements(opening, std::move(pending).Value()).HasError());
+            CHECK_FALSE(owner.IsDirty().Value());
+        }
+        SECTION("no-ops do not appear in the review or create history") {
+            auto unchanged =
+                owner.PreviewReplacements(opening, {{.object = first.id, .priorContent = fingerprint(first), .desired = first}});
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().Changes().empty());
+            auto applied = owner.ApplyReviewedReplacements(opening, std::move(unchanged).Value());
+            REQUIRE(applied.HasValue());
+            CHECK_FALSE(applied.Value().committed);
+            CHECK(owner.Replay(opening, false).HasError());
+        }
+    }
+
     TEST_CASE("Viewport Scene State Advances Its Mesh Resource Generation Only For Resource Changes", "[unit][editor]") {
         using namespace Horo::Editor;
 

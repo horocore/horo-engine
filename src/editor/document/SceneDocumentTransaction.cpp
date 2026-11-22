@@ -466,6 +466,43 @@ namespace Horo::Editor {
         return Result<SceneTransactionResult>::Success(PublishPrepared(*replacement.prepared_));
     }
 
+    /** @copydoc SceneDocumentTransactions::PreviewReplacements */
+    Result<SceneDocumentTransactions::ReplacementPreview> SceneDocumentTransactions::PreviewReplacements(
+        const SceneTransactionContext &context, std::vector<SceneObjectReplacement> changes, const SceneTransactionLimits limits) const {
+        auto prepared = Prepare(context, changes, limits);
+        if (prepared.HasError())
+            return Result<ReplacementPreview>::Failure(prepared.ErrorValue());
+        if (!prepared.Value()->history) {
+            changes.clear();
+        } else {
+            const auto &affected = prepared.Value()->history->undo.back().affectedObjects;
+            std::erase_if(changes, [&affected](const SceneObjectReplacement &change) {
+                return std::ranges::find(affected, change.object) == affected.end();
+            });
+        }
+        if (auto valid = ValidatePrepared(*prepared.Value()); valid.HasError())
+            return Result<ReplacementPreview>::Failure(valid.ErrorValue());
+        ReplacementPreview preview;
+        preview.owner_ = lifetime_;
+        preview.context_ = context;
+        preview.limits_ = limits;
+        preview.changes_ = std::move(changes);
+        return Result<ReplacementPreview>::Success(std::move(preview));
+    }
+
+    /** @copydoc SceneDocumentTransactions::ApplyReviewedReplacements */
+    Result<SceneTransactionResult> SceneDocumentTransactions::ApplyReviewedReplacements(const SceneTransactionContext &approval,
+                                                                                        ReplacementPreview preview) {
+        if (!lifetime_ || preview.owner_.lock() != lifetime_)
+            return Result<SceneTransactionResult>::Failure(Rejected(SceneTransactionFailure::Stale));
+        if (auto admitted = Admit(preview.context_); admitted.HasError())
+            return Result<SceneTransactionResult>::Failure(admitted.ErrorValue());
+        auto context = approval;
+        context.cancellation = CancellationToken::AnyOf(approval.cancellation, preview.context_.cancellation);
+        // Rebuild against live history because saving and maintenance can occur while the review is open.
+        return Execute(context, preview.changes_, preview.limits_);
+    }
+
     /** @copydoc SceneDocumentTransactions::Execute */
     Result<SceneTransactionResult> SceneDocumentTransactions::Execute(const SceneTransactionContext &context,
                                                                       const std::span<const SceneObjectReplacement> changes,

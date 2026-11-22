@@ -100,8 +100,49 @@ namespace Horo::Editor {
      */
     class SceneDocumentTransactions final {
         struct Prepared;
+        struct Lifetime;
 
     public:
+        /** @brief Move-only review of a validated batch, with no live editor state or staged history attached. */
+        class ReplacementPreview final {
+        public:
+            /** @brief Transfer the single-use review. @param other Source review. */
+            ReplacementPreview(ReplacementPreview &&other) noexcept = default;
+            /** @brief Replace this review. @param other Source review. @return This review. */
+            ReplacementPreview &operator=(ReplacementPreview &&other) noexcept = default;
+
+            /** @brief Borrow only the non-no-op replacements validated for review. @return Bounded typed changes. */
+            [[nodiscard]] std::span<const SceneObjectReplacement> Changes() const noexcept {
+                return changes_;
+            }
+
+        private:
+            friend class SceneDocumentTransactions;
+            ReplacementPreview() = default;
+            std::weak_ptr<Lifetime> owner_;
+            SceneTransactionContext context_;
+            SceneTransactionLimits limits_;
+            std::vector<SceneObjectReplacement> changes_;
+        };
+
+        /** @brief Validate a detached batch for review without mutating the document or history.
+         * @param context Exact editable scene opening and revision at proposal time.
+         * @param changes Owned candidate operations; never read again from the caller after preview.
+         * @param limits Finite preparation and change ceilings.
+         * @return Single-use review with effective changes or a typed validation failure.
+         */
+        [[nodiscard]] Result<ReplacementPreview> PreviewReplacements(const SceneTransactionContext &context,
+                                                                     std::vector<SceneObjectReplacement> changes,
+                                                                     SceneTransactionLimits limits = {}) const;
+
+        /** @brief Apply the reviewed batch through the canonical history after explicit owner approval.
+         * @param approval Fresh owner fence with live edit permission and cancellation after approval.
+         * @param preview Consumed review from this opening. Dropping it discards the proposal.
+         * @return One coherent commit/no-op or a typed rejection with no mutation.
+         */
+        [[nodiscard]] Result<SceneTransactionResult> ApplyReviewedReplacements(const SceneTransactionContext &approval,
+                                                                               ReplacementPreview preview);
+
         /** @brief Fully reserved subtree-to-instance replacement; no authored state changes before CommitPrefabReplacement. */
         class PrefabReplacement final {
         public:

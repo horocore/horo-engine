@@ -623,6 +623,13 @@ struct AgentEditTransaction {
 The command system owns undo/redo, dirty-state updates, selection restoration,
 and UI refresh. Agent tools do not bypass it.
 
+For authored object replacements, `SceneDocumentTransactions::PreviewReplacements`
+validates the complete batch and returns the effective typed changes for review.
+The review owns detached values tied to the original document opening and
+revision. After approval, the owner calls `ApplyReviewedReplacements` with fresh
+edit admission. It revalidates the reviewed batch against the live document and
+records one canonical history entry.
+
 ### Communication Flow
 
 ```text
