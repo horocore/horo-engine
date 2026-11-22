@@ -181,21 +181,24 @@ TEST_CASE("Package lifecycle orders actual native providers before dependants an
     CHECK(std::filesystem::is_empty(fixture.temporary.Path()));
 }
 
-TEST_CASE("Package lifecycle rejects missing and cyclic native dependency plans before loading", "[packages][activation]") {
+TEST_CASE("Package installation and activation reject invalid dependency plans before loading", "[packages][activation]") {
     Fixture fixture;
     auto graph = Graph(HORO_PACKAGE_EMPTY_FIXTURE, true, true, "com.example.dependent");
     auto provider = Graph(HORO_PACKAGE_EMPTY_FIXTURE, true, true, "com.example.provider");
     graph->packages.front().lock.dependencies.push_back({provider->packages.front().lock.package, provider->packages.front().lock.version});
-    SECTION("missing dependency") {}
+    SECTION("missing dependency is rejected at installation") {
+        CHECK(fixture.install.Install(graph, fixture.cancellation.Token()).HasError());
+        CHECK_FALSE(fixture.install.InstalledRecord());
+    }
     SECTION("cyclic dependency") {
         provider->packages.front().lock.dependencies.push_back(
             {graph->packages.front().lock.package, graph->packages.front().lock.version});
         graph->packages.push_back(provider->packages.front());
         fixture.enabled.push_back({Parse<HoroPackageId>("com.example.provider"), Parse<PackagePath>("extensions/native/extension.json")});
+        fixture.enabled.front().package = Parse<HoroPackageId>("com.example.dependent");
+        fixture.Install(graph);
+        CHECK(fixture.Activate().HasError());
     }
-    fixture.enabled.front().package = Parse<HoroPackageId>("com.example.dependent");
-    fixture.Install(graph);
-    CHECK(fixture.Activate().HasError());
     CHECK(fixture.loads == 0U);
 }
 

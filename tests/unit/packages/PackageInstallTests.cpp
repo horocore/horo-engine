@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <span>
+#include <string_view>
 
 using namespace Horo;
 using namespace Horo::Packages;
@@ -31,12 +32,12 @@ namespace {
         return std::move(version).Value();
     }
 
-    std::shared_ptr<PackageRestoreGraph> Graph() {
+    std::shared_ptr<PackageRestoreGraph> Graph(std::string_view id = "com.horo.install-fixture") {
         auto bytes = Horo::Tests::Packages::ValidPackageArchiveBytes();
         auto verified = ValidatedPackageArchive::Verify(bytes);
         REQUIRE(verified.HasValue());
         auto archive = std::make_shared<const ValidatedPackageArchive>(std::move(verified).Value());
-        LockedPackage lock{.package = PackageId("com.horo.install-fixture"),
+        LockedPackage lock{.package = PackageId(id),
                            .version = Version("1.0.0"),
                            .source = SourceId("fixture.source"),
                            .artifactDigest = archive->Digest(),
@@ -143,6 +144,36 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
     CHECK(stopped.ErrorValue().code.Value() == PackageInstallErrors::Cancelled.code.Value());
     CHECK(service.ActiveGraph() == committed);
     CHECK(ReadFile(recordPath) == originalRecord);
+}
+
+TEST_CASE("Package install retains the graph when replacement would break a locked dependency", "[packages][install]") {
+    TemporaryDirectory project;
+    NativeDurableFileSystem files;
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
+    REQUIRE(created.HasValue());
+    auto service = std::move(created).Value();
+    auto graph = Graph();
+    auto dependency = Graph("com.horo.required-fixture");
+    graph->packages.front().lock.dependencies.emplace_back(dependency->packages.front().lock.package, Version("1.0.0"));
+    graph->packages.push_back(std::move(dependency->packages.front()));
+    REQUIRE(service.Install(graph, {}).HasValue());
+    const auto committed = service.InstalledRecord();
+    const auto recordPath = project.Path() / ".horo/packages.installed.json";
+    const auto originalRecord = ReadFile(recordPath);
+
+    SECTION("the dependency disappeared") {
+        graph->packages.pop_back();
+    }
+    SECTION("the dependency version changed without updating the dependent edge") {
+        graph->packages.back().lock.version = Version("2.0.0");
+    }
+    const auto rejected = service.Install(graph, {});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == PackageInstallErrors::InvalidInput.code.Value());
+    CHECK(rejected.ErrorValue().message == "Package com.horo.install-fixture requires com.horo.required-fixture at version 1.0.0.");
+    CHECK(service.InstalledRecord() == committed);
+    CHECK(ReadFile(recordPath) == originalRecord);
+    CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.install.pending"));
 }
 
 TEST_CASE("Package install leaves the previous record active when a durable commit fails", "[packages][install]") {

@@ -3,12 +3,14 @@
 #include "Horo/Packages/PackageInstallErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
-#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -22,14 +24,26 @@ namespace Horo::Packages {
                 graph.platform.architecture.empty() || graph.platform.sdkAbi.empty())
                 return Result<void>::Failure(MakeError(PackageInstallErrors::InvalidInput));
 
-            std::set<std::string, std::less<>> identities;
+            std::map<std::string_view, const LockedPackage *, std::less<>> identities;
             for (const auto &package : graph.packages) {
-                if (!package.archive || !identities.insert(package.lock.package.Value()).second)
+                if (!package.archive || package.lock.dependencies.size() > MaximumInstalledPackages ||
+                    !identities.try_emplace(package.lock.package.Value(), &package.lock).second)
                     return Result<void>::Failure(MakeError(PackageInstallErrors::InvalidInput));
                 if (package.archive->Digest() != package.lock.artifactDigest ||
                     package.archive->PackageManifestDigest() != package.lock.manifestDigest ||
                     package.archive->Manifest().Digest() != package.lock.fileManifestDigest)
                     return Result<void>::Failure(MakeError(PackageInstallErrors::EvidenceMismatch));
+            }
+            for (const auto &package : graph.packages) {
+                for (const auto &dependency : package.lock.dependencies) {
+                    const auto installed = identities.find(dependency.package.Value());
+                    if (installed == identities.end() || installed->second == &package.lock ||
+                        installed->second->version != dependency.version)
+                        return Result<void>::Failure(
+                            MakeError(PackageInstallErrors::InvalidInput,
+                                      std::format("Package {} requires {} at version {}.", package.lock.package.Value(),
+                                                  dependency.package.Value(), dependency.version.ToString())));
+                }
             }
             return Result<void>::Success();
         }
