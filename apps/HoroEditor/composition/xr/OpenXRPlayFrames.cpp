@@ -770,7 +770,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::LightingCutoff */
     std::optional<XRRuntimeTime> OpenXRPlayHost::LightingCutoff(const XRLightEstimateScope &scope) const noexcept {
-        const auto read = [&]() -> std::optional<XRRuntimeTime> {
+        const auto observeCutoff = [&]() -> std::optional<XRRuntimeTime> {
             const auto state = sessions_->Snapshot();
             const auto *tracking = tracking_.Current();
             if (!tracking || pendingRevoke_ || eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing ||
@@ -780,8 +780,8 @@ namespace Horo::Application::Internal {
                 return std::nullopt;
             return tracking->SampledAt();
         };
-        const auto observed = read();
-        if (!observed || !composition_.session.AllowsNativeLighting(scope) || read() != observed)
+        const auto observed = observeCutoff();
+        if (!observed || !composition_.session.AllowsNativeLighting(scope) || observeCutoff() != observed)
             return std::nullopt;
         return observed;
     }
