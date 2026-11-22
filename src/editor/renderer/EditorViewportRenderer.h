@@ -70,7 +70,7 @@ namespace Horo::Editor {
             return std::nullopt;
         }
 
-        /** @brief Cancels an exact capture while pending. */
+        /** @brief Withdraws an exact pending capture or its ready artifact. */
         virtual bool CancelImageCapture(std::uint64_t) noexcept {
             return false;
         }

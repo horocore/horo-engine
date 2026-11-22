@@ -395,6 +395,12 @@ cancellation; on a drain timeout, host composition must keep that owner alive
 until its jobs/processes have stopped and callbacks have completed. Controller
 destruction cannot forcibly terminate an application-owned job or process.
 
+An owner may lease a sensitive result to the controller for a single
+`operations/get` delivery. The lease binds a monotonic deadline and weak source
+lifetime without calling the owner from the transport thread. A lease applies
+only to that running operation. Revoked, expired, and already received
+payloads return operation-unavailable.
+
 ## Error Handling
 
 MCP errors are translated into JSON-RPC error objects:
@@ -783,8 +789,11 @@ authored viewport while Play is idle. Coordinates use a top-left pixel origin,
 with at most 256 pixels per axis. `debug.get_image` reports capture status and
 returns ready RGBA8 pixels as hexadecimal in chunks of up to 2,048 bytes. Start
 at offset zero and use `nextOffset` until the result omits it. Reads belong to the
-same authenticated session and source revision. `debug.cancel_image` requires
-exact approval. Workspace retirement, a source change, or loss of authority
+same authenticated session and source revision. A prepared pixel chunk can be
+collected once through `operations/get` while the source still owns it. To retry
+a lost delivery, request the same byte offset again while the capture is live.
+`debug.cancel_image` requires exact approval and withdraws pending or ready
+images. Workspace retirement, a source change, or loss of authority
 withdraws the image.
 
 ## Editor gameplay build commands

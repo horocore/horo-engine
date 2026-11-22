@@ -82,7 +82,7 @@ namespace Horo::Editor {
         height_ = height;
         region_ = region;
         phase_ = EditorViewportImagePhase::Pending;
-        artifact_.reset();
+        WithdrawPublication();
         authorized_ = std::move(authorized);
         return Output::Success(++serial_);
     }
@@ -93,14 +93,16 @@ namespace Horo::Editor {
         WithdrawIfUnauthorized();
         if (!started_ || serial_ != id)
             return std::nullopt;
-        return EditorViewportImageSnapshot{phase_, artifact_};
+        return EditorViewportImageSnapshot{phase_, artifact_, publication_, *started_ + Lifetime};
     }
 
     /** @copydoc OpenGLViewportImageCapture::Cancel */
     bool OpenGLViewportImageCapture::Cancel(std::uint64_t id) noexcept {
         Expire(Clock::now());
-        if (!id || serial_ != id || phase_ != EditorViewportImagePhase::Pending)
+        if (!id || serial_ != id || (phase_ != EditorViewportImagePhase::Pending && phase_ != EditorViewportImagePhase::Ready))
             return false;
+        authorized_ = {};
+        WithdrawPublication();
         phase_ = EditorViewportImagePhase::Cancelled;
         return true;
     }
@@ -126,21 +128,22 @@ namespace Horo::Editor {
             phase_ = EditorViewportImagePhase::Failed;
     }
 
-    /** @brief Withdraws pending publication when the exact render target changes or fails. */
+    /** @brief Withdraws publication when the exact render target changes or fails. */
     void OpenGLViewportImageCapture::ReconcileSource(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height,
                                                      bool frameFailed) noexcept {
-        if (phase_ != EditorViewportImagePhase::Pending)
+        if (phase_ != EditorViewportImagePhase::Pending && phase_ != EditorViewportImagePhase::Ready)
             return;
-        if (target != target_ || width != width_ || height != height_)
-            phase_ = EditorViewportImagePhase::Resized;
-        else if (frameFailed)
-            phase_ = EditorViewportImagePhase::Failed;
+        const bool resized = target != target_ || width != width_ || height != height_;
+        if (resized || frameFailed) {
+            WithdrawPublication();
+            phase_ = resized ? EditorViewportImagePhase::Resized : EditorViewportImagePhase::Failed;
+        }
     }
 
     /** @brief Expires only publication so already queued GPU work can retire without waiting. */
     void OpenGLViewportImageCapture::Expire(Clock::time_point now) noexcept {
         if (started_ && now - *started_ >= Lifetime) {
-            artifact_.reset();
+            WithdrawPublication();
             phase_ = EditorViewportImagePhase::Expired;
             authorized_ = {};
         }
@@ -151,8 +154,14 @@ namespace Horo::Editor {
         if (!authorized_ || authorized_())
             return;
         authorized_ = {};
-        artifact_.reset();
+        WithdrawPublication();
         phase_ = EditorViewportImagePhase::Cancelled;
+    }
+
+    /** @brief Separately revokes transport delivery even if a caller still owns detached pixels. */
+    void OpenGLViewportImageCapture::WithdrawPublication() noexcept {
+        publication_.reset();
+        artifact_.reset();
     }
 
     /** @brief Queues one bounded color rectangle into an OpenGL pixel pack buffer. */
@@ -197,10 +206,12 @@ namespace Horo::Editor {
     /** @brief Maps only completed storage, flips rows, and publishes no native identities. */
     bool OpenGLViewportImageCapture::CopyPixels() {
         std::shared_ptr<EditorViewportImageArtifact> result;
+        std::shared_ptr<const Publication> publication;
         try {
             result = std::make_shared<EditorViewportImageArtifact>();
             result->region = region_;
             result->rgba.resize(region_.Bytes());
+            publication = std::make_shared<const Publication>();
         } catch (const std::bad_alloc &) {
             return false;
         }
@@ -216,6 +227,7 @@ namespace Horo::Editor {
         if (glUnmapBuffer(GL_PIXEL_PACK_BUFFER) != GL_TRUE)
             return false;
         artifact_ = std::move(result);
+        publication_ = std::move(publication);
         return true;
     }
 
@@ -232,7 +244,7 @@ namespace Horo::Editor {
     /** @copydoc OpenGLViewportImageCapture::Shutdown */
     void OpenGLViewportImageCapture::Shutdown() noexcept {
         ReleaseCopy();
-        artifact_.reset();
+        WithdrawPublication();
         started_.reset();
         authorized_ = {};
         phase_ = EditorViewportImagePhase::Failed;

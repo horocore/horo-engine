@@ -193,13 +193,47 @@ namespace {
         }
         SECTION("completed pixels are withdrawn before a later read") {
             capture.Advance(Target, 10, 10, false, std::nullopt);
-            REQUIRE(capture.Read(id.Value())->artifact);
+            const auto ready = capture.Read(id.Value());
+            REQUIRE(ready);
+            REQUIRE(ready->artifact);
+            CHECK_FALSE(ready->publication.expired());
             authorized = false;
+            capture.Advance(Target, 10, 10, false, std::nullopt);
+            CHECK(ready->publication.expired());
         }
         const auto withdrawn = capture.Read(id.Value());
         REQUIRE(withdrawn);
         CHECK(withdrawn->phase == EditorViewportImagePhase::Cancelled);
         CHECK_FALSE(withdrawn->artifact);
+    }
+
+    TEST_CASE("OpenGL viewport cancels or resizes an already prepared image", "[editor][opengl][image-capture]") {
+        ScopedCaptureDispatch gl;
+        OpenGLViewportImageCapture capture;
+        const auto id = capture.Request({0, 0, 2, 2}, Target, 10, 10);
+        REQUIRE(id.HasValue());
+        capture.Advance(Target, 10, 10, false, 20);
+        gl.fake.waitStatus = GL_CONDITION_SATISFIED;
+        capture.Advance(Target, 10, 10, false, std::nullopt);
+        const auto ready = capture.Read(id.Value());
+        REQUIRE(ready);
+        REQUIRE(ready->artifact);
+        CHECK_FALSE(ready->publication.expired());
+
+        auto expected = EditorViewportImagePhase::Cancelled;
+        SECTION("the exact identifier cancels the image") {
+            CHECK_FALSE(capture.Cancel(id.Value() + 1));
+            CHECK(capture.Cancel(id.Value()));
+        }
+        SECTION("the viewport generation changes") {
+            expected = EditorViewportImagePhase::Resized;
+            capture.Advance(Target, 9, 10, false, 21);
+        }
+        CHECK(ready->publication.expired());
+        const auto resized = capture.Read(id.Value());
+        REQUIRE(resized);
+        CHECK(resized->phase == expected);
+        CHECK_FALSE(resized->artifact);
     }
 
     TEST_CASE("OpenGL viewport capture suppresses copied pixels after retirement", "[editor][opengl][image-capture]") {

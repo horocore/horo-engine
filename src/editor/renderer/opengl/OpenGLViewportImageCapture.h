@@ -30,7 +30,7 @@ namespace Horo::Editor {
                                                     std::uint32_t width, std::uint32_t height, std::function<bool()> authorized = {});
         /** @brief Copies ready artifact ownership without touching native state. */
         [[nodiscard]] std::optional<EditorViewportImageSnapshot> Read(std::uint64_t id);
-        /** @brief Prevents a pending copy from publishing without reusing its staging prematurely. */
+        /** @brief Withdraws a pending or ready capture without reusing native staging prematurely. */
         bool Cancel(std::uint64_t id) noexcept;
         /** @brief Reports whether a new native copy may need the target framebuffer this frame. */
         [[nodiscard]] bool NeedsFramebuffer() const noexcept;
@@ -43,7 +43,10 @@ namespace Horo::Editor {
     private:
         using Clock = std::chrono::steady_clock;
 
+        struct Publication {};
+
         void Expire(Clock::time_point now) noexcept;
+        void WithdrawPublication() noexcept;
         void WithdrawIfUnauthorized();
         void ReconcileSource(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height, bool frameFailed) noexcept;
         bool Submit(GLuint framebuffer);
@@ -59,6 +62,7 @@ namespace Horo::Editor {
         EditorViewportImageRegion region_;
         EditorViewportImagePhase phase_{EditorViewportImagePhase::Failed};
         std::shared_ptr<const EditorViewportImageArtifact> artifact_;
+        std::shared_ptr<const Publication> publication_;
         std::function<bool()> authorized_;
         GLuint buffer_{};
         GLsync fence_{};

@@ -165,7 +165,8 @@ namespace Horo::Editor {
             return hex;
         }
 
-        Output ReadImage(const EditorDebugCaptureEndpoint &endpoint, const CaptureOwner &owner, std::size_t offset) {
+        Output ReadImage(const EditorDebugCaptureEndpoint &endpoint, const CaptureOwner &owner, std::size_t offset,
+                         const Mcp::McpRequestContext &context) {
             const auto image = endpoint.readImage(owner.id);
             if (!image)
                 return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
@@ -175,6 +176,8 @@ namespace Horo::Editor {
             const auto &artifact = image->artifact;
             if (!artifact || artifact->region != owner.region || artifact->rgba.size() != artifact->region.Bytes() ||
                 offset >= artifact->rgba.size())
+                return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
+            if (!context.BindResultLease({image->publication, image->expiresAt}))
                 return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
 
             const auto bytes = artifact->rgba.size();
@@ -220,7 +223,7 @@ namespace Horo::Editor {
                 if (action_ == Action::Cancel)
                     return Output::Success({{"cancelled", kind_ == CaptureKind::Image ? endpoint.cancelImage(*id) : endpoint.cancel(*id)}});
                 if (kind_ == CaptureKind::Image)
-                    return ReadImage(endpoint, *owner_, arguments.value("offset", std::size_t{0}));
+                    return ReadImage(endpoint, *owner_, arguments.value("offset", std::size_t{0}), context);
                 const auto artifact = endpoint.read(*id);
                 if (!artifact)
                     return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));

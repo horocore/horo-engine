@@ -43,13 +43,17 @@ namespace {
         REQUIRE(session.Decide(challenge.Value(), true).HasValue());
     }
 
-    Json Execute(const EditorCommandMcpSession &session, const McpRequest &request) {
+    Json QueueAndPump(const EditorCommandMcpSession &session, const McpRequest &request) {
         const auto client = session.Client();
         const auto accepted = client->Call(request);
         REQUIRE(accepted.HasValue());
         REQUIRE(session.Pump().HasValue());
-        const auto status = client->Call(
-            {.id = "read-result", .method = "operations/get", .params = {{"operationId", accepted.Value().at("operationId")}}});
+        return {{"operationId", accepted.Value().at("operationId")}};
+    }
+
+    Json Execute(const EditorCommandMcpSession &session, const McpRequest &request) {
+        const auto operation = QueueAndPump(session, request);
+        const auto status = session.Client()->Call({.id = "read-result", .method = "operations/get", .params = operation});
         REQUIRE(status.HasValue());
         return status.Value();
     }
@@ -136,6 +140,8 @@ namespace {
         auto image = std::make_shared<EditorViewportImageArtifact>(
             EditorViewportImageArtifact{region, std::vector<std::byte>(region.Bytes(), std::byte{0xf0})});
         auto phase = EditorViewportImagePhase::Pending;
+        auto publication = std::make_shared<const bool>(true);
+        auto expiresAt = std::chrono::steady_clock::now() + 30s;
         std::function<bool()> authorized;
         const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(EditorDebugCaptureEndpoint{
             .project = "project-one",
@@ -161,12 +167,13 @@ namespace {
         },
             .readImage = [&](std::uint64_t id) -> std::optional<EditorViewportImageSnapshot> {
             CHECK(id == 12);
-            return EditorViewportImageSnapshot{phase, image};
+            return EditorViewportImageSnapshot{phase, image, publication, expiresAt};
         },
             .cancelImage =
                 [&](std::uint64_t id) {
             CHECK(id == 12);
             phase = EditorViewportImagePhase::Cancelled;
+            publication.reset();
             return true;
         },
         });
@@ -185,34 +192,56 @@ namespace {
         CHECK_FALSE(pending["result"].contains("data"));
 
         phase = EditorViewportImagePhase::Ready;
-        const auto first = Execute(session, Command("first-chunk", "debug.get_image", args));
-        REQUIRE(first["status"] == "succeeded");
-        CHECK(first["result"]["totalBytes"] == 3072);
-        CHECK(first["result"]["encoding"] == "rgba8-hex");
-        CHECK(first["result"]["data"].get<std::string>().size() == 4096);
-        CHECK(first["result"]["data"].get<std::string>().starts_with("f0f0"));
-        const auto next = first["result"]["nextOffset"];
-        REQUIRE(next == 2048);
-        const auto second = Execute(session, Command("second-chunk", "debug.get_image", {{"captureId", "12"}, {"offset", next}}));
-        REQUIRE(second["status"] == "succeeded");
-        CHECK(second["result"]["offset"] == 2048);
-        CHECK(second["result"]["data"].get<std::string>().size() == 2048);
-        CHECK_FALSE(second["result"].contains("nextOffset"));
-        CHECK(Execute(session, Command("wrong-id", "debug.get_image", {{"captureId", "13"}}))["status"] != "succeeded");
-        image->region.x = 3;
-        CHECK(Execute(session, Command("wrong-region", "debug.get_image", args))["status"] != "succeeded");
-        auto other = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
-        REQUIRE(other.HasValue());
-        CHECK(Execute(*other.Value(), Command("other-session", "debug.get_image", args))["status"] != "succeeded");
+        SECTION("prepared pixels cannot be replayed or delivered once the source revokes them") {
+            const auto client = session.Client();
+            auto operation = QueueAndPump(session, Command("once", "debug.get_image", args));
+            const auto poll = [&](std::string method) {
+                return client->Call({.id = "status-image", .method = std::move(method), .params = operation});
+            };
+            CHECK(poll("operations/cancel").HasError());
+            const auto result = poll("operations/get");
+            REQUIRE(result.HasValue());
+            CHECK(result.Value()["result"].contains("data"));
+            CHECK(poll("operations/get").HasError());
 
-        const auto cancel = Command("cancel-image", "debug.cancel_image", args);
-        CHECK(session.Client()->Call(cancel).HasError());
-        Approve(session, cancel);
-        CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
-        REQUIRE(authorized);
-        CHECK(authorized());
-        CHECK(session.Close().HasValue());
-        CHECK_FALSE(authorized());
+            operation = QueueAndPump(session, Command("revoked", "debug.get_image", args));
+            publication.reset();
+            CHECK(poll("operations/get").HasError());
+        }
+        SECTION("expiry prevents publication") {
+            expiresAt = std::chrono::steady_clock::now() - 1ms;
+            CHECK(Execute(session, Command("expired", "debug.get_image", args))["status"] == "failed");
+        }
+        SECTION("approved chunks preserve offset, dimensions, and session ownership") {
+            const auto first = Execute(session, Command("first-chunk", "debug.get_image", args));
+            REQUIRE(first["status"] == "succeeded");
+            CHECK(first["result"]["totalBytes"] == 3072);
+            CHECK(first["result"]["encoding"] == "rgba8-hex");
+            CHECK(first["result"]["data"].get<std::string>().size() == 4096);
+            CHECK(first["result"]["data"].get<std::string>().starts_with("f0f0"));
+            const auto next = first["result"]["nextOffset"];
+            REQUIRE(next == 2048);
+            const auto second = Execute(session, Command("second-chunk", "debug.get_image", {{"captureId", "12"}, {"offset", next}}));
+            REQUIRE(second["status"] == "succeeded");
+            CHECK(second["result"]["offset"] == 2048);
+            CHECK(second["result"]["data"].get<std::string>().size() == 2048);
+            CHECK_FALSE(second["result"].contains("nextOffset"));
+            CHECK(Execute(session, Command("wrong-id", "debug.get_image", {{"captureId", "13"}}))["status"] != "succeeded");
+            image->region.x = 3;
+            CHECK(Execute(session, Command("wrong-region", "debug.get_image", args))["status"] != "succeeded");
+            auto other = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
+            REQUIRE(other.HasValue());
+            CHECK(Execute(*other.Value(), Command("other-session", "debug.get_image", args))["status"] != "succeeded");
+
+            const auto cancel = Command("cancel-image", "debug.cancel_image", args);
+            CHECK(session.Client()->Call(cancel).HasError());
+            Approve(session, cancel);
+            CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
+            REQUIRE(authorized);
+            CHECK(authorized());
+            CHECK(session.Close().HasValue());
+            CHECK_FALSE(authorized());
+        }
     }
 
     TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {

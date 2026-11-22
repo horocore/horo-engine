@@ -2,6 +2,7 @@
 
 /** @file EditorViewportImageCapture.h @brief Detached, bounded editor viewport image evidence. */
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -50,5 +51,7 @@ namespace Horo::Editor {
     struct EditorViewportImageSnapshot {
         EditorViewportImagePhase phase;
         std::shared_ptr<const EditorViewportImageArtifact> artifact;
+        std::weak_ptr<const void> publication;             /**< Revoked when the capture owner withdraws the image. */
+        std::chrono::steady_clock::time_point expiresAt{}; /**< Deadline for delivering detached pixels. */
     };
 }  // namespace Horo::Editor

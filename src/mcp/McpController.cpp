@@ -68,6 +68,7 @@ namespace Horo::Mcp {
             std::shared_ptr<const McpToolSnapshot> snapshot;
             OperationState state{OperationState::Queued};
             std::optional<nlohmann::json> result;
+            std::optional<McpResultLease> resultLease;
             std::optional<Error> error;
             std::optional<double> progress;
             std::string phase;
@@ -204,6 +205,33 @@ namespace Horo::Mcp {
             }
         }
 
+        /** @brief Binds one live source lease before an adapter completes its sensitive response. */
+        bool BindResultLease(std::uint64_t id, McpResultLease lease) {
+            std::lock_guard lock{mutex};
+            const auto found = operations.find(id);
+            if (found == operations.end() || found->second->state != OperationState::Running || found->second->resultLease ||
+                !lease.IsLive())
+                return false;
+            found->second->resultLease = std::move(lease);
+            return true;
+        }
+
+        /** @brief Emits a leased payload only once, exclusively through operations/get. Requires mutex. */
+        Result<nlohmann::json> ReadOperation(Operation &operation, bool consumeResult) {
+            using Output = Result<nlohmann::json>;
+            if (!operation.resultLease || operation.state != OperationState::Succeeded)
+                return Output::Success(View(operation));
+            if (!operation.result || !operation.resultLease->IsLive() || operation.context.authority->IsStopRequested()) {
+                operation.result.reset();
+                return Output::Failure(MakeError(McpErrors::OperationUnavailable));
+            }
+            if (!consumeResult)
+                return Output::Failure(MakeError(McpErrors::OperationUnavailable));
+            auto view = View(operation);
+            operation.result.reset();
+            return Output::Success(std::move(view));
+        }
+
         /** @brief Admits one request and retains its snapshot under the bounded queue lock. */
         [[nodiscard]] Result<nlohmann::json> QueueCall(const McpRequest &request, const McpRequestContext &context, McpToolId tool,
                                                        const McpOwnerContext owner, std::shared_ptr<const McpToolSnapshot> snapshot) {
@@ -232,6 +260,10 @@ namespace Horo::Mcp {
                 if (const auto state = weak.lock())
                     state->ReportProgress(id, fraction, std::move(phase));
             };
+            operation->context.bindResultLease = [weak = weak_from_this(), id = operation->id](McpResultLease lease) {
+                const auto state = weak.lock();
+                return state && state->BindResultLease(id, std::move(lease));
+            };
             operation->owner = owner;
             operation->snapshot = std::move(snapshot);
             operations.try_emplace(operation->id, operation);
@@ -249,7 +281,9 @@ namespace Horo::Mcp {
             std::lock_guard lock{mutex};
             try {
                 if (operation && !StopIfRequested(operation)) {
-                    if (outcome.HasValue())
+                    if (operation->resultLease && !operation->resultLease->IsLive())
+                        Finish(operation, OperationState::Failed, MakeError(McpErrors::OperationUnavailable));
+                    else if (outcome.HasValue())
                         Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
                     else
                         Finish(operation, OperationState::Failed, outcome.ErrorValue());
@@ -354,7 +388,7 @@ namespace Horo::Mcp {
         } else {
             state_->StopIfRequested(operation);
         }
-        return Result<nlohmann::json>::Success(View(*operation));
+        return state_->ReadOperation(*operation, request.method == "operations/get");
     }
 
     /** @copydoc McpController::DispatchCall */
