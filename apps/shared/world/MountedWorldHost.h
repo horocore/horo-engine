@@ -39,10 +39,18 @@ namespace Horo::Application::Internal {
         std::span<const std::uint8_t> envelope;
     };
 
+    /** @brief Scene command intent for an exact mounted Navigation coverage change. */
+    enum class MountedWorldNavigationChange : std::uint8_t {
+        Attach,
+        Retire,
+        ForceEvict
+    };
+
     /** @brief Prepares a command owner for the complete proposed resident NavMesh set on the Scene owner lane. */
     using MountedWorldNavigationPublication =
         std::function<Result<std::shared_ptr<const Runtime::SceneGroupPublication>>(const Runtime::RuntimeSceneView &,
-                                                                                    std::span<const MountedWorldNavigationCell>)>;
+                                                                                    std::span<const MountedWorldNavigationCell>,
+                                                                                    MountedWorldNavigationChange)>;
     /** @brief Advances provider-affine retirement and reports whether old query and tile pins are drained. */
     using MountedWorldNavigationRetirement = std::function<Result<bool>()>;
 
@@ -236,6 +244,13 @@ namespace Horo::Application::Internal {
          * @return Success or typed stale evidence if the mount does not own that occurrence.
          */
         [[nodiscard]] Result<void> WithdrawLiveCell(Runtime::SceneInstanceId occurrence);
+
+        /** @brief Overrides demand for an exact resident cell on the authoritative mount owner lane.
+         * @param occurrence Resident occurrence selected by the trusted host.
+         * @return Success when retirement is requested, or a typed refusal once its Scene transaction is pending.
+         * @details Uses the ordinary retirement fence and waits for provider pins before returning residency capacity.
+         */
+        [[nodiscard]] Result<void> ForceEvictLiveCell(Runtime::SceneInstanceId occurrence);
 
         /** @brief Read exact charged CPU asset capacity on the Scene owner lane.
          * @return Shared resident and retiring payload bytes, or a typed error if the live owner is unavailable.

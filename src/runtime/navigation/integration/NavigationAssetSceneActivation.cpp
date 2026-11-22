@@ -32,8 +32,10 @@ namespace Horo::Navigation {
     public:
         NavigationStreamedTopologyPublication(std::shared_ptr<Detail::NavigationAssetSceneState> state,
                                               std::shared_ptr<NavigationWorldLifecycle> world,
-                                              const NavigationWorldActivationDescriptor &candidate, NavigationWorldReadLease predecessor)
-            : state_(std::move(state)), world_(std::move(world)), candidate_(candidate), predecessor_(std::move(predecessor)) {}
+                                              const NavigationWorldActivationDescriptor &candidate, NavigationWorldReadLease predecessor,
+                                              NavigationTopologyChange change)
+            : state_(std::move(state)), world_(std::move(world)), candidate_(candidate), predecessor_(std::move(predecessor)),
+              change_(change) {}
 
         NavigationStreamedTopologyPublication(const NavigationStreamedTopologyPublication &) = delete;
         NavigationStreamedTopologyPublication &operator=(const NavigationStreamedTopologyPublication &) = delete;
@@ -55,7 +57,7 @@ namespace Horo::Navigation {
         }
 
         void Publish() noexcept override {
-            world_->PublishValidatedTopology(candidate_);
+            world_->PublishValidatedTopology(candidate_, change_);
             ownsStage_ = false;
         }
 
@@ -71,6 +73,7 @@ namespace Horo::Navigation {
         std::shared_ptr<NavigationWorldLifecycle> world_;
         NavigationWorldActivationDescriptor candidate_;
         NavigationWorldReadLease predecessor_; /**< Pins retirement capacity through the no-fail publication phase. */
+        NavigationTopologyChange change_;
         bool ownsStage_{};
     };
 
@@ -564,8 +567,8 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationAssetSceneActivationParticipant::PrepareStreamedPublication */
     Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NavigationAssetSceneActivationParticipant::PrepareStreamedPublication(
-        const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
-        std::span<const NavigationStreamedSurface> surfaces) {
+        const NavigationWorldActivationDescriptor &expected, NavigationGeneration next, std::span<const NavigationStreamedSurface> surfaces,
+        NavigationTopologyChange change) {
         using Candidate = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
         const auto world = ActiveWorld();
         if (!world)
@@ -578,7 +581,8 @@ namespace Horo::Navigation {
         auto candidate = expected;
         candidate.topology = next;
         try {
-            auto prepared = std::make_unique<NavigationStreamedTopologyPublication>(state_, world, candidate, std::move(predecessor));
+            auto prepared =
+                std::make_unique<NavigationStreamedTopologyPublication>(state_, world, candidate, std::move(predecessor), change);
             if (auto staged = StageStreamedTopology(expected, next, surfaces); staged.HasError())
                 return Candidate::Failure(staged.ErrorValue());
             prepared->OwnStagedTopology();

@@ -958,6 +958,13 @@ namespace Horo::Application::Internal {
                      : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
     }
 
+    /** @copydoc ForceEvictHeadlessWorldCell */
+    Result<void> ForceEvictHeadlessWorldCell(const Network::INetworkModeService &service, Runtime::SceneInstanceId occurrence) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->ForceEvictMountedCell(occurrence)
+                     : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+    }
+
     /** @copydoc CaptureHeadlessWorldRenderGeometry */
     Result<MountedWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
                                                                         const Runtime::SceneObjectId camera,

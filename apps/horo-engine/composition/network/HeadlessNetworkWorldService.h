@@ -135,6 +135,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return occurrence ? mount->WithdrawLiveCell(*occurrence) : mount->WithdrawLiveCell();
         }
 
+        /** @brief Overrides demand through the same authoritative standalone Scene facade. */
+        Result<void> ForceEvictMountedCell(Runtime::SceneInstanceId occurrence) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->ForceEvictLiveCell(occurrence)
+                         : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
         /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
         Result<MountedWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
                                                                     std::span<const Runtime::SceneObjectId> meshes,

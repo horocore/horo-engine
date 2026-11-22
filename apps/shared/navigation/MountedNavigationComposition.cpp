@@ -19,9 +19,10 @@ namespace Horo::Application::Internal {
         public:
             CellNavigationOwner(Nav::NavigationAssetSceneActivationParticipant &owner,
                                 const Nav::NavigationWorldActivationDescriptor &predecessor, Nav::NavigationGeneration next,
-                                std::optional<Nav::LoadedNavMeshAsset> content, std::uint64_t surfaceGeneration)
+                                std::optional<Nav::LoadedNavMeshAsset> content, std::uint64_t surfaceGeneration,
+                                Nav::NavigationTopologyChange change)
                 : owner_(owner), predecessor_(predecessor), next_(next), content_(std::move(content)),
-                  surfaceGeneration_(surfaceGeneration) {}
+                  surfaceGeneration_(surfaceGeneration), change_(change) {}
 
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                                std::span<const Runtime::EntityRef>, bool) const override {
@@ -29,9 +30,9 @@ namespace Horo::Application::Internal {
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                         MakeError(Nav::NavigationErrors::StaleSnapshot));
                 if (!content_)
-                    return owner_.PrepareStreamedPublication(predecessor_, next_, {});
+                    return owner_.PrepareStreamedPublication(predecessor_, next_, {}, change_);
                 const std::array surfaces{Nav::NavigationStreamedSurface{*content_, 0, surfaceGeneration_}};
-                return owner_.PrepareStreamedPublication(predecessor_, next_, surfaces);
+                return owner_.PrepareStreamedPublication(predecessor_, next_, surfaces, change_);
             }
 
         private:
@@ -40,6 +41,7 @@ namespace Horo::Application::Internal {
             Nav::NavigationGeneration next_;
             std::optional<Nav::LoadedNavMeshAsset> content_;
             std::uint64_t surfaceGeneration_;
+            Nav::NavigationTopologyChange change_;
         };
 
         /** @brief Rejects a foreign Scene, profile, definition or stale cook before admitting requested tile storage. */
@@ -95,7 +97,7 @@ namespace Horo::Application::Internal {
         /** @brief Issues an exact generation for this Scene command even if it is subsequently cancelled. */
         Publication PreparePublication(const Runtime::RuntimeSceneView &scene, std::span<const MountedWorldNavigationCell> desired,
                                        ProjectSceneNavigationWorld &world, const ProjectSceneNavigationSelection &selected,
-                                       std::uint64_t &lastIssued) {
+                                       std::uint64_t &lastIssued, MountedWorldNavigationChange change) {
             const auto lifecycle = world.assets->ActiveWorld();
             if (!lifecycle)
                 return Publication::Failure(MakeError(Nav::NavigationErrors::NoNavigationData));
@@ -109,8 +111,11 @@ namespace Horo::Application::Internal {
             if (content.HasError())
                 return Publication::Failure(content.ErrorValue());
             const auto next = Nav::NavigationGeneration::Create(++lastIssued).Value();
+            const auto reason = change == MountedWorldNavigationChange::ForceEvict ? Nav::NavigationTopologyChange::ForcedCellEviction
+                                                                                   : Nav::NavigationTopologyChange::Replacement;
             return Publication::Success(std::make_shared<CellNavigationOwner>(*world.assets, predecessor.Value(), next,
-                                                                              std::move(content).Value(), selected.surfaceGeneration));
+                                                                              std::move(content).Value(), selected.surfaceGeneration,
+                                                                              reason));
         }
     }  // namespace
 
@@ -121,10 +126,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapabilityUnavailable));
         try {
             return mount.BindLiveNavigation(
-                [&world, selected = std::move(selection),
-                 lastIssued = std::uint64_t{}](const Runtime::RuntimeSceneView &scene,
-                                               std::span<const MountedWorldNavigationCell> desired) mutable {
-                return PreparePublication(scene, desired, world, *selected, lastIssued);
+                [&world, selected = std::move(selection), lastIssued = std::uint64_t{}](const Runtime::RuntimeSceneView &scene,
+                                                                                        std::span<const MountedWorldNavigationCell> desired,
+                                                                                        MountedWorldNavigationChange change) mutable {
+                return PreparePublication(scene, desired, world, *selected, lastIssued, change);
             },
                 [&world] {
                 const auto lifecycle = world.assets->ActiveWorld();

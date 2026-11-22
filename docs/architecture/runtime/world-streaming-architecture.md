@@ -1150,6 +1150,11 @@ under the same world and Scene identity.
 An unloaded cell's old provider can remain charged while a query retains its
 lease. The mount holds the cell in Retiring and acknowledges completion only
 after the provider reports that those leases have drained.
+The standalone host's forced eviction entry point names an exact live
+occurrence and uses the same Scene retirement fence. The new topology excludes
+that cell when the transaction commits. Pending or unconsumed path results
+from the revoked topology carry `navigation.query.tile_evicted` together with
+their original world, snapshot and topology identities.
 
 [ADR-107](../../adr/107-navigation-query-consistency-and-snapshot-ownership.md)
 requires a navigation query snapshot to record the exact PartitionEpoch,

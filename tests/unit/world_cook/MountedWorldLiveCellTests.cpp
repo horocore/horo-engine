@@ -192,6 +192,10 @@ namespace Horo::WorldCook {
                 Check(WithdrawHeadlessWorldCell(*scene_, demand_.occurrence));
             }
 
+            void ForceEvictFirstOccurrence() const {
+                Check(ForceEvictHeadlessWorldCell(*scene_, demand_.occurrence));
+            }
+
             Result<void> ProbeRequest() const {
                 return RequestHeadlessWorldCell(*scene_, demand_);
             }
@@ -608,6 +612,13 @@ namespace Horo::WorldCook {
             static_cast<void>(product.UntilAttached(false));
             REQUIRE(product.Attached(true));
         }
+        SECTION("The authoritative standalone facade can force retirement of an exact resident occurrence") {
+            MountedCellProduct product{true, true};
+            static_cast<void>(product.UntilAttached(true));
+            static_cast<void>(product.RunFrame());
+            product.ForceEvictFirstOccurrence();
+            static_cast<void>(product.UntilAttached(false));
+        }
     }
 
     TEST_CASE("Mounted live cells charge one committed allocation and retire it after the last native detach",
@@ -852,8 +863,10 @@ namespace Horo::WorldCook {
         W::TestSupport::RequireError(mount.RequestLiveCell(request), W::WorldArtifactErrors::Unsupported);
         std::size_t residentTiles{};
         REQUIRE(mount
-                    .BindLiveNavigation([&](const S::RuntimeSceneView &view, std::span<const MountedWorldNavigationCell> desired) {
+                    .BindLiveNavigation([&](const S::RuntimeSceneView &view, std::span<const MountedWorldNavigationCell> desired,
+                                            MountedWorldNavigationChange change) {
             CHECK(view.Find({42}));
+            CHECK(change == (desired.empty() ? MountedWorldNavigationChange::Retire : MountedWorldNavigationChange::Attach));
             if (!desired.empty()) {
                 REQUIRE(desired.size() == 1);
                 CHECK(desired.front().cell == identity.cell);
@@ -1011,24 +1024,56 @@ namespace Horo::WorldCook {
         REQUIRE(old.HasValue());
         auto retained = std::move(old).Value();
         const auto active = retained.Descriptor();
-        const auto path = retained.Backend().FindPath({.world = active.world,
-                                                       .topology = active.topology,
-                                                       .start = {1, 0, 1},
-                                                       .destination = {2, 0, 2},
-                                                       .filter = filter,
-                                                       .requirement = policy.MaximumQuery()},
-                                                      {});
+        const N::NavigationPathRequest request{.world = active.world,
+                                               .topology = active.topology,
+                                               .start = {1, 0, 1},
+                                               .destination = {2, 0, 2},
+                                               .filter = filter,
+                                               .requirement = policy.MaximumQuery()};
+        const auto path = retained.Backend().FindPath(request, {});
         REQUIRE(path.HasValue());
         CHECK(path.Value().status == N::NavigationPathStatus::Reachable);
-        REQUIRE(mount->WithdrawLiveCell({101}).HasValue());
+        const auto lifecycle = navigation->assets->ActiveWorld();
+        const std::array callers{
+            N::NavigationPathCaller{IdentityFrom<N::NavigationDynamicOwnerId>(1), IdentityFrom<N::NavigationDynamicOwnerGeneration>(1)}};
+        const auto epoch = active.topology.Value();
+        const N::NavigationOutcomeProvenance source{IdentityFrom<N::NavigationSnapshotToken>(epoch),
+                                                    active.world,
+                                                    active.topology,
+                                                    epoch,
+                                                    epoch,
+                                                    policy.Revision().Value(),
+                                                    epoch};
+        const auto queued = navigation->coordinator.Submit(*lifecycle,
+                                                           {.caller = callers.front(),
+                                                            .request = request,
+                                                            .source = source,
+                                                            .capabilityRevision = policy.Revision().Value(),
+                                                            .targetTick = 1,
+                                                            .deadlineTick = 8},
+                                                           1);
+        REQUIRE(queued.HasValue());
+        W::TestSupport::RequireError(mount->ForceEvictLiveCell({999}), W::WorldArtifactErrors::Stale);
+        REQUIRE(mount->ForceEvictLiveCell({101}).HasValue());
         until(Stage::Retiring);
         W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
-        CHECK(retained.Revocation() == N::NavigationWorldRevocation::TopologyReplaced);
+        CHECK(retained.Revocation() == N::NavigationWorldRevocation::TileEvicted);
         CHECK(retained.Cancellation().IsCancellationRequested());
         CHECK(navigation->assets->Snapshot().reservedProviderBytes > 0);
         until(Stage::Retiring);
         CHECK_FALSE(scene.ActiveScene()->Find({11}));
-        CHECK(navigation->assets->ActiveWorld()->ActiveDescriptor().Value().world == active.world);
+        const auto publishedTopology = lifecycle->ActiveDescriptor().Value();
+        CHECK(publishedTopology.world == active.world);
+        auto currentSource = source;
+        currentSource.topology = publishedTopology.topology;
+        currentSource.snapshot = IdentityFrom<N::NavigationSnapshotToken>(publishedTopology.topology.Value());
+        REQUIRE(navigation->coordinator.Commit({publishedTopology, currentSource, callers, 2}) == 1);
+        const auto completion = navigation->coordinator.Take(queued.Value());
+        REQUIRE(completion);
+        W::TestSupport::RequireError(completion->result, N::NavigationErrors::TileEvicted);
+        CHECK(completion->activation == active);
+        CHECK(completion->source.snapshot == source.snapshot);
+        CHECK(completion->source.topology == source.topology);
         retained = {};
         until(Stage::Idle);
         CHECK(navigation->assets->Snapshot().reservedProviderBytes == 0);

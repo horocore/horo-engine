@@ -121,11 +121,12 @@ namespace Horo::Navigation {
         /** @brief Prepares topology for publication through a Scene structural transaction.
          * @param expected Exact active predecessor. @param next New unique topology generation.
          * @param surfaces Borrowed verified desired resident set.
+         * @param change Typed cause reported to readers of the retiring topology.
          * @return Owned structural candidate or original error. Its destruction discards any unpublished stage.
          */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareStreamedPublication(
             const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
-            std::span<const NavigationStreamedSurface> surfaces);
+            std::span<const NavigationStreamedSurface> surfaces, NavigationTopologyChange change = NavigationTopologyChange::Replacement);
         /** @brief Read exact asset provenance for the current provider generation.
          * @return Owner-thread borrow valid until publication or shutdown; no inactive fallback is returned. */
         [[nodiscard]] std::span<const NavigationAssetProvenance> ActiveAssetProvenance() const noexcept;

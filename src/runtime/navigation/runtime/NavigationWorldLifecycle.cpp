@@ -234,10 +234,13 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationWorldLifecycle::PublishValidatedTopology */
-    void NavigationWorldLifecycle::PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept {
+    void NavigationWorldLifecycle::PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate,
+                                                            NavigationTopologyChange change) noexcept {
         assert(IsStagedTopology(candidate) && CanRetireActive());
         (void)candidate;
-        PublishStaged(/*deferCancellation=*/true);
+        const auto reason = change == NavigationTopologyChange::ForcedCellEviction ? NavigationWorldRevocation::TileEvicted
+                                                                                   : NavigationWorldRevocation::TopologyReplaced;
+        PublishStaged(/*deferCancellation=*/true, reason);
     }
 
     /** @copydoc NavigationWorldLifecycle::NotifyRetired */
@@ -262,12 +265,11 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationWorldLifecycle::PublishStaged */
-    void NavigationWorldLifecycle::PublishStaged(bool deferCancellation) noexcept {
+    void NavigationWorldLifecycle::PublishStaged(bool deferCancellation, NavigationWorldRevocation topologyReason) noexcept {
         using enum NavigationWorldLifecycleState;
         const bool replacesTopology = active_ && active_->descriptor.world == staged_->descriptor.world;
         const bool keepPaused = state_ == Paused && replacesTopology;
-        RetireActive(replacesTopology ? NavigationWorldRevocation::TopologyReplaced : NavigationWorldRevocation::WorldRetired,
-                     deferCancellation);
+        RetireActive(replacesTopology ? topologyReason : NavigationWorldRevocation::WorldRetired, deferCancellation);
         active_ = std::move(staged_);
         lastStagedTopology_ = active_->descriptor.topology;
         state_ = keepPaused ? Paused : Active;

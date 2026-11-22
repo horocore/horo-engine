@@ -121,6 +121,15 @@ namespace Horo::Navigation::NavigationErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor TileEvicted{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.query.tile_evicted"},
+        .defaultSeverity = ErrorSeverity::Info,
+        .summary = "Forced cell eviction revoked the navigation topology used by this query.",
+        .remediationHint = "Resubmit only after the required cell coverage is available.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor NoNavigationData{
         .domain = NavigationDomain,
         .code = ErrorCode{"navigation.data.unavailable"},

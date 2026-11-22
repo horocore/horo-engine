@@ -810,6 +810,7 @@ namespace Horo::Application::Internal {
             CancellationToken cancellation;
             CancellationSource lifetime;
             bool withdrawn{};
+            bool forcedEviction{};
 
             /** @brief Returns whether this exact occurrence must stop work. */
             [[nodiscard]] bool IsWithdrawn() const noexcept {
@@ -857,6 +858,13 @@ namespace Horo::Application::Internal {
             std::optional<std::size_t> retiring;
             std::optional<Runtime::SceneInstanceOperation> removal;
 
+            /** @brief Looks up the exact resident occurrence without matching logical cell coordinates alone. */
+            [[nodiscard]] auto FindResident(Runtime::SceneInstanceId occurrence) noexcept {
+                return std::ranges::find_if(residents, [occurrence](const LiveResident &resident) {
+                    return resident.demand.selected.occurrence == occurrence;
+                });
+            }
+
             /** @brief Returns the in-flight retirement or the next withdrawn live occurrence. */
             [[nodiscard]] std::optional<std::size_t> RetirementCandidate() const noexcept {
                 if (retiring.has_value())
@@ -888,7 +896,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<MountedWorldLiveCellState> RetireLiveCell(const Runtime::RuntimeSceneView &parent, std::size_t index);
         /** @brief Builds the exact aggregate command owner for an added or removed cell with Navigation content. */
         [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> PrepareNavigationChange(
-            const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, bool creating) const;
+            const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, MountedWorldNavigationChange change) const;
         [[nodiscard]] Result<MountedWorldLiveCellState> RejectLive(const Error &error);
         /** @brief Reserves retirement of one exact Resident or Active cell until its resources have settled. */
         [[nodiscard]] Result<void> BeginLiveRetirement(const ActiveCell &cell);
@@ -1434,7 +1442,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MountedWorld::State::PrepareNavigationChange */
     Result<std::shared_ptr<const Runtime::SceneGroupPublication>> MountedWorld::State::PrepareNavigationChange(
-        const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, bool creating) const {
+        const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, MountedWorldNavigationChange change) const {
         using Output = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
         const auto *changed = NavigationCell(cell);
         if (!changed)
@@ -1442,6 +1450,7 @@ namespace Horo::Application::Internal {
         if (!live->navigation || !committedAssets)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
         try {
+            const bool creating = change == MountedWorldNavigationChange::Attach;
             std::vector<MountedWorldNavigationCell> desired;
             desired.reserve(live->residents.size() + (creating ? 1U : 0U));
             const auto append = [&](const MountedNavigationMembership &row) {
@@ -1461,7 +1470,7 @@ namespace Horo::Application::Internal {
             }
             if (creating && !append(*changed))
                 return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-            auto owner = live->navigation(parent, desired);
+            auto owner = live->navigation(parent, desired, change);
             if (owner.HasValue() && !owner.Value())
                 return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
             return owner;
@@ -1481,7 +1490,7 @@ namespace Horo::Application::Internal {
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (!live->prepared->value().assets.resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
-        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, true);
+        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, MountedWorldNavigationChange::Attach);
         if (navigation.HasError())
             return RejectLive(navigation.ErrorValue());
         const auto operation = IssueLiveOperation();
@@ -1587,7 +1596,9 @@ namespace Horo::Application::Internal {
         }
         if (!AttachedParent(cell) || parent.RuntimeId() != cell.address.parent)
             return Result<Stage>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
-        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, false);
+        const auto change =
+            resident.demand.forcedEviction ? MountedWorldNavigationChange::ForceEvict : MountedWorldNavigationChange::Retire;
+        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, change);
         if (navigation.HasError())
             return Result<Stage>::Failure(navigation.ErrorValue());
         if (const auto retired = BeginLiveRetirement(cell); retired.HasError())
@@ -1739,11 +1750,26 @@ namespace Horo::Application::Internal {
             live.demand->Withdraw();
             return Result<void>::Success();
         }
-        const auto found = std::ranges::find_if(live.residents, [&](const State::LiveResident &resident) {
-            return resident.demand.selected.occurrence == occurrence;
-        });
+        const auto found = live.FindResident(occurrence);
         if (found == live.residents.end())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        found->demand.Withdraw();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc MountedWorld::ForceEvictLiveCell */
+    Result<void> MountedWorld::ForceEvictLiveCell(Runtime::SceneInstanceId occurrence) {
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        auto &live = *state_->live;
+        const auto found = live.FindResident(occurrence);
+        if (found == live.residents.end())
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        if (found->demand.forcedEviction)
+            return Result<void>::Success();
+        if (live.retiring == static_cast<std::size_t>(found - live.residents.begin()))
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+        found->demand.forcedEviction = true;
         found->demand.Withdraw();
         return Result<void>::Success();
     }

@@ -46,7 +46,14 @@ namespace Horo::Navigation {
     enum class NavigationWorldRevocation : std::uint8_t {
         None,
         TopologyReplaced,
-        WorldRetired
+        WorldRetired,
+        TileEvicted
+    };
+
+    /** @brief Selects why the current topology will stop accepting results at structural publication. */
+    enum class NavigationTopologyChange : std::uint8_t {
+        Replacement,
+        ForcedCellEviction
     };
 
     /**
@@ -203,7 +210,7 @@ namespace Horo::Navigation {
     private:
         friend class NavigationStreamedTopologyPublication;
         /** @brief Publishes the validated aggregate topology without waiting for cancellation observers. */
-        void PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept;
+        void PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate, NavigationTopologyChange change) noexcept;
         /** @brief Wakes cancellation observers on the exact predecessor after aggregate publication. */
         static void NotifyRetired(const NavigationWorldReadLease &predecessor) noexcept;
         /** @brief Discards only the named unpublished topology. @return True if it was discarded. */
@@ -219,7 +226,8 @@ namespace Horo::Navigation {
         /** @brief Checks that the named candidate replaces topology within the live world. */
         [[nodiscard]] bool IsStagedTopology(const NavigationWorldActivationDescriptor &candidate) const noexcept;
         /** @brief Publishes prevalidated detached state into the owner record. */
-        void PublishStaged(bool deferCancellation = false) noexcept;
+        void PublishStaged(bool deferCancellation = false,
+                           NavigationWorldRevocation topologyReason = NavigationWorldRevocation::TopologyReplaced) noexcept;
         /** @brief Check whether replacing the active record preserves the configured retirement bound. */
         [[nodiscard]] bool CanRetireActive() const noexcept;
         /** @brief Permanently close admission and request cooperative cancellation for one record. */

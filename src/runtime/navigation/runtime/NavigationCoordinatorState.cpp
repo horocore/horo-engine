@@ -163,6 +163,8 @@ namespace Horo::Navigation {
         switch (lease.Revocation()) {
             case NavigationWorldRevocation::TopologyReplaced:
                 return &NavigationErrors::StaleSnapshot;
+            case NavigationWorldRevocation::TileEvicted:
+                return &NavigationErrors::TileEvicted;
             case NavigationWorldRevocation::WorldRetired:
                 return &NavigationErrors::InvalidWorld;
             case NavigationWorldRevocation::None:

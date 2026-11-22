@@ -443,6 +443,13 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service, Runtime::SceneInstanceId occurrence);
 
+    /** @brief Forces retirement through the trusted standalone host owner lane.
+     * @param service Current authoritative standalone Scene facade. @param occurrence Exact resident occurrence.
+     * @return Accepted retirement request or typed denial. Retirement continues through the normal Scene cutoff.
+     */
+    [[nodiscard]] Result<void> ForceEvictHeadlessWorldCell(const Network::INetworkModeService &service,
+                                                           Runtime::SceneInstanceId occurrence);
+
     /** @brief Captures an exact active World camera and procedural geometry on the standalone Scene owner lane.
      * @param service Actual headless Scene service.
      * @param camera Exact mounted object with an authored camera target.
