@@ -72,6 +72,10 @@ namespace Horo::Application {
 namespace Horo::Editor {
     class SourceReviewOverlay;
     struct SourceReviewApplication;
+
+    namespace Proposals {
+        struct SourceReviewAudit;
+    }
     class TerrainDocumentHost;
     struct PrefabApplyRecoveryCandidate;
 
@@ -310,6 +314,8 @@ namespace Horo::Editor {
         BlackboardDocument,
         ApplySourceReview,
         UndoSourceReview,
+        BuildSourceReview,
+        TestSourceReview,
         NavigatePlayDecisionDiagnostic,
     };
 
@@ -1012,6 +1018,7 @@ namespace Horo::Editor {
         SourceDocumentSnapshot sourceReviewRenameUndo;
         SourceDocumentSnapshot sourceReviewDeleteUndo;
         CancellationToken sourceReviewLifetime;
+        std::shared_ptr<const Proposals::SourceReviewAudit> sourceReviewValidationAudit;
         std::uint64_t playDecisionDiagnosticSequence{};
     };
 

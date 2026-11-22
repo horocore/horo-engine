@@ -290,6 +290,7 @@ namespace Horo::Editor {
                 requestSourceReviewApply_ = context.requestSourceReviewApply;
                 requestSourceReviewUndo_ = context.requestSourceReviewUndo;
                 sourceReviewTransaction_ = context.sourceReviewTransaction;
+                requestSourceReviewValidation_ = context.requestSourceReviewValidation;
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
@@ -443,6 +444,7 @@ namespace Horo::Editor {
                 requestSourceReviewApply_ = {};
                 requestSourceReviewUndo_ = {};
                 sourceReviewTransaction_ = {};
+                requestSourceReviewValidation_ = {};
                 sourceApplyQueued_ = false;
                 patchSource_ = {};
                 patchReview_.reset();
@@ -1458,8 +1460,34 @@ namespace Horo::Editor {
                 if (state.auditHistoryError)
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_audit_history_error"),
                                     Theme::Text(), fonts);
+                DrawSourceValidation(state, locale, fonts, command);
                 if (requestSourceReviewUndo_ && contextLifetime_ && state.canUndo && Button(locale, "source_patch_revert", true))
                     status_ = requestSourceReviewUndo_(contextLifetime_->Token(), command) ? nullptr : "source_patch_revert_failed";
+            }
+
+            /** @brief Shows exact build/test outcome and queues only the clicked validation action. */
+            void DrawSourceValidation(const Proposals::SourceTransactionStatus &state, const ILocalizationService &locale,
+                                      const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
+                using enum Proposals::SourceReviewValidation;
+                constexpr std::array<const char *, 10> labels{nullptr,
+                                                              "source_validation_save",
+                                                              nullptr,
+                                                              "source_validation_building",
+                                                              "source_validation_build_passed",
+                                                              "source_validation_build_failed",
+                                                              "source_validation_testing",
+                                                              "source_validation_tests_passed",
+                                                              "source_validation_tests_failed",
+                                                              "source_validation_stale"};
+                if (const auto *label = labels[static_cast<std::size_t>(state.validation)])
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, label), Theme::Text(), fonts);
+                if (!contextLifetime_ || !state.audit || !requestSourceReviewValidation_)
+                    return;
+                if ((state.validation == Ready || state.validation == BuildFailed) &&
+                    Button(locale, "source_validation_approve_build", true))
+                    requestSourceReviewValidation_(SourceReviewValidationAction::Build, state, contextLifetime_->Token(), command);
+                else if (state.canRunTests && Button(locale, "source_validation_approve_test", true))
+                    requestSourceReviewValidation_(SourceReviewValidationAction::Test, state, contextLifetime_->Token(), command);
             }
 
             /** @brief Presents the content-free proposal identifier for the latest successful application. */
@@ -1840,6 +1868,7 @@ namespace Horo::Editor {
             decltype(PanelContext::requestSourceReviewApply) requestSourceReviewApply_;
             decltype(PanelContext::requestSourceReviewUndo) requestSourceReviewUndo_;
             decltype(PanelContext::sourceReviewTransaction) sourceReviewTransaction_;
+            decltype(PanelContext::requestSourceReviewValidation) requestSourceReviewValidation_;
             decltype(PanelContext::requestMcpAudit) requestMcpAudit_;
             bool sourceApplyQueued_{};
             EditorLocalAgentPatchSource patchSource_;

@@ -942,6 +942,11 @@ Later edits, closed buffers, and history restored on reopen cannot supply that
 receipt. The disk check compares the saved bytes and verifies that deleted or
 renamed source paths are still absent. It runs on an I/O worker and may reject
 changes that the workspace has not observed yet.
+The source review panel offers separate build and test approvals. Build
+approval captures the saved application on the workspace command lane and
+starts an isolated native build. Test approval is available after that
+specific build succeeds. The result belongs to the live audit and its source
+revisions. Undo, edits, or workspace retirement invalidate that result.
 Source Save As, later edits, and unconfirmed writes cannot supply that proof.
 An explicit group undo records a reverted application. An invalidated unsaved
 revision or an applied-only record reopened without live ownership is stale.

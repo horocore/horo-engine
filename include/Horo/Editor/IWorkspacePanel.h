@@ -9,6 +9,7 @@
 #include "Horo/Runtime/Input.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -74,6 +75,12 @@ namespace Horo::Editor {
         struct WorkspaceEditPlan;
     }  // namespace Proposals
 
+    /** @brief Explicit validation action selected by the user in a source review. */
+    enum class SourceReviewValidationAction : std::uint8_t {
+        Build,
+        Test
+    };
+
     /** @brief Context injected when a panel is attached to the workspace. */
     struct PanelContext {
         EditorDataBus &dataBus;
@@ -129,6 +136,10 @@ namespace Horo::Editor {
         std::function<bool(const CancellationToken &, EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};
         /** @brief Reads the current workspace's source transaction outcome and undo availability. */
         std::function<Proposals::SourceTransactionStatus()> sourceReviewTransaction{};
+        /** @brief Stages one explicit validation action for the currently shown review. */
+        std::function<void(SourceReviewValidationAction, const Proposals::SourceTransactionStatus &, const CancellationToken &,
+                           EditorWorkspaceViewCommandData &)>
+            requestSourceReviewValidation{};
         /** @brief Stages presentation of one exact redacted MCP operation in the workspace dock. */
         std::function<void(const WorkspaceMcpAuditReference &, EditorWorkspaceViewCommandData &)> requestMcpAudit{};
         /** @brief Copies bounded numeric camera state and selection on explicit user request. */

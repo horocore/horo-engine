@@ -992,6 +992,43 @@ namespace {
         CHECK(stale.find("The source changed after this request.") != std::string::npos);
     }
 
+    TEST_CASE("Source review validation requires distinct approvals for build and tests", "[editor][agent][source]") {
+        using enum Proposals::SourceReviewValidation;
+        Proposals::SourceTransactionStatus state{.audit = std::make_shared<const Proposals::SourceReviewAudit>(),
+                                                 .disposition = Proposals::SourceReviewDisposition::Saved,
+                                                 .validation = Ready};
+        std::optional<SourceReviewValidationAction> requested;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &panel) {
+            panel.sourceReviewTransaction = [&] {
+                return state;
+            };
+            panel.requestSourceReviewValidation = [&](const auto action, const auto &review, const auto &lifetime, auto &) {
+                CHECK(review.audit == state.audit);
+                CHECK_FALSE(lifetime.IsCancellationRequested());
+                requested = action;
+            };
+        }};
+        const auto ready = fixture.DrawnText();
+        CHECK(ready.find("Approve build") != std::string::npos);
+        CHECK(ready.find("Approve tests") == std::string::npos);
+        CHECK_FALSE(requested);
+        fixture.Activate("###source_validation_approve_build");
+        CHECK(requested == SourceReviewValidationAction::Build);
+        requested.reset();
+        state.validation = BuildPassed;
+        state.canRunTests = true;
+        CHECK(fixture.DrawnText().find("Approve tests") != std::string::npos);
+        CHECK_FALSE(requested);
+        fixture.Activate("###source_validation_approve_test");
+        CHECK(requested == SourceReviewValidationAction::Test);
+        requested.reset();
+        state.validation = Stale;
+        state.canRunTests = false;
+        const auto stale = fixture.DrawnText();
+        CHECK(stale.find("Validation is stale.") != std::string::npos);
+        CHECK(stale.find("Approve tests") == std::string::npos);
+    }
+
     TEST_CASE("Structural confirmation follows accepted files in a restored review", "[editor][agent][source]") {
         using namespace Proposals;
         TestSupport::SourceProject project;

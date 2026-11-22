@@ -4,6 +4,8 @@
 #include "EditorTestCommandEndpoint.h"
 #include "EditorWorkspaceController.h"
 
+#include <algorithm>
+
 namespace Horo::Editor {
     namespace {
         const ErrorCodeDescriptor BuildAwaitingPlay{
@@ -12,6 +14,134 @@ namespace Horo::Editor {
             .defaultSeverity = ErrorSeverity::Info,
             .summary = "Play still owns a pending gameplay build result.",
         };
+
+        using Validation = Proposals::SourceReviewValidation;
+
+        /** @brief Projects rejection of captured evidence independently from a compiler or test failure. */
+        bool StaleValidation(const std::optional<Error> &error) {
+            if (!error)
+                return false;
+            const auto code = error->code.Value();
+            return code == Proposals::Errors::StaleBase.code.Value() || code == SourceDocumentErrors::Stale.code.Value() ||
+                   code == SourceDocumentErrors::SaveConflict.code.Value() || code == "build_inputs_stale" ||
+                   code == "validation_inputs_changed";
+        }
+
+        /** @brief Converts exact native build state to the panel's small presentation state. */
+        Validation BuildValidationState(const std::optional<Application::GameplayBuildSnapshot> &build) {
+            using enum Application::GameplayBuildState;
+            if (!build || StaleValidation(build->error))
+                return Validation::Stale;
+            switch (build->state) {
+                case Succeeded:
+                    return Validation::BuildPassed;
+                case Cancelled:
+                case Failed:
+                case TimedOut:
+                    return Validation::BuildFailed;
+                default:
+                    return Validation::Building;
+            }
+        }
+
+        /** @brief Converts exact native test state to the panel's small presentation state. */
+        Validation TestValidationState(const std::optional<Application::GameplayTestSnapshot> &test) {
+            if (!test || StaleValidation(test->error))
+                return Validation::Stale;
+            switch (test->state) {
+                case OperationState::Succeeded:
+                    return Validation::TestsPassed;
+                case OperationState::Failed:
+                case OperationState::Cancelled:
+                    return Validation::TestsFailed;
+                default:
+                    return Validation::Testing;
+            }
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceController::ReadSourceReviewStatus */
+    Proposals::SourceTransactionStatus EditorWorkspaceController::ReadSourceReviewStatus() const {
+        auto status = m_sourceReviews.Status();
+        if (!status.audit || status.feedback == Proposals::SourceTransactionFeedback::Preparing || !m_gameplayBuilds || !m_durableFiles ||
+            m_gameplayBuildEnvironment.gameplaySdkPackage.empty())
+            return status;
+        if (status.disposition == Proposals::SourceReviewDisposition::Applied) {
+            status.validation = Validation::SaveRequired;
+            return status;
+        }
+        const bool sameRun = m_sourceValidation && m_sourceValidation->evidence->audit == status.audit;
+        if (status.disposition != Proposals::SourceReviewDisposition::Saved) {
+            if (sameRun)
+                status.validation = Validation::Stale;
+            return status;
+        }
+        status.validation = Validation::Ready;
+        if (!sameRun)
+            return status;
+        const auto &run = *m_sourceValidation;
+        if (!std::ranges::all_of(run.evidence->sources, &SourceDocumentSnapshot::IsCurrent)) {
+            status.validation = Validation::Stale;
+            return status;
+        }
+        if (run.test)
+            status.validation = TestValidationState(m_gameplayTests->Query(*run.test));
+        else if (run.refused != Validation::Unavailable)
+            status.validation = run.refused;
+        else
+            status.validation = BuildValidationState(m_gameplayBuilds->Query(*run.build));
+        status.canRunTests = m_gameplayTests && !m_gameplayTestEnvironment.ctest.empty() &&
+                             (status.validation == Validation::BuildPassed || status.validation == Validation::TestsFailed);
+        return status;
+    }
+
+    /** @copydoc EditorWorkspaceController::RunSourceReviewValidation */
+    void EditorWorkspaceController::RunSourceReviewValidation(const EditorWorkspaceViewCommandData &command) {
+        const auto status = ReadSourceReviewStatus();
+        if (!status.audit || command.sourceReviewValidationAudit != status.audit || command.sourceReviewLifetime.IsCancellationRequested())
+            return;
+        const auto stop = [&command] {
+            return command.sourceReviewLifetime.IsCancellationRequested();
+        };
+        if (command.command == EditorWorkspaceViewCommand::TestSourceReview) {
+            if (!status.canRunTests)
+                return;
+            auto &run = *m_sourceValidation;
+            const auto build = m_gameplayBuilds->Query(*run.build);
+            if (!build || build->state != Application::GameplayBuildState::Succeeded)
+                return;
+            const auto started = m_gameplayTests->StartForBuild({run.request, build->activeInputHash}, m_gameplayTestEnvironment, stop);
+            if (started.HasValue()) {
+                run.test = started.Value();
+                run.refused = Validation::Unavailable;
+            } else {
+                run.test.reset();
+                run.refused = Validation::TestsFailed;
+            }
+            return;
+        }
+        if ((status.validation != Validation::Ready && status.validation != Validation::BuildFailed) || m_playAfterGameplayBuild)
+            return;
+        RevokeSourceReviewValidation();
+        auto captured = m_sourceReviews.CaptureSavedReview(m_sourceOpenService.Documents());
+        if (captured.HasError()) {
+            m_sourceValidation =
+                SourceValidationRun{.evidence = std::make_shared<const SavedSourceReview>(SavedSourceReview{.audit = status.audit}),
+                                    .refused = Validation::Stale};
+            return;
+        }
+        auto evidence = std::make_shared<const SavedSourceReview>(std::move(captured).Value());
+        auto request = MakeGameplayBuildRequest();
+        request.validateSources = [evidence, root = request.projectRoot, files = m_durableFiles](const CancellationToken &cancel) {
+            return evidence->VerifyDisk(root, *files, cancel);
+        };
+        const auto started = m_gameplayBuilds->StartIsolated(request, stop);
+        const auto build = started.HasValue() ? std::optional{started.Value()} : std::nullopt;
+        m_sourceValidation = SourceValidationRun{std::move(evidence),
+                                                 std::move(request),
+                                                 build,
+                                                 {},
+                                                 build ? Validation::Unavailable : Validation::BuildFailed};
     }
 
     /** @copydoc EditorWorkspaceController::BindSourcePresentation */
@@ -107,6 +237,18 @@ namespace Horo::Editor {
         if (m_commandBuildSession) {
             static_cast<void>(m_gameplayBuilds->RequestCancel(*m_commandBuildSession));
             m_commandBuildSession.reset();
+        }
+        RevokeSourceReviewValidation();
+    }
+
+    /** @copydoc EditorWorkspaceController::RevokeSourceReviewValidation */
+    void EditorWorkspaceController::RevokeSourceReviewValidation() noexcept {
+        if (m_sourceValidation) {
+            if (m_sourceValidation->test)
+                static_cast<void>(m_gameplayTests->RequestCancel(*m_sourceValidation->test));
+            if (m_sourceValidation->build)
+                static_cast<void>(m_gameplayBuilds->RequestCancel(*m_sourceValidation->build));
+            m_sourceValidation.reset();
         }
     }
 

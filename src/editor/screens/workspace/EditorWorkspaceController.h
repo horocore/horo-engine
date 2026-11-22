@@ -413,6 +413,9 @@ namespace Horo::Editor {
             return m_sourceReviews;
         }
 
+        /** @brief Projects current source review and native validation state for the attached panel. */
+        [[nodiscard]] Proposals::SourceTransactionStatus ReadSourceReviewStatus() const;
+
         /** @brief Applies an explicit revision-fenced canvas close decision, preserving dirty state on failure. */
         [[nodiscard]] Result<bool> ResolveUiCanvasClose(UiCanvasDocumentStateId state, SourceCloseDecision decision);
         /** @brief Handles the shared close dialog's exact Blackboard revision choice. */
@@ -916,6 +919,16 @@ namespace Horo::Editor {
         std::shared_ptr<const EditorTestCommandEndpoint> m_testCommandEndpoint;
         std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;
         std::optional<OperationId> m_commandTestOperation;
+
+        struct SourceValidationRun final {
+            std::shared_ptr<const SavedSourceReview> evidence;
+            Application::GameplayBuildRequest request;
+            std::optional<Application::GameplayBuildSessionId> build;
+            std::optional<OperationId> test;
+            Proposals::SourceReviewValidation refused{};
+        };
+
+        std::optional<SourceValidationRun> m_sourceValidation;
         Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
         std::uint64_t m_scriptLanguageApiRevision{};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
@@ -1485,6 +1498,10 @@ namespace Horo::Editor {
         void ReviewSourceCodeAction(const SourceCodeActionIntent &intent);
         /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
+        /** @brief Consumes a deferred, explicitly approved build or test for the supplied audit. */
+        void RunSourceReviewValidation(const EditorWorkspaceViewCommandData &command);
+        /** @brief Cancels operations owned by the current review and retires its presentation. */
+        void RevokeSourceReviewValidation() noexcept;
         /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */
         void RevokeGameplayTestCommands() noexcept;
         /** @brief Opens embedded source and publishes a validated optional text location on the editor lane. */

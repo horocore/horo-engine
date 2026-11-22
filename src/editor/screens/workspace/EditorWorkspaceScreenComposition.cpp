@@ -241,7 +241,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
             .sourceReviewTransaction =
                 [this] {
-            return controller_->SourceReviews().Status();
+            return controller_->ReadSourceReviewStatus();
+        },
+            .requestSourceReviewValidation =
+                [](const SourceReviewValidationAction action, const Proposals::SourceTransactionStatus &status,
+                   const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) {
+            if (command.command != EditorWorkspaceViewCommand::None || !status.audit || lifetime.IsCancellationRequested())
+                return;
+            command.command = action == SourceReviewValidationAction::Build ? EditorWorkspaceViewCommand::BuildSourceReview
+                                                                            : EditorWorkspaceViewCommand::TestSourceReview;
+            command.sourceReviewValidationAudit = status.audit;
+            command.sourceReviewLifetime = lifetime;
         },
             .requestMcpAudit =
                 [this, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}](const WorkspaceMcpAuditReference &reference,

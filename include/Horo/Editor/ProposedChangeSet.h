@@ -353,6 +353,20 @@ namespace Horo::Editor::Proposals {
         Stale
     };
 
+    /** @brief Status of explicitly approved native validation for the current source review. */
+    enum class SourceReviewValidation : std::uint8_t {
+        Unavailable,
+        SaveRequired,
+        Ready,
+        Building,
+        BuildPassed,
+        BuildFailed,
+        Testing,
+        TestsPassed,
+        TestsFailed,
+        Stale
+    };
+
     /** @brief Owner-published status for the latest explicit application or group undo. */
     struct SourceTransactionStatus final {
         SourceTransactionFeedback feedback{};
@@ -361,6 +375,8 @@ namespace Horo::Editor::Proposals {
         bool writingAudit{};
         bool auditHistoryError{};
         SourceReviewDisposition disposition{SourceReviewDisposition::Historical};
+        SourceReviewValidation validation{};
+        bool canRunTests{};
     };
 
     /** @brief Exact owner receipt and its redacted attribution, returned together after publication. */

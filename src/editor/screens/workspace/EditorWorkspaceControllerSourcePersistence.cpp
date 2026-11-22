@@ -295,6 +295,10 @@ namespace Horo::Editor {
         }
         NativeDurableFileSystem files;
         switch (command.command) {
+            case EditorWorkspaceViewCommand::BuildSourceReview:
+            case EditorWorkspaceViewCommand::TestSourceReview:
+                RunSourceReviewValidation(command);
+                return true;
             case EditorWorkspaceViewCommand::RequestSourceLanguage:
                 if (command.sourceLanguageIntent)
                     RequestSourceLanguage(*command.sourceLanguageIntent);
