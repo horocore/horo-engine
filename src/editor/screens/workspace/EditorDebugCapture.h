@@ -2,8 +2,8 @@
 
 /** @file EditorDebugCapture.h @brief Bounded numeric debug capture at the editor owner boundary. */
 
-#include "editor/renderer/EditorViewportImageCapture.h"
 #include "Horo/Foundation/Result.h"
+#include "editor/renderer/EditorViewportImageCapture.h"
 
 #include <array>
 #include <chrono>
