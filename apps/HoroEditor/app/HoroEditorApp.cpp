@@ -1,5 +1,6 @@
 #include "HoroEditorApp.h"
 
+#include "EditorCloudModelProfile.h"
 #include "EditorColorOptions.h"
 #include "EditorConsoleExecution.h"
 #include "EditorConsoleLaunch.h"
@@ -4348,11 +4349,15 @@ namespace Horo::Editor {
             auto localAgent = EditorLocalAgentPanelHost{};
             if (p.options.localAgent) {
                 auto backend = Platform::CreateNativeCredentialBackend();
-                std::shared_ptr<Security::CredentialVault> credentials;
-                if (backend && backend->Available())
-                    credentials =
-                        std::make_shared<Security::CredentialVault>(std::move(backend), Platform::CreateNativeSecureRandomSource());
-                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(credentials));
+                std::shared_ptr<EditorCloudModelProfileStore> profiles;
+                if (backend && backend->Available()) {
+                    auto credentials = std::make_shared<Security::PersistentCredentialStore>(std::move(backend),
+                                                                                             Platform::CreateNativeSecureRandomSource());
+                    profiles =
+                        std::make_shared<EditorCloudModelProfileStore>(ResolveEditorSettingsPath().parent_path() / "cloud_model.profile",
+                                                                       std::move(credentials));
+                }
+                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles));
             }
             if (localAgent.panel)
                 workspacePanelRegistry.RegisterPanel(localAgent.panel);

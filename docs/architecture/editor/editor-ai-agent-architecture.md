@@ -1008,8 +1008,9 @@ The desktop chat panel exposes cloud mode when the host supplies a native
 credential backend. Each model list or inference request requires approval of
 the displayed HTTPS endpoint. The inference review also displays the selected
 model and exact message. The worker sends one user message and has no project
-context, history, or tool capability. The panel keeps the credential reference
-for the editor session and exposes explicit removal.
+context, history, or tool capability. The editor restores the model, endpoint,
+and opaque credential reference from a user-level profile. The native
+credential store owns the key, and the panel exposes explicit removal.
 
 ### Provider Selection
 

@@ -3,6 +3,7 @@
 #include "AgentBackgroundTurn.h"
 #include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
+#include "EditorCloudModelProfile.h"
 #include "EditorLocalAgentContext.h"
 #include "EditorLocalAgentHistory.h"
 #include "EditorLocalAgentPatch.h"
@@ -34,7 +35,13 @@ namespace Horo::Editor {
             const char *unavailable;
         };
 
-        using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
+        /** @brief Completion of a serialized user-profile operation. */
+        struct CloudProfileReply final {
+            Result<std::optional<EditorCloudModelProfile>> outcome;
+            const char *status;
+        };
+
+        using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview, CloudProfileReply>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
         using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
         using SceneReviewClock = std::chrono::steady_clock;
@@ -205,7 +212,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Executes the approved cloud payload with no project-context or tool capability. */
-        Reply RunCloudOperation(CloudTurnReview review, std::shared_ptr<Security::CredentialVault> credentials, std::uint64_t turn,
+        Reply RunCloudOperation(CloudTurnReview review, std::shared_ptr<Security::CredentialProvider> credentials, std::uint64_t turn,
                                 std::stop_token stop) {
             auto provider = CreateOpenAIModelProviderWithCredentials(std::move(review.config), std::move(credentials));
             if (!review.request)
@@ -236,8 +243,8 @@ namespace Horo::Editor {
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background,
-                            std::shared_ptr<Security::CredentialVault> credentials)
-                : IWorkspacePanel("workspace.local_agent"), cloudCredentials_(std::move(credentials)), background_(std::move(background)),
+                            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles)
+                : IWorkspacePanel("workspace.local_agent"), cloudProfiles_(std::move(cloudProfiles)), background_(std::move(background)),
                   history_(jobs, files), files_(files) {}
 
             ~LocalAgentPanel() override {
@@ -294,6 +301,8 @@ namespace Horo::Editor {
                 background_->Abandon();
                 prompt_.clear();
                 cloudPrompt_.clear();
+                cloudProfileAdmitted_ = false;
+                cloudProfileRead_ = false;
                 response_.clear();
                 sceneCount_ = {};
                 RevokeContext();
@@ -484,13 +493,15 @@ namespace Horo::Editor {
 
             /** @brief Switches the selected provider only when the local composer holds no active review. */
             void DrawProviderSelection(const ILocalizationService &locale) {
-                if (!cloudCredentials_)
+                if (!cloudProfiles_)
                     return;
                 const bool canSwitch = !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !ContextLocksComposer() &&
                                        !sceneQueryReview_ && !cloudReview_;
                 if (!Button(locale, cloudMode_ ? "cloud_use_local" : "cloud_use", canSwitch))
                     return;
                 cloudMode_ = !cloudMode_;
+                cloudProfileRead_ = false;
+                cloudProfileAdmitted_ = false;
                 models_.clear();
                 selection_ = -1;
                 status_ = nullptr;
@@ -499,7 +510,29 @@ namespace Horo::Editor {
 
             /** @brief Reports whether the available reference belongs to the exact configured endpoint. */
             bool CanReviewCloud() const {
-                return cloudCredential_ && cloudEndpoint_ == cloudCredentialEndpoint_;
+                return cloudProfileAdmitted_ && cloudProfile_ && cloudEndpoint_ == cloudProfile_->endpoint;
+            }
+
+            /** @brief Serializes profile writes and credential resolution on the same worker lane. */
+            template <typename Operation> void StartCloudProfile(Operation operation, const char *status) {
+                try {
+                    BackgroundTurn::Operation task{
+                        [profiles = cloudProfiles_, operation = std::move(operation), status](std::stop_token) mutable {
+                        return Reply{CloudProfileReply{operation(*profiles), status}};
+                    }};
+                    cloudProfileBusy_ = background_->Start(std::move(task));
+                    status_ = cloudProfileBusy_ ? "cloud_profile_working" : "cloud_profile_failed";
+                } catch (const std::bad_alloc &) {
+                    status_ = "cloud_profile_failed";
+                }
+            }
+
+            /** @brief Lifts a successful write into the same profile result used for loading. */
+            static Result<std::optional<EditorCloudModelProfile>> UpdatedProfile(Result<EditorCloudModelProfile> profile) {
+                using Outcome = Result<std::optional<EditorCloudModelProfile>>;
+                if (profile.HasError())
+                    return Outcome::Failure(profile.ErrorValue());
+                return Outcome::Success(std::move(profile).Value());
             }
 
             /** @brief Enrolls only the explicitly requested clipboard value, using zeroizing application-owned memory. */
@@ -512,20 +545,12 @@ namespace Horo::Editor {
                     return;
                 }
                 try {
-                    auto endpoint = cloudEndpoint_;
-                    auto enrolled = cloudCredentials_->Put(Security::SecureBytes{std::as_bytes(std::span{value})});
-                    if (enrolled.HasError()) {
-                        status_ = "cloud_key_failed";
-                        return;
-                    }
-                    if (cloudCredential_ && cloudCredentials_->Revoke(*cloudCredential_).HasError()) {
-                        static_cast<void>(cloudCredentials_->Revoke(enrolled.Value()));
-                        status_ = "cloud_key_failed";
-                        return;
-                    }
-                    cloudCredential_ = std::move(enrolled).Value();
-                    cloudCredentialEndpoint_ = std::move(endpoint);
-                    status_ = "cloud_key_saved";
+                    StartCloudProfile(
+                        [expected = cloudProfile_, endpoint = cloudEndpoint_, model = cloudModel_,
+                         key = Security::SecureBytes{std::as_bytes(std::span{value})}](EditorCloudModelProfileStore &store) mutable {
+                        return UpdatedProfile(store.Enroll(expected, std::move(endpoint), std::move(model), std::move(key)));
+                    },
+                        "cloud_key_saved");
                 } catch (const std::bad_alloc &) {
                     status_ = "cloud_key_failed";
                 }
@@ -533,20 +558,26 @@ namespace Horo::Editor {
 
             /** @brief Withdraws the key reference only after its exact backend entry has been revoked. */
             void RevokeCloudCredential() {
-                if (cloudCredentials_->Revoke(*cloudCredential_).HasError()) {
-                    status_ = "cloud_key_failed";
-                    return;
-                }
-                cloudCredential_.reset();
-                cloudCredentialEndpoint_.clear();
-                status_ = "cloud_key_removed";
+                StartCloudProfile([expected = *cloudProfile_](EditorCloudModelProfileStore &store) {
+                    using Outcome = Result<std::optional<EditorCloudModelProfile>>;
+                    const auto revoked = store.Revoke(expected);
+                    return revoked.HasError() ? Outcome::Failure(revoked.ErrorValue()) : Outcome::Success(std::nullopt);
+                }, "cloud_key_removed");
+            }
+
+            /** @brief Retains the selected model in the user profile without attempting a network request. */
+            void RememberCloudModel() {
+                StartCloudProfile([expected = *cloudProfile_, model = cloudModel_](EditorCloudModelProfileStore &store) mutable {
+                    return UpdatedProfile(store.SelectModel(expected, std::move(model)));
+                }, "cloud_model_saved");
             }
 
             /** @brief Pins the reviewed destination, reference, and payload before an explicit send decision. */
             void PrepareCloudReview(const bool discover) {
                 if (!CanReviewCloud())
                     return;
-                ModelProviderConfig config{.endpoint = cloudEndpoint_, .credentialReference = std::string{cloudCredential_->Value()}};
+                ModelProviderConfig config{.endpoint = cloudProfile_->endpoint,
+                                           .credentialReference = std::string{cloudProfile_->credential.Value()}};
                 std::optional<ModelRequest> request;
                 if (!discover) {
                     request.emplace();
@@ -565,8 +596,8 @@ namespace Horo::Editor {
                 submittedReference_.reset();
                 response_.clear();
                 try {
-                    BackgroundTurn::Operation task{
-                        [review = std::move(reviewed), credentials = cloudCredentials_, turn = ++turn_](std::stop_token stop) mutable {
+                    BackgroundTurn::Operation task{[review = std::move(reviewed), credentials = cloudProfiles_->Provider(),
+                                                    turn = ++turn_](std::stop_token stop) mutable {
                         return RunCloudOperation(std::move(review), std::move(credentials), turn, stop);
                     }};
                     status_ = background_->Start(std::move(task)) ? "cloud_working" : "failed";
@@ -597,7 +628,13 @@ namespace Horo::Editor {
                 const auto show = [&](const std::string_view text) {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Text(), fonts);
                 };
-                ImGui::BeginDisabled(Busy() || cloudReview_);
+                if (!cloudProfileRead_ && !Busy()) {
+                    cloudProfileRead_ = true;
+                    StartCloudProfile([](EditorCloudModelProfileStore &store) {
+                        return store.Load();
+                    }, nullptr);
+                }
+                ImGui::BeginDisabled(Busy() || cloudReview_ || !cloudProfileAdmitted_);
                 show(LocalizedText(locale, "cloud_endpoint"));
                 if (DrawTextField("##CloudEndpoint", cloudEndpoint_, 256, fonts)) {
                     models_.clear();
@@ -605,9 +642,9 @@ namespace Horo::Editor {
                     response_.clear();
                     status_ = nullptr;
                 }
-                if (Button(locale, "cloud_key_enroll", cloudEndpoint_.starts_with("https://")))
+                if (Button(locale, "cloud_key_enroll", ValidCloudModelEndpoint(cloudEndpoint_)))
                     EnrollCloudCredential();
-                if (Button(locale, "cloud_key_revoke", cloudCredential_.has_value()))
+                if (Button(locale, "cloud_key_revoke", cloudProfile_.has_value()))
                     RevokeCloudCredential();
                 if (Button(locale, "discover", CanReviewCloud()))
                     PrepareCloudReview(true);
@@ -615,6 +652,8 @@ namespace Horo::Editor {
                 if (DrawTextField("##CloudModel", cloudModel_, 256, fonts))
                     selection_ = -1;
                 DrawAvailableModels(fonts, cloudModel_);
+                if (Button(locale, "cloud_model_save", CanReviewCloud() && !cloudModel_.empty() && cloudProfile_->model != cloudModel_))
+                    RememberCloudModel();
                 show(LocalizedText(locale, "prompt"));
                 static_cast<void>(DrawTextField("##CloudPrompt", cloudPrompt_, 4096, fonts));
                 if (Button(locale, "cloud_review", CanReviewCloud() && !cloudModel_.empty() && !cloudPrompt_.empty()))
@@ -622,7 +661,7 @@ namespace Horo::Editor {
                 ImGui::EndDisabled();
                 if (cloudReview_)
                     DrawCloudReview(locale, fonts);
-                if (Busy() && Button(locale, "stop", background_->CanCancel()))
+                if (Busy() && !cloudProfileBusy_ && Button(locale, "stop", background_->CanCancel()))
                     background_->Cancel();
                 if (status_)
                     show(LocalizedText(locale, status_));
@@ -1573,6 +1612,7 @@ namespace Horo::Editor {
                 auto completion = background_->Poll();
                 if (!completion)
                     return;
+                cloudProfileBusy_ = false;
                 liveDraft_.reset();
                 if (completion->state != BackgroundTurn::CompletionState::Abandoned) {
                     try {
@@ -1583,6 +1623,21 @@ namespace Horo::Editor {
                 }
                 submittedPrompt_.reset();
                 submittedReference_.reset();
+            }
+
+            /** @brief Installs the current durable binding without resolving its key. */
+            void Adopt(CloudProfileReply &result) {
+                if (result.outcome.HasError()) {
+                    status_ = "cloud_profile_failed";
+                    return;
+                }
+                cloudProfile_ = std::move(result.outcome).Value();
+                cloudProfileAdmitted_ = true;
+                if (cloudProfile_) {
+                    cloudEndpoint_ = cloudProfile_->endpoint;
+                    cloudModel_ = cloudProfile_->model;
+                }
+                status_ = result.status;
             }
 
             void AdoptCompletion(BackgroundTurn::Completion &completion) {
@@ -1675,13 +1730,15 @@ namespace Horo::Editor {
             std::string model_;
             std::string prompt_;
             std::string response_;
-            std::shared_ptr<Security::CredentialVault> cloudCredentials_;
+            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles_;
             bool cloudMode_{};
+            bool cloudProfileBusy_{};
+            bool cloudProfileRead_{};
+            bool cloudProfileAdmitted_{};
             std::string cloudEndpoint_;
             std::string cloudModel_;
             std::string cloudPrompt_;
-            std::string cloudCredentialEndpoint_;
-            std::optional<CredentialReference> cloudCredential_;
+            std::optional<EditorCloudModelProfile> cloudProfile_;
             std::optional<CloudTurnReview> cloudReview_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
@@ -1740,9 +1797,9 @@ namespace Horo::Editor {
 
     /** @copydoc MakeEditorLocalAgentPanel */
     EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
-                                                        std::shared_ptr<Security::CredentialVault> cloudCredentials) {
+                                                        std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles) {
         auto background = std::make_shared<BackgroundTurn>();
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudCredentials));
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles));
         return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
             if (const auto current = owner.lock()) {
                 current->Poll();

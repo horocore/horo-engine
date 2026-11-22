@@ -1,3 +1,4 @@
+#include "../../../apps/HoroEditor/app/EditorCloudModelProfile.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPanel.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
@@ -49,8 +50,8 @@ namespace {
         EditorLocalAgentPanelHost agent;
 
         explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {},
-                                   std::shared_ptr<Security::CredentialVault> credentials = {})
-            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(credentials))) {
+                                   std::shared_ptr<EditorCloudModelProfileStore> profiles = {})
+            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(profiles))) {
             ImGui::GetIO().IniFilename = nullptr;
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
@@ -143,41 +144,126 @@ namespace {
     struct CloudCredentialProbe final : Security::CredentialBackend {
         static constexpr std::string_view Key = "fixture-model-key";
         std::atomic_uint resolutions{};
-        bool enrolled{};
+        std::atomic_bool enrolled{};
+        std::vector<CredentialReference> stored;
 
         bool Available() const noexcept override {
             return true;
         }
 
-        Result<void> Put(const Security::CredentialReference &, Security::SecureBytes secret) override {
+        Result<void> Put(const Security::CredentialReference &reference, Security::SecureBytes secret) override {
             enrolled = std::ranges::equal(secret.View(), std::as_bytes(std::span{Key}));
+            stored.push_back(reference);
             return Result<void>::Success();
         }
 
-        Result<Security::SecureBytes> Resolve(const Security::CredentialReference &) override {
+        Result<Security::SecureBytes> Resolve(const Security::CredentialReference &reference) override {
+            if (std::ranges::find(stored, reference) == stored.end())
+                return Result<Security::SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
             ++resolutions;
             return Result<Security::SecureBytes>::Failure(MakeError(SecurityErrors::CredentialRevoked));
         }
 
-        Result<void> Remove(const Security::CredentialReference &) noexcept override {
-            enrolled = false;
+        Result<void> Remove(const Security::CredentialReference &reference) noexcept override {
+            std::erase(stored, reference);
+            enrolled = !stored.empty();
             return Result<void>::Success();
         }
     };
 
-    TEST_CASE("Cloud chat asks before looking up credentials for either approved operation", "[editor][agent][gui][cloud]") {
+    TEST_CASE("Cloud profile preserves the active binding through stale and failed writes", "[editor][agent][cloud]") {
+        Horo::Tests::OwnedTestDirectory directory{"cloud-profile-write"};
+        const auto path = directory.Path() / "connection.profile";
         const auto probe = std::make_shared<CloudCredentialProbe>();
-        const auto vault = std::make_shared<Security::CredentialVault>(probe, Platform::CreateNativeSecureRandomSource());
-        LocalAgentFixture fixture{"en-US", {}, vault};
-        ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) {
-            return CloudCredentialProbe::Key.data();
+        EditorCloudModelProfileStore
+            store{path, std::make_shared<Security::PersistentCredentialStore>(probe, Platform::CreateNativeSecureRandomSource())};
+        const auto key = [] {
+            return Security::SecureBytes{std::as_bytes(std::span{CloudCredentialProbe::Key})};
         };
-        fixture.Draw(420);
-        fixture.Activate("###cloud_use");
-        fixture.Enter("##CloudEndpoint", "https://provider.invalid");
-        fixture.Activate("###cloud_key_enroll");
-        REQUIRE(probe->enrolled);
-        fixture.Enter("##CloudModel", "fixture-model");
+        CHECK(store.Enroll(std::nullopt, "https://example.invalid/?other=route", "model-a", key()).HasError());
+        std::ofstream{path} << "horo-cloud-model-v1\nhttps://first.invalid\nmodel-a\ninvalid-reference\n\n";
+        CHECK(store.Load().HasError());
+        CHECK(store.Enroll(std::nullopt, "https://first.invalid", "model-a", key()).HasError());
+        CHECK(probe->stored.empty());
+        REQUIRE(std::filesystem::remove(path));
+        const auto original = store.Enroll(std::nullopt, "https://first.invalid", "model-a", key());
+        REQUIRE(original.HasValue());
+        CHECK(store.Enroll(std::nullopt, "https://second.invalid", "model-b", key()).HasError());
+        REQUIRE(probe->stored.size() == 1);
+
+        auto blocked = path;
+        blocked += ".pending";
+        REQUIRE(std::filesystem::create_directory(blocked));
+        std::ofstream{blocked / "active"} << "owned fixture";
+        CHECK(store.Enroll(original.Value(), "https://second.invalid", "model-b", key()).HasError());
+        REQUIRE(probe->stored.size() == 1);
+        CHECK(probe->stored.front() == original.Value().credential);
+        const auto retained = store.Load();
+        REQUIRE(retained.HasValue());
+        CHECK(retained.Value() == original.Value());
+
+        REQUIRE(std::filesystem::remove(blocked / "active"));
+        REQUIRE(std::filesystem::remove(blocked));
+        const auto replaced = store.Enroll(original.Value(), "https://second.invalid", "model-b", key());
+        REQUIRE(replaced.HasValue());
+        REQUIRE(probe->stored.size() == 1);
+        CHECK(probe->stored.front() == replaced.Value().credential);
+        CHECK(store.Revoke(original.Value()).HasError());
+        REQUIRE(store.Revoke(replaced.Value()).HasValue());
+        CHECK(probe->stored.empty());
+    }
+
+    TEST_CASE("Cloud chat asks before looking up credentials for either approved operation", "[editor][agent][gui][cloud]") {
+        Horo::Tests::OwnedTestDirectory directory{"cloud-profile"};
+        const auto path = directory.Path() / "connection.profile";
+        const auto probe = std::make_shared<CloudCredentialProbe>();
+        const auto makeStore = [&] {
+            return std::make_shared<
+                EditorCloudModelProfileStore>(path,
+                                              std::make_shared<
+                                                  Security::PersistentCredentialStore>(probe, Platform::CreateNativeSecureRandomSource()));
+        };
+        const auto switchToCloud = [](LocalAgentFixture &fixture) {
+            fixture.Draw(420);
+            fixture.Activate("###cloud_use");
+            REQUIRE(Await([&] {
+                return fixture.DrawnText().find("Updating cloud connection") == std::string::npos;
+            }));
+            CHECK(fixture.DrawnText().find("Could not update the saved cloud connection") == std::string::npos);
+        };
+        const auto store = makeStore();
+        {
+            LocalAgentFixture first{"en-US", {}, store};
+            ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) {
+                return CloudCredentialProbe::Key.data();
+            };
+            switchToCloud(first);
+            first.Enter("##CloudEndpoint", "https://provider.invalid");
+            first.Activate("###cloud_key_enroll");
+            REQUIRE(Await([&] {
+                return first.DrawnText().find("Access key saved") != std::string::npos;
+            }));
+            REQUIRE(probe->enrolled);
+            first.Enter("##CloudModel", "fixture-model");
+            first.Activate("###cloud_model_save");
+            REQUIRE(Await([&] {
+                return first.DrawnText().find("Model saved for this cloud connection") != std::string::npos;
+            }));
+        }
+        const auto retained = store->Load();
+        REQUIRE(retained.HasValue());
+        REQUIRE(retained.Value());
+        CHECK(retained.Value()->model == "fixture-model");
+        CHECK(retained.Value()->endpoint == "https://provider.invalid");
+        std::ifstream profile{path, std::ios::binary};
+        const std::string serialized{std::istreambuf_iterator<char>{profile}, std::istreambuf_iterator<char>{}};
+        profile.close();
+        CHECK(serialized.find(CloudCredentialProbe::Key) == std::string::npos);
+        CHECK(serialized.find(retained.Value()->credential.Value()) != std::string::npos);
+
+        LocalAgentFixture fixture{"en-US", {}, makeStore()};
+        switchToCloud(fixture);
+        CHECK(probe->resolutions == 0);
         fixture.Enter("##CloudPrompt", "Review this exact prompt");
         fixture.Activate("###cloud_review");
         const auto review = fixture.DrawnText();
@@ -204,7 +290,11 @@ namespace {
         REQUIRE(Await(failed));
         CHECK(probe->resolutions == 2);
         fixture.Activate("###cloud_key_revoke");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Cloud access key removed") != std::string::npos;
+        }));
         CHECK_FALSE(probe->enrolled);
+        CHECK_FALSE(std::filesystem::exists(path));
     }
 
 #if HORO_ENABLE_TELEMETRY
