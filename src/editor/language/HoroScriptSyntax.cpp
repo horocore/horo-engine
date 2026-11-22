@@ -2,6 +2,8 @@
 
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Utf8.h"
+#include "ScriptModuleHostServices.h"
+#include "editor/source_editor/HoroScriptModuleLanguage.h"
 
 #include <charconv>
 #include <cstdlib>
@@ -111,20 +113,27 @@ namespace Horo::Editor::Language {
     }
 
     /** @copydoc HoroScriptSyntaxWorkspace::Start */
-    void HoroScriptSyntaxWorkspace::Start(const JobSystem &jobs, const SourceDocumentSnapshot &source) {
+    void HoroScriptSyntaxWorkspace::Start(const JobSystem &jobs, const SourceDocumentSnapshot &source,
+                                          std::vector<Extensions::ScriptModuleApiMetadata> imports) {
         auto output = std::make_shared<std::optional<LanguageResult>>();
-        auto submitted = jobs.SubmitResult({.priority = JobPriority::Background}, [source, output](const CancellationToken &cancel) {
+        auto submitted = jobs.SubmitResult({.priority = JobPriority::Background},
+                                           [source, output, imports = std::move(imports)](const CancellationToken &cancel) {
             if (cancel.IsCancellationRequested())
                 return Result<void>::Success();
             auto result = CheckHoroScriptSyntax(source);
             if (result.HasError())
                 return Result<void>::Failure(std::move(result).ErrorValue());
-            if (!cancel.IsCancellationRequested())
-                output->emplace(std::move(result).Value());
+            if (cancel.IsCancellationRequested())
+                return Result<void>::Success();
+            auto publication = std::move(result).Value();
+            auto &diagnostics = std::get<LanguageDiagnostics>(publication.payload);
+            if (diagnostics.items.empty())
+                diagnostics = DiagnoseHoroScriptImports(source.Text(), imports);
+            output->emplace(std::move(publication));
             return Result<void>::Success();
         });
         if (submitted.HasValue()) {
-            work_.emplace(Work{source, std::move(submitted).Value(), std::move(output)});
+            work_.emplace(Work{source, apiRevision_, std::move(submitted).Value(), std::move(output)});
             attempted_ = source;
         } else {
             retryAt_ = std::chrono::steady_clock::now() + std::chrono::milliseconds{200};
@@ -132,8 +141,8 @@ namespace Horo::Editor::Language {
     }
 
     /** @copydoc HoroScriptSyntaxWorkspace::Admit */
-    void HoroScriptSyntaxWorkspace::Admit(const JobSystem &jobs, const SourceFileOpenService &sources,
-                                          const SourceDocumentSnapshot &source) {
+    void HoroScriptSyntaxWorkspace::Admit(const JobSystem &jobs, const SourceFileOpenService &sources, const SourceDocumentSnapshot &source,
+                                          const CaptureImports &captureImports) {
         if (!source.IsCurrent()) {
             attempted_ = {};
             retryAt_ = {};
@@ -145,17 +154,28 @@ namespace Horo::Editor::Language {
         const auto &utf8Path = identity.key.source.Value();
         const std::filesystem::path path{std::u8string{utf8Path.begin(), utf8Path.end()}};
         if (sources.Classify(path).kind == SourceFileKind::HoroScript)
-            Start(jobs, source);
+            Start(jobs, source, captureImports ? captureImports(source) : std::vector<Extensions::ScriptModuleApiMetadata>{});
         else
             attempted_ = source;
     }
 
+    /** @copydoc HoroScriptSyntaxWorkspace::Work::Matches */
+    bool HoroScriptSyntaxWorkspace::Work::Matches(const SourceDocumentSnapshot &current, const std::uint64_t revision) const noexcept {
+        return apiRevision == revision && current.IsCurrent() && source.SharesStateWith(current);
+    }
+
     /** @copydoc HoroScriptSyntaxWorkspace::Poll */
     std::optional<LanguageResult> HoroScriptSyntaxWorkspace::Poll(const JobSystem &jobs, const SourceFileOpenService &sources,
-                                                                  const SourceDocumentSnapshot &source) {
+                                                                  const SourceDocumentSnapshot &source, const std::uint64_t apiRevision,
+                                                                  const CaptureImports &captureImports) {
+        if (apiRevision != apiRevision_) {
+            apiRevision_ = apiRevision;
+            attempted_ = {};
+            retryAt_ = {};
+        }
         std::optional<LanguageResult> publication;
         if (work_) {
-            const bool matches = source.IsCurrent() && work_->source.SharesStateWith(source);
+            const bool matches = work_->Matches(source, apiRevision);
             const auto job = work_->job.Snapshot();
             if (!job || !job->terminalResult) {
                 if (!matches)
@@ -168,7 +188,7 @@ namespace Horo::Editor::Language {
                 attempted_ = {};
             work_.reset();
         }
-        Admit(jobs, sources, source);
+        Admit(jobs, sources, source, captureImports);
         return publication;
     }
 }  // namespace Horo::Editor::Language

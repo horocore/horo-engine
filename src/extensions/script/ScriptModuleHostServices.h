@@ -72,6 +72,8 @@ namespace Horo::Extensions {
          */
         [[nodiscard]] Result<std::vector<ScriptModuleApiMetadata>> DescribeActiveModuleApis(
             std::string_view package, std::string_view module, const ScriptCapabilityScopeLease &project) const;
+        /** @brief Identifies the current authoring schema publication. Zero denotes an unavailable host. */
+        [[nodiscard]] std::uint64_t AuthoringApiRevision() const noexcept;
         /** Explicit builtin additive-provider request, prepared through the generic all-operation rebind path.
          * No native library replacement is attempted. One active and one draining predecessor are retained. */
         [[nodiscard]] Result<std::vector<ScriptModuleUpdateReport>> RefreshReference(ScriptExportVersion);

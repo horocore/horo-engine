@@ -149,11 +149,17 @@ namespace Horo::Extensions {
         if (reference.HasError())
             return Result<void>::Failure(reference.ErrorValue());
         impl_->reference = std::move(reference).Value();
+        impl_->authority->PublishBuiltinAuthoringChange();
         return Result<void>::Success();
     }
 
     ScriptModuleBindingCacheStats ScriptModuleHostServices::CacheStats() const noexcept {
         return impl_->cache.Stats();
+    }
+
+    /** @copydoc ScriptModuleHostServices::AuthoringApiRevision */
+    std::uint64_t ScriptModuleHostServices::AuthoringApiRevision() const noexcept {
+        return impl_->authority->AuthoringApiRevision();
     }
 
     /** @copydoc ScriptModuleHostServices::DescribeApis */

@@ -272,8 +272,9 @@ as one revision-fenced undo step. Changes of source publication retire results.
 The active source is classified by the project source policy. The Lua 5.4
 parser checks Horo Script text on a bounded background job. It opens no
 libraries and returns only the exact source revision and typed diagnostics.
-The workspace retires a pending check when its source changes. Its marker
-range uses the original UTF-8 bytes, including any BOM and newline spelling.
+The workspace retires a pending check when its source or the host's API
+revision changes. Diagnostic ranges use the original UTF-8 bytes, including
+any BOM and newline spelling. The diagnostic picker selects that byte range.
 
 Module API descriptions come from the current registered providers for an
 authenticated importing module. A live project scope and the project and
@@ -285,6 +286,10 @@ Direct `horo.import("alias").namespace.member` queries use that schema to
 project typed source completion and hover. Completion supplies an exact
 identifier replacement range. The lexer excludes comments and strings
 from matching, and the source lease fences queries against later edits.
+After a successful parse, the background check warns at the first unknown
+namespace segment or member in each direct import with an available schema.
+Unavailable schemas suppress those warnings. The check is lexical and does
+not infer Lua-local values, aliases, dynamic indexing, or argument types.
 
 At workspace open, the editor reads optional `.horo/script-language.json`.
 Version 1 maps each project-relative Lua source to the package and module
@@ -300,8 +305,10 @@ that own its imports. For example:
 ```
 
 The source toolbar uses the current registered module to answer completion
-and symbol information. Selection rechecks the proposed edit against the
-current schema before applying it. Reopen the workspace to read changes to
+and symbol information. Registry publication and withdrawal retire old
+diagnostics, hover and completion during the next workspace update. Selection
+rechecks the proposed edit against the current schema before applying it.
+Reopen the workspace to read changes to
 the binding file. The file selects metadata under the existing host
 registration and grants no execution capabilities.
 

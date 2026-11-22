@@ -67,11 +67,18 @@ namespace Horo::Editor::Language {
         Hint
     };
 
+    /** @brief Localizable editor-owned diagnostics. Provider text retains its original wording. */
+    enum class LanguageDiagnosticCode {
+        ProviderMessage,
+        UnknownScriptImportMember
+    };
+
     /** @brief A server diagnostic projected onto the exact source bytes. */
     struct LanguageDiagnostic final {
         LanguageByteSpan span;
         LanguageSeverity severity{};
         std::string message;
+        LanguageDiagnosticCode code{LanguageDiagnosticCode::ProviderMessage};
     };
 
     /** @brief Complete projected diagnostics for one source revision. */

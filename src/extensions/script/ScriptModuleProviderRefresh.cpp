@@ -93,6 +93,7 @@ namespace Horo::Extensions {
             return reports;
         impl_->predecessorReference = std::move(impl_->reference);
         impl_->reference = std::move(candidate).Value();
+        impl_->authority->PublishBuiltinAuthoringChange();
         return reports;
     }
 

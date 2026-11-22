@@ -22,4 +22,12 @@ namespace Horo::Editor::Language {
     [[nodiscard]] Result<LanguageResult> QueryHoroScriptImports(const SourceDocumentSnapshot &source, SourceLanguageRequestKind kind,
                                                                 std::size_t offset,
                                                                 std::span<const Extensions::ScriptModuleApiMetadata> imports);
+
+    /** @brief Finds mismatched namespaces and members in direct Lua imports with available schemas.
+     * @param text Syntactically valid Lua source bytes, including the original line endings.
+     * @param imports Copied, inert schemas for the registered importing module.
+     * @return Bounded warnings with half-open UTF-8 byte ranges in the input.
+     */
+    [[nodiscard]] LanguageDiagnostics DiagnoseHoroScriptImports(std::string_view text,
+                                                                std::span<const Extensions::ScriptModuleApiMetadata> imports);
 }  // namespace Horo::Editor::Language

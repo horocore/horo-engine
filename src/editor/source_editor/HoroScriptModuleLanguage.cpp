@@ -9,6 +9,7 @@ namespace Horo::Editor::Language {
     namespace {
         constexpr std::size_t MaximumExpressionBytes = 4096;
         constexpr std::size_t MaximumChoices = 128;
+        constexpr std::size_t MaximumImportDiagnostics = 64;
 
         /** @brief Matches a byte that can occur inside an ASCII Lua identifier. */
         bool Identifier(const char value) noexcept {
@@ -212,6 +213,52 @@ namespace Horo::Editor::Language {
             return DescribeMember(*imported->descriptor, *member,
                                   text.substr(member->member.start, member->member.end - member->member.start));
         }
+
+        /** @brief Returns the first member token that disagrees with the published namespace or symbol table. */
+        std::string_view UnknownMember(std::string_view expression, const Extensions::ScriptExportDescriptor &descriptor) {
+            std::string_view expected = descriptor.nameSpace;
+            while (Take(expression, ".")) {
+                SkipWhitespace(expression);
+                const auto end = std::ranges::find_if_not(expression, Identifier);
+                const auto member = expression.substr(0, static_cast<std::size_t>(end - expression.begin()));
+                if (member.empty())
+                    return {};
+                expression.remove_prefix(member.size());
+                if (expected.empty()) {
+                    const bool known = std::ranges::find(descriptor.functions, member, &Extensions::ScriptExportFunctionDescriptor::id) !=
+                                           descriptor.functions.end() ||
+                                       std::ranges::find(descriptor.constants, member, &Extensions::ScriptExportConstantDescriptor::id) !=
+                                           descriptor.constants.end();
+                    return known ? std::string_view{} : member;
+                }
+                const auto separator = expected.find('.');
+                if (member != expected.substr(0, separator))
+                    return member;
+                expected = separator == expected.npos ? std::string_view{} : expected.substr(separator + 1);
+            }
+            return {};
+        }
+
+        /** @brief Checks an eligible lexical receiver without evaluating Lua or guessing at unavailable imports. */
+        std::optional<LanguageDiagnostic> DiagnoseImport(const std::string_view text, const std::size_t start,
+                                                         const std::span<const Extensions::ScriptModuleApiMetadata> imports) {
+            auto expression = text.substr(start, MaximumExpressionBytes);
+            const auto alias = ReadAlias(expression);
+            if (!alias)
+                return std::nullopt;
+            const auto imported = std::ranges::find(imports, *alias, &Extensions::ScriptModuleApiMetadata::alias);
+            if (imported == imports.end() || !imported->descriptor)
+                return std::nullopt;
+            const auto token = UnknownMember(expression, *imported->descriptor);
+            if (token.empty() ||
+                (token.data() + token.size() == expression.data() + expression.size() && start + MaximumExpressionBytes < text.size()))
+                return std::nullopt;
+            const auto first = static_cast<std::size_t>(token.data() - text.data());
+            return LanguageDiagnostic{{first, first + token.size()},
+                                      LanguageSeverity::Warning,
+                                      {},
+                                      LanguageDiagnosticCode::UnknownScriptImportMember};
+        }
     }  // namespace
 
     /** @copydoc QueryHoroScriptImports */
@@ -227,5 +274,24 @@ namespace Horo::Editor::Language {
             ClassifySourceLanguage(source.Identity().key.source.Value()) != SourceLanguage::HoroScript)
             return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
         return Output::Success({{kind, source}, ProjectImport(text, kind, offset, imports)});
+    }
+
+    /** @copydoc DiagnoseHoroScriptImports */
+    LanguageDiagnostics DiagnoseHoroScriptImports(const std::string_view text,
+                                                  const std::span<const Extensions::ScriptModuleApiMetadata> imports) {
+        LanguageDiagnostics diagnostics;
+        if (imports.empty())
+            return diagnostics;
+        const auto syntax = TokenizeSource(SourceLanguage::HoroScript, text);
+        if (syntax.fallback != SourceSyntaxFallback::None)
+            return diagnostics;
+        for (auto start = text.find("horo"); start != text.npos && diagnostics.items.size() < MaximumImportDiagnostics;
+             start = text.find("horo", start + 4)) {
+            if (!ImportHead(text, syntax, start))
+                continue;
+            if (auto diagnostic = DiagnoseImport(text, start, imports))
+                diagnostics.items.push_back(std::move(*diagnostic));
+        }
+        return diagnostics;
     }
 }  // namespace Horo::Editor::Language

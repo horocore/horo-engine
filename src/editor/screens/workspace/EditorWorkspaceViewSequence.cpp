@@ -14,21 +14,31 @@
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Selects the exact parser-reported byte range in the active script editor. */
+        /** @brief Selects the exact byte range of an active script diagnostic. */
         bool DrawScriptDiagnosticJump(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
                                       const std::shared_ptr<const Language::LanguageResult> &publication, SourceEditorWidget &widget) {
-            if (!publication || !source.SharesStateWith(publication->context.source) ||
+            if (!publication || !source.IsCurrent() || !source.SharesStateWith(publication->context.source) ||
                 ClassifySourceLanguage(source.Identity().key.source.Value()) != SourceLanguage::HoroScript)
                 return false;
             const auto *diagnostics = std::get_if<Language::LanguageDiagnostics>(&publication->payload);
             if (!diagnostics || diagnostics->items.empty())
                 return false;
-            if (!Ui::Button({.label = context.localization.Get("editor", "workspace.source_language.script_error").c_str(),
-                             .variant = Ui::ButtonVariant::Secondary,
-                             .font = context.theme.fonts.sans}))
+            const auto &title = context.localization.Get("editor", "workspace.source_language.script_diagnostics");
+            std::string label;
+            const Ui::ComboItemSource labels{.label = [&](const int index) {
+                if (index == 0)
+                    return title.c_str();
+                const auto &item = diagnostics->items[static_cast<std::size_t>(index - 1)];
+                label = std::format("{}. {}", index, item.message);
+                return label.c_str();
+            }};
+            int choice = 0;
+            if (!Ui::ComboControl("##ScriptDiagnostics", &choice, static_cast<int>(diagnostics->items.size()) + 1, labels,
+                                  context.theme.fonts) ||
+                choice == 0)
                 return false;
-            const auto span = diagnostics->items.front().span;
-            return source.IsCurrent() && widget.Select({span.start, span.end});
+            const auto span = diagnostics->items[static_cast<std::size_t>(choice - 1)].span;
+            return widget.Select({span.start, span.end});
         }
 
         /** @brief Resolves the localized notice for the active source revision. */

@@ -776,6 +776,7 @@ namespace Horo::Editor {
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
         Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
+        std::uint64_t m_scriptLanguageApiRevision{};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
 
         struct PendingSourceLanguage final {
@@ -1271,6 +1272,15 @@ namespace Horo::Editor {
         void PrepareSourceLanguage();
         /** @brief Loads the project's authored script-to-module bindings. */
         void ConfigureScriptLanguage(std::shared_ptr<Extensions::ScriptModuleHostServices> host);
+        /** @brief Reads current inert module metadata for the source's registered project binding. */
+        [[nodiscard]] Result<std::vector<Extensions::ScriptModuleApiMetadata>> CaptureScriptLanguageImports(
+            const SourceDocumentSnapshot &source);
+        /** @brief Clears displayed script metadata when the host replaces or withdraws a schema. */
+        void UpdateScriptLanguageRevision();
+        /** @brief Reads the current schema revision without recapturing module metadata. */
+        [[nodiscard]] std::uint64_t ScriptAuthoringApiRevision() const noexcept;
+        /** @brief Localizes the current script diagnostics and refuses results from a retired registry revision. */
+        void PublishScriptDiagnostics(Language::LanguageResult publication);
         /** @brief Resolves a module and queries its metadata in the exact source revision. */
         [[nodiscard]] Result<Language::LanguageResult> QueryScriptLanguage(const SourceLanguageIntent &intent);
         /** @brief Publishes one explicit Lua completion or hover request. */

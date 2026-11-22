@@ -38,6 +38,8 @@ namespace Horo::Extensions::Tests {
         const auto program = package.Program();
         const auto policy = host.Policy();
         const auto beforeInstall = Take(host.modules->DescribeApis(*program, policy));
+        const auto initialRevision = host.modules->AuthoringApiRevision();
+        CHECK(initialRevision != 0);
         REQUIRE(beforeInstall.size() == 2);
         CHECK(beforeInstall[0].alias == "backend-import");
         REQUIRE(beforeInstall[0].descriptor);
@@ -57,10 +59,13 @@ namespace Horo::Extensions::Tests {
         CHECK(host.modules->DescribeActiveModuleApis(package.id, "not-loaded", host.project.Lease()).HasError());
 
         Accept(host.modules->PrepareReference(true));
+        const auto installedRevision = host.modules->AuthoringApiRevision();
+        CHECK(installedRevision > initialRevision);
         const auto retained = Take(host.modules->DescribeApis(*program, policy));
         REQUIRE(retained[1].descriptor);
         CHECK(retained[1].descriptor->version == ScriptExportVersion{1, 0, 0});
         CHECK(Take(host.modules->RefreshReference({1, 1, 0})).empty());
+        CHECK(host.modules->AuthoringApiRevision() > installedRevision);
         const auto current = Take(host.modules->DescribeApis(*program, policy));
         REQUIRE(current[1].descriptor);
         CHECK(current[1].descriptor->version == ScriptExportVersion{1, 1, 0});
@@ -79,6 +84,21 @@ namespace Horo::Extensions::Tests {
         host.project.Revoke();
         CHECK(host.modules->DescribeApis(*program, policy).HasError());
         CHECK(host.modules->DescribeActiveModuleApis(package.id, package.module, host.project.Lease()).HasError());
+    }
+
+    TEST_CASE("Unloading an actual native provider invalidates retained authoring metadata", "[Extensions][ScriptModule][Authoring]") {
+        SignedPackage package{ScriptModuleRuntimeKind::Lua54, "return 42"};
+        package.Capture();
+        Interactive host{package};
+        ScriptCapabilityScope project{ScriptCapabilityScopeKind::Project};
+        const auto active = Take(host.modules->DescribeActiveModuleApis(package.id, package.module, project.Lease()));
+        REQUIRE_FALSE(active.empty());
+        const auto loaded = host.modules->AuthoringApiRevision();
+        host.manager->UnloadAll();
+        CHECK(host.modules->AuthoringApiRevision() > loaded);
+        CHECK(host.modules->DescribeActiveModuleApis(package.id, package.module, project.Lease()).HasError());
+        host.native->BeginShutdown();
+        CHECK(host.modules->AuthoringApiRevision() == 0);
     }
 
     TEST_CASE("Actual signed Headless operations retain the same two VM states across a real additive provider update",

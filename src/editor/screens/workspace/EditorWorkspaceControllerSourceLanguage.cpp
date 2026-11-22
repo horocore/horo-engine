@@ -50,20 +50,25 @@ namespace Horo::Editor {
         m_viewModel.sourceScriptBindings = std::move(bindings).Value();
     }
 
-    /** @copydoc EditorWorkspaceController::QueryScriptLanguage */
-    Result<Language::LanguageResult> EditorWorkspaceController::QueryScriptLanguage(const SourceLanguageIntent &intent) {
-        using Output = Result<Language::LanguageResult>;
-        const auto identity = intent.source.Identity();
+    /** @copydoc EditorWorkspaceController::CaptureScriptLanguageImports */
+    Result<std::vector<Extensions::ScriptModuleApiMetadata>> EditorWorkspaceController::CaptureScriptLanguageImports(
+        const SourceDocumentSnapshot &source) {
+        using Output = Result<std::vector<Extensions::ScriptModuleApiMetadata>>;
+        const auto identity = source.Identity();
         const auto *module = Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, identity.key.source);
         if (!module || !m_scriptLanguageHost)
             return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
         const auto current = m_sourceOpenService.Documents().Snapshot(identity.instance);
-        if (current.HasError() || !current.Value().SharesStateWith(intent.source))
+        if (current.HasError() || !current.Value().SharesStateWith(source))
             return Output::Failure(MakeError(SourceDocumentErrors::Stale));
-        const auto imports =
-            m_scriptLanguageHost->DescribeActiveModuleApis(module->package, module->module, m_scriptLanguageProject.Lease());
+        return m_scriptLanguageHost->DescribeActiveModuleApis(module->package, module->module, m_scriptLanguageProject.Lease());
+    }
+
+    /** @copydoc EditorWorkspaceController::QueryScriptLanguage */
+    Result<Language::LanguageResult> EditorWorkspaceController::QueryScriptLanguage(const SourceLanguageIntent &intent) {
+        const auto imports = CaptureScriptLanguageImports(intent.source);
         if (imports.HasError())
-            return Output::Failure(imports.ErrorValue());
+            return Result<Language::LanguageResult>::Failure(imports.ErrorValue());
         return Language::QueryHoroScriptImports(intent.source, intent.kind, intent.view.caret, imports.Value());
     }
 
@@ -233,6 +238,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateSourceLanguage */
     void EditorWorkspaceController::UpdateSourceLanguage() {
         RetireStaleSourceLanguageProjections();
+        UpdateScriptLanguageRevision();
         UpdateScriptSyntax();
         if (!m_sourceLanguage)
             return;
@@ -255,6 +261,28 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceController::UpdateScriptLanguageRevision */
+    void EditorWorkspaceController::UpdateScriptLanguageRevision() {
+        const auto revision = ScriptAuthoringApiRevision();
+        if (revision == m_scriptLanguageApiRevision)
+            return;
+        m_scriptLanguageApiRevision = revision;
+        m_viewModel.sourceScriptHover.reset();
+        if (m_viewModel.sourceCompletions && m_viewModel.sourceCompletions->fromScriptModule)
+            m_viewModel.sourceCompletions.reset();
+        std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {
+            const auto *diagnostics = std::get_if<Language::LanguageDiagnostics>(&entry.second->payload);
+            return diagnostics && std::ranges::any_of(diagnostics->items, [](const Language::LanguageDiagnostic &item) {
+                return item.code == Language::LanguageDiagnosticCode::UnknownScriptImportMember;
+            });
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::ScriptAuthoringApiRevision */
+    std::uint64_t EditorWorkspaceController::ScriptAuthoringApiRevision() const noexcept {
+        return m_scriptLanguageHost ? m_scriptLanguageHost->AuthoringApiRevision() : 0;
+    }
+
     /** @copydoc EditorWorkspaceController::UpdateScriptSyntax */
     void EditorWorkspaceController::UpdateScriptSyntax() {
         if (!m_sourceRecoveryJobs)
@@ -270,9 +298,26 @@ namespace Horo::Editor {
             if (captured.HasValue())
                 source = std::move(captured).Value();
         }
-        auto publication = m_scriptSyntax.Poll(*m_sourceRecoveryJobs, m_sourceOpenService, source);
+        auto publication = m_scriptSyntax.Poll(*m_sourceRecoveryJobs, m_sourceOpenService, source, m_scriptLanguageApiRevision,
+                                               [this](const SourceDocumentSnapshot &current) {
+            auto imports = CaptureScriptLanguageImports(current);
+            return imports.HasValue() ? std::move(imports).Value() : std::vector<Extensions::ScriptModuleApiMetadata>{};
+        });
         if (publication)
-            PublishSourceLanguageDiagnostics(std::move(*publication));
+            PublishScriptDiagnostics(std::move(*publication));
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishScriptDiagnostics */
+    void EditorWorkspaceController::PublishScriptDiagnostics(Language::LanguageResult publication) {
+        if (ScriptAuthoringApiRevision() != m_scriptLanguageApiRevision)
+            return;
+        for (auto &item : std::get<Language::LanguageDiagnostics>(publication.payload).items) {
+            if (item.code == Language::LanguageDiagnosticCode::UnknownScriptImportMember) {
+                item.message = Localized("workspace.source_language.unknown_script_member",
+                                         "The registered import schema does not contain this member.");
+            }
+        }
+        PublishSourceLanguageDiagnostics(std::move(publication));
     }
 
     /** @copydoc EditorWorkspaceController::PublishSourceLanguageDiagnostics */

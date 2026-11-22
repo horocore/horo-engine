@@ -2,6 +2,7 @@
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "ScriptModuleHostServices.h"
+#include "editor/language/HoroScriptSyntax.h"
 #include "editor/source_editor/HoroScriptAuthoringConfig.h"
 #include "editor/source_editor/HoroScriptModuleLanguage.h"
 #include "editor/source_editor/SourceEditorTheme.h"
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 
 using namespace Horo::Editor;
 
@@ -140,6 +142,58 @@ return horo.import('available').pkg.ap
 
     REQUIRE(sources.Documents().Edit(source.Identity().instance, {source.Revision(), prefix, 2, "api"}).HasValue());
     CHECK(QueryHoroScriptImports(source, Completion, prefix + 2, imports).HasError());
+}
+
+TEST_CASE("Horo Script import diagnostics identify exact members and retire on provider replacement", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using namespace std::chrono_literals;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-import-diagnostics"};
+    constexpr std::string_view code = "\xEF\xBB\xBF-- \xC3\xA9\r\n"
+                                      "local inert = [=[horo.import('api').pkg.api.inert]=]\r\n"
+                                      "local other = receiver.horo.import('api').pkg.api.ignored\r\n"
+                                      "local unknown = horo.import('unavailable').pkg.api.ignored\r\n"
+                                      "local partial = horo.import('api').pkg\r\n"
+                                      "local bad = horo.import('api').pkg.wrong.member\r\n"
+                                      "local valid = horo.import('api').pkg.api.read\r\n"
+                                      "return horo.import('api').pkg.api.missing\r\n";
+    std::ofstream(directory.Path() / "example.lua", std::ios::binary) << code;
+    SourceFileOpenService sources{directory.Path()};
+    const auto opened = sources.Open({.path = "example.lua"});
+    REQUIRE(opened.HasValue());
+    REQUIRE(opened.Value().sourceSnapshot);
+    const auto source = *opened.Value().sourceSnapshot;
+    const Horo::Extensions::ScriptModuleApiMetadata registered{.alias = "api",
+                                                               .descriptor =
+                                                                   Horo::Extensions::ScriptExportDescriptor{.nameSpace = "pkg.api",
+                                                                                                            .functions = {{.id = "read"}}}};
+    const std::array imports{registered, Horo::Extensions::ScriptModuleApiMetadata{.alias = "unavailable"}};
+    const auto &items = DiagnoseHoroScriptImports(source.Text(), imports).items;
+    REQUIRE(items.size() == 2);
+    CHECK(items[0].code == LanguageDiagnosticCode::UnknownScriptImportMember);
+    CHECK(items[0].span == LanguageByteSpan{code.find("wrong"), code.find("wrong") + 5});
+    CHECK(items[1].span == LanguageByteSpan{code.find("missing"), code.find("missing") + 7});
+
+    Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+    HoroScriptSyntaxWorkspace workspace;
+    const auto capture = [&](const SourceDocumentSnapshot &) {
+        return std::vector{registered};
+    };
+    CHECK_FALSE(workspace.Poll(jobs, sources, source, 1, capture));
+    std::optional<LanguageResult> publication;
+    const auto poll = [&](const std::uint64_t revision, const HoroScriptSyntaxWorkspace::CaptureImports &captureImports) {
+        for (auto deadline = std::chrono::steady_clock::now() + 3s; std::chrono::steady_clock::now() < deadline && !publication;) {
+            publication = workspace.Poll(jobs, sources, source, revision, captureImports);
+            std::this_thread::sleep_for(2ms);
+        }
+    };
+    poll(2, {});
+    REQUIRE(publication);
+    CHECK(publication->context.source.SharesStateWith(source));
+    CHECK(std::get<LanguageDiagnostics>(publication->payload).items.empty());
+    publication.reset();
+    poll(3, capture);
+    REQUIRE(publication);
+    CHECK(std::get<LanguageDiagnostics>(publication->payload).items.size() == 2);
 }
 
 TEST_CASE("Configuration syntax separates properties values and comments", "[editor][source][syntax]") {
