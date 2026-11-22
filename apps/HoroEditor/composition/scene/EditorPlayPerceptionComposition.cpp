@@ -54,7 +54,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                    .memory = {.fixedStep = std::chrono::nanoseconds{selection.fixedStep.ToNanoseconds()}},
                                    .radiusMillimeters = native->radiusMillimeters,
                                    .visibleLayers = native->visibleLayers,
-                                   .workUnitsPerTick = native->workUnitsPerTick};
+                                   .workUnitsPerTick = native->workUnitsPerTick,
+                                   .scheduling = native->scheduling};
             playPerception_ = std::move(prepared);
             policy.aiSettings.requirePerceptionEndpoints = true;
             policy.aiControllers = std::move(controllers).Value();

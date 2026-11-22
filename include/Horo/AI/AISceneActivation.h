@@ -49,6 +49,12 @@ namespace Horo::AI {
     using AiScenePerceptionPositionSource =
         std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>;
 
+    /** @brief Admission and fixed-tick service policy for native Scene perception. */
+    enum class AiScenePerceptionScheduling : std::uint8_t {
+        FullPopulation,   /**< Every admitted listener is reserved on every tick. */
+        RotateUnderBudget /**< Per-agent and per-listener turns share a bounded Scene budget. */
+    };
+
     /** @brief Explicit execution policy for a Scene's already selected frozen native producer generation. */
     struct AiScenePerceptionExecution final {
         std::shared_ptr<const PerceptionSenseGeneration> generation;
@@ -57,6 +63,7 @@ namespace Horo::AI {
         std::uint64_t radiusMillimeters{};
         std::uint64_t visibleLayers{};
         std::size_t workUnitsPerTick{};
+        AiScenePerceptionScheduling scheduling{AiScenePerceptionScheduling::FullPopulation};
     };
 
     /** @brief Explicit perception publication owned by an AI Scene activation candidate. */

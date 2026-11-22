@@ -383,7 +383,8 @@ namespace Horo::Application::Internal {
                                                                .capabilities = policy.capabilities,
                                                                .radiusMillimeters = policy.radiusMillimeters,
                                                                .visibleLayers = policy.visibleLayers,
-                                                               .workUnitsPerTick = policy.workUnitsPerTick};
+                                                               .workUnitsPerTick = policy.workUnitsPerTick,
+                                                               .scheduling = policy.scheduling};
                 const auto activated = prepared->scene.ActivatePerceptionAtSafePoint(*active, prepared->perception->spatial, execution);
                 if (activated.HasError())
                     return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());

@@ -35,6 +35,7 @@ namespace Horo::Application::Internal {
         std::uint64_t radiusMillimeters{};
         std::uint64_t visibleLayers{};
         std::size_t workUnitsPerTick{};
+        AI::AiScenePerceptionScheduling scheduling{AI::AiScenePerceptionScheduling::FullPopulation};
     };
 
     /** @brief Project-authored spatial selection tied to one admitted cooked Scene definition. */

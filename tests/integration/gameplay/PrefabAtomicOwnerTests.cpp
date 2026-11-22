@@ -601,6 +601,27 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(healthy.Value().entries.front().lastSensedTick == 3);
         }
 
+        /** @brief Proves finite service and private memory under sustained native sensing pressure. */
+        void RequirePerceptionRotation(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
+                                       const std::array<Runtime::EntityRef, 2> &recipients, Duration quantum,
+                                       const CancellationToken &cancellation) {
+            for (std::uint64_t tick = 1; tick <= 4; ++tick) {
+                REQUIRE(physics.RunFixedTick({tick, quantum, cancellation}).HasValue());
+                CHECK(probe.module[1] == tick);
+                const auto served = (tick - 1) % recipients.size();
+                const auto memory = Internal::InspectHeadlessPerceptionMemory(physics, recipients[served]);
+                REQUIRE(memory.HasValue());
+                REQUIRE(memory.Value().count == 1);
+                CHECK(memory.Value().entries.front().lastSensedTick == tick);
+                CHECK(memory.Value().entries.front().key.source == AI::ProjectPerceptionSource(recipients[1 - served]));
+                const auto waiting = Internal::InspectHeadlessPerceptionMemory(physics, recipients[1 - served]);
+                REQUIRE(waiting.HasValue());
+                REQUIRE(waiting.Value().count == (tick == 1 ? 0 : 1));
+                if (tick > 1)
+                    CHECK(waiting.Value().entries.front().lastSensedTick == tick - 1);
+            }
+        }
+
         TEST_CASE("Configured authoritative headless ticks poll the admitted native producer over its actual Scene",
                   "[prefab][integration][ai][perception][host]") {
             using namespace Network;
@@ -643,6 +664,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool usesAuthoredCoordinates = false;
             bool admitAuthoredSource = true;
             bool isolateFault = false;
+            bool rotating = false;
             SECTION("bounded fixed dispatch and paired shutdown") {}
             SECTION("a provider exception suspends its recipient while the other recipient and fixed tick continue") {
                 isolateFault = true;
@@ -701,6 +723,16 @@ namespace Horo::Application::PrefabAtomicTest {
                 input.perceptionExecution->workUnitsPerTick = native.RequiredUnits() - 1;
                 seatsAdmitted = false;
             }
+            SECTION("rotating policy refuses a listener that can never fit") {
+                input.perceptionExecution->scheduling = AI::AiScenePerceptionScheduling::RotateUnderBudget;
+                input.perceptionExecution->workUnitsPerTick = native.RequiredUnits() - 1;
+                seatsAdmitted = false;
+            }
+            SECTION("rotating policy serves both recipients under a one-listener budget") {
+                input.perceptionExecution->scheduling = AI::AiScenePerceptionScheduling::RotateUnderBudget;
+                input.perceptionExecution->workUnitsPerTick = native.RequiredUnits();
+                rotating = true;
+            }
             SECTION("the connected client inherits no native Perception authority") {
                 role = NetworkProjectRole::ListenServer;
                 world = NetworkModeWorldKind::Client;
@@ -746,6 +778,12 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(physics.Value()->Prepare().HasValue());
             REQUIRE(physics.Value()->Activate().HasValue());
             const auto quantum = Duration::FromNanoseconds(native.execution.memory.fixedStep.count());
+            if (rotating) {
+                RequirePerceptionRotation(*physics.Value(), native.probe, {*observer, *source}, quantum, cancellation.Token());
+                sceneService.Value()->Shutdown();
+                physics.Value()->Shutdown();
+                return;
+            }
             REQUIRE(physics.Value()->RunFixedTick({1, quantum, cancellation.Token()}).HasValue());
             CHECK(native.probe.module[1] == 2);
             const auto memory = Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer);
@@ -813,6 +851,15 @@ namespace Horo::Application::PrefabAtomicTest {
                 "native": {"listeners":[{"id":91,"sense":20}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":64}
             })");
             auto &watches = source["controllers"][0]["decisionWatches"];
+            SECTION("the native scheduling policy is explicit and closed") {
+                source["native"]["scheduling"] = "rotateUnderBudget";
+                const auto captured = CaptureProjectPerception(definition.Value(), asset, source.dump());
+                REQUIRE(captured.HasValue());
+                REQUIRE(captured.Value()->native);
+                CHECK(captured.Value()->native->scheduling == AI::AiScenePerceptionScheduling::RotateUnderBudget);
+                source["native"]["scheduling"] = "unknown";
+                CHECK(CaptureProjectPerception(definition.Value(), asset, source.dump()).HasError());
+            }
             SECTION("stable node and admitted listener select event-only execution") {
                 const auto captured = CaptureProjectPerception(definition.Value(), asset, source.dump());
                 REQUIRE(captured.HasValue());

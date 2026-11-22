@@ -18,7 +18,7 @@ namespace Horo::AI {
 
         /** @brief Reserves query entry only when the complete subsequent provider allowance fits. */
         bool ReserveQuery(const PerceptionSenseContract &contract, AiWorkBudget &agent, AiWorkBudget &global) noexcept {
-            const auto required = contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
+            const auto required = Detail::PerceptionSenseWorkUnits(contract);
             if (std::min(agent.Remaining(), global.Remaining()) < required)
                 return false;
             static_cast<void>(agent.Consume());

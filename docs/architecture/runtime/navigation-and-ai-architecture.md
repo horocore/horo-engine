@@ -1337,7 +1337,12 @@ policy. The same prepared gameplay image supplies inert sense/stimulus contracts
 for registry admission, then issues the callable generation after real module
 startup on the already paired Scene. A listener cannot name an unregistered
 sense, and an insufficient aggregate allowance fails startup before exposing the
-world. Connected hosts receive no native Perception grant.
+world. A project can explicitly opt into `"scheduling": "rotateUnderBudget"`
+in `native`. That mode admits an oversubscribed population if each individual
+listener fits the Scene limit. The owner rotates service across agent slots and
+across each agent's listeners. Deferred listeners keep their prior observations
+subject to normal expiry and source retirement. Connected hosts receive no native
+Perception grant.
 
 Schema 3 adds explicit filtering to the same native policy. Each controller
 declares a `filter` with `team` (zero means unaligned), `visibility`

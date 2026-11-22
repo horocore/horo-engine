@@ -46,7 +46,7 @@ namespace Horo::AI {
                 if (contract == contracts.end() || contract->sense.identity != sense)
                     return Result<void>::Failure(
                         MakeError(AIErrors::PerceptionDependencyMissing, "No admitted native producer owns this listener."));
-                const auto units = contract->workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
+                const auto units = Detail::PerceptionSenseWorkUnits(*contract);
                 if (units > remaining)
                     return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
                 auto instance = policy.generation->Create(policy.generation, sense, *endpoints.registry, policy.capabilities,
@@ -61,7 +61,8 @@ namespace Horo::AI {
                                               .visibleLayers = policy.visibleLayers,
                                               .maximumCandidates = contract->maximumCandidates}});
                 recipient->workUnits += units;
-                remaining -= units;
+                if (policy.scheduling == AiScenePerceptionScheduling::FullPopulation)
+                    remaining -= units;
             }
             agent.sensing = std::move(recipient);
             return Result<void>::Success();
@@ -74,19 +75,46 @@ namespace Horo::AI {
                    view.Get({view.RuntimeId(), {source.slot, source.generation}}).HasValue();
         }
 
+        /** @brief Visits each slot once and rotates past the first slot that spent shared work. */
+        template <typename Visitor>
+        Result<void> PollBudgetOrder(std::size_t count, std::size_t &cursor, bool rotating, AiWorkBudget &global, Visitor visit) {
+            if (count == 0)
+                return Result<void>::Success();
+            auto index = rotating ? cursor % count : 0;
+            bool spent = false;
+            for (std::size_t visited = 0; visited < count; ++visited) {
+                const auto before = global.Remaining();
+                if (auto result = visit(index); result.HasError())
+                    return result;
+                if (++index == count)
+                    index = 0;
+                if (rotating && !spent && global.Remaining() < before) {
+                    cursor = index;
+                    spent = true;
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Quarantines only the failed listener and withdraws its observations in the same sensing window. */
         [[nodiscard]] Result<void> PollRecipient(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
                                                  const PerceptionSenseGeneration &generation, Detail::SceneAgentPerception &sensing,
-                                                 const std::uint64_t tick, AiWorkBudget &global) {
+                                                 const std::uint64_t tick, AiWorkBudget &global, bool rotating) {
             AiWorkBudget budget{sensing.workUnits};
             std::optional<Error> firstFault;
             bool hasActiveListener{};
-            for (auto &sense : sensing.senses) {
+            const auto poll = [&sensing, &scene, &spatial, &generation, tick, &budget, &global, rotating, &firstFault,
+                               &hasActiveListener](const std::size_t index) {
+                auto &sense = sensing.senses[index];
                 auto &instance = *sense.instance;
                 const auto &binding = instance.Binding();
                 if (instance.IsQuarantined()) {
                     sensing.memory.ForgetListener(binding.listenerType);
-                    continue;
+                    return Result<void>::Success();
+                }
+                if (rotating && global.Remaining() < Detail::PerceptionSenseWorkUnits(instance.Contract())) {
+                    hasActiveListener = true;
+                    return Result<void>::Success();
                 }
                 auto polled = Detail::PollSceneSense(scene, spatial, instance, sense.query, tick, sensing.memory, {budget, global});
                 if (polled.HasError())
@@ -94,7 +122,7 @@ namespace Horo::AI {
                 auto fault = std::move(polled).Value().providerFailure;
                 if (!fault) {
                     hasActiveListener = true;
-                    continue;
+                    return Result<void>::Success();
                 }
                 if (!generation.CanAdmit() || binding.cancellation.IsCancellationRequested())
                     return Result<void>::Failure(std::move(*fault));
@@ -102,7 +130,10 @@ namespace Horo::AI {
                 sensing.memory.ForgetListener(binding.listenerType);
                 if (!firstFault)
                     firstFault = std::move(fault);
-            }
+                return Result<void>::Success();
+            };
+            if (auto result = PollBudgetOrder(sensing.senses.size(), sensing.nextSense, rotating, global, poll); result.HasError())
+                return result;
             if (!hasActiveListener)
                 sensing.suspension = firstFault ? std::move(*firstFault) : MakeError(AIErrors::RuntimeUnavailable);
             return Result<void>::Success();
@@ -349,10 +380,12 @@ namespace Horo::AI {
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
         if (policy.radiusMillimeters > PerceptionSpatialLimits::RadiusMillimeters || policy.visibleLayers == 0 ||
             policy.workUnitsPerTick == 0 || policy.workUnitsPerTick > AiTaskSchedulerSettings::HardWorkUnits ||
+            (policy.scheduling != AiScenePerceptionScheduling::FullPopulation &&
+             policy.scheduling != AiScenePerceptionScheduling::RotateUnderBudget) ||
             (policy.capabilities.bits & ~allCapabilityBits) != 0)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         auto remaining = policy.workUnitsPerTick;
-        for (std::size_t index = 0; index < residents.size(); ++index) {
+        for (std::size_t index = 0; policy.scheduling == AiScenePerceptionScheduling::FullPopulation && index < residents.size(); ++index) {
             const auto &agent = residents[index];
             if (!agent.sensing || std::ranges::binary_search(removals, index))
                 continue;
@@ -497,30 +530,32 @@ namespace Horo::AI {
         active_->perceptionPollFailure.reset();
         AiWorkBudget global{policy->workUnitsPerTick};
         const auto revision = state->revision;
-        for (auto &agent : state->agents) {
+        const bool rotating = policy->scheduling == AiScenePerceptionScheduling::RotateUnderBudget;
+        const auto poll = [this, &state, &scene, &spatial, &policy, tick, &global, rotating, revision](const std::size_t index) {
+            auto &agent = state->agents[index];
             if (!agent.sensing || agent.sensing->suspension)
-                continue;
+                return Result<void>::Success();
             const auto handle = agent.record.handle;
             const auto plan = agent.cookedPlan;
             auto *scheduler = state->scheduler.get();
             std::optional<AIPerceptionMemory> previous;
             if (scheduler && !scheduler->PerceptionWatches(handle, plan).empty())
                 previous.emplace(agent.sensing->memory);
-            auto polled = PollRecipient(scene, spatial, *policy->generation, *agent.sensing, tick, global);
-            if (polled.HasError()) {
-                state->perceptionPollFailure = polled.ErrorValue();
+            auto polled = PollRecipient(scene, spatial, *policy->generation, *agent.sensing, tick, global, rotating);
+            if (polled.HasError())
                 return polled;
-            }
-            if (state->closed || state != active_ || state->revision != revision) {
-                state->perceptionPollFailure = MakeError(AIErrors::PerceptionSpatialStale);
-                return Result<void>::Failure(*state->perceptionPollFailure);
-            }
+            if (state->closed || state != active_ || state->revision != revision)
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
             if (previous && std::ranges::any_of(scheduler->PerceptionWatches(handle, plan), [&](const auto listener) {
                 return agent.sensing->memory.DecisionFactsChanged(*previous, listener);
             }))
                 static_cast<void>(scheduler->Wake(handle, {.perception = true}));
-        }
-        return Result<void>::Success();
+            return Result<void>::Success();
+        };
+        auto result = PollBudgetOrder(state->agents.size(), state->nextPerceptionAgent, rotating, global, poll);
+        if (result.HasError())
+            state->perceptionPollFailure = result.ErrorValue();
+        return result;
     }
 
     /** @copydoc AiSceneRuntime::PublishPerceptionBlackboardsAtBlackboardSync */

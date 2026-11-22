@@ -209,7 +209,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Validates explicit native listeners and a bounded native execution window. */
         ProjectNativePerceptionPolicy ReadNative(const Json &object) {
-            RequireFields(object, {"listeners", "radiusMillimeters", "visibleLayers", "workUnitsPerTick"});
+            RequireFields(object, {"listeners", "radiusMillimeters", "visibleLayers", "workUnitsPerTick"}, {"scheduling"});
             const auto &listeners = object["listeners"];
             const auto radius = Unsigned(object["radiusMillimeters"]);
             const auto layers = Unsigned(object["visibleLayers"]);
@@ -220,6 +220,11 @@ namespace Horo::Application::Internal {
                 units > AI::AiTaskSchedulerSettings::HardWorkUnits)
                 throw std::invalid_argument("Native Perception execution policy exceeds its bounds");
             ProjectNativePerceptionPolicy policy{{}, radius, layers, static_cast<std::size_t>(units)};
+            if (object.contains("scheduling")) {
+                if (object["scheduling"] != "rotateUnderBudget")
+                    throw std::invalid_argument("Unknown native Perception scheduling policy");
+                policy.scheduling = AI::AiScenePerceptionScheduling::RotateUnderBudget;
+            }
             policy.listeners.reserve(listeners.size());
             for (const auto &entry : listeners) {
                 RequireFields(entry, {"id", "sense"});

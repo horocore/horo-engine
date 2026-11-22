@@ -613,20 +613,27 @@ namespace Horo::AI {
             REQUIRE(scene.HasValue());
             const auto view = scene.Value()->View();
             PerceptionSpatialBroadphase spatial;
-            const AiScenePerceptionActivationInput sensing{spatial,
-                                                           {},
-                                                           [](const Runtime::RuntimeSceneView &candidate) {
+            AiScenePerceptionActivationInput sensing{spatial,
+                                                     {},
+                                                     [](const Runtime::RuntimeSceneView &candidate) {
                 std::vector<AiScenePerceptionPosition> positions;
                 for (std::uint64_t id = 1; id <= 2; ++id)
                     positions.push_back({*candidate.Find(Runtime::SceneObjectId{id}),
                                          Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(id) * 1000, 0, 0)});
                 return Result<std::vector<AiScenePerceptionPosition>>::Success(std::move(positions));
             },
-                                                           AiScenePerceptionExecution{.generation = generation.Value(),
-                                                                                      .capabilities = native.capabilities,
-                                                                                      .radiusMillimeters = 5000,
-                                                                                      .visibleLayers = 1,
-                                                                                      .workUnitsPerTick = 100}};
+                                                     AiScenePerceptionExecution{.generation = generation.Value(),
+                                                                                .capabilities = native.capabilities,
+                                                                                .radiusMillimeters = 5000,
+                                                                                .visibleLayers = 1,
+                                                                                .workUnitsPerTick = 100}};
+            bool rotateSenses = false;
+            SECTION("two agents with two listeners each share one listener allowance") {
+                rotateSenses = true;
+                sensing.execution->scheduling = AiScenePerceptionScheduling::RotateUnderBudget;
+                sensing.execution->workUnitsPerTick =
+                    registrations.front().contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
+            }
 
             JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
@@ -664,6 +671,22 @@ namespace Horo::AI {
                 REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
                 return decision.Value().evaluated;
             };
+            if (rotateSenses) {
+                const auto first = *view.Find(Runtime::SceneObjectId{1});
+                const auto second = *view.Find(Runtime::SceneObjectId{2});
+                for (std::uint64_t tick = 1; tick <= 4; ++tick) {
+                    (void)evaluate(tick);
+                    CHECK(primary.evaluations == std::min<std::uint64_t>(tick, 2));
+                    CHECK(secondary.evaluations == (tick > 2 ? tick - 2 : 0));
+                    const auto served = tick % 2 == 1 ? first : second;
+                    const auto memory = runtime.ReadPerceptionAtSafePoint(view, served);
+                    REQUIRE(memory.HasValue());
+                    REQUIRE(memory.Value().count == (tick <= 2 ? 1 : 2));
+                    const auto entries = std::span{memory.Value().entries}.first(memory.Value().count);
+                    CHECK(std::ranges::count(entries, tick, &PerceivedStimulus::lastSensedTick) == 1);
+                }
+                return;
+            }
             CHECK(evaluate(1) == 2);
             const auto oldBoard = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
             REQUIRE(oldBoard.HasValue());

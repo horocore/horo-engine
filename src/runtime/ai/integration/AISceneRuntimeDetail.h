@@ -14,6 +14,11 @@ namespace Horo::AI::Detail {
         PerceptionSpatialQuery query;
     };
 
+    /** @brief Whole cost needed before entering a single native sense. */
+    [[nodiscard]] constexpr std::size_t PerceptionSenseWorkUnits(const PerceptionSenseContract &contract) noexcept {
+        return contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
+    }
+
     /** @brief One agent's owned native runtime, discarded before releasing any executable lease. */
     struct SceneAgentPerception final {
         AIPerceptionMemory memory;
@@ -24,6 +29,7 @@ namespace Horo::AI::Detail {
         std::size_t projectionDrops{};
         std::uint64_t projectedTick{};
         std::uint64_t projectedSpatialRevision{};
+        std::size_t nextSense{};
     };
 
     /** @brief Separates a provider fault from a failure of the Scene's sensing window. */
@@ -126,6 +132,7 @@ namespace Horo::AI::Detail {
         std::optional<AiScenePerceptionExecution> perceptionExecution;
         const PerceptionSpatialBroadphase *perceptionSpatial{}; /**< Exact publisher borrowed for the same activation lifetime. */
         std::uint64_t lastPerceptionTick{};
+        std::size_t nextPerceptionAgent{};
         std::optional<Error> perceptionPollFailure; /**< Same-tick retries cannot replay native callbacks. */
         bool replacingDecision{};                   /**< Owner-lane fence across replacement provider callbacks. */
         bool closed{};
