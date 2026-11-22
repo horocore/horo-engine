@@ -9,6 +9,7 @@
 #include <ctime>
 #include <format>
 #include <numeric>
+#include <optional>
 
 namespace Horo::Editor {
     namespace {
@@ -37,13 +38,32 @@ namespace Horo::Editor {
 
         /** @brief Ensures a registry token contains no path, delimiter, or spreadsheet formula prefix. */
         bool ToolToken(const std::string_view value) {
-            const auto alphanumeric = [](const unsigned char c) {
-                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-            };
-            return value.empty() ||
-                   (value.size() <= 128 && alphanumeric(value.front()) && std::ranges::all_of(value, [&](const unsigned char c) {
-                return alphanumeric(c) || c == '.' || c == '_' || c == '-';
+            constexpr std::string_view alphanumeric = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            constexpr std::string_view punctuation = "._-";
+            return value.empty() || (value.size() <= 128 && alphanumeric.find(value.front()) != std::string_view::npos &&
+                                     std::ranges::all_of(value, [&](const char c) {
+                return alphanumeric.find(c) != std::string_view::npos || punctuation.find(c) != std::string_view::npos;
             }));
+        }
+
+        /** @brief Canonical labels and the borrowed, validated registry token. */
+        struct AuditLabels {
+            std::string_view event;
+            std::string_view status;
+            std::string_view tool;
+        };
+
+        /** @brief Resolves the input fields to the supported audit vocabulary. */
+        std::optional<AuditLabels> ReadLabels(const Log::StructuredLogRecord &record) {
+            const auto event = std::ranges::find(Events, record.message);
+            const auto *tool = Field<std::string>(record, "tool");
+            const auto *text = Field<std::string>(record, "status");
+            if (event == Events.end() || !tool || !ToolToken(*tool) || !text)
+                return std::nullopt;
+            const auto status = std::ranges::find(Statuses, *text);
+            if (status == Statuses.end())
+                return std::nullopt;
+            return AuditLabels{*event, *status, *tool};
         }
 
         /** @brief Formats the retained UTC timestamp independently of the host locale. */
@@ -113,22 +133,18 @@ namespace Horo::Editor {
     void GlobalDockMcpPane::AppendRow(const Log::StructuredLogRecord &record) {
         if (record.category != "mcp.audit" || Number(record, "schema_version") != 1)
             return;
-        const auto event = std::ranges::find(Events, record.message);
-        const auto *tool = Field<std::string>(record, "tool");
-        const auto *text = Field<std::string>(record, "status");
-        if (event == Events.end() || !tool || !ToolToken(*tool) || !text)
-            return;
-        const auto status = std::ranges::find(Statuses, *text);
+        const auto labels = ReadLabels(record);
         const auto principal = Number(record, "principal_id");
         const auto session = Number(record, "session_id");
         const auto generation = Number(record, "session_generation");
-        if (status == Statuses.end() || !principal || !session || !generation)
+        if (!labels || !principal || !session || !generation)
             return;
         const auto operation = Number(record, "operation_id");
         const auto approval = Number(record, "approval_id");
         const auto *elapsed = Field<std::int64_t>(record, "elapsed_ms");
-        m_rows.push_back({record.timestampUtc, principal, session, generation, operation, approval, elapsed ? *elapsed : 0, *event, *status,
-                          *tool, TimeOfDay(record.timestampUtc), std::format("{} / {}.{}", principal, session, generation)});
+        m_rows.push_back({record.timestampUtc, principal, session, generation, operation, approval, elapsed ? *elapsed : 0, labels->event,
+                          labels->status, std::string{labels->tool}, TimeOfDay(record.timestampUtc),
+                          std::format("{} / {}.{}", principal, session, generation)});
     }
 
     /** @copydoc GlobalDockMcpPane::DrawToolbar */
