@@ -232,6 +232,19 @@ namespace Horo::Mcp {
             return Output::Success(std::move(view));
         }
 
+        /** @brief Routes adapter callbacks to the exact operation without retaining the controller. */
+        void BindAdapterCallbacks(Operation &operation) {
+            const auto controller = weak_from_this();
+            operation.context.reportProgress = [controller, id = operation.id](const double fraction, std::string phase) {
+                if (const auto state = controller.lock())
+                    state->ReportProgress(id, fraction, std::move(phase));
+            };
+            operation.context.bindResultLease = [controller, id = operation.id](McpResultLease lease) {
+                const auto state = controller.lock();
+                return state && state->BindResultLease(id, std::move(lease));
+            };
+        }
+
         /** @brief Admits one request and retains its snapshot under the bounded queue lock. */
         [[nodiscard]] Result<nlohmann::json> QueueCall(const McpRequest &request, const McpRequestContext &context, McpToolId tool,
                                                        const McpOwnerContext owner, std::shared_ptr<const McpToolSnapshot> snapshot) {
@@ -256,14 +269,7 @@ namespace Horo::Mcp {
             operation->context.requestIdentity = request.id;
             operation->cancellation = CancellationSource{context.cancellation};
             operation->context.cancellation = operation->cancellation.Token();
-            operation->context.reportProgress = [weak = weak_from_this(), id = operation->id](const double fraction, std::string phase) {
-                if (const auto state = weak.lock())
-                    state->ReportProgress(id, fraction, std::move(phase));
-            };
-            operation->context.bindResultLease = [weak = weak_from_this(), id = operation->id](McpResultLease lease) {
-                const auto state = weak.lock();
-                return state && state->BindResultLease(id, std::move(lease));
-            };
+            BindAdapterCallbacks(*operation);
             operation->owner = owner;
             operation->snapshot = std::move(snapshot);
             operations.try_emplace(operation->id, operation);
