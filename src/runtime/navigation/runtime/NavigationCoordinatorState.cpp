@@ -140,10 +140,13 @@ namespace Horo::Navigation {
     std::optional<Error> NavigationCoordinator::State::PublicationFailure(const Entry &entry, const NavigationPathPublication &current) {
         if (entry.cancellation.Token().IsCancellationRequested())
             return MakeError(NavigationErrors::QueryCancelled);
-        if (!current.activation.IsValid() || entry.query.worldLease.IsRevoked() ||
-            entry.query.worldLease.Descriptor().scene != current.activation.scene ||
-            entry.query.worldLease.Descriptor().sceneGeneration != current.activation.sceneGeneration ||
-            entry.query.request.world != current.activation.world)
+        const auto &admitted = entry.query.worldLease.Descriptor();
+        if (!current.activation.IsValid() || admitted.scene != current.activation.scene ||
+            admitted.sceneGeneration != current.activation.sceneGeneration || entry.query.request.world != current.activation.world)
+            return MakeError(NavigationErrors::InvalidWorld);
+        if (admitted.topology != current.activation.topology)
+            return MakeError(NavigationErrors::StaleSnapshot);
+        if (entry.query.worldLease.IsRevoked())
             return MakeError(NavigationErrors::InvalidWorld);
         if (const auto caller = std::ranges::lower_bound(current.callers, entry.submission.caller.owner, {}, &NavigationPathCaller::owner);
             caller == current.callers.end() || *caller != entry.submission.caller)

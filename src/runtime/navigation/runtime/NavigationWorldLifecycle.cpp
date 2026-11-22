@@ -34,6 +34,18 @@ namespace Horo::Navigation {
                 return record->descriptor.world == world;
             });
         }
+
+        /** @brief Validate identity continuity for an immutable topology replacement within the active world. */
+        [[nodiscard]] Result<void> ValidateTopologyReplacement(const NavigationWorldActivationDescriptor &active,
+                                                               const NavigationWorldActivationDescriptor &candidate) {
+            if (candidate.scene != active.scene || candidate.sceneGeneration != active.sceneGeneration)
+                return Failure<void>(NavigationErrors::InvalidWorld);
+            if (candidate.topology == active.topology)
+                return Failure<void>(NavigationErrors::InvalidWorld);
+            if (candidate.topology < active.topology)
+                return Failure<void>(NavigationErrors::StaleSnapshot);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc NavigationWorldActivationDescriptor::IsValid */
@@ -121,8 +133,12 @@ namespace Horo::Navigation {
             return Failure<void>(NavigationErrors::CapabilityUnavailable);
         if (!descriptor.IsValid() || !backend || !ValidateNavigationProviderCapabilities(backend->Capabilities()))
             return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
-        if ((active_ && active_->descriptor.world == descriptor.world) || ContainsWorld(retired_, descriptor.world))
+        if (active_ && active_->descriptor.world == descriptor.world) {
+            if (const auto valid = ValidateTopologyReplacement(active_->descriptor, descriptor); valid.HasError())
+                return valid;
+        } else if (ContainsWorld(retired_, descriptor.world)) {
             return Failure<void>(NavigationErrors::InvalidWorld);
+        }
         try {
             staged_ = std::make_shared<Detail::NavigationWorldRecord>(descriptor, std::move(backend));
             return Result<void>::Success();
@@ -142,10 +158,10 @@ namespace Horo::Navigation {
         if (!CanRetireActive())
             return Failure<void>(NavigationErrors::CapacityExceeded);
 
-        if (active_)
-            RetireActive();
+        const bool keepPaused = state_ == Paused && active_ && active_->descriptor.world == staged_->descriptor.world;
+        RetireActive();
         active_ = std::move(staged_);
-        state_ = Active;
+        state_ = keepPaused ? Paused : Active;
         return Result<void>::Success();
     }
 

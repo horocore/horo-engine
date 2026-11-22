@@ -120,6 +120,36 @@ namespace Horo::Navigation {
         }
     }
 
+    TEST_CASE("Same-world topology replacement publishes a stale result with the exact old source", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        Activate(world);
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        const auto request = Admit(coordinator, world);
+        REQUIRE(coordinator.Dispatch(1) == 1);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+
+        const NavigationPathCaller callers[]{Caller()};
+        auto current = Current(callers);
+        current.activation.topology = NavigationGeneration::Create(Topology().Value() + 1U).Value();
+        current.source.topology = current.activation.topology;
+        current.source.snapshot = NavigationSnapshotToken::Create(2).Value();
+        REQUIRE(world.Stage(current.activation, MakeObservedNavigationBackend()).HasValue());
+        REQUIRE(world.CommitAtSafePoint(current.activation.scene, current.activation.sceneGeneration).HasValue());
+        REQUIRE(world.RetiredCount() == 1);
+
+        REQUIRE(coordinator.Commit(current) == 1);
+        const auto completion = coordinator.Take(request);
+        REQUIRE(completion);
+        REQUIRE(ErrorIs(*completion, NavigationErrors::StaleSnapshot));
+        REQUIRE(completion->source.world == World());
+        REQUIRE(completion->source.topology == Topology());
+        REQUIRE(completion->activation == Activation());
+        REQUIRE(coordinator.IsDrained());
+        REQUIRE(world.CollectRetired() == NavigationWorldLifecycleState::Active);
+        REQUIRE(world.RetiredCount() == 0);
+    }
+
     TEST_CASE("Queued scheduler cancellation and exception publish each request terminally", "[unit][navigation][coordinator]") {
         for (bool fail : {false, true}) {
             JobSystem jobs{{.workerCount = 0}};

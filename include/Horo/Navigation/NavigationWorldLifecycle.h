@@ -113,7 +113,8 @@ namespace Horo::Navigation {
 
         /**
          * @brief Validate and retain one detached provider candidate without changing the active world.
-         * @param descriptor Exact Scene/world/topology identities for later publication.
+         * @param descriptor Exact Scene/world/topology identities for later publication. A candidate for the active
+         *                   world must keep its Scene incarnation and generation and advance its topology generation.
          * @param backend Unique fully initialized provider; consumed on success or failure.
          * @return Success or typed invalid/lifecycle/capacity failure with the active world unchanged.
          */
@@ -125,6 +126,7 @@ namespace Horo::Navigation {
          * @param expectedScene Exact active Scene incarnation at the safe point.
          * @param expectedGeneration Exact active Scene generation at the safe point.
          * @return Success or typed stale/lifecycle/retirement-capacity failure with the old world preserved.
+         * @post A same-world topology replacement preserves paused admission and revokes the previous provider's read leases.
          */
         [[nodiscard]] Result<void> CommitAtSafePoint(NavigationSceneRuntimeId expectedScene, NavigationSceneGeneration expectedGeneration);
 
