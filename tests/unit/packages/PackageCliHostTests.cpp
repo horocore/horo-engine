@@ -240,6 +240,38 @@ namespace {
             CHECK(read(metadata / "packages.lock") == originalLock);
             return;
         }
+        SECTION("an asset-only replacement preserves mounted paths and rejects changed bytes") {
+            NativeDurableFileSystem files;
+            auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+            REQUIRE(cache.HasValue());
+            auto verifiedCache = std::move(cache).Value();
+            REQUIRE(verifiedCache.Publish(fixture.graph.archive).HasValue());
+            for (const bool preserves : {false, true}) {
+                const auto bytes = Tests::Packages::ValidPackageArchiveBytes(preserves ? "verified bytes" : "changed bytes", "new asset");
+                const auto archive = Packages::ValidatedPackageArchive::Verify(bytes);
+                REQUIRE(archive.HasValue());
+                REQUIRE(verifiedCache.Publish(archive.Value()).HasValue());
+                auto nextLock = nlohmann::json::parse(originalLock);
+                auto &locked = nextLock["packages"].front();
+                locked["artifactSha256"] = FormatSha256(archive.Value().Digest());
+                locked["fileManifestSha256"] = FormatSha256(archive.Value().Manifest().Digest());
+                fixture.Write("candidate.json", originalRequest);
+                fixture.Write("candidate.lock", nextLock.dump());
+                const auto preview = execute();
+                REQUIRE(preview.Outcome().HasValue());
+                const auto result = apply(std::get<std::string>(preview.Outcome().Value().fields.back().value));
+                if (!preserves) {
+                    REQUIRE(result.Outcome().HasError());
+                    CHECK(result.Outcome().ErrorValue().code.Value() == "packages.host.update_requires_migration_review");
+                    CHECK(read(metadata / "packages.lock") == originalLock);
+                } else {
+                    REQUIRE(result.Outcome().HasValue());
+                    CHECK(read(metadata / "packages.lock") == nextLock.dump());
+                }
+            }
+            CHECK(read(metadata / "packages.json") == originalRequest);
+            return;
+        }
         SECTION("a pending publication is left intact") {
             std::filesystem::create_directory(metadata / "local");
             fixture.Write("local/package-metadata.pending", "pending publication");

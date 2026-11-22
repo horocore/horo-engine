@@ -388,8 +388,11 @@ the preview until a recovery-capable operation repairs the project.
 `horo-engine package apply-update` takes the same project and candidate options,
 plus `--approve` with the preview fingerprint and `--package-cache-root` with the
 absolute path to an existing verified cache. This path stages offline and
-publishes updates that preserve every existing locked package. A change that
-withdraws or replaces an existing entry needs a migration and reference review.
+publishes updates that retain existing package references. An asset-only
+replacement can add files at the same version when the package manifest and
+lock policy stay identical and verified archives prove that every existing
+path keeps its bytes and contribution owner. Withdrawals, version changes,
+and other replacements require migration and reference review.
 
 The update host publishes a previously reviewed candidate only when the exact
 base and candidate documents still match the review and the candidate lock

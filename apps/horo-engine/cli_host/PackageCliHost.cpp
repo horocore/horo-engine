@@ -6,9 +6,11 @@
 #include "ProjectProtocolIdentity.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <format>
+#include <map>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -250,16 +252,73 @@ namespace Horo::Application::Internal {
             return Output::Failure(UpdateStopped(context));
         }
 
-        /** @brief Applies an approved update that preserves every existing locked package. */
+        /** @brief Rejects changes to selected versions, source, policy, or exported contribution classes. */
+        bool CanPreserveAssetReferences(const Packages::PackageUpdateChange &change) {
+            if (!change.current)
+                return true;
+            if (!change.candidate)
+                return false;
+            const auto &next = *change.candidate;
+            auto compatible = *change.current;
+            compatible.artifactDigest = next.artifactDigest;
+            compatible.fileManifestDigest = next.fileManifestDigest;
+            return compatible == next && std::ranges::equal(next.contributions, std::array<std::string_view, 1>{"assets"});
+        }
+
+        /** @brief Verifies that every old content path retains its bytes and contribution owner. */
+        bool PreservesAssetFiles(const Packages::ValidatedPackageArchive &previous, const Packages::ValidatedPackageArchive &candidate) {
+            const auto contributionPath = [](const Packages::PackageFileEntry &file) -> std::string_view {
+                return file.contributionRoot ? std::string_view{file.contributionRoot->Value()} : std::string_view{};
+            };
+            std::map<std::string_view, const Packages::PackageFileEntry *, std::less<>> byPath;
+            for (const auto &file : candidate.Manifest().Entries()) {
+                const std::string_view path = file.id.path.Value();
+                if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
+                    return false;
+                byPath.emplace(path, &file);
+            }
+            return std::ranges::all_of(previous.Manifest().Entries(), [&byPath, &contributionPath](const auto &oldFile) {
+                const auto next = byPath.find(oldFile.id.path.Value());
+                return next != byPath.end() && !oldFile.executable && oldFile.digest == next->second->digest &&
+                       oldFile.size == next->second->size && contributionPath(oldFile) == contributionPath(*next->second);
+            });
+        }
+
+        Error UpdateNeedsMigration() {
+            return Error{ErrorCode{"packages.host.update_requires_migration_review"}, ErrorDomainId{"packages.host"}};
+        }
+
+        /** @brief Checks the exact old and staged archives for each replaced asset package before publication. */
+        Result<void> CheckAssetReplacements(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
+                                            Packages::PackageCacheStore &cache) {
+            for (const auto &change : update.preview.changes) {
+                if (!change.current)
+                    continue;
+                const auto &old = *change.current;
+                const auto next = std::ranges::find_if(staged.packages, [&old](const auto &item) {
+                    return item.lock.package == old.package;
+                });
+                if (next == staged.packages.end() || !next->archive)
+                    return Result<void>::Failure(UpdateNeedsMigration());
+                const auto previous = cache.Load(old.artifactDigest);
+                if (previous.HasError())
+                    return Result<void>::Failure(previous.ErrorValue());
+                if (!previous.Value() || previous.Value()->PackageManifestDigest() != old.manifestDigest ||
+                    previous.Value()->Manifest().Digest() != old.fileManifestDigest ||
+                    !PreservesAssetFiles(*previous.Value(), *next->archive))
+                    return Result<void>::Failure(UpdateNeedsMigration());
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies an approved update after proving its package references remain usable. */
         Result<Cli::CliCommandResult> ApplyUpdate(const Cli::CliCommandRequest &request, const InspectedPackageUpdate &update,
                                                   const Cli::CliExecutionContext &context) {
             using Output = Result<Cli::CliCommandResult>;
             if (UpdateApproval(request) != update.ApprovalFingerprint())
                 return Output::Failure(Error{ErrorCode{"packages.host.update_approval_mismatch"}, ErrorDomainId{"packages.host"}});
-            if (std::ranges::any_of(update.preview.changes, [](const auto &change) {
-                return change.current.has_value();
-            }))
-                return Output::Failure(Error{ErrorCode{"packages.host.update_requires_migration_review"}, ErrorDomainId{"packages.host"}});
+            if (!std::ranges::all_of(update.preview.changes, CanPreserveAssetReferences))
+                return Output::Failure(UpdateNeedsMigration());
             const auto cachePath = PathOption(request, "package-cache-root");
             if (cachePath.HasError())
                 return Output::Failure(cachePath.ErrorValue());
@@ -279,6 +338,8 @@ namespace Horo::Application::Internal {
             const auto staged = StageUpdate(update, service, context);
             if (staged.HasError())
                 return Output::Failure(staged.ErrorValue());
+            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), verifiedCache); content.HasError())
+                return Output::Failure(content.ErrorValue());
 
             const auto remaining = context.RemainingTimeout();
             const Platform::ProjectReadContext admission{.projectIdentity = ProjectProtocolIdentity(update.policy.projectRoot),
@@ -359,7 +420,7 @@ namespace Horo::Application::Internal {
         using namespace Cli;
         auto descriptor = DescribePackageUpdatePreviewCommand();
         descriptor.path = {{"package", "apply-update"}};
-        descriptor.summary = "Apply an approved offline update that preserves the existing locked packages.";
+        descriptor.summary = "Apply an approved offline update that preserves existing package references.";
         descriptor.options.pop_back();
         descriptor.options.insert(descriptor.options.begin(), {.name = "approve",
                                                                .summary = "Exact fingerprint from the update preview.",
@@ -396,7 +457,7 @@ namespace Horo::Application::Internal {
     Cli::CliCommandDescriptor DescribePackageRollbackUpdateCommand() {
         auto descriptor = DescribePackageApplyUpdateCommand();
         descriptor.path = {{"package", "rollback-update"}};
-        descriptor.summary = "Restore the approved prior package metadata when the locked packages are preserved.";
+        descriptor.summary = "Restore approved prior package metadata when existing references are preserved.";
         std::erase_if(descriptor.options, [](const auto &option) {
             return option.name.starts_with("candidate-");
         });

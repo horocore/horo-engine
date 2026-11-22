@@ -92,9 +92,12 @@ namespace Horo::Tests::Packages {
 
     inline std::vector<std::byte> FinalizeArchive(mz_zip_archive &zip);
 
-    inline std::vector<std::byte> ValidPackageArchiveBytes() {
-        const std::vector<std::pair<std::string, std::string>> files{{"horo-package.toml", "schemaVersion = 1\n"},
-                                                                     {"assets/data.bin", "verified bytes"}};
+    inline std::vector<std::byte> ValidPackageArchiveBytes(const std::string_view asset = "verified bytes",
+                                                           const std::string_view extraAsset = {}) {
+        std::vector<std::pair<std::string, std::string>> files{{"horo-package.toml", "schemaVersion = 1\n"},
+                                                               {"assets/data.bin", std::string{asset}}};
+        if (!extraAsset.empty())
+            files.emplace_back("assets/extra.bin", extraAsset);
         nlohmann::json entries = nlohmann::json::array();
         for (const auto &[name, content] : files)
             entries.push_back(FileInventoryEntry(name, content));
