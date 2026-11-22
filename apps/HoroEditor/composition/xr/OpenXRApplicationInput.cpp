@@ -608,25 +608,27 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::PlaneCaptureAvailability */
-    XRCapabilityState OpenXRApplicationSession::PlaneCaptureAvailability() const noexcept {
-        if (!planes_.allowed)
+    XRCapabilityState OpenXRApplicationSession::PlaneCaptureAvailability(const XRRuntimeTime now) const noexcept {
+        if (!planes_.allowed || !now.IsValid() || now < planes_.latestCutoff)
             return XRCapabilityState::Unavailable;
-        if (planes_.publishedAt.IsValid() && planes_.latestCutoff >= planes_.publishedAt &&
-            planes_.latestCutoff.Nanoseconds() - planes_.publishedAt.Nanoseconds() <= PlaneCapturePolicy.maximumAge.ToNanoseconds())
+        if (planes_.publishedAt.IsValid() &&
+            now.Nanoseconds() - planes_.publishedAt.Nanoseconds() <= PlaneCapturePolicy.maximumAge.ToNanoseconds())
             return XRCapabilityState::Available;
         return XRCapabilityState::TemporarilyUnavailable;
     }
 
     /** @copydoc OpenXRApplicationSession::ReadPlaneObservations */
-    Result<XRPlaneSnapshot> OpenXRApplicationSession::ReadPlaneObservations(const XRTrackingSnapshot &tracking) const {
+    Result<XRPlaneSnapshot> OpenXRApplicationSession::ReadPlaneObservations(const XRTrackingSnapshot &tracking,
+                                                                            const XRRuntimeTime now) const {
         using Outcome = Result<XRPlaneSnapshot>;
         if (std::this_thread::get_id() != lane_ || !planes_.allowed || !planes_.scope || !planes_.native)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (tracking.Focus() != XRTrackingFocusState::Focused || tracking.State() != XRTrackingState::Active ||
             tracking.Session() != planes_.scope->session || tracking.SampledAt() != planes_.latestCutoff)
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        if (!now.IsValid() || now < planes_.latestCutoff)
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const auto scope = *planes_.scope;
-        const auto now = planes_.latestCutoff;
         auto result = planes_.native->Read(scope, now);
         // Revocation clears the exact scope before retiring the native capture.
         if (planes_.scope != scope)

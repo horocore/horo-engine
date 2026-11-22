@@ -530,6 +530,10 @@ namespace Horo::Application::Internal {
         struct WriterPair;
         /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
         void ProgressPassthrough();
+        /** @brief Checks whether the current owner lane can read from the focused Play publication. */
+        [[nodiscard]] bool PlaneReadsAdmitted() const noexcept;
+        /** @brief Validates plane freshness against current native time. @param observedAt Timestamp used for admission. */
+        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservationsAtCurrentTime(XR::XRRuntimeTime &observedAt) const;
         /** @brief Checks the exact local grant, Play and World ownership without calling platform authority.
          * @param scope Frozen session, World and operator grant. @return Whether all three are still current.
          */

@@ -1925,6 +1925,10 @@ namespace Horo::Tests::OpenXRApplication {
             pinned.expectedSampledAt = hits.SampledAt();
             pinned.maximumAge = Duration::FromMilliseconds(25);
             REQUIRE(fixture.play->QueryPlaneHits(pinned).HasValue());
+            fixture.script.clock.sample = 396'000'000;
+            const auto betweenCutoffs = fixture.play->QueryPlaneHits(pinned);
+            REQUIRE(betweenCutoffs.HasError());
+            CHECK(betweenCutoffs.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
             REQUIRE(sample(420'000'000).HasValue());
             const auto expired = fixture.play->QueryPlaneHits(pinned);
             REQUIRE(expired.HasError());
@@ -1935,6 +1939,18 @@ namespace Horo::Tests::OpenXRApplication {
             bool contextRetired = false;
             SECTION("operator revokes after the next scan is queued") {
                 CHECK(sample(620'000'000).HasValue());
+                preview.RevokePlaneCapture();
+            }
+            SECTION("room geometry expires while the Input cutoff is stalled") {
+                REQUIRE(sample(620'000'000).HasValue());
+                fixture.script.clock.sample = 1'870'000'000;
+                REQUIRE(fixture.play->ReadPlaneObservations().HasValue());
+                CHECK(preview.ReadPlaneCaptureState() == Tracking);
+                ++fixture.script.clock.sample;
+                const auto stale = fixture.play->ReadPlaneObservations();
+                REQUIRE(stale.HasError());
+                CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+                CHECK(preview.ReadPlaneCaptureState() == WaitingForSample);
                 preview.RevokePlaneCapture();
             }
             SECTION("operator revokes during the native scan call") {

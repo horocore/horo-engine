@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -398,26 +399,41 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ReadPlaneObservations */
     Result<XR::XRPlaneSnapshot> OpenXRPlayHost::ReadPlaneObservations() const {
+        XR::XRRuntimeTime observedAt;
+        return ReadPlaneObservationsAtCurrentTime(observedAt);
+    }
+
+    /** @copydoc OpenXRPlayHost::PlaneReadsAdmitted */
+    bool OpenXRPlayHost::PlaneReadsAdmitted() const noexcept {
+        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && !instanceLost_ && !eventsPending_ && input_.admitted &&
+               input_.play == Editor::EditorPlayState::Playing && sessions_->Snapshot().admitsActions;
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadPlaneObservationsAtCurrentTime */
+    Result<XR::XRPlaneSnapshot> OpenXRPlayHost::ReadPlaneObservationsAtCurrentTime(XR::XRRuntimeTime &observedAt) const {
         using Outcome = Result<XR::XRPlaneSnapshot>;
-        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
+        if (!PlaneReadsAdmitted())
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        const auto now = clock_.RuntimeNow();
+        if (now.HasError())
+            return Outcome::Failure(now.ErrorValue());
+        if (!PlaneReadsAdmitted())
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        observedAt = now.Value();
         const auto *tracking = tracking_.Current();
-        return tracking ? composition_.session.ReadPlaneObservations(*tracking)
+        return tracking ? composition_.session.ReadPlaneObservations(*tracking, observedAt)
                         : Outcome::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
     }
 
     /** @copydoc OpenXRPlayHost::QueryPlaneHits */
     Result<XR::XRSpatialHits> OpenXRPlayHost::QueryPlaneHits(const XR::XRSpatialHitRequest &request) const {
-        auto source = ReadPlaneObservations();
+        XR::XRRuntimeTime observedAt;
+        auto source = ReadPlaneObservationsAtCurrentTime(observedAt);
         if (source.HasError())
             return Result<XR::XRSpatialHits>::Failure(source.ErrorValue());
-        const auto *tracking = tracking_.Current();
-        if (!tracking)
-            return Result<XR::XRSpatialHits>::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
         auto liveRequest = request;
         if (request.now.IsValid() && request.now >= source.Value().SampledAt())
-            liveRequest.now = std::max(request.now, tracking->SampledAt());
+            liveRequest.now = std::max(request.now, observedAt);
         return XR::QueryXRPlaneHits(source.Value(), liveRequest);
     }
 
@@ -430,15 +446,22 @@ namespace Horo::Application::Internal {
             return Armed;
         if (SetupIdle() && composition_.session.MayArmPlaneCapture())
             return Ready;
-        if (eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
+        if (!PlaneReadsAdmitted())
             return Unavailable;
-        switch (composition_.session.PlaneCaptureAvailability()) {
-            case XR::XRCapabilityState::Available:
-                return Tracking;
-            case XR::XRCapabilityState::TemporarilyUnavailable:
-                return WaitingForSample;
-            default:
+        try {
+            const auto now = clock_.RuntimeNow();
+            if (now.HasError() || !PlaneReadsAdmitted())
                 return Unavailable;
+            switch (composition_.session.PlaneCaptureAvailability(now.Value())) {
+                case XR::XRCapabilityState::Available:
+                    return Tracking;
+                case XR::XRCapabilityState::TemporarilyUnavailable:
+                    return WaitingForSample;
+                default:
+                    return Unavailable;
+            }
+        } catch (const std::bad_alloc &) {
+            return Unavailable;
         }
     }
 

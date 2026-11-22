@@ -349,11 +349,14 @@ namespace Horo::Application::Internal {
         void RevokePlaneCapture() noexcept;
         /** @return Successful update or native debt that must be retried by the control lane. */
         [[nodiscard]] Result<void> ProgressPlaneRetirement();
-        /** @return Redacted evidence for the current Play scope. */
-        [[nodiscard]] XR::XRCapabilityState PlaneCaptureAvailability() const noexcept;
+        /** @brief Reports current redacted plane state. @param now Same-instance runtime time at the read.
+         * @return Redacted evidence for the current Play scope. */
+        [[nodiscard]] XR::XRCapabilityState PlaneCaptureAvailability(XR::XRRuntimeTime now) const noexcept;
         /** @brief Copies current geometry only for exact focused tracking evidence. @param tracking Current Input publication.
+         * @param now Same-instance runtime time at the read, at or after the Input cutoff.
          * @return Immutable plane batch or typed privacy/identity/age failure. */
-        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations(const XR::XRTrackingSnapshot &tracking) const;
+        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations(const XR::XRTrackingSnapshot &tracking,
+                                                                        XR::XRRuntimeTime now) const;
         /** @return Whether both signed host policy and observed hardware permit arming the optional gaze preview. */
         [[nodiscard]] bool MayArmEyeGaze() const noexcept;
         [[nodiscard]] bool MayArmEyeGazeRendering() const;

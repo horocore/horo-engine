@@ -997,6 +997,8 @@ failure states.
   advances one asynchronous OpenXR future at the canonical focused Input cutoff
   and resolves snapshots in the same calibrated World space. Pause, focus or tracking
   loss, origin replacement, permission denial and retirement withdraw geometry.
+  Reading geometry or querying hits also checks the current native runtime
+  clock, so a stalled Input cutoff cannot extend an observation's lifetime.
   Setup exposes only redacted state, and room geometry stays out of records and diagnostics.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
