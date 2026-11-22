@@ -3484,7 +3484,10 @@ post-poll stimulus memory. Each row carries the authored source, listener,
 sense and stimulus type, its first and last sensed ticks, and the sensed flag.
 The sample counts source identities it cannot project back to the authored
 Scene and reports an unavailable read separately from empty memory. These
-observations are diagnostic and do not alter deterministic spatial comparison.
+observations are diagnostic. When a spatial publication diverges and both
+captures contain available post-poll memory, `relatedStimulus` links the
+first changed disclosed observation to its `perception-stimulus` timeline
+address. The spatial comparison still depends on the publication evidence.
 
 At the Scene safe point, the live agent inspection API copies the selected
 agent generation, Blackboard schema and revision, directly owned task, and

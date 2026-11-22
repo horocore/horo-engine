@@ -326,6 +326,57 @@ namespace Horo::Application::PrefabAtomicTest {
             return nlohmann::json::parse(text.substr(newline + 1));
         }
 
+        /** @brief Checks that stimulus differences supplement only a deterministic spatial divergence. */
+        void ExpectPerceptionDivergence(const std::filesystem::path &file, const Sha256Digest &differentDigest) {
+            std::ifstream original{file, std::ios::binary};
+            REQUIRE(original.is_open());
+            auto changed = nlohmann::json::parse(original);
+            auto &stimuli = changed.at("perceptionStimuli");
+            auto &records = stimuli.at("records");
+            REQUIRE(records.size() == 1);
+            auto &stimulus = records.front();
+            stimulus["sensed"] = false;
+            stimulus["privatePayload"] = "private-stimulus-data";
+
+            const auto candidate = file.parent_path() / "changed-stimulus.json";
+            const auto saveCandidate = [&] {
+                std::ofstream stream{candidate, std::ios::binary | std::ios::trunc};
+                stream << changed;
+                REQUIRE(stream.good());
+            };
+            saveCandidate();
+            const auto diagnosticOnly = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(diagnosticOnly.HasValue());
+            CHECK_FALSE(diagnosticOnly.Value());
+
+            changed.at("perceptionInput")["digest"] = FormatSha256(differentDigest);
+            saveCandidate();
+            const auto divergence = ReadDivergenceLocation(file, candidate);
+            CHECK(divergence.at("boundary") == "perception-input");
+            CHECK(divergence.at("ordinal").is_null());
+            const auto &related = divergence.at("relatedStimulus");
+            const auto exported = ExportReplayTimeline(candidate, "512");
+            const auto &events = exported.at("events");
+            const auto match = std::ranges::find_if(events, [&](const auto &event) {
+                return event.at("boundary") == related.at("boundary") && event.at("ordinal") == related.at("ordinal") &&
+                       event.at("tick") == related.at("tick") && event.at("agentId") == related.at("agentId");
+            });
+            REQUIRE(match != events.end());
+            CHECK(related.at("recorded").at("sourceObjectId") == "2");
+            CHECK(related.at("recorded").at("sensed") == true);
+            CHECK(related.at("replayed").at("sensed") == false);
+            CHECK(related.at("replayed") == match->at("operation"));
+            CHECK_FALSE(related.at("replayed").contains("privatePayload"));
+
+            stimulus["sensed"] = true;
+            saveCandidate();
+            CHECK_FALSE(ReadDivergenceLocation(file, candidate).contains("relatedStimulus"));
+            stimuli["available"] = false;
+            stimuli["records"] = nlohmann::json::array();
+            saveCandidate();
+            CHECK_FALSE(ReadDivergenceLocation(file, candidate).contains("relatedStimulus"));
+        }
+
         /** @brief Checks the real consecutive captures and locates a difference in the later boundary. */
         void ExpectReplayWindow(const Internal::HeadlessReplayOutput &output,
                                 std::span<const Internal::HeadlessDecisionReplayData> frames) {
@@ -635,7 +686,9 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(data.stimuli->available);
             CHECK(data.stimuli->count == 1);
             CHECK(data.stimuli->unresolvedSources == 0);
-            ExpectStimulusTimeline(output.Value().Directory() / "evidence.json");
+            const auto file = output.Value().Directory() / "evidence.json";
+            ExpectStimulusTimeline(file);
+            ExpectPerceptionDivergence(file, data.sceneInput);
         } else {
             CHECK_FALSE(data.stimuli);
         }

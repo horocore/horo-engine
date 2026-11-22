@@ -88,6 +88,12 @@ namespace Horo::Application::Internal {
             return SelectFields(record, {"objectId"}, {});
         }
 
+        /** @brief Borrows only available post-poll diagnostics, separate from deterministic Perception input. */
+        const Json *AvailableStimuli(const Json &frame) {
+            const auto stimuli = frame.find("perceptionStimuli");
+            return stimuli != frame.end() && stimuli->at("available") == true ? &stimuli->at("records") : nullptr;
+        }
+
         /** @brief Reads one exact record sequence and its privacy projection. */
         struct ReplayRecords final {
             const Json *values{};
@@ -169,6 +175,30 @@ namespace Horo::Application::Internal {
                           const std::optional<std::size_t> ordinal) {
             return {{"tick", tick}, {"agentId", agent}, {"boundary", boundary}, {"ordinal", ordinal ? Json(*ordinal) : Json(nullptr)}};
         }
+
+        /** @brief Links a divergent spatial publication to the first differing disclosed stimulus observation. */
+        std::optional<Json> RelatedStimulus(const Json &recorded, const Json &replayed, std::string_view tick, std::string_view agent) {
+            const auto *left = AvailableStimuli(recorded);
+            const auto *right = AvailableStimuli(replayed);
+            if (!left || !right)
+                return std::nullopt;
+
+            const auto project = [](const Json &records, const std::size_t ordinal) {
+                return ordinal < records.size() ? StimulusFields(records.at(ordinal)) : Json(nullptr);
+            };
+            const auto count = std::max(left->size(), right->size());
+            for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
+                auto before = project(*left, ordinal);
+                auto after = project(*right, ordinal);
+                if (before != after) {
+                    auto address = EventAddress(tick, agent, "perception-stimulus", ordinal);
+                    address["recorded"] = std::move(before);
+                    address["replayed"] = std::move(after);
+                    return address;
+                }
+            }
+            return std::nullopt;
+        }
     }  // namespace
 
     HeadlessReplayTimeline::HeadlessReplayTimeline(const std::size_t limit) : limit_(limit) {}
@@ -228,9 +258,10 @@ namespace Horo::Application::Internal {
         while (ordinal < common && left.values->at(ordinal) == right.values->at(ordinal))
             ++ordinal;
         const bool operationChanged = ordinal < std::max(left.Size(), right.Size());
-        auto address =
-            EventAddress(std::to_string(tick), std::to_string(agent), HeadlessReplayBoundaryNames[static_cast<std::size_t>(boundary)],
-                         operationChanged ? std::optional{ordinal} : std::nullopt);
+        const auto tickText = std::to_string(tick);
+        const auto agentText = std::to_string(agent);
+        auto address = EventAddress(tickText, agentText, HeadlessReplayBoundaryNames[static_cast<std::size_t>(boundary)],
+                                    operationChanged ? std::optional{ordinal} : std::nullopt);
         const auto project = [&](const ReplayRecords &records, const Json &frame) {
             if (!operationChanged)
                 return SummaryFor(frame, boundary);
@@ -238,6 +269,10 @@ namespace Horo::Application::Internal {
         };
         address["recorded"] = project(left, recorded);
         address["replayed"] = project(right, replayed);
+        if (boundary == PerceptionInput) {
+            if (auto stimulus = RelatedStimulus(recorded, replayed, tickText, agentText))
+                address["relatedStimulus"] = std::move(*stimulus);
+        }
         return address;
     }
 }  // namespace Horo::Application::Internal
