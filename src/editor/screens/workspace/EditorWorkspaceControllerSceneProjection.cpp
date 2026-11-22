@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -40,6 +41,31 @@ namespace Horo::Editor {
                                           .defaultSeverity = ErrorSeverity::Warning,
                                           .summary =
                                               "Matching committed viewport geometry counts are unavailable for the requested object."};
+
+        const ErrorCodeDescriptor SurfaceBudgetExceeded{.domain = ErrorDomainId{"editor.inspection"},
+                                                        .code = ErrorCode{"surface_budget_exceeded"},
+                                                        .defaultSeverity = ErrorSeverity::Warning,
+                                                        .summary = "The requested surface page exceeds its triangle budget."};
+
+        /** @brief Normalizes a finite bounded world segment once for the entire page. */
+        std::optional<InspectionSurfaceRay> NormalizeSurfaceRay(const std::optional<InspectionSurfaceRay> &ray) {
+            const auto validCoordinate = [](const double value) {
+                return std::abs(value) <= std::numeric_limits<float>::max();
+            };
+            if (!ray || ray->maximumDistance <= 0.0 || !validCoordinate(ray->maximumDistance) ||
+                !std::ranges::all_of(ray->origin, validCoordinate) || !std::ranges::all_of(ray->direction, validCoordinate))
+                return std::nullopt;
+            const double largest = std::max({std::abs(ray->direction[0]), std::abs(ray->direction[1]), std::abs(ray->direction[2])});
+            if (largest == 0.0)
+                return std::nullopt;
+            auto normalized = *ray;
+            for (double &coordinate : normalized.direction)
+                coordinate /= largest;
+            const double length = std::hypot(normalized.direction[0], normalized.direction[1], normalized.direction[2]);
+            for (double &coordinate : normalized.direction)
+                coordinate /= length;
+            return normalized;
+        }
 
         /** @brief Projects authored numeric data without names or runtime handles. */
         AgentViewportTransform LocalTransform(const SceneObject &object) {
@@ -114,6 +140,48 @@ namespace Horo::Editor {
                 result.triangles += mesh->indices.size() / 3;
             }
             if (!result.instances)
+                return Output::Failure(MakeError(InspectionGeometryUnavailable));
+            return Output::Success(result);
+        }
+
+        /** @brief Tests a retained mesh using the committed world pose and preserves the closest sample so far. */
+        Result<void> SampleInspectionMesh(const EditorViewportMeshResourceView &mesh, const Math::Mat4 &world,
+                                          const InspectionSurfaceRay &ray, std::optional<InspectionSurfaceSample> &nearest,
+                                          std::size_t &remainingTriangles) {
+            const auto project = [&mesh, &world](const std::uint32_t vertex) -> std::optional<std::array<double, 3>> {
+                if (vertex >= mesh.vertices.size())
+                    return std::nullopt;
+                const auto point = Math::TransformPoint(world, mesh.vertices[vertex].position);
+                if (!Math::IsFinite(point))
+                    return std::nullopt;
+                return std::array<double, 3>{point.x, point.y, point.z};
+            };
+            const auto status = SampleInspectionTriangles(mesh.indices, ray, project, nearest, remainingTriangles);
+            if (status == InspectionSurfaceScan::Complete)
+                return Result<void>::Success();
+            const auto &failure = status == InspectionSurfaceScan::BudgetExceeded ? SurfaceBudgetExceeded : InspectionGeometryUnavailable;
+            return Result<void>::Failure(MakeError(failure));
+        }
+
+        /** @brief Samples all matching retained mesh instances for one exact authored target. */
+        Result<InspectedSurface> SampleSurface(const EditorViewportSceneSnapshot &geometry, const SceneObjectId id, const Math::Mat4 &world,
+                                               const InspectionSurfaceRay &ray, std::size_t &remainingTriangles) {
+            using Output = Result<InspectedSurface>;
+            InspectedSurface result{.object = id.value};
+            bool foundMesh = false;
+            for (std::size_t i = 0; i < geometry.instanceObjects.size(); ++i) {
+                if (geometry.instanceObjects[i] != id)
+                    continue;
+                const auto mesh =
+                    std::ranges::find(geometry.meshResources, geometry.instances[i].mesh, &EditorViewportMeshResourceView::handle);
+                if (mesh == geometry.meshResources.end())
+                    return Output::Failure(MakeError(InspectionGeometryUnavailable));
+                const auto sampled = SampleInspectionMesh(*mesh, world, ray, result.sample, remainingTriangles);
+                if (sampled.HasError())
+                    return Output::Failure(sampled.ErrorValue());
+                foundMesh = true;
+            }
+            if (!foundMesh)
                 return Output::Failure(MakeError(InspectionGeometryUnavailable));
             return Output::Success(result);
         }
@@ -344,6 +412,8 @@ namespace Horo::Editor {
             return InspectDistances(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectGridOffsets(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectSurfaces(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -446,6 +516,25 @@ namespace Horo::Editor {
             if (!Math::IsFinite(origin))
                 return Output::Failure(MakeError(InspectionObjectUnavailable));
             return Output::Success(MeasureInspectionGridOffset(object.id.value, {origin.x, origin.y, origin.z}, *step));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectSurfaces */
+    Result<SurfaceInspectionPage> EditorWorkspaceController::InspectSurfaces(const ObjectInspectionRequest &request) const {
+        constexpr std::size_t MaximumPageTriangles = 65'536;
+        const auto ray = NormalizeSurfaceRay(request.surfaceRay);
+        if (!ray)
+            return Result<SurfaceInspectionPage>::Failure(MakeError(InspectionInvalidPage));
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && HasCurrentInspectionGeometry(*active);
+        std::size_t remainingTriangles = MaximumPageTriangles;
+        return ReadInspectionPage<SurfaceInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                         [this, &active, &ray, &remainingTriangles, current](const SceneObject &object) {
+            using Output = Result<InspectedSurface>;
+            const auto pose = ReadInspectionPose(active, current, object.id);
+            if (pose.HasError())
+                return Output::Failure(pose.ErrorValue());
+            return SampleSurface(m_viewportScene, object.id, pose.Value(), *ray, remainingTriangles);
         });
     }
 

@@ -22,6 +22,13 @@ namespace Horo::Editor {
         bool operator==(const InspectionSceneRevision &) const = default;
     };
 
+    /** @brief Explicit world-space ray segment. The owner normalizes direction before sampling. */
+    struct InspectionSurfaceRay {
+        std::array<double, 3> origin{};
+        std::array<double, 3> direction{};
+        double maximumDistance{};
+    };
+
     /** @brief Exact object set and optional continuation fence. */
     struct ObjectInspectionRequest {
         static constexpr std::size_t MaximumObjects = 16;
@@ -31,6 +38,7 @@ namespace Horo::Editor {
         std::optional<InspectionSceneRevision> expected;
         std::optional<std::uint64_t> referenceObject; /**< Used only by the distance tool. */
         std::optional<double> gridStep;               /**< Used only by the grid-offset tool. */
+        std::optional<InspectionSurfaceRay> surfaceRay;
     };
 
     /** @brief Authored TRS, local and world matrices, and the authored object's world pivot. */
@@ -145,6 +153,27 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Nearest surface sample, with a geometric normal from the published triangle winding. */
+    struct InspectionSurfaceSample {
+        double distance{};
+        std::array<double, 3> position{};
+        std::array<double, 3> normal{};
+        double slopeRadians{};
+    };
+
+    /** @brief A visible target with an explicit optional ray hit. */
+    struct InspectedSurface {
+        std::uint64_t object{};
+        std::optional<InspectionSurfaceSample> sample;
+    };
+
+    /** @brief Surface samples in target order. */
+    struct SurfaceInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedSurface> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -156,5 +185,6 @@ namespace Horo::Editor {
         std::function<Result<GeometryInspectionPage>(const ObjectInspectionRequest &)> readGeometry;
         std::function<Result<DistanceInspectionPage>(const ObjectInspectionRequest &)> readDistances;
         std::function<Result<GridInspectionPage>(const ObjectInspectionRequest &)> readGridOffsets;
+        std::function<Result<SurfaceInspectionPage>(const ObjectInspectionRequest &)> readSurfaces;
     };
 }  // namespace Horo::Editor

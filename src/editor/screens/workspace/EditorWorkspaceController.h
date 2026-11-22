@@ -86,6 +86,7 @@ namespace Horo::Editor {
     struct GeometryInspectionPage;
     struct DistanceInspectionPage;
     struct GridInspectionPage;
+    struct SurfaceInspectionPage;
     struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
@@ -834,6 +835,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<DistanceInspectionPage> InspectDistances(const ObjectInspectionRequest &request) const;
         /** @brief Measures the offset of committed object origins to a requested world grid. */
         [[nodiscard]] Result<GridInspectionPage> InspectGridOffsets(const ObjectInspectionRequest &request) const;
+
+        /** @brief Samples committed viewport mesh surfaces with a bounded world-space segment. */
+        [[nodiscard]] Result<SurfaceInspectionPage> InspectSurfaces(const ObjectInspectionRequest &request) const;
         /** @brief Checks that the current extraction belongs to the committed authored Scene. */
         [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
         /** @brief Fences inspection against the authored Scene and its current editor projection. */

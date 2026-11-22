@@ -11,7 +11,7 @@ namespace Horo::Editor {
         using Json = nlohmann::json;
         using JsonResult = Result<Json>;
         constexpr auto MaximumObjects = ObjectInspectionRequest::MaximumObjects;
-        constexpr auto SmallestGridStep = std::numeric_limits<double>::denorm_min();
+        constexpr auto SmallestPositiveNumber = std::numeric_limits<double>::denorm_min();
 
         /** @brief Describes the numeric Scene fence carried across pages. */
         Json SceneSchema() {
@@ -48,7 +48,7 @@ namespace Horo::Editor {
         /** @brief Requires an explicit numeric grid spacing. */
         Json GridInputSchema() {
             auto result = InputSchema();
-            result["properties"]["gridStep"] = {{"type", "number"}, {"minimum", SmallestGridStep}};
+            result["properties"]["gridStep"] = {{"type", "number"}, {"minimum", SmallestPositiveNumber}};
             result["required"].push_back("gridStep");
             return result;
         }
@@ -56,6 +56,24 @@ namespace Horo::Editor {
         /** @brief Describes numeric records without names, free text, or runtime handles. */
         Json VectorSchema(const std::size_t count) {
             return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
+        }
+
+        /** @brief Requires a bounded world-space ray for every surface page. */
+        Json SurfaceInputSchema() {
+            auto result = InputSchema();
+            constexpr auto extent = std::numeric_limits<float>::max();
+            Json vector = VectorSchema(3);
+            vector["items"] = {{"type", "number"}, {"minimum", -extent}, {"maximum", extent}};
+            result["properties"]["ray"] = {{"type", "object"},
+                                           {"properties",
+                                            {{"origin", vector},
+                                             {"direction", vector},
+                                             {"maximumDistance",
+                                              {{"type", "number"}, {"minimum", SmallestPositiveNumber}, {"maximum", extent}}}}},
+                                           {"required", {"origin", "direction", "maximumDistance"}},
+                                           {"additionalProperties", false}};
+            result["required"].push_back("ray");
+            return result;
         }
 
         /** @brief Places a typed record in the shared revision-fenced page envelope. */
@@ -148,11 +166,27 @@ namespace Horo::Editor {
             return PageSchema({{"type", "object"},
                                {"properties",
                                 {{"object", {{"type", "integer"}, {"minimum", 1}}},
-                                 {"gridStep", {{"type", "number"}, {"minimum", SmallestGridStep}}},
+                                 {"gridStep", {{"type", "number"}, {"minimum", SmallestPositiveNumber}}},
                                  {"position", VectorSchema(3)},
                                  {"snappedPosition", VectorSchema(3)},
                                  {"offset", VectorSchema(3)}}},
                                {"required", {"object", "gridStep", "position", "snappedPosition", "offset"}},
+                               {"additionalProperties", false}});
+        }
+
+        /** @brief A sample exists only when the ray intersects the target mesh. */
+        Json SurfaceSchema() {
+            const Json sample{{"type", "object"},
+                              {"properties",
+                               {{"position", VectorSchema(3)},
+                                {"normal", VectorSchema(3)},
+                                {"distance", {{"type", "number"}, {"minimum", 0}}},
+                                {"slopeRadians", {{"type", "number"}, {"minimum", 0}}}}},
+                              {"required", {"position", "normal", "distance", "slopeRadians"}},
+                              {"additionalProperties", false}};
+            return PageSchema({{"type", "object"},
+                               {"properties", {{"object", {{"type", "integer"}, {"minimum", 1}}}, {"sample", sample}}},
+                               {"required", {"object"}},
                                {"additionalProperties", false}});
         }
 
@@ -167,6 +201,10 @@ namespace Horo::Editor {
                 request.referenceObject = reference->get<std::uint64_t>();
             if (const auto step = arguments.find("gridStep"); step != arguments.end())
                 request.gridStep = step->get<double>();
+            if (const auto ray = arguments.find("ray"); ray != arguments.end())
+                request.surfaceRay =
+                    InspectionSurfaceRay{ray->at("origin").get<std::array<double, 3>>(), ray->at("direction").get<std::array<double, 3>>(),
+                                         ray->at("maximumDistance").get<double>()};
             return request;
         }
 
@@ -217,6 +255,19 @@ namespace Horo::Editor {
                     {"position", entry.position},
                     {"snappedPosition", entry.snappedPosition},
                     {"offset", entry.offset}};
+        }
+
+        /** @brief Emits one exact target ID and an optional surface sample. */
+        Json WriteRecord(const InspectedSurface &entry) {
+            Json result{{"object", entry.object}};
+            if (entry.sample) {
+                const auto &sample = *entry.sample;
+                result["sample"] = {{"distance", sample.distance},
+                                    {"position", sample.position},
+                                    {"normal", sample.normal},
+                                    {"slopeRadians", sample.slopeRadians}};
+            }
+            return result;
         }
 
         /** @brief Exports an owner-produced page with an optional continuation offset. */
@@ -317,6 +368,10 @@ namespace Horo::Editor {
                              readGridOffsets>(tools, endpoint, "inspect.grid_offsets",
                                               "Measure committed object origins against an explicit zero-origin world grid.", GridSchema,
                                               GridInputSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::
+                             readSurfaces>(tools, endpoint, "inspect.surfaces",
+                                           "Sample the nearest committed mesh surface per visible object along a world-space ray.",
+                                           SurfaceSchema, SurfaceInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

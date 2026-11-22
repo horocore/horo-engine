@@ -481,6 +481,12 @@ committed transformed local forward axes.
 positive step on a zero-origin world grid. It reports the nearest aligned
 position and the signed correction on each axis without editing the Scene.
 Midpoints round away from zero.
+`inspect.surfaces` takes a world-space ray origin, direction, and positive
+maximum distance. It returns the closest triangle hit per requested object
+from the committed viewport mesh. A hit carries its distance, world position,
+geometric normal in triangle winding order, and slope relative to world up.
+A valid miss omits the sample. Missing mesh data and requests exceeding the
+65,536-triangle page budget produce explicit errors.
 
 ## MCP History Retention And Redaction
 

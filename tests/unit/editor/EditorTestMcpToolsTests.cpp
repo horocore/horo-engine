@@ -148,6 +148,85 @@ namespace {
         CHECK((nearest.snappedPosition == std::array<double, 3>{1.0, -2.0, 0.0}));
     }
 
+    TEST_CASE("Surface sampling preserves triangle winding and finite ray boundaries", "[unit][editor][mcp][inspection]") {
+        const std::array<double, 3> a{0, 0, 0};
+        const std::array<double, 3> b{0, 0, 2};
+        const std::array<double, 3> c{2, 0, 0};
+        InspectionSurfaceRay ray{{0.5, 3, 0.5}, {0, -1, 0}, 3};
+        const auto hit = MeasureInspectionTriangle(ray, a, b, c);
+        REQUIRE(hit);
+        CHECK(hit->distance == 3.0);
+        CHECK((hit->position == std::array<double, 3>{0.5, 0, 0.5}));
+        CHECK((hit->normal == std::array<double, 3>{0, 1, 0}));
+        CHECK(hit->slopeRadians == 0.0);
+        const auto reverse = MeasureInspectionTriangle(ray, a, c, b);
+        REQUIRE(reverse);
+        CHECK((reverse->normal == std::array<double, 3>{0, -1, 0}));
+        CHECK_FALSE(MeasureInspectionTriangle(ray, a, b, b));
+        ray.maximumDistance = 2;
+        CHECK_FALSE(MeasureInspectionTriangle(ray, a, b, c));
+        ray.origin = {1.5, 1, 1.5};
+        CHECK_FALSE(MeasureInspectionTriangle(ray, a, b, c));
+        ray.origin = {0.5, 1, 0.5};
+        ray.direction = {1, 0, 0};
+        CHECK_FALSE(MeasureInspectionTriangle(ray, a, b, c));
+    }
+
+    TEST_CASE("Indexed surface sampling keeps the nearest hit and shares a strict triangle budget", "[unit][editor][mcp][inspection]") {
+        using Point = std::array<double, 3>;
+        const std::array<Point, 6> vertices{{{0, 0, 0}, {0, 0, 2}, {2, 0, 0}, {0, 1, 0}, {0, 1, 2}, {2, 1, 0}}};
+        const std::array<std::uint32_t, 6> triangles{0, 1, 2, 3, 4, 5};
+        const auto project = [&vertices](const std::uint32_t index) -> std::optional<Point> {
+            if (index >= vertices.size())
+                return std::nullopt;
+            return vertices[index];
+        };
+        const InspectionSurfaceRay ray{{0.5, 3, 0.5}, {0, -1, 0}, 5};
+        std::optional<InspectionSurfaceSample> nearest;
+        std::size_t remaining = 1;
+        CHECK(SampleInspectionTriangles(triangles, ray, project, nearest, remaining) == InspectionSurfaceScan::BudgetExceeded);
+        CHECK(remaining == 1);
+        CHECK_FALSE(nearest);
+        remaining = 2;
+        CHECK(SampleInspectionTriangles(triangles, ray, project, nearest, remaining) == InspectionSurfaceScan::Complete);
+        CHECK(remaining == 0);
+        REQUIRE(nearest);
+        CHECK(nearest->distance == 2.0);
+        const std::array<std::uint32_t, 3> malformed{0, 1, 6};
+        remaining = 1;
+        CHECK(SampleInspectionTriangles(malformed, ray, project, nearest, remaining) == InspectionSurfaceScan::GeometryUnavailable);
+    }
+
+    TEST_CASE("Surface inspection serializes a hit and a miss under the same Scene fence", "[unit][editor][mcp][inspection]") {
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readSurfaces = [](const ObjectInspectionRequest &request) {
+            REQUIRE(request.surfaceRay);
+            CHECK(request.surfaceRay->maximumDistance == 5.0);
+            CHECK((request.surfaceRay->origin == std::array<double, 3>{0.5, 3, 0.5}));
+            const auto sample = MeasureInspectionTriangle(*request.surfaceRay, {0, 0, 0}, {0, 0, 2}, {2, 0, 0});
+            return Result<SurfaceInspectionPage>::Success(
+                {.scene = {7, 19}, .records = {{request.objects.at(0), sample}, {request.objects.at(1), std::nullopt}}});
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        const auto missing = Execute(session, Command("missing", "inspect.surfaces", {{"objects", {42, 9}}}));
+        CHECK(missing.at("status") == "failed");
+        const Json ray{{"origin", {0.5, 3, 0.5}}, {"direction", {0, -1, 0}}, {"maximumDistance", 5}};
+        const auto measured = Execute(session, Command("surface", "inspect.surfaces", {{"objects", {42, 9}}, {"ray", ray}}));
+        REQUIRE(measured.at("status") == "succeeded");
+        CHECK(measured["result"]["scene"]["revision"] == 19);
+        const auto &rows = measured["result"]["records"];
+        CHECK(rows[0]["object"] == 42);
+        CHECK(rows[0]["sample"]["normal"] == Json::array({0, 1, 0}));
+        CHECK(rows[1]["object"] == 9);
+        CHECK_FALSE(rows[1].contains("sample"));
+    }
+
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",
