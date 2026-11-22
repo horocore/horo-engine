@@ -553,14 +553,17 @@ namespace Horo::AI {
         /** @brief Replaces one flat cooked decision at the owner's completed tick boundary.
          * @param agent Exact active Scene agent generation.
          * @param previous Exact currently published cooked plan and image owner.
-         * @param replacement Current compiled revision of the same root and exact admitted Blackboard schema.
+         * @param replacement Current compiled revision of the same root.
+         * @param migration Optional direct forward migration for a newer version of the same authored Blackboard schema.
          * @return Success or a typed rejection preserving the prior decision, Blackboard and task range.
          * @details Executable-equivalent plans retain active tasks and their existing callbacks. An incompatible accepted edit
-         * retires active nodes with PlanReplaced and restarts the root. The same Blackboard retains its values and read leases.
-         * Either path starts evaluating the new plan on the next tick. Composed decisions and schema migration are not admitted.
+         * retires active nodes with PlanReplaced and restarts the root. A schema migration stages a new Blackboard and revokes
+         * the previous read, write and task reservation leases at publication. Agents with separate live task or sensing
+         * authorities require coordinated Scene replacement for a schema migration. Composed decisions are unsupported.
          * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
         [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
-                                                                    std::shared_ptr<const CookedDecisionPlan> replacement);
+                                                                    std::shared_ptr<const CookedDecisionPlan> replacement,
+                                                                    const BlackboardSchemaMigration *migration = nullptr);
 
         /** @brief Runs one admitted query task's BlackboardSync against its exact Scene-owned destination.
          * @param task Existing owner-bound query task. @param scene Current view for output revalidation.
@@ -739,6 +742,12 @@ namespace Horo::AI {
         [[nodiscard]] Result<AiScheduledDecisionRegistration> PrepareCookedDecisionRegistration(
             const std::shared_ptr<Detail::AiSceneRuntimeState> &state, const Detail::AgentRuntimeState &agent,
             const std::shared_ptr<const CookedDecisionPlan> &plan, std::uint32_t &nextTaskSlot) const;
+
+        /** @brief Stages an admitted restart and publishes its Blackboard and scheduler image together. */
+        [[nodiscard]] Result<void> RestartCookedDecisionAtSafePoint(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
+                                                                    Detail::AgentRuntimeState &slot,
+                                                                    std::shared_ptr<const CookedDecisionPlan> replacement,
+                                                                    Detail::AgentRuntimeState *migrated);
 
         /** @brief Prepares decisions and exact task ranges in detached storage for a scene or structural transaction. */
         [[nodiscard]] Result<std::vector<AiScheduledDecisionRegistration>> PrepareCookedDecisionRegistrations(

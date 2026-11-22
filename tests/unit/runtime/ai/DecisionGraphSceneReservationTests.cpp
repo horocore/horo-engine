@@ -647,6 +647,85 @@ namespace Horo::AI {
             CHECK(old.probe.cleanups == 1);
         }
 
+        TEST_CASE("Scene decision reload publishes a migrated Blackboard and retires the old generation at one cutoff",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture old;
+            Fixture next;
+            old.probe.succeedTick = 100;
+            const auto oldKey = MakeIdentity<BlackboardKeyId>(1);
+            const auto newKey = MakeIdentity<BlackboardKeyId>(2);
+            const std::array keys{BlackboardKeyDescriptor{.key = newKey, .defaultValue = BlackboardValue{BlackboardScalarValue{true}}}};
+            auto schema = BlackboardSchema::Capture({old.schema->Identity(), 2, BlackboardUnknownValuePolicy::Reject, keys});
+            REQUIRE(schema.HasValue());
+            next.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+            auto source = TaskTree(11);
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            auto newNode = TreeNode(2, DecisionControlKind::Task);
+            newNode.requirements = {{.key = newKey, .kind = BlackboardValueKind::Boolean, .source = Location()}};
+            auto newSource = Tree(11, {TreeNode(1, DecisionControlKind::Root), newNode}, {Edge(1, 1, 2)});
+            newSource.blackboardVersion = {2, 2};
+            newSource.executionTask = source.executionTask;
+            const auto previous = old.Compile(std::span{&source, 1}, 11);
+            const auto replacement = next.Compile(std::span{&newSource, 1}, 11);
+            const std::array mapping{BlackboardKeyMigration{oldKey, newKey}};
+            const BlackboardSchemaMigration valid{old.schema, next.schema->Identity(), next.schema->Version(), mapping};
+            const BlackboardSchemaMigration missingMapping{old.schema, next.schema->Identity(), next.schema->Version(), {}};
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}}).Value();
+            auto scene = SceneFixture(old, *previous);
+            scene.descriptor.cookedPlan = previous;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto capability = runtime.CapabilityAtSafePoint();
+            auto write = std::move(capability.BeginBlackboardWrite(agent)).Value();
+            const BlackboardValue preserved{BlackboardScalarValue{false}};
+            REQUIRE(write.Stage({oldKey, preserved}).HasValue());
+            REQUIRE(capability.CommitBlackboardWrite(agent, std::move(write)).HasValue());
+            const auto oldSnapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent).Value();
+            auto oldBatch = std::move(capability.BeginBlackboardWrite(agent)).Value();
+            REQUIRE(oldBatch.Stage({oldKey, BlackboardScalarValue{true}}).HasValue());
+            const auto reservation = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, 1);
+            REQUIRE(reservation.HasValue());
+            REQUIRE(scheduler->EvaluateAtDecision(1).HasValue());
+            const auto continuation = old.probe.continuation;
+            REQUIRE(continuation.IsCurrent());
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement, &valid),
+                                     AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement),
+                                     AIErrors::DecisionAssetSchemaIncompatible);
+            CHECK(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement, &missingMapping).HasError());
+            CHECK(reservation.Value().CanAdmit());
+            CHECK(oldSnapshot.Read(oldKey).Value() == std::optional{preserved});
+            CHECK(continuation.IsCurrent());
+            CHECK(next.probe.factories == 0);
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(old.probe.resumes == 1);
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement, &valid).HasValue());
+            CHECK_FALSE(reservation.Value().CanAdmit());
+            CHECK_FALSE(continuation.IsCurrent());
+            CHECK(oldSnapshot.Read(oldKey).HasError());
+            CHECK(capability.CommitBlackboardWrite(agent, std::move(oldBatch)).HasError());
+            REQUIRE(old.probe.abortReasons.size() == 1);
+            CHECK(old.probe.abortReasons.front() == AiTaskCancellationReason::PlanReplaced);
+            CHECK(old.probe.cleanups == 1);
+            CHECK(next.probe.starts == 0);
+
+            const auto current = runtime.CaptureDecisionSnapshotAtSafePoint(agent).Value();
+            CHECK(current.Binding().agent == agent);
+            CHECK(current.Binding().schemaVersion == 2);
+            CHECK(current.Binding().schemaGeneration > oldSnapshot.Binding().schemaGeneration);
+            CHECK(current.Read(newKey).Value() == std::optional{preserved});
+            REQUIRE(scheduler->EvaluateAtDecision(3).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
+            CHECK(next.probe.starts == 1);
+        }
+
         TEST_CASE("A compatible Scene recook retains the exact running task and detached completion",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;

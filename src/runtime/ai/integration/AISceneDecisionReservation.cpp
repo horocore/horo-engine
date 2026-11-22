@@ -26,6 +26,44 @@ namespace Horo::AI {
             return selected.Value()->blackboard->Snapshot();
         }
 
+        Result<Detail::AgentRuntimeState> PrepareDecisionSchemaMigration(const Detail::AgentRuntimeState &agent,
+                                                                         std::shared_ptr<const BlackboardSchema> schema,
+                                                                         const BlackboardSchemaMigration &migration) {
+            using Staged = Result<Detail::AgentRuntimeState>;
+            auto binding = agent.blackboardBinding;
+            if (migration.source != agent.schema || schema->Identity() != binding.schema || schema->Version() <= binding.schemaVersion)
+                return Staged::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
+            if (agent.task || agent.sensing)
+                return Staged::Failure(MakeError(AIErrors::DecisionAssetSchemaIncompatible));
+            if (binding.schemaGeneration == std::numeric_limits<std::uint64_t>::max())
+                return Staged::Failure(MakeError(AIErrors::BlackboardRevisionExhausted));
+            const auto instanceGeneration = AdvanceAiRuntimeGeneration(binding.instanceGeneration);
+            if (instanceGeneration.HasError())
+                return Staged::Failure(instanceGeneration.ErrorValue());
+            binding.schemaVersion = schema->Version();
+            ++binding.schemaGeneration;
+            binding.instanceGeneration = instanceGeneration.Value();
+
+            auto source = agent.blackboard->CaptureCanonical();
+            if (source.HasError())
+                return Staged::Failure(source.ErrorValue());
+            auto migrated = MigrateCanonicalBlackboard(source.Value(), *schema, std::span{&migration, 1});
+            if (migrated.HasError())
+                return Staged::Failure(migrated.ErrorValue());
+            auto board = BlackboardInstance::CreateFromCanonical(binding, schema, migrated.Value());
+            if (board.HasError())
+                return Staged::Failure(board.ErrorValue());
+            try {
+                return Staged::Success({.record = agent.record,
+                                        .schema = std::move(schema),
+                                        .perceptionEndpoints = agent.perceptionEndpoints,
+                                        .blackboardBinding = binding,
+                                        .blackboard = std::move(board).Value()});
+            } catch (const std::bad_alloc &) {
+                return Staged::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+            }
+        }
+
         std::size_t ModelWork(const AiSceneLocalPolicyBinding &policy) noexcept {
             return policy.model->RequiredWork() + policy.featureKeys.size() * std::bit_width(MaximumBlackboardKeys);
         }
@@ -473,7 +511,8 @@ namespace Horo::AI {
     /** @copydoc AiSceneRuntime::ReplaceCookedDecisionAtSafePoint */
     Result<void> AiSceneRuntime::ReplaceCookedDecisionAtSafePoint(const AgentHandle agent,
                                                                   const std::shared_ptr<const CookedDecisionPlan> previous,
-                                                                  std::shared_ptr<const CookedDecisionPlan> replacement) {
+                                                                  std::shared_ptr<const CookedDecisionPlan> replacement,
+                                                                  const BlackboardSchemaMigration *migration) {
         using Outcome = Result<void>;
         if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
             return owner;
@@ -497,21 +536,45 @@ namespace Horo::AI {
         auto *executor = dynamic_cast<ScheduledCookedDecision *>(registered.Value());
         if (!executor)
             return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        const auto &oldRoot = previous->Graphs()[previous->Occurrences().front().plan];
+        const auto &newRoot = replacement->Graphs()[replacement->Occurrences().front().plan];
+        if (oldRoot.execution.index() != newRoot.execution.index())
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        const auto schema = newRoot.bindings->BlackboardSchema();
+        if (schema != slot.schema) {
+            if (!migration || !schema)
+                return Outcome::Failure(MakeError(AIErrors::DecisionAssetSchemaIncompatible));
+            auto prepared = PrepareDecisionSchemaMigration(slot, schema, *migration);
+            if (prepared.HasError())
+                return Outcome::Failure(prepared.ErrorValue());
+            auto migrated = std::move(prepared).Value();
+            return RestartCookedDecisionAtSafePoint(state, slot, std::move(replacement), &migrated);
+        }
         auto retained = executor->Decision().TryRetainCompatibleFlatPlan(replacement);
         if (retained.HasError())
             return Outcome::Failure(retained.ErrorValue());
-        if (retained.Value()) {
-            scheduler->PublishRetainedDecisionImage(agent, replacement);
-            slot.cookedPlan = std::move(replacement);
-            ++state->revision;
-            return Outcome::Success();
-        }
+        if (!retained.Value())
+            return RestartCookedDecisionAtSafePoint(state, slot, std::move(replacement), nullptr);
+        scheduler->PublishRetainedDecisionImage(agent, replacement);
+        slot.cookedPlan = std::move(replacement);
+        ++state->revision;
+        return Outcome::Success();
+    }
 
+    /** @copydoc AiSceneRuntime::RestartCookedDecisionAtSafePoint */
+    Result<void> AiSceneRuntime::RestartCookedDecisionAtSafePoint(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
+                                                                  Detail::AgentRuntimeState &slot,
+                                                                  std::shared_ptr<const CookedDecisionPlan> replacement,
+                                                                  Detail::AgentRuntimeState *migrated) {
+        using Outcome = Result<void>;
+        const auto agent = slot.record.handle;
+        const auto previous = slot.cookedPlan;
+        auto *scheduler = state->scheduler.get();
         const auto sceneRevision = state->revision;
         const auto scheduleRevision = scheduler->populationRevision_;
         const auto tick = scheduler->report_.tick;
         auto cursor = state->nextTaskSlot;
-        auto registration = PrepareCookedDecisionRegistration(state, slot, replacement, cursor);
+        auto registration = PrepareCookedDecisionRegistration(state, migrated ? *migrated : slot, replacement, cursor);
         if (registration.HasError())
             return Outcome::Failure(registration.ErrorValue());
         // Provider construction can call out. Reacquire the slot only after validating the original publication.
@@ -528,7 +591,17 @@ namespace Horo::AI {
             return valid;
         if (!replacement->IsCurrent())
             return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
-        // No callbacks intervene between either publication and the cursor update.
+        if (migrated) {
+            auto &live = *current.Value();
+            if (auto revoked = live.blackboard->TeardownAtBlackboardSync(); revoked.HasError())
+                return revoked;
+            live.cancellation.RequestCancellation();
+            live.cancellation = std::move(migrated->cancellation);
+            live.schema = std::move(migrated->schema);
+            live.blackboardBinding = migrated->blackboardBinding;
+            live.blackboard = std::move(migrated->blackboard);
+        }
+        // No provider callbacks intervene between publication and the cursor update.
         staged.Value()->Publish();
         current.Value()->cookedPlan = std::move(replacement);
         state->nextTaskSlot = cursor;
