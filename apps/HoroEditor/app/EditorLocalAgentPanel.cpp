@@ -13,12 +13,14 @@
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/Security/CredentialStore.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <utility>
 #include <variant>
@@ -36,6 +38,12 @@ namespace Horo::Editor {
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
         using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
         using SceneReviewClock = std::chrono::steady_clock;
+
+        /** @brief The exact disclosed destination and payload retained until a local decision. */
+        struct CloudTurnReview final {
+            ModelProviderConfig config;
+            std::optional<ModelRequest> request;
+        };
 
         /** @brief One preview tied to the exact project attachment and disclosed count. */
         struct SceneQueryReview final {
@@ -196,8 +204,18 @@ namespace Horo::Editor {
             return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, nullptr, observe);
         }
 
+        /** @brief Executes the approved cloud payload with no project-context or tool capability. */
+        Reply RunCloudOperation(CloudTurnReview review, std::shared_ptr<Security::CredentialVault> credentials, std::uint64_t turn,
+                                std::stop_token stop) {
+            auto provider = CreateOpenAIModelProviderWithCredentials(std::move(review.config), std::move(credentials));
+            if (!review.request)
+                return provider->Discover(stop);
+            AgentTurnRuntime runtime;
+            return runtime.Run(*provider, nullptr, turn, std::move(*review.request), {}, stop);
+        }
+
         /** @brief Presents sanitized, localized remediation without displaying transport response bodies. */
-        const char *FailureKey(const std::optional<ModelErrorCode> error) {
+        const char *FailureKey(const std::optional<ModelErrorCode> error, const bool cloud) {
             using enum ModelErrorCode;
             if (error == InvalidRequest)
                 return "invalid";
@@ -205,16 +223,22 @@ namespace Horo::Editor {
                 return "cancelled";
             if (error == UnsupportedCapability)
                 return "tools_unsupported";
+            if (cloud && (error == Authentication || error == CredentialUnavailable))
+                return "cloud_auth_failed";
+            if (cloud && error == RateLimited)
+                return "cloud_rate_limited";
             if (error == Unavailable || error == Transport)
-                return "unavailable";
+                return cloud ? "cloud_unavailable" : "unavailable";
             return "failed";
         }
 
         /** @brief Presents and reviews results from the editor-owned background operation. */
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
-            LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background)
-                : IWorkspacePanel("workspace.local_agent"), background_(std::move(background)), history_(jobs, files), files_(files) {}
+            LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background,
+                            std::shared_ptr<Security::CredentialVault> credentials)
+                : IWorkspacePanel("workspace.local_agent"), cloudCredentials_(std::move(credentials)), background_(std::move(background)),
+                  history_(jobs, files), files_(files) {}
 
             ~LocalAgentPanel() override {
                 RevokeContext();
@@ -269,6 +293,7 @@ namespace Horo::Editor {
             void OnDetach() override {
                 background_->Abandon();
                 prompt_.clear();
+                cloudPrompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
                 RevokeContext();
@@ -283,6 +308,7 @@ namespace Horo::Editor {
             void OnPresentationHidden(EditorWorkspaceViewCommandData &) override {
                 textInput_.Reset();
                 sceneQueryReview_.reset();
+                cloudReview_.reset();
             }
 
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
@@ -313,6 +339,13 @@ namespace Horo::Editor {
                 const auto &fonts = context.theme.fonts;
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 textFieldActive_ = false;
+                DrawProviderSelection(locale);
+                if (cloudMode_) {
+                    DrawCloud(locale, fonts);
+                    UpdateTextInputFocus();
+                    ImGui::EndChild();
+                    return;
+                }
                 ReviewOfferedViewport();
                 DrawProvider(locale, fonts);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
@@ -380,6 +413,7 @@ namespace Horo::Editor {
                 contextLifetime_.reset();
                 contextPreview_.reset();
                 sceneQueryReview_.reset();
+                cloudReview_.reset();
                 plainReplay_.reset();
                 sceneQuery_.reset();
                 activeSource_ = {};
@@ -448,6 +482,154 @@ namespace Horo::Editor {
                     requestMcpAudit_(*audit, command);
             }
 
+            /** @brief Switches the selected provider only when the local composer holds no active review. */
+            void DrawProviderSelection(const ILocalizationService &locale) {
+                if (!cloudCredentials_)
+                    return;
+                const bool canSwitch = !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !ContextLocksComposer() &&
+                                       !sceneQueryReview_ && !cloudReview_;
+                if (!Button(locale, cloudMode_ ? "cloud_use_local" : "cloud_use", canSwitch))
+                    return;
+                cloudMode_ = !cloudMode_;
+                models_.clear();
+                selection_ = -1;
+                status_ = nullptr;
+                response_.clear();
+            }
+
+            /** @brief Reports whether the available reference belongs to the exact configured endpoint. */
+            bool CanReviewCloud() const {
+                return cloudCredential_ && cloudEndpoint_ == cloudCredentialEndpoint_;
+            }
+
+            /** @brief Enrolls only the explicitly requested clipboard value, using zeroizing application-owned memory. */
+            void EnrollCloudCredential() {
+                const auto value = CaptureClipboardText();
+                if (value.empty() || std::ranges::any_of(value, [](const unsigned char byte) {
+                    return byte <= 0x20 || byte >= 0x7f;
+                })) {
+                    status_ = "cloud_key_failed";
+                    return;
+                }
+                try {
+                    auto endpoint = cloudEndpoint_;
+                    auto enrolled = cloudCredentials_->Put(Security::SecureBytes{std::as_bytes(std::span{value})});
+                    if (enrolled.HasError()) {
+                        status_ = "cloud_key_failed";
+                        return;
+                    }
+                    if (cloudCredential_ && cloudCredentials_->Revoke(*cloudCredential_).HasError()) {
+                        static_cast<void>(cloudCredentials_->Revoke(enrolled.Value()));
+                        status_ = "cloud_key_failed";
+                        return;
+                    }
+                    cloudCredential_ = std::move(enrolled).Value();
+                    cloudCredentialEndpoint_ = std::move(endpoint);
+                    status_ = "cloud_key_saved";
+                } catch (const std::bad_alloc &) {
+                    status_ = "cloud_key_failed";
+                }
+            }
+
+            /** @brief Withdraws the key reference only after its exact backend entry has been revoked. */
+            void RevokeCloudCredential() {
+                if (cloudCredentials_->Revoke(*cloudCredential_).HasError()) {
+                    status_ = "cloud_key_failed";
+                    return;
+                }
+                cloudCredential_.reset();
+                cloudCredentialEndpoint_.clear();
+                status_ = "cloud_key_removed";
+            }
+
+            /** @brief Pins the reviewed destination, reference, and payload before an explicit send decision. */
+            void PrepareCloudReview(const bool discover) {
+                if (!CanReviewCloud())
+                    return;
+                ModelProviderConfig config{.endpoint = cloudEndpoint_, .credentialReference = std::string{cloudCredential_->Value()}};
+                std::optional<ModelRequest> request;
+                if (!discover) {
+                    request.emplace();
+                    request->model = cloudModel_;
+                    request->messages.push_back({.role = ModelRole::User, .text = cloudPrompt_});
+                }
+                cloudReview_.emplace(std::move(config), std::move(request));
+                status_ = nullptr;
+            }
+
+            /** @brief Consumes the displayed review and transfers it to the existing cancellable worker owner. */
+            void SendCloudReview() {
+                auto reviewed = std::move(*cloudReview_);
+                cloudReview_.reset();
+                submittedPrompt_.reset();
+                submittedReference_.reset();
+                response_.clear();
+                try {
+                    BackgroundTurn::Operation task{
+                        [review = std::move(reviewed), credentials = cloudCredentials_, turn = ++turn_](std::stop_token stop) mutable {
+                        return RunCloudOperation(std::move(review), std::move(credentials), turn, stop);
+                    }};
+                    status_ = background_->Start(std::move(task)) ? "cloud_working" : "failed";
+                } catch (const std::bad_alloc &) {
+                    status_ = "failed";
+                }
+            }
+
+            /** @brief Shows the exact endpoint, operation, and prompt before any authenticated request is queued. */
+            void DrawCloudReview(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                const auto show = [&](const std::string_view text) {
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Text(), fonts);
+                };
+                show(LocalizedText(locale, cloudReview_->request ? "cloud_review_prompt" : "cloud_review_discovery"));
+                show(cloudReview_->config.endpoint);
+                if (cloudReview_->request) {
+                    show(cloudReview_->request->model);
+                    show(cloudReview_->request->messages.front().text);
+                }
+                if (Button(locale, "cloud_approve", !Busy()))
+                    SendCloudReview();
+                else if (Button(locale, "cloud_discard", true))
+                    cloudReview_.reset();
+            }
+
+            /** @brief Presents the cloud-only composer and credentials without exposing local context or history actions. */
+            void DrawCloud(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                const auto show = [&](const std::string_view text) {
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Text(), fonts);
+                };
+                ImGui::BeginDisabled(Busy() || cloudReview_);
+                show(LocalizedText(locale, "cloud_endpoint"));
+                if (DrawTextField("##CloudEndpoint", cloudEndpoint_, 256, fonts)) {
+                    models_.clear();
+                    selection_ = -1;
+                    response_.clear();
+                    status_ = nullptr;
+                }
+                if (Button(locale, "cloud_key_enroll", cloudEndpoint_.starts_with("https://")))
+                    EnrollCloudCredential();
+                if (Button(locale, "cloud_key_revoke", cloudCredential_.has_value()))
+                    RevokeCloudCredential();
+                if (Button(locale, "discover", CanReviewCloud()))
+                    PrepareCloudReview(true);
+                show(LocalizedText(locale, "model"));
+                if (DrawTextField("##CloudModel", cloudModel_, 256, fonts))
+                    selection_ = -1;
+                DrawAvailableModels(fonts, cloudModel_);
+                show(LocalizedText(locale, "prompt"));
+                static_cast<void>(DrawTextField("##CloudPrompt", cloudPrompt_, 4096, fonts));
+                if (Button(locale, "cloud_review", CanReviewCloud() && !cloudModel_.empty() && !cloudPrompt_.empty()))
+                    PrepareCloudReview(false);
+                ImGui::EndDisabled();
+                if (cloudReview_)
+                    DrawCloudReview(locale, fonts);
+                if (Busy() && Button(locale, "stop", background_->CanCancel()))
+                    background_->Cancel();
+                if (status_)
+                    show(LocalizedText(locale, status_));
+                if (!response_.empty())
+                    show(response_);
+            }
+
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "endpoint"), Theme::Text(), fonts);
                 ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || ContextLocksComposer() ||
@@ -464,11 +646,11 @@ namespace Horo::Editor {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "model"), Theme::Text(), fonts);
                 if (DrawTextField("##Model", model_, 256, fonts))
                     selection_ = -1;
-                DrawAvailableModels(fonts);
+                DrawAvailableModels(fonts, model_);
                 ImGui::EndDisabled();
             }
 
-            void DrawAvailableModels(const Theme::Fonts &fonts) {
+            void DrawAvailableModels(const Theme::Fonts &fonts, std::string &destination) {
                 if (models_.empty())
                     return;
                 std::array<const char *, 64> labels{};
@@ -476,7 +658,7 @@ namespace Horo::Editor {
                     labels[index] = models_[index].id.c_str();
                 if (Ui::ComboControl("##AvailableModels", &selection_, labels.data(), static_cast<int>(models_.size()), fonts) &&
                     selection_ >= 0 && static_cast<std::size_t>(selection_) < models_.size())
-                    model_ = models_[static_cast<std::size_t>(selection_)].id;
+                    destination = models_[static_cast<std::size_t>(selection_)].id;
             }
 
             void DrawSendActions(const ILocalizationService &locale, const Theme::Fonts &fonts) {
@@ -1427,7 +1609,7 @@ namespace Horo::Editor {
             void Adopt(ProviderDiscovery &discovery) {
                 if (!discovery.outcome.Succeeded()) {
                     models_.clear();
-                    status_ = FailureKey(discovery.outcome.error->code);
+                    status_ = FailureKey(discovery.outcome.error->code, cloudMode_);
                     return;
                 }
                 std::erase_if(discovery.models, [](const ModelDescriptor &model) {
@@ -1447,11 +1629,16 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
-                    CapturePatchReview();
-                    ReviewCompleted(result);
+                    if (!cloudMode_) {
+                        CapturePatchReview();
+                        ReviewCompleted(result);
+                    }
                     return;
                 }
-                status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);
+                const auto *timeout = cloudMode_ ? "cloud_timeout" : "timeout";
+                status_ = result.status == AgentTurnStatus::TimedOut ? timeout : FailureKey(result.providerError, cloudMode_);
+                if (cloudMode_)
+                    return;
                 history_.FinishRecovery(result.status == AgentTurnStatus::Cancelled ? AgentHistoryMessageState::Cancelled
                                                                                     : AgentHistoryMessageState::Failed);
             }
@@ -1488,6 +1675,14 @@ namespace Horo::Editor {
             std::string model_;
             std::string prompt_;
             std::string response_;
+            std::shared_ptr<Security::CredentialVault> cloudCredentials_;
+            bool cloudMode_{};
+            std::string cloudEndpoint_;
+            std::string cloudModel_;
+            std::string cloudPrompt_;
+            std::string cloudCredentialEndpoint_;
+            std::optional<CredentialReference> cloudCredential_;
+            std::optional<CloudTurnReview> cloudReview_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
@@ -1544,9 +1739,10 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc MakeEditorLocalAgentPanel */
-    EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files) {
+    EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
+                                                        std::shared_ptr<Security::CredentialVault> cloudCredentials) {
         auto background = std::make_shared<BackgroundTurn>();
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background);
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudCredentials));
         return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
             if (const auto current = owner.lock()) {
                 current->Poll();

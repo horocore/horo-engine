@@ -12,18 +12,23 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/SecureRandom.h"
+#include "Horo/Security/CredentialStore.h"
+#include "Horo/Security/SecurityErrors.h"
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceReviewApplication.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <imgui_internal.h>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -41,9 +46,11 @@ namespace {
         Input::RawInputCollector collector;
         EditorWorkspaceViewModel model;
         EditorWorkspaceViewCommandData command;
-        EditorLocalAgentPanelHost agent{MakeEditorLocalAgentPanel(jobs.Get(), files)};
+        EditorLocalAgentPanelHost agent;
 
-        explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {}) {
+        explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {},
+                                   std::shared_ptr<Security::CredentialVault> credentials = {})
+            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(credentials))) {
             ImGui::GetIO().IniFilename = nullptr;
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
@@ -130,6 +137,74 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds{5});
         } while (std::chrono::steady_clock::now() < deadline);
         return false;
+    }
+
+    /** @brief Observes credential admission, then prevents network access by rejecting each lookup. */
+    struct CloudCredentialProbe final : Security::CredentialBackend {
+        static constexpr std::string_view Key = "fixture-model-key";
+        std::atomic_uint resolutions{};
+        bool enrolled{};
+
+        bool Available() const noexcept override {
+            return true;
+        }
+
+        Result<void> Put(const Security::CredentialReference &, Security::SecureBytes secret) override {
+            enrolled = std::ranges::equal(secret.View(), std::as_bytes(std::span{Key}));
+            return Result<void>::Success();
+        }
+
+        Result<Security::SecureBytes> Resolve(const Security::CredentialReference &) override {
+            ++resolutions;
+            return Result<Security::SecureBytes>::Failure(MakeError(SecurityErrors::CredentialRevoked));
+        }
+
+        Result<void> Remove(const Security::CredentialReference &) noexcept override {
+            enrolled = false;
+            return Result<void>::Success();
+        }
+    };
+
+    TEST_CASE("Cloud chat asks before looking up credentials for either approved operation", "[editor][agent][gui][cloud]") {
+        const auto probe = std::make_shared<CloudCredentialProbe>();
+        const auto vault = std::make_shared<Security::CredentialVault>(probe, Platform::CreateNativeSecureRandomSource());
+        LocalAgentFixture fixture{"en-US", {}, vault};
+        ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) {
+            return CloudCredentialProbe::Key.data();
+        };
+        fixture.Draw(420);
+        fixture.Activate("###cloud_use");
+        fixture.Enter("##CloudEndpoint", "https://provider.invalid");
+        fixture.Activate("###cloud_key_enroll");
+        REQUIRE(probe->enrolled);
+        fixture.Enter("##CloudModel", "fixture-model");
+        fixture.Enter("##CloudPrompt", "Review this exact prompt");
+        fixture.Activate("###cloud_review");
+        const auto review = fixture.DrawnText();
+        CHECK(review.find("https://provider.invalid") != std::string::npos);
+        CHECK(review.find("fixture-model") != std::string::npos);
+        CHECK(review.find("Review this exact prompt") != std::string::npos);
+        CHECK(review.find(CloudCredentialProbe::Key) == std::string::npos);
+        CHECK(probe->resolutions == 0);
+        fixture.Activate("###cloud_discard");
+        CHECK(probe->resolutions == 0);
+
+        fixture.Activate("###discover");
+        CHECK(probe->resolutions == 0);
+        fixture.Activate("###cloud_approve");
+        const auto failed = [&] {
+            return fixture.DrawnText().find("Cloud authentication failed") != std::string::npos;
+        };
+        REQUIRE(Await(failed));
+        CHECK(probe->resolutions == 1);
+
+        fixture.Activate("###cloud_review");
+        CHECK(probe->resolutions == 1);
+        fixture.Activate("###cloud_approve");
+        REQUIRE(Await(failed));
+        CHECK(probe->resolutions == 2);
+        fixture.Activate("###cloud_key_revoke");
+        CHECK_FALSE(probe->enrolled);
     }
 
 #if HORO_ENABLE_TELEMETRY

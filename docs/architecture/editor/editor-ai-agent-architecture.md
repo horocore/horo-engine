@@ -1004,6 +1004,13 @@ through the shared security provider for each HTTPS operation. The adapter
 checks the endpoint before lookup and keeps resolved bytes in zeroizing
 application-owned storage. Endpoint and model consent remain host-owned.
 
+The desktop chat panel exposes cloud mode when the host supplies a native
+credential backend. Each model list or inference request requires approval of
+the displayed HTTPS endpoint. The inference review also displays the selected
+model and exact message. The worker sends one user message and has no project
+context, history, or tool capability. The panel keeps the credential reference
+for the editor session and exposes explicit removal.
+
 ### Provider Selection
 
 The active provider is selected in the chat panel header. Per-conversation

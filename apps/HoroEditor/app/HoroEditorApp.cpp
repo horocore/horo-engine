@@ -105,6 +105,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Platform/NativeCredentialBackend.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/PlatformServices/PlatformProjectSettings.h"
@@ -4344,8 +4345,15 @@ namespace Horo::Editor {
             workspacePanelRegistry.RegisterPanel(MakeEditorMcpCommandPanel(workspaceCommands));
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend, workspaceCommands);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
-            const auto localAgent =
-                p.options.localAgent ? MakeEditorLocalAgentPanel(p.background.jobs, durableFiles) : EditorLocalAgentPanelHost{};
+            auto localAgent = EditorLocalAgentPanelHost{};
+            if (p.options.localAgent) {
+                auto backend = Platform::CreateNativeCredentialBackend();
+                std::shared_ptr<Security::CredentialVault> credentials;
+                if (backend && backend->Available())
+                    credentials =
+                        std::make_shared<Security::CredentialVault>(std::move(backend), Platform::CreateNativeSecureRandomSource());
+                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(credentials));
+            }
             if (localAgent.panel)
                 workspacePanelRegistry.RegisterPanel(localAgent.panel);
             EditorExtensionSources extensionSources{p.background.jobs};
