@@ -1433,6 +1433,8 @@ namespace Horo::Editor {
         /** @brief Revalidates the visible problem and its entity before changing selection. */
         void NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request);
         void NavigatePlayDecisionGraphProblem(const PlayDecisionGraphNavigationRequest &request);
+        /** @brief Resolves the exact current Play problem behind a selected Build Output row. */
+        void NavigatePlayDecisionDiagnostic(std::uint64_t sequence);
         std::uint64_t m_playDecisionGraphFocusSequence{};
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
@@ -1760,5 +1762,6 @@ namespace Horo::Editor {
         void ReconcileContentBrowserNavigation();
         IAudioComponentPreview *m_audioPreview{};
         Assets::AssetId m_audioPreviewWorkspace;
+        std::uint64_t m_playDecisionDiagnosticSequence{};
     };
 }  // namespace Horo::Editor

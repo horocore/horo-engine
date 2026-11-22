@@ -453,7 +453,8 @@ namespace Horo::Editor {
         const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
         const std::string level = context.localization.Get("editor", StatusLocalizationKey(record));
         const std::string line = LineLabel(record);
-        const std::string file = FileLabel(record);
+        const bool decision = record.stage == PlayDecisionDiagnosticStage;
+        const std::string file = decision ? kTextScope.Text(context.localization, "source.decision_graph") : FileLabel(record);
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {levelX, textY},
                                   {lineX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {lineX, textY},
@@ -463,7 +464,10 @@ namespace Horo::Editor {
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {messageX, textY},
                                   {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
                                   Theme::Text(), record.message);
-        if (activated && record.source.has_value()) {
+        if (activated && decision) {
+            command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionDiagnostic;
+            command.playDecisionDiagnosticSequence = record.sequence;
+        } else if (activated && record.source.has_value()) {
             command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
             command.diagnosticSource = DiagnosticSourceRequest{
                 .absolutePath = DiagnosticNativePath(record.source->absolutePath),

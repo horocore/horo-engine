@@ -65,6 +65,11 @@ namespace Horo {
 
     /** @copydoc BuildOutputStore::Append */
     void BuildOutputStore::Append(BuildOutputRecord record) {
+        static_cast<void>(AppendWithSequence(std::move(record)));
+    }
+
+    /** @copydoc BuildOutputStore::AppendWithSequence */
+    std::uint64_t BuildOutputStore::AppendWithSequence(BuildOutputRecord record) {
         std::lock_guard lock(mutex_);
         record.sequence = nextSequence_++;
         if (records_.size() == capacity_) {
@@ -75,6 +80,7 @@ namespace Horo {
         records_.push_back(std::move(record));
         RevokeOperation(records_.back().operationId);
         ++revision_;
+        return records_.back().sequence;
     }
 
     /** @copydoc BuildOutputStore::CaptureOperationTail */

@@ -3524,6 +3524,7 @@
       "text": "Henüz build çıktısı yok. Sonuçları görmek için bir cook işlemi başlatın."
     },
     "workspace.global_dock.build_output.dropped": {"text": "Eski build çıktıları kaldırıldı:"},
+    "workspace.global_dock.build_output.source.decision_graph": {"text": "Karar grafiği"},
     "workspace.global_dock.build_output.source.invalid": {"text": "Tanı kaynağı kullanılamıyor veya proje dışında."},
     "workspace.global_dock.build_output.source.unavailable": {"text": "Kaynak gezintisi bu platformda kullanılamıyor."},
     "workspace.source_open.missing": {"text": "Kaynak dosyası projede bulunamıyor."},

@@ -3524,6 +3524,7 @@
       "text": "No build output yet. Run a cook operation to see results."
     },
     "workspace.global_dock.build_output.dropped": {"text": "Older build output entries discarded:"},
+    "workspace.global_dock.build_output.source.decision_graph": {"text": "Decision graph"},
     "workspace.global_dock.build_output.source.invalid": {"text": "The diagnostic source is unavailable or outside the project."},
     "workspace.global_dock.build_output.source.unavailable": {"text": "Source navigation is unavailable on this platform."},
     "workspace.source_open.missing": {"text": "The source file is missing from the project."},

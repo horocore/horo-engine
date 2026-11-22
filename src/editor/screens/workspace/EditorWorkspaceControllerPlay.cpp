@@ -1,4 +1,6 @@
 #include "EditorPlayXrHost.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Editor/NotificationService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "WorkspacePathText.h"
@@ -300,13 +302,16 @@ namespace Horo::Editor {
         const bool playing = m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused;
         if (!playing || !scene || !scene->IsCurrent()) {
             problem.reset();
+            m_playDecisionDiagnosticSequence = 0;
             m_viewModel.playDecisionGraphFocus.reset();
             m_viewModel.playDecisionGraphUnavailable = false;
             m_viewModel.playDecisionObjectAvailable = false;
             return;
         }
-        if (problem && problem->scene != scene->RuntimeId())
+        if (problem && problem->scene != scene->RuntimeId()) {
             problem.reset();
+            m_playDecisionDiagnosticSequence = 0;
+        }
         if (auto captured = m_playSession.ReadDecisionProblem(); captured && captured->scene == scene->RuntimeId() && captured->tick > 0 &&
                                                                  captured->agent.IsValid() &&
                                                                  (!problem || captured->tick > problem->tick)) {
@@ -315,13 +320,35 @@ namespace Horo::Editor {
             m_viewModel.playDecisionGraphUnavailable = false;
             if (m_diagnosticOutput) {
                 const auto &error = problem->error;
-                m_diagnosticOutput->Append({.severity = DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Note),
-                                            .stage = "ai.decision_play",
-                                            .code = DiagnosticCode{error.code.Value()},
-                                            .message = error.message});
+                m_playDecisionDiagnosticSequence = m_diagnosticOutput->AppendWithSequence(
+                    {.severity = DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Note),
+                     .stage = std::string{PlayDecisionDiagnosticStage},
+                     .code = DiagnosticCode{error.code.Value()},
+                     .message = error.message});
             }
         }
         m_viewModel.playDecisionObjectAvailable = problem && ResolvePlayDecisionProblemObject(*problem).has_value();
+    }
+
+    /** @copydoc EditorWorkspaceController::NavigatePlayDecisionDiagnostic */
+    void EditorWorkspaceController::NavigatePlayDecisionDiagnostic(const std::uint64_t sequence) {
+        const auto unavailable = [this] {
+            constexpr auto message = "workspace.global_dock.build_output.source.invalid";
+            m_viewModel.contentBrowserOperationError = message;
+            if (m_localization)
+                NotificationService{DataBus()}.Publish(PlayDecisionDiagnosticStage, NotificationSeverity::Warning,
+                                                       m_localization->Get("editor", message), {}, message);
+        };
+        const auto &problem = m_viewModel.playDecisionProblem;
+        if (!problem || sequence == 0 || sequence != m_playDecisionDiagnosticSequence || !problem->graph.IsValid() ||
+            !problem->node.IsValid()) {
+            unavailable();
+            return;
+        }
+        const auto previousFocus = m_playDecisionGraphFocusSequence;
+        NavigatePlayDecisionGraphProblem({problem->scene, problem->tick, problem->agent, problem->graph, problem->node});
+        if (m_playDecisionGraphFocusSequence == previousFocus)
+            unavailable();
     }
 
     /** @copydoc EditorWorkspaceController::NavigatePlayDecisionProblem */

@@ -4,6 +4,7 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/MeshEditorPayload.h"
+#include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "OwnedTestDirectory.h"
@@ -484,7 +485,10 @@ namespace {
         Runtime::RuntimeSceneService preview;
         REQUIRE(preview.Startup(cancellation.Token()).HasValue());
         BuildOutputStore diagnostics{8};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        REQUIRE(localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/en-US.json"));
         EditorWorkspaceDependencies dependencies;
+        dependencies.localization = &localization;
         dependencies.sourceNavigation.diagnosticOutput = &diagnostics;
         dependencies.assets.mutableAssetRegistry = &registry;
         dependencies.gameplay.sceneFactory = [=](Runtime::SceneRuntimeId scene, const Runtime::RuntimeSceneDefinition &) {
@@ -493,6 +497,11 @@ namespace {
         };
         EditorWorkspaceController workspace{project.Path(), preview, registry.Snapshot(), dependencies};
         REQUIRE_FALSE(workspace.InitializationError());
+        std::vector<NotificationEvent> navigationWarnings;
+        const auto subscription = workspace.DataBus().Subscribe<NotificationEvent>([&](const NotificationEvent &notification) {
+            if (notification.source == PlayDecisionDiagnosticStage)
+                navigationWarnings.push_back(notification);
+        });
 
         const auto play = [&] {
             workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StartPlay));
@@ -509,7 +518,7 @@ namespace {
         const auto emitted = diagnostics.SnapshotIfChanged(0);
         REQUIRE(emitted);
         REQUIRE(emitted->records.size() == 1);
-        CHECK(emitted->records.front().stage == "ai.decision_play");
+        CHECK(emitted->records.front().stage == PlayDecisionDiagnosticStage);
         CHECK(emitted->records.front().code.Value() == first.error.code.Value());
         CHECK_FALSE(emitted->records.front().source);
         EditorWorkspaceViewCommandData graphNavigation{.command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem,
@@ -519,7 +528,11 @@ namespace {
         workspace.ProcessCommand(graphNavigation);
         CHECK(workspace.ViewModel().decisionGraphDocuments.empty());
         graphNavigation.playDecisionGraphNavigation->node = node;
-        workspace.ProcessCommand(graphNavigation);
+        const EditorWorkspaceViewCommandData outputNavigation{
+            .command = EditorWorkspaceViewCommand::NavigatePlayDecisionDiagnostic,
+            .playDecisionDiagnosticSequence = emitted->records.front().sequence,
+        };
+        workspace.ProcessCommand(outputNavigation);
         REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
         const auto &opened = workspace.ViewModel().decisionGraphDocuments.front();
         CHECK(opened.asset == graphAsset);
@@ -528,6 +541,7 @@ namespace {
         CHECK(workspace.ViewModel().playDecisionGraphFocus->fence.revision == opened.revision);
         CHECK(workspace.ViewModel().playDecisionGraphFocus->node == node);
         CHECK_FALSE(workspace.ViewModel().playDecisionGraphUnavailable);
+        CHECK(navigationWarnings.empty());
         const auto previousSelection = workspace.ViewModel().primarySelection;
         EditorWorkspaceViewCommandData navigate{.command = EditorWorkspaceViewCommand::NavigatePlayDecisionProblem,
                                                 .playDecisionNavigation =
@@ -543,6 +557,12 @@ namespace {
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);
         const auto second = play();
         CHECK(second.scene != first.scene);
+        workspace.ProcessCommand(outputNavigation);
+        CHECK_FALSE(workspace.ViewModel().playDecisionGraphFocus);
+        CHECK(workspace.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid");
+        REQUIRE(navigationWarnings.size() == 1);
+        CHECK(navigationWarnings.front().severity == NotificationSeverity::Warning);
+        CHECK(navigationWarnings.front().message == localization.Get("editor", "workspace.global_dock.build_output.source.invalid"));
         workspace.ProcessCommand(graphNavigation);
         CHECK_FALSE(workspace.ViewModel().playDecisionGraphFocus);
         writeGraph("duplicate", Assets::AssetId::FromBytes({0x62}));

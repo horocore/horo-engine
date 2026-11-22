@@ -178,6 +178,9 @@ namespace Horo {
          */
         void Append(BuildOutputRecord record);
 
+        /** @brief Appends a record and returns the exact sequence from the same locked publication. */
+        [[nodiscard]] std::uint64_t AppendWithSequence(BuildOutputRecord record);
+
         /** @copydoc IBuildOutputQuery::SnapshotIfChanged */
         [[nodiscard]] std::optional<BuildOutputSnapshot> SnapshotIfChanged(std::uint64_t knownRevision) const override;
         /** @copydoc IBuildOutputQuery::CaptureOperationTail */

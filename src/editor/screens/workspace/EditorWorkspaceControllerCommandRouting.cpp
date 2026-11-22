@@ -63,6 +63,10 @@ namespace Horo::Editor {
                 NavigatePlayDecisionProblem(*cmd.playDecisionNavigation);
             return;
         }
+        if (cmd.command == EditorWorkspaceViewCommand::NavigatePlayDecisionDiagnostic) {
+            NavigatePlayDecisionDiagnostic(cmd.playDecisionDiagnosticSequence);
+            return;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem) {
             if (cmd.playDecisionGraphNavigation)
                 NavigatePlayDecisionGraphProblem(*cmd.playDecisionGraphNavigation);

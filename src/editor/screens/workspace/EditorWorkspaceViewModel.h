@@ -306,6 +306,7 @@ namespace Horo::Editor {
         BlackboardDocument,
         ApplySourceReview,
         UndoSourceReview,
+        NavigatePlayDecisionDiagnostic,
     };
 
     enum class BottomDockMode {
@@ -806,6 +807,9 @@ namespace Horo::Editor {
         Runtime::EntityRef entity;
     };
 
+    /** @brief Build Output source stage for committed Play Decision problems. */
+    inline constexpr std::string_view PlayDecisionDiagnosticStage = "ai.decision_play";
+
     /** @brief Exact runtime report and semantic source target selected from the Game panel. */
     struct PlayDecisionGraphNavigationRequest final {
         Runtime::SceneRuntimeId scene;
@@ -934,6 +938,7 @@ namespace Horo::Editor {
         SourceDocumentSnapshot sourceReviewRenameUndo;
         SourceDocumentSnapshot sourceReviewDeleteUndo;
         CancellationToken sourceReviewLifetime;
+        std::uint64_t playDecisionDiagnosticSequence{};
     };
 
     /** @brief Pending project-local Content Browser clipboard operation. */
