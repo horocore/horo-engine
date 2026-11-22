@@ -2927,6 +2927,8 @@
     "workspace.game.ai_inspection_omitted_tasks": {"text": "Listelenmeyen çalışan görevler"},
     "workspace.game.ai_inspection_trace": {"text": "Karar yürütme"},
     "workspace.game.ai_inspection_transition": {"text": "Geçiş"},
+    "workspace.game.ai_inspection_utility_consideration": {"text": "Değerlendirme"},
+    "workspace.game.ai_inspection_utility_total": {"text": "Utility skoru"},
     "workspace.game.ai_inspection_trace_overflow": {"text": "Listelenmeyen iz kayıtları"},
     "workspace.game.ai_debug_pause": {"text": "Ajanı duraklat"},
     "workspace.game.ai_debug_step": {"text": "Ajanı tek adım ilerlet"},

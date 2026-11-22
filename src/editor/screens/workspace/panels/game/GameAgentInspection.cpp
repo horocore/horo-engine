@@ -149,7 +149,19 @@ namespace Horo::Editor {
                 DebugButton("ai_debug_clear_breakpoint", state, ClearBreakpoint, command, context);
         }
 
-        /** @brief Draws redacted active nodes and committed transitions from one bounded observation. */
+        /** @brief Formats a normalized consideration or option total from the published trace. */
+        std::string UtilityScoreText(const AI::DecisionStepRecord &record, const ILocalizationService &localization) {
+            const auto text = [&](const std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(localization, key);
+            };
+            const auto label = record.key.IsValid() ? std::format("{} {}", text("ai_inspection_utility_consideration"), record.key.Value())
+                                                    : text("ai_inspection_utility_total");
+            const auto score = record.utilityScore ? std::format("{:.3f}", *record.utilityScore) : text("ai_inspection_unavailable");
+            return std::format("{} {} · {} {} · {} {}", text("ai_problem_graph"), record.occurrence.graph.Value(), text("ai_problem_node"),
+                               record.node.Value(), label, score);
+        }
+
+        /** @brief Draws redacted node, transition and score evidence from one bounded observation. */
         void DrawDecisionTrace(const AI::DecisionStepTrace &trace, const EditorGuiContext &context,
                                const EditorPlayDecisionDebugState *debug = nullptr, EditorWorkspaceViewCommandData *command = nullptr) {
             const auto text = [&](const std::string_view key) -> const std::string & {
@@ -163,7 +175,9 @@ namespace Horo::Editor {
             for (std::size_t index = 0; index < records.size(); ++index) {
                 const auto &record = records[index];
                 using enum AI::DecisionStepRecordKind;
-                if (record.kind == StateMachineTransition) {
+                if (record.kind == UtilityScore) {
+                    line(UtilityScoreText(record, context.localization), Theme::Muted());
+                } else if (record.kind == StateMachineTransition) {
                     line(std::format("{} {} · {} {} · {}", text("ai_problem_graph"), record.occurrence.graph.Value(),
                                      text("ai_inspection_transition"), record.node.Value(), record.transitionCount),
                          Theme::Muted());

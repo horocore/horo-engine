@@ -112,14 +112,18 @@ namespace Horo::AI {
                                                                const std::span<const std::size_t> slots, const EvidenceWriter &writer) {
         auto score = option.priority;
         bool eligible = true;
+        bool withheld = false;
         const auto compensation = option.compensation * (1 - 1.0 / static_cast<double>(option.considerations.size()));
         for (std::size_t index = 0; index < option.considerations.size(); ++index) {
             const auto &consideration = option.considerations[index];
-            auto value = snapshot.ReadBound(slots[index]);
+            const auto slot = slots[index];
+            auto value = snapshot.ReadBound(slot);
             if (value.HasError())
                 return Result<std::optional<double>>::Failure(std::move(value).ErrorValue());
             const auto response = ReadScore(value.Value(), consideration);
-            writer.Append({option.id, consideration.key, response});
+            const bool readAuthorized = snapshot.authorizations_[slot] != nullptr;
+            writer.Append({option.id, consideration.key, readAuthorized ? std::nullopt : response});
+            withheld |= readAuthorized;
             if (!response) {
                 eligible = false;
                 continue;
@@ -127,7 +131,9 @@ namespace Horo::AI {
             const auto adjusted = *response + (1 - *response) * compensation * *response;
             score *= std::lerp(1.0, adjusted, consideration.weight);
         }
-        return Result<std::optional<double>>::Success(eligible && UnitValue(score) ? std::optional{score} : std::nullopt);
+        const auto total = eligible && UnitValue(score) ? std::optional{score} : std::nullopt;
+        writer.Append({option.id, {}, withheld ? std::nullopt : total});
+        return Result<std::optional<double>>::Success(total);
     }
 
     /** @copydoc UtilitySelector::Capture */
@@ -190,7 +196,6 @@ namespace Horo::AI {
             if (score.HasError())
                 return Evaluation::Failure(std::move(score).ErrorValue());
             slots = slots.subspan(count);
-            writer.Append({option.id, {}, score.Value()});
             if (IsBetterScore(score.Value(), result.selection))
                 result.selection = UtilitySelection{option.id, option.action, *score.Value()};
             if (option.action == preferred && IsBetterScore(score.Value(), preference))

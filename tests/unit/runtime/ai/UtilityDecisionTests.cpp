@@ -160,13 +160,17 @@ namespace Horo::AI {
 
             AiWorkBudget global{4};
             const DecisionGraphStepInput input{2, fixture.binding, snapshot.Value(), {}, &agent, &global};
-            SECTION("Current value participates at its own stable key") {
+            SECTION("Current value participates without exposing derived scores in the retained trace") {
                 REQUIRE(instance->StepWithTrace(input, trace).HasValue());
                 REQUIRE(fixture.probe.calls.size() >= 1);
                 CHECK(fixture.probe.calls.front() == "start:5003");
                 REQUIRE(trace.Records().size() >= 4);
+                CHECK(trace.Records()[0].utilityScore == 0.25);
+                CHECK(trace.Records()[1].utilityScore == 0.25);
                 CHECK(trace.Records()[2].key == key);
-                CHECK(trace.Records()[2].utilityScore == 0.875);
+                CHECK_FALSE(trace.Records()[2].utilityScore);
+                CHECK_FALSE(trace.Records()[3].key.IsValid());
+                CHECK_FALSE(trace.Records()[3].utilityScore);
                 CHECK(agent.Remaining() == 0);
                 CHECK(global.Remaining() == 0);
             }

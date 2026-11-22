@@ -54,7 +54,7 @@ namespace Horo::AI {
         DecisionNodeId lastTransition;
         std::uint32_t transitionCount{};    /**< Total for StateMachineStep; one-based commit ordinal for StateMachineTransition. */
         BlackboardKeyId key;                /**< Utility consideration identity; invalid identifies the option total. */
-        std::optional<double> utilityScore; /**< Bounded normalized evidence, never a raw blackboard value. */
+        std::optional<double> utilityScore; /**< Normalized evidence; empty for ineligible or read-authorized scores. */
 
         bool operator==(const DecisionStepRecord &) const = default;
     };

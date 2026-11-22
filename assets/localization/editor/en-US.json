@@ -2927,6 +2927,8 @@
     "workspace.game.ai_inspection_omitted_tasks": {"text": "Additional running tasks"},
     "workspace.game.ai_inspection_trace": {"text": "Decision execution"},
     "workspace.game.ai_inspection_transition": {"text": "Transition"},
+    "workspace.game.ai_inspection_utility_consideration": {"text": "Consideration"},
+    "workspace.game.ai_inspection_utility_total": {"text": "Utility score"},
     "workspace.game.ai_inspection_trace_overflow": {"text": "Omitted trace records"},
     "workspace.game.ai_debug_pause": {"text": "Pause agent"},
     "workspace.game.ai_debug_step": {"text": "Step agent"},

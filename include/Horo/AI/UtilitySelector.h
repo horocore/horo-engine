@@ -48,7 +48,7 @@ namespace Horo::AI {
     struct UtilityScoreRecord final {
         DecisionNodeId option;
         BlackboardKeyId key;
-        std::optional<double> score; /**< Empty if the consideration or option was ineligible. */
+        std::optional<double> score; /**< Empty for ineligible evidence or a score derived from read-authorized values. */
     };
 
     /** @brief One selected stable action, with its finite normalized score. */

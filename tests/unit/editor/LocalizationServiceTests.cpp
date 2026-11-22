@@ -635,6 +635,8 @@ namespace {
                                           "workspace.game.ai_inspection_omitted_tasks",
                                           "workspace.game.ai_inspection_trace",
                                           "workspace.game.ai_inspection_transition",
+                                          "workspace.game.ai_inspection_utility_consideration",
+                                          "workspace.game.ai_inspection_utility_total",
                                           "workspace.game.ai_inspection_trace_overflow",
                                           "workspace.game.ai_debug_pause",
                                           "workspace.game.ai_debug_step",
