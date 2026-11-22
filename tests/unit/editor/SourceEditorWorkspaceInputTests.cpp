@@ -69,8 +69,12 @@ TEST_CASE("Workspace review controls follow the selected source tab at high DPI"
         CHECK(command.command == EditorWorkspaceViewCommand::None);
         return text;
     };
-    CHECK(draw(two).find("Next change") == std::string::npos);
-    CHECK(draw(one.Identity().instance).find("Next change") != std::string::npos);
+    const auto unrelated = draw(two);
+    CHECK(unrelated.find("Next change") == std::string::npos);
+    CHECK(unrelated.find("No language diagnostics for this source revision.") == std::string::npos);
+    const auto reviewed = draw(one.Identity().instance);
+    CHECK(reviewed.find("Next change") != std::string::npos);
+    CHECK(reviewed.find("No language diagnostics for this source revision.") != std::string::npos);
     CHECK(draw(two).find("Next change") == std::string::npos);
     CHECK(draw(one.Identity().instance).find("Dismiss review") != std::string::npos);
     CHECK(one.Text() == original);

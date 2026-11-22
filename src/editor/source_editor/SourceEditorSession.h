@@ -15,6 +15,12 @@ namespace Horo::Editor {
         struct LanguageSourceFocus;
     }  // namespace Language
 
+    /** @brief Error and warning counts for the exact current source behind a review. */
+    struct SourceReviewDiagnosticCounts final {
+        std::size_t errors{};
+        std::size_t warnings{};
+    };
+
     /** @brief One independent source presentation; no document or language authority. */
     struct SourceEditorView final {
         explicit SourceEditorView(SourceEditingViewId identity) : widget(identity) {}
@@ -25,6 +31,11 @@ namespace Horo::Editor {
         void Publish(const SourceDocumentSnapshot &source);
         /** @brief Presents diagnostics for the exact source publication, or clears retired decorations. */
         void PublishDiagnostics(const SourceDocumentSnapshot &source, std::shared_ptr<const Language::LanguageResult> result);
+        /** @brief Returns a read-only baseline for a live review of the supplied source.
+         * @param source The current authoritative source publication.
+         * @return Counts when that exact revision has language evidence and a current review.
+         */
+        [[nodiscard]] std::optional<SourceReviewDiagnosticCounts> ReviewDiagnostics(const SourceDocumentSnapshot &source) const;
         /** @brief Selects an exact language destination once in this presentation. */
         [[nodiscard]] bool ApplyLanguageFocus(const SourceDocumentSnapshot &source,
                                               const std::shared_ptr<const Language::LanguageSourceFocus> &focus);
@@ -35,6 +46,9 @@ namespace Horo::Editor {
         std::shared_ptr<const SourceReviewOverlay> pendingReview;
         std::shared_ptr<const Language::LanguageResult> diagnostics;
         std::weak_ptr<const Language::LanguageSourceFocus> lastLanguageFocus;
+
+    private:
+        std::optional<SourceReviewDiagnosticCounts> diagnosticCounts_;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */

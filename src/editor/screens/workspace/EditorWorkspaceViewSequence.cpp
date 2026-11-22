@@ -16,6 +16,20 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Shows diagnostics of the unchanged source bytes behind an open proposal review. */
+        void DrawSourceReviewDiagnostics(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
+                                         const SourceEditorView &presentation) {
+            if (presentation.widget.ReviewStatus() != SourceReviewStatus::Ready)
+                return;
+            const auto &locale = context.localization;
+            const auto counts = presentation.ReviewDiagnostics(source);
+            const auto text = counts ? std::format("{} · {} {} · {} {}", locale.Get("editor", "workspace.source_review.source_diagnostics"),
+                                                   locale.Get("editor", "workspace.source_review.errors"), counts->errors,
+                                                   locale.Get("editor", "workspace.source_review.warnings"), counts->warnings)
+                                     : locale.Get("editor", "workspace.source_review.diagnostics_unavailable");
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Muted(), context.theme.fonts);
+        }
+
         /** @brief Selects the exact byte range of an active script diagnostic. */
         bool DrawScriptDiagnosticJump(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
                                       const std::shared_ptr<const Language::LanguageResult> &publication, SourceEditorWidget &widget) {
@@ -479,6 +493,7 @@ namespace Horo::Editor {
         const bool scriptFocus = DrawScriptDiagnosticJump(m_context, source, projection, widget);
         DrawSourceLanguageActions(m_context, source, widget, viewModel, outCommand);
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
+        DrawSourceReviewDiagnostics(m_context, source, *presentation);
         const bool focus =
             languageFocus || scriptFocus || m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();

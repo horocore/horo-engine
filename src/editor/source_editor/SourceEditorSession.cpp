@@ -41,16 +41,31 @@ namespace Horo::Editor {
         if (result == diagnostics)
             return;
         std::vector<SourceWidgetDecoration> markers;
+        std::optional<SourceReviewDiagnosticCounts> counts;
         if (result) {
             if (const auto *published = std::get_if<Language::LanguageDiagnostics>(&result->payload)) {
+                counts.emplace();
                 markers.reserve(published->items.size());
-                for (const auto &diagnostic : published->items)
-                    markers.push_back(
-                        {diagnostic.span.start, diagnostic.span.end, DiagnosticStyle(diagnostic.severity), diagnostic.message});
+                for (const auto &diagnostic : published->items) {
+                    const auto style = DiagnosticStyle(diagnostic.severity);
+                    counts->errors += style == SourceWidgetDecorationKind::Error;
+                    counts->warnings += style == SourceWidgetDecorationKind::Warning;
+                    markers.emplace_back(diagnostic.span.start, diagnostic.span.end, style, diagnostic.message);
+                }
             }
         }
-        if (widget.Decorate(source.Revision(), markers))
+        if (widget.Decorate(source.Revision(), markers)) {
             diagnostics = std::move(result);
+            diagnosticCounts_ = counts;
+        }
+    }
+
+    /** @copydoc SourceEditorView::ReviewDiagnostics */
+    std::optional<SourceReviewDiagnosticCounts> SourceEditorView::ReviewDiagnostics(const SourceDocumentSnapshot &source) const {
+        if (widget.ReviewStatus() != SourceReviewStatus::Ready || !diagnostics || !source.IsCurrent() ||
+            !source.SharesStateWith(diagnostics->context.source))
+            return std::nullopt;
+        return diagnosticCounts_;
     }
 
     /** @copydoc SourceEditorView::ApplyLanguageFocus */

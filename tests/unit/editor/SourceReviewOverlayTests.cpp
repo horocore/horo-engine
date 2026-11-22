@@ -1,5 +1,7 @@
 #include "Horo/Editor/EditorTheme.h"
+#include "SourceEditorSession.h"
 #include "SourceReviewOverlay.h"
+#include "editor/language/LspResultProjection.h"
 #include "helpers/editor_ui/SourceEditorWidgetFixture.h"
 
 #include <array>
@@ -101,6 +103,52 @@ TEST_CASE("Source review is isolated by exact publication and retires after typi
     fixture.first.ClearReview();
     CHECK(fixture.first.ReviewStatus() == SourceReviewStatus::None);
     CHECK(updated.Text() == "xalpha");
+}
+
+TEST_CASE("Source review retains language diagnostics only for its current source revision", "[editor][source][review]") {
+    using enum Language::LanguageSeverity;
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "alpha");
+    const auto other = fixture.Open("other.cpp", "alpha");
+    SourceEditorView view{SourceEditingViewId{10}};
+    view.Publish(source);
+    const auto overlay = Overlay(source, {{0, "a", "A"}});
+    REQUIRE(view.widget.PresentReview(overlay));
+    CHECK_FALSE(view.ReviewDiagnostics(source));
+
+    const auto diagnostics = [](const SourceDocumentSnapshot &forSource) {
+        return std::make_shared<const Language::LanguageResult>(
+            Language::LanguageResult{.context = {.source = forSource},
+                                     .payload = Language::LanguageDiagnostics{
+                                         {{{0, 1}, Error, "error"}, {{1, 2}, Warning, "warning"}, {{2, 3}, Hint, "hint"}}}});
+    };
+    view.PublishDiagnostics(source, diagnostics(other));
+    CHECK_FALSE(view.ReviewDiagnostics(source));
+
+    view.PublishDiagnostics(source,
+                            std::make_shared<const Language::LanguageResult>(
+                                Language::LanguageResult{.context = {.source = source}, .payload = Language::LanguageDiagnostics{}}));
+    const auto clean = view.ReviewDiagnostics(source);
+    REQUIRE(clean);
+    CHECK(clean->errors == 0);
+    CHECK(clean->warnings == 0);
+
+    const auto exact = diagnostics(source);
+    view.PublishDiagnostics(source, exact);
+    const auto counts = view.ReviewDiagnostics(source);
+    REQUIRE(counts);
+    CHECK(counts->errors == 1);
+    CHECK(counts->warnings == 1);
+    CHECK_FALSE(view.ReviewDiagnostics(other));
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+
+    const auto change = fixture.documents.Documents().Edit(source.Identity().instance, {source.Revision(), 0, 1, "b"});
+    REQUIRE(change.HasValue());
+    CHECK_FALSE(view.ReviewDiagnostics(source));
+    view.Publish(change.Value());
+    view.PublishDiagnostics(change.Value(), exact);
+    CHECK_FALSE(view.ReviewDiagnostics(change.Value()));
+    CHECK(view.widget.ReviewStatus() == SourceReviewStatus::Conflicted);
 }
 
 TEST_CASE("Source review clips long tooltips and marks an insertion in an empty document", "[editor][source][review]") {
