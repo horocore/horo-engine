@@ -109,12 +109,12 @@ namespace Horo::Editor {
             return InspectionSurfaceScan::BudgetExceeded;
         remainingTriangles -= count;
         for (std::size_t index = 0; index < indices.size(); index += 3) {
-            const auto a = project(indices[index]);
-            const auto b = project(indices[index + 1]);
-            const auto c = project(indices[index + 2]);
-            if (!a || !b || !c)
+            const std::array points{project(indices[index]), project(indices[index + 1]), project(indices[index + 2])};
+            if (!std::ranges::all_of(points, [](const auto &point) {
+                return point.has_value();
+            }))
                 return InspectionSurfaceScan::GeometryUnavailable;
-            const auto hit = MeasureInspectionTriangle(ray, *a, *b, *c);
+            const auto hit = MeasureInspectionTriangle(ray, *points[0], *points[1], *points[2]);
             if (hit && (!nearest || hit->distance < nearest->distance))
                 nearest = hit;
         }
