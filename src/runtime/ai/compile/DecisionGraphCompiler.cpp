@@ -135,8 +135,16 @@ namespace Horo::AI {
     std::optional<std::size_t> CookedDecisionPlan::MaximumDecisionWorkUnits() const noexcept {
         if (occurrences_.size() != 1)
             return std::nullopt;
-        const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graphs_[occurrences_.front().plan].execution);
-        return tree ? std::optional{(*tree)->MaximumDecisionWorkUnits()} : std::nullopt;
+        const auto &execution = graphs_[occurrences_.front().plan].execution;
+        if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&execution))
+            return (*tree)->MaximumDecisionWorkUnits();
+        if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&execution)) {
+            std::size_t actionWork{};
+            for (const auto &action : (*utility)->Actions())
+                actionWork = std::max(actionWork, action->MaximumDecisionWorkUnits());
+            return (*utility)->Selector().MaximumWorkUnits() + actionWork;
+        }
+        return std::nullopt;
     }
 
     Result<bool> DecisionPlanStore::TryActivate(DecisionGraphCompilation candidate) {

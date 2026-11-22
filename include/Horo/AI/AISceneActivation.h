@@ -12,6 +12,7 @@
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/BlackboardInstance.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
 #include "Horo/AI/PerceptionDescriptorRegistry.h"
 #include "Horo/AI/PerceptionMemory.h"
 #include "Horo/Foundation/Time.h"
@@ -21,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -384,7 +386,16 @@ namespace Horo::AI {
         BestEffortQueries
     };
 
-    /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
+    /** @brief Immutable host selection of signed integer Blackboard inputs in model feature order. */
+    struct AiSceneLocalPolicyBinding final {
+        std::shared_ptr<const LocalLearnedPolicy> model;
+        AiCapabilityDescriptorSet tasks;
+        std::vector<BlackboardKeyId> featureKeys;
+    };
+
+    using AiSceneLocalPolicyCatalog = std::map<ControllerTypeId, std::shared_ptr<const AiSceneLocalPolicyBinding>>;
+
+    /** @brief Opt-in fixed-tick execution for supported flat cooked decisions owned by this Scene. */
     struct AiSceneCookedDecisionExecution final {
         JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
         AiTaskSchedulerSettings scheduler;
@@ -392,6 +403,7 @@ namespace Horo::AI {
         std::shared_ptr<IDecisionQueryTaskBinder> queryTasks; /**< Explicit Scene owner binding for authored query tasks. */
         std::shared_ptr<IAiCookedDecisionIntentSink> intents; /**< Explicit owner for deferred decision requests. */
         AiCookedDecisionTiming timing{AiCookedDecisionTiming::Deterministic};
+        std::shared_ptr<const AiSceneLocalPolicyCatalog> localPolicies;
 
         /** @brief Checks that scheduler semantics match the declared feedback authority. */
         [[nodiscard]] bool HasMatchingTiming() const noexcept {

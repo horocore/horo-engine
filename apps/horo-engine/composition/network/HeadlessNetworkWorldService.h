@@ -599,6 +599,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         AI::AiSceneCookedDecisionExecution ConfiguredDecisionExecution() const {
             const auto &input = *owners_->configured;
             auto execution = *input.cookedDecisions->execution;
+            if (!record_->localPolicies.empty())
+                execution.localPolicies = std::make_shared<const CookedSceneLocalPolicyCatalog>(record_->localPolicies);
             if (input.perceptionProject && input.perceptionProject->policy && SelectsReactiveDecisions(*input.perceptionProject->policy)) {
                 execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;

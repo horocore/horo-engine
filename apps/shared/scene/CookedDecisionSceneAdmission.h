@@ -35,9 +35,10 @@ namespace Horo::Application::Internal {
         AI::LocalPolicyCookTarget target;
         AI::AiCapabilityDescriptorSet tasks;
         std::optional<AI::BlackboardSchemaId> blackboard;
+        std::vector<AI::BlackboardKeyId> featureKeys;
     };
 
-    using CookedSceneLocalPolicyCatalog = std::map<AI::ControllerTypeId, std::shared_ptr<const AI::LocalLearnedPolicy>>;
+    using CookedSceneLocalPolicyCatalog = AI::AiSceneLocalPolicyCatalog;
 
     /** @brief Durable selection of a Decision artifact for an initial or explicit prefab controller. */
     struct CookedDecisionSceneBinding final {

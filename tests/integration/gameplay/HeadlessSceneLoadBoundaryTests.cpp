@@ -309,7 +309,7 @@ namespace {
             CHECK(admitted.Value().front().cookedPlan->Root() == graph.asset);
             REQUIRE(policies.contains(controller.controller));
             const auto prior = policies.at(controller.controller);
-            CHECK(prior->Digest() == model.Value().Digest());
+            CHECK(prior->model->Digest() == model.Value().Digest());
             CHECK(AdmitHeadlessCookedControllers(catalog, scene.Value(), input, limits.Value(), {}).HasError());
             const auto requireRejected = [&](const CookedSceneLocalPolicySelection &invalid, const ErrorCodeDescriptor &expected) {
                 auto rejectedInput = input;

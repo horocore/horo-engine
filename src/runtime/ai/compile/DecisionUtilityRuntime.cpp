@@ -91,7 +91,7 @@ namespace Horo::AI {
             runtime.selected = static_cast<std::size_t>(selected - options.begin());
         }
         auto &action = *runtime.actions[*runtime.selected];
-        auto stepped = action.Evaluate(input.tick, input.blackboard, input.current.agent);
+        auto stepped = action.Evaluate(input.tick, input.blackboard, input.current.agent, input.treeResumeReason);
         if (trace_)
             action.AppendTrace(TraceOccurrence(index), *trace_);
         if (stepped.HasError())

@@ -2,6 +2,8 @@
 #include "Horo/AI/DecisionGraphInstance.h"
 #include "Horo/AI/DecisionQueryTask.h"
 
+#include <algorithm>
+#include <bit>
 #include <limits>
 #include <new>
 #include <utility>
@@ -24,15 +26,64 @@ namespace Horo::AI {
             return selected.Value()->blackboard->Snapshot();
         }
 
+        std::size_t ModelWork(const AiSceneLocalPolicyBinding &policy) noexcept {
+            return policy.model->RequiredWork() + policy.featureKeys.size() * std::bit_width(MaximumBlackboardKeys);
+        }
+
+        bool CaptureModelFeatures(const AiSceneLocalPolicyBinding &policy, const BlackboardSnapshot &snapshot,
+                                  const std::span<LocalPolicyFeature> output) {
+            const auto ids = policy.model->Features();
+            for (std::size_t index = 0; index < output.size(); ++index) {
+                const auto value = snapshot.Read(policy.featureKeys[index]);
+                if (value.HasError() || !value.Value())
+                    return false;
+                const auto *scalar = std::get_if<BlackboardScalarValue>(&*value.Value());
+                const auto *integer = scalar ? std::get_if<std::int64_t>(scalar) : nullptr;
+                if (!integer || !std::in_range<std::int16_t>(*integer))
+                    return false;
+                output[index] = {ids[index], static_cast<std::int16_t>(*integer)};
+            }
+            return true;
+        }
+
+        Result<std::shared_ptr<const AiSceneLocalPolicyBinding>> BindModel(const AiSceneCookedDecisionExecution &execution,
+                                                                           const Detail::AgentRuntimeState &agent,
+                                                                           const DecisionCompiledGraph &root) {
+            using Bound = Result<std::shared_ptr<const AiSceneLocalPolicyBinding>>;
+            if (!execution.localPolicies || !agent.record.controller)
+                return Bound::Success({});
+            const auto entry = execution.localPolicies->find(agent.record.controller->controller);
+            if (entry == execution.localPolicies->end())
+                return Bound::Success({});
+            const auto &policy = entry->second;
+            if (!policy || !policy->model)
+                return Bound::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+            if (policy->featureKeys.empty())
+                return Bound::Success({});
+            if (!std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(root.execution) || !agent.schema ||
+                !policy->model->SupportsBlackboard(agent.schema->Identity()) ||
+                policy->featureKeys.size() != policy->model->Features().size())
+                return Bound::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+            const auto keys = agent.schema->Keys();
+            for (const auto id : policy->featureKeys) {
+                const auto key = std::ranges::lower_bound(keys, id, {}, &BlackboardKeyDescriptor::key);
+                if (key == keys.end() || key->key != id || key->kind != BlackboardValueKind::SignedInteger ||
+                    key->cardinality != BlackboardValueCardinality::Scalar)
+                    return Bound::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+            }
+            return Bound::Success(policy);
+        }
+
         /** @brief Flat cooked decisions own their task lease and borrow only a weak exact Scene publication. */
         class ScheduledCookedDecision final : public IAiScheduledDecision {
         public:
             ScheduledCookedDecision(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
                                     std::unique_ptr<DecisionGraphInstance> decision, AgentHandle agent,
                                     std::shared_ptr<IAiCookedDecisionIntentSink> intents, std::vector<PerceptionListenerTypeId> watches,
-                                    bool reactive) noexcept
+                                    bool reactive, std::shared_ptr<const AiSceneLocalPolicyBinding> model,
+                                    const std::size_t graphWork) noexcept
                 : state_(state), decision_(std::move(decision)), agent_(agent), intents_(std::move(intents)), watches_(std::move(watches)),
-                  reactive_(reactive) {}
+                  reactive_(reactive), model_(std::move(model)), graphWork_(graphWork) {}
 
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
                 providerFailure_.reset();
@@ -54,8 +105,9 @@ namespace Horo::AI {
                 auto *capture = state->decisionReplay ? &*state->decisionReplay : nullptr;
                 const bool recording = capture && capture->agent == context.agent && capture->tick == context.tick &&
                                        capture->executor == this && !capture->observed;
-                const auto step = recording ? decision_->StepBudgetedWithTrace(input, budget, *capture->trace, &providerFailure_)
-                                            : decision_->StepBudgeted(input, budget, &providerFailure_);
+                const auto step = model_      ? StepModel(input, budget)
+                                  : recording ? decision_->StepBudgetedWithTrace(input, budget, *capture->trace, &providerFailure_)
+                                              : decision_->StepBudgeted(input, budget, &providerFailure_);
                 if (recording) {
                     const auto revision = input.blackboard.CapturedRevision();
                     if (capture->trace->Header().MatchesObservation(capture->plan->Digest(), context.tick, input.current, revision))
@@ -112,7 +164,34 @@ namespace Horo::AI {
                 return *decision_;
             }
 
+            bool HasModel() const noexcept {
+                return model_ != nullptr;
+            }
+
         private:
+            Result<std::optional<AiTaskState>> StepModel(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
+                const auto modelWork = ModelWork(*model_);
+                const auto total = graphWork_ + modelWork;
+                if (!budget.Consume(total))
+                    return Result<std::optional<AiTaskState>>::Success(std::nullopt);
+                AiWorkBudget graphBudget{graphWork_};
+                const auto &model = *model_->model;
+                std::array<LocalPolicyFeature, LocalLearnedPolicy::MaximumFeatures> features{};
+                const auto output = std::span{features}.first(model_->featureKeys.size());
+                if (!CaptureModelFeatures(*model_, input.blackboard, output))
+                    return decision_->StepBudgeted(input, graphBudget, &providerFailure_);
+                AiWorkBudget inferenceBudget{model.RequiredWork()};
+                const LocalPolicyUtilityInput policy{model,
+                                                     model_->tasks,
+                                                     output,
+                                                     model.Digest(),
+                                                     model.Target(),
+                                                     model.TensorSchemaVersion(),
+                                                     input.blackboard.CapturedRevision(),
+                                                     inferenceBudget};
+                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy);
+            }
+
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
             AgentHandle agent_;
@@ -122,6 +201,8 @@ namespace Horo::AI {
             std::uint64_t evaluationTick_{};
             std::optional<std::uint64_t> nextFixedWake_;
             bool reactive_{};
+            std::shared_ptr<const AiSceneLocalPolicyBinding> model_;
+            std::size_t graphWork_{};
         };
     }  // namespace
 
@@ -150,7 +231,7 @@ namespace Horo::AI {
         if (registered.HasError())
             return Result<void>::Failure(registered.ErrorValue());
         const auto *executor = dynamic_cast<const ScheduledCookedDecision *>(registered.Value());
-        if (!executor || !slot.cookedPlan->IsCurrent())
+        if (!executor || executor->HasModel() || !slot.cookedPlan->IsCurrent())
             return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
         try {
             auto trace = std::make_shared<DecisionStepTrace>();
@@ -310,10 +391,14 @@ namespace Horo::AI {
         auto bounded = decisionExecution_->agent;
         const auto limit = plan->MaximumDecisionWorkUnits();
         if (!limit)
-            return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a flat cooked Behavior Tree."));
-        if (*limit > bounded.workUnitsPerTick)
-            return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+            return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a flat cooked decision."));
         const auto &root = plan->Graphs()[plan->Occurrences().front().plan];
+        auto model = BindModel(*decisionExecution_, agent, root);
+        if (model.HasError())
+            return Output::Failure(std::move(model).ErrorValue());
+        const auto required = *limit + (model.Value() ? ModelWork(*model.Value()) : 0);
+        if (required > bounded.workUnitsPerTick)
+            return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
         if (!root.executionTask.IsValid())
             return Output::Failure(
                 MakeError(AIErrors::TaskContextInvalid, "Scheduled cooked decisions require an authored execution task."));
@@ -348,10 +433,10 @@ namespace Horo::AI {
             auto decision = DecisionGraphInstance::Create(plan, std::move(reservation), operation, decisionExecution_->queryTasks);
             if (decision.HasError())
                 return Output::Failure(decision.ErrorValue());
-            bounded.workUnitsPerTick = *limit;
+            bounded.workUnitsPerTick = required;
             auto executor =
                 std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value(), handle, decisionExecution_->intents,
-                                                          std::move(watches), bounded.intervalTicks == 0);
+                                                          std::move(watches), bounded.intervalTicks == 0, std::move(model).Value(), *limit);
             nextTaskSlot += count + 1;
             return Output::Success({handle, identity, bounded, plan, std::move(executor), cancellation});
         } catch (const std::bad_alloc &) {

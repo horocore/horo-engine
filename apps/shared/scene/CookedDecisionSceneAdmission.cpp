@@ -325,14 +325,21 @@ namespace Horo::Application::Internal {
                                                        "Selected local policy is absent or has the wrong asset type."));
             if (selection.blackboard && (!descriptor.blackboardSchema || descriptor.blackboardSchema->Identity() != selection.blackboard))
                 return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
-            if (sizeof(AI::LocalLearnedPolicy) > remaining)
+            if (selection.featureKeys.size() > AI::LocalLearnedPolicy::MaximumFeatures)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            const auto storage = sizeof(AI::LocalLearnedPolicy) + sizeof(AI::AiSceneLocalPolicyBinding) +
+                                 selection.featureKeys.size() * sizeof(AI::BlackboardKeyId);
+            if (storage > remaining)
                 return Result<void>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
             auto model = AI::LocalLearnedPolicy::DecodeCooked(artifact->payload, artifact->payloadDigest, selection.target, selection.tasks,
                                                               selection.blackboard);
             if (model.HasError())
                 return Result<void>::Failure(std::move(model).ErrorValue());
-            models.emplace(descriptor.controller, std::make_shared<const AI::LocalLearnedPolicy>(std::move(model).Value()));
-            remaining -= sizeof(AI::LocalLearnedPolicy);
+            models.emplace(descriptor.controller,
+                           std::make_shared<const AI::AiSceneLocalPolicyBinding>(
+                               AI::AiSceneLocalPolicyBinding{std::make_shared<const AI::LocalLearnedPolicy>(std::move(model).Value()),
+                                                             selection.tasks, selection.featureKeys}));
+            remaining -= storage;
             return Result<void>::Success();
         }
 

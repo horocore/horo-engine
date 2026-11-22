@@ -367,6 +367,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                    "Editor Decision Play scheduler mode must match the authored Perception watches."));
         AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
+        if (!models.empty())
+            execution.localPolicies = std::make_shared<const CookedSceneLocalPolicyCatalog>(models);
         execution.scheduler.mode = mode;
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;

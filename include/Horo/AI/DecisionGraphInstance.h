@@ -109,6 +109,10 @@ namespace Horo::AI {
          * unchanged. Already revoked work is retired even when the slice has no allowance.
          */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget);
+        /** @brief Advances one fully reserved root Utility slice with optional model preference. */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedWithLocalPolicy(const DecisionGraphStepInput &input,
+                                                                                     AiWorkBudget &budget,
+                                                                                     const LocalPolicyUtilityInput &policy);
         /** @brief Advances a budgeted step and optionally reports the first raw task callback error.
          * @param input Exact committed observation for the requested tick.
          * @param budget Scheduler-owned allowance for the current slice.
@@ -164,7 +168,8 @@ namespace Horo::AI {
         /** @brief Admits one scheduler slice before writing optional evidence. */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedImpl(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                                           DecisionStepTrace *trace,
-                                                                          std::optional<DecisionProviderFailure> *providerFailure);
+                                                                          std::optional<DecisionProviderFailure> *providerFailure,
+                                                                          const LocalPolicyUtilityInput *policy = nullptr);
         /** @brief Initializes and seals optional evidence around an already admitted execution. */
         [[nodiscard]] Result<AiTaskState> StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
                                                        std::optional<DecisionProviderFailure> *providerFailure = nullptr,
@@ -187,6 +192,7 @@ namespace Horo::AI {
         /** @brief Requires host allowances only for closures that contain Utility. */
         [[nodiscard]] bool UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept;
         [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
+        [[nodiscard]] const BehaviorTreeInstance *ActiveFlatAction() const noexcept;
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index, IDecisionQueryTaskBinder *queryTasks);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);

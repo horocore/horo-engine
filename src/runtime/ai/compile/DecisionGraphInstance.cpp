@@ -200,18 +200,25 @@ namespace Horo::AI {
 
     /** @copydoc DecisionGraphInstance::HasPendingTaskWake */
     bool DecisionGraphInstance::HasPendingTaskWake() const noexcept {
-        if (!Available() || evaluating_ || occurrences_.size() != 1)
-            return false;
-        const auto &root = *occurrences_.front();
-        return root.active && root.tree && root.tree->HasPendingTaskWake();
+        const auto *action = ActiveFlatAction();
+        return action && action->HasPendingTaskWake();
     }
 
     /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
     std::optional<std::uint64_t> DecisionGraphInstance::NextFixedWakeTick() const noexcept {
+        const auto *action = ActiveFlatAction();
+        return action ? action->NextFixedWakeTick() : std::nullopt;
+    }
+
+    const BehaviorTreeInstance *DecisionGraphInstance::ActiveFlatAction() const noexcept {
         if (!Available() || evaluating_ || occurrences_.size() != 1)
-            return std::nullopt;
+            return nullptr;
         const auto &root = *occurrences_.front();
-        return root.active && root.tree ? root.tree->NextFixedWakeTick() : std::nullopt;
+        if (!root.active)
+            return nullptr;
+        if (root.utility && root.utility->selected)
+            return root.utility->actions[*root.utility->selected].get();
+        return root.tree.get();
     }
 
     /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
@@ -366,6 +373,12 @@ namespace Horo::AI {
         return StepBudgeted(input, budget, nullptr);
     }
 
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedWithLocalPolicy(const DecisionGraphStepInput &input,
+                                                                                          AiWorkBudget &budget,
+                                                                                          const LocalPolicyUtilityInput &policy) {
+        return StepBudgetedImpl(input, budget, nullptr, nullptr, &policy);
+    }
+
     /** @copydoc DecisionGraphInstance::StepBudgeted */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                                            std::optional<DecisionProviderFailure> *providerFailure) {
@@ -382,18 +395,25 @@ namespace Horo::AI {
     /** @copydoc DecisionGraphInstance::StepBudgetedImpl */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedImpl(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                                                DecisionStepTrace *trace,
-                                                                               std::optional<DecisionProviderFailure> *providerFailure) {
+                                                                               std::optional<DecisionProviderFailure> *providerFailure,
+                                                                               const LocalPolicyUtilityInput *policy) {
         using Outcome = Result<std::optional<AiTaskState>>;
         const auto work = plan_->MaximumDecisionWorkUnits();
         if (!work)
             return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable, "Cooked decision shape does not support scheduler slices."));
-        if (auto valid = ValidateStep(input); valid.HasError())
+        auto observation = input;
+        AiWorkBudget utilityWork{*work};
+        if (usesUtility_) {
+            observation.utilityAgentBudget = &utilityWork;
+            observation.utilityGlobalBudget = &utilityWork;
+        }
+        if (auto valid = ValidateStep(observation); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         if (providerFailure)
             providerFailure->reset();
         if (Available() && !budget.Consume(*work))
             return Outcome::Success(std::nullopt);
-        auto evaluated = StepRecorded(input, trace, providerFailure);
+        auto evaluated = StepRecorded(observation, trace, providerFailure, policy);
         if (providerFailure && (binding_.operation.IsCancellationRequested() || !providers_->CanAdmit()))
             providerFailure->reset();
         if (evaluated.HasError())

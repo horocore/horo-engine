@@ -96,6 +96,11 @@ namespace Horo::AI {
 
         /** @brief Returns validated options in the declared stable order. @return Immutable policies. */
         [[nodiscard]] std::span<const UtilityOption> Options() const noexcept;
+
+        [[nodiscard]] std::size_t MaximumWorkUnits() const noexcept {
+            return workUnits_;
+        }
+
         /** @brief Measures owned selector storage without counting its borrowed schema lease. @return Logical storage. */
         [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
 

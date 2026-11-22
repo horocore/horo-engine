@@ -2666,7 +2666,11 @@ the owner. An explicitly fed root Utility decision accepts a model preference
 only for an eligible authored action in its current Blackboard snapshot.
 Inference uses a separate work allowance, and missing, stale, cancelled or
 ineligible proposals leave normal Utility scoring in charge. A running action
-retains its existing task lifecycle.
+retains its existing task lifecycle. Fixed-tick Scene execution binds explicit
+signed-integer Blackboard keys in feature order. Invalid or missing values
+leave selection with Utility scoring. The scheduler admits the combined bound
+for feature reads, inference, Utility scoring and the selected task before
+executing the slice.
 
 ### Runtime Task & Lifecycle Alignment
 

@@ -152,6 +152,19 @@ namespace Horo::AI {
         }
 
         [[nodiscard]] std::size_t RequiredWork() const noexcept;
+
+        [[nodiscard]] std::span<const LocalPolicyFeatureId> Features() const noexcept {
+            return std::span{features_}.first(featureCount_);
+        }
+
+        [[nodiscard]] LocalPolicyTargetId Target() const noexcept {
+            return target_;
+        }
+
+        [[nodiscard]] std::uint32_t TensorSchemaVersion() const noexcept {
+            return tensorSchemaVersion_;
+        }
+
         /** @brief Runs the bounded inference against exact typed features. Fall back at the caller on a typed failure. */
         [[nodiscard]] LocalPolicyProposal Infer(const LocalPolicyRequestIdentity &identity, LocalPolicyTargetId target,
                                                 const Sha256Digest &expectedModel, std::uint32_t tensorSchemaVersion,

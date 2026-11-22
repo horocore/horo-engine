@@ -1359,6 +1359,72 @@ namespace Horo::AI {
             CHECK(fixture.probe.resumes == 1);
         }
 
+        TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",
+                  "[ai][decision_reservation][local-policy]") {
+            const bool outOfRange = GENERATE(false, true);
+            Fixture fixture;
+            auto source = UtilitySource();
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            auto &utility = std::get<UtilityDecisionSource>(source.body);
+            const auto scalar = utility.requirements.front().key;
+            const auto feature = MakeIdentity<BlackboardKeyId>(104);
+            const std::array keys{BlackboardKeyDescriptor{.key = scalar,
+                                                          .kind = BlackboardValueKind::Scalar,
+                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}},
+                                  BlackboardKeyDescriptor{.key = feature,
+                                                          .kind = BlackboardValueKind::SignedInteger,
+                                                          .defaultValue = BlackboardValue{
+                                                              BlackboardScalarValue{std::int64_t{outOfRange ? 32768 : 12}}}}};
+            auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(schema.HasValue());
+            fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+            const auto fallback = utility.options.front().option.action;
+            const auto learned = MakeIdentity<TaskId>(5003);
+            auto preference = utility.options.front();
+            preference.option.id = preference.provider.id = Node(3);
+            preference.option.action = learned;
+            preference.option.priority = 0.5;
+            utility.options.push_back(std::move(preference));
+            const auto plan = fixture.Compile(std::span{&source, 1}, 1);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            const auto graphWork = plan->MaximumDecisionWorkUnits();
+            REQUIRE(graphWork);
+
+            AiCapabilityDescriptorRegistry declarations;
+            REQUIRE(declarations.Register({learned, SchemaId()}).HasValue());
+            const auto tasks = declarations.Freeze();
+            const auto target = MakeIdentity<LocalPolicyTargetId>(1);
+            const std::array targets{target};
+            const std::array features{MakeIdentity<LocalPolicyFeatureId>(1)};
+            const std::array<std::int16_t, 1> weights{1};
+            const std::array rows{LocalPolicyRowSource{learned, 0, weights}};
+            auto model = LocalLearnedPolicy::Cook({MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows},
+                                                  {target, true, sizeof(LocalLearnedPolicy), 3}, tasks, SchemaId());
+            REQUIRE(model.HasValue());
+            const auto binding = std::make_shared<const AiSceneLocalPolicyBinding>(
+                AiSceneLocalPolicyBinding{std::make_shared<const LocalLearnedPolicy>(std::move(model).Value()), tasks, {feature}});
+            const auto policies =
+                std::make_shared<const AiSceneLocalPolicyCatalog>(AiSceneLocalPolicyCatalog{{scene.descriptor.controller, binding}});
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            const auto publication = TestSupport::Publish(runtime, scene);
+            TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint(
+                                         {.jobs = jobs, .agent = {.workUnitsPerTick = *graphWork}, .localPolicies = policies}),
+                                     AIErrors::SchedulerBudgetExhausted);
+            CHECK(fixture.probe.factories == 0);
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .localPolicies = policies}).HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            for (const std::uint64_t tick : {1, 2}) {
+                REQUIRE(scheduler->EvaluateAtDecision(tick).Value().failed == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
+            }
+            REQUIRE_FALSE(fixture.probe.calls.empty());
+            CHECK(fixture.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
+            CHECK(fixture.probe.starts == 1);
+            CHECK(fixture.probe.resumes == 1);
+        }
+
         TEST_CASE("Scene-owned composed decisions retire tasks before reading revoked snapshots",
                   "[unit][ai][scene][decision_reservation][composition]") {
             Fixture fixture;
