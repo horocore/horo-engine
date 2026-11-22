@@ -40,7 +40,7 @@ namespace Horo::Runtime {
 namespace Horo::Render {
     struct RenderCapabilitySnapshot;
     class RenderFrontend;
-}
+}  // namespace Horo::Render
 
 namespace Horo::Editor {
     class EditorViewportRendererVulkan;
