@@ -13,7 +13,8 @@ add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
 target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
 target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication
-    PRIVATE HoroEngine::PackageGameplayHost HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets)
+    PRIVATE HoroEngine::PackageGameplayHost HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets
+        HoroEngine::ProjectMutationGuard)
 
 # One application-owned signature document codec, shared by the package CLI and
 # explicit installed-host bootstrap. The staged interface is never installed.

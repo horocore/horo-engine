@@ -1,10 +1,12 @@
 #include "Horo/Application/ProjectAssetRegistrySource.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageProjectHost.h"
 
 #include <fstream>
+#include <functional>
 #include <type_traits>
 
 namespace {
@@ -30,6 +32,26 @@ namespace {
         Duration MonotonicNow() const override {
             return now;
         }
+    };
+
+    /** @brief Runs an observation at the start of an otherwise native asset capture. */
+    class ObservedAssetSource final : public Assets::IAssetRegistrySource {
+    public:
+        ObservedAssetSource(const Assets::IAssetRegistrySource &source, std::function<void()> observe)
+            : source_(source), observe_(std::move(observe)) {}
+
+        Result<Assets::AssetRegistrySourceManifest> Capture() const override {
+            observe_();
+            return source_.Capture();
+        }
+
+        Result<std::string> ReadSidecar(std::string_view path, std::chrono::steady_clock::time_point deadline) const override {
+            return source_.ReadSidecar(path, deadline);
+        }
+
+    private:
+        const Assets::IAssetRegistrySource &source_;
+        std::function<void()> observe_;
     };
 
     class MetadataFiles final : public DurableFileSystem {
@@ -216,6 +238,16 @@ namespace {
             CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets).HasError());
             REQUIRE(std::filesystem::exists(journal));
             CHECK(fixture.Read("packages.json") != oldRequest);
+            {
+                const Editor::ProjectMutationCoordinator mutations{files};
+                const auto sceneSave = mutations.TryAcquire({policy.projectRoot, Editor::ProjectMutationOwner::Save, "scene-save"});
+                REQUIRE(sceneSave.HasValue());
+                const auto blocked = PreparePackageProject(policy, files, {});
+                REQUIRE(blocked.HasError());
+                CHECK(blocked.ErrorValue().code.Value() == "project.migration.locked");
+                CHECK(std::filesystem::exists(journal));
+                CHECK(fixture.Read("packages.json") != oldRequest);
+            }
             REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
             CHECK(fixture.Read("packages.json") == oldRequest);
             CHECK(fixture.Read("packages.lock") == oldLock);
@@ -237,6 +269,38 @@ namespace {
         CHECK(current.Value().application.portableRequest->Dependencies().empty());
         CHECK(current.Value().application.lockedPlan->Packages().empty());
         CHECK_FALSE(std::filesystem::exists(journal));
+    }
+
+    TEST_CASE("Package removal fences authored writes and detects external edits during inventory", "[packages][application][host]") {
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const Editor::ProjectMutationCoordinator mutations{fixture.files};
+        const Editor::ProjectMutationRequest save{policy.projectRoot, Editor::ProjectMutationOwner::Save, "scene-save"};
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto edited = fixture.Read("packages.json") + "\n";
+        const ObservedAssetSource observed{*assets, [&mutations, &save, &fixture, &edited] {
+            CHECK(mutations.TryAcquire(save).HasError());
+            fixture.Write("packages.json", edited);
+        }};
+        {
+            const auto sceneSave = mutations.TryAcquire(save);
+            REQUIRE(sceneSave.HasValue());
+            const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, observed);
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == "project.migration.locked");
+            CHECK(fixture.Read("packages.json") != edited);
+        }
+        const auto conflict = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, observed);
+        REQUIRE(conflict.HasError());
+        CHECK(conflict.ErrorValue().code.Value() == "packages.host.metadata_conflict");
+        CHECK(fixture.Read("packages.json") == edited);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+        CHECK(mutations.TryAcquire(save).HasValue());
     }
 
     TEST_CASE("Package metadata recovery leaves an independently edited request intact", "[packages][application][host]") {

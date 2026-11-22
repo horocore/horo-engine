@@ -76,6 +76,7 @@ namespace Horo::Application::Internal {
      * @param package Direct request to withdraw. @param files Host filesystem authority.
      * @param assets Read source bound to the same project's current assets.
      * @pre The caller has checked other references and executable ownership for this snapshot and approved this removal.
+     * @details Acquires the shared project mutation lease before recovery or reference scans and retains it through publication.
      * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                                   const PreparedPackageProject &expected,

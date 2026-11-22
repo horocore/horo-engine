@@ -1,3 +1,4 @@
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Packages/PackageRestoreErrors.h"
 #include "PackageProjectSession.h"
@@ -75,6 +76,8 @@ namespace Horo::Application::Internal {
             bool Matches(const PreparedPackageProject &expected) const {
                 return Digest(request) == expected.requestDocumentDigest && Digest(lock) == expected.lockDigest;
             }
+
+            bool operator==(const MetadataDocuments &) const = default;
 
             bool Fits(const Packages::PackageLockfileLimits &limits) const {
                 return request.size() <= RequestLimit && lock.size() <= limits.documentBytes;
@@ -187,8 +190,11 @@ namespace Horo::Application::Internal {
             return Result<bool>::Success(entry.Value().has_value());
         }
 
-        Result<ExclusiveFileLock> AcquireMetadata(const std::filesystem::path &journal, DurableFileSystem &files) {
-            return files.TryAcquireExclusive(journal.parent_path() / "package-metadata.lock", "horo.package-metadata");
+        /** @brief Serializes repair and removal with authored Scene, asset and migration writers across processes. */
+        Result<Editor::ProjectMutationLease> AcquireProjectMutation(const std::filesystem::path &metadata, DurableFileSystem &files,
+                                                                    std::string operation) {
+            const Editor::ProjectMutationCoordinator mutations{files};
+            return mutations.TryAcquire({metadata.parent_path(), Editor::ProjectMutationOwner::Package, std::move(operation)});
         }
 
         enum class RecoveryAction {
@@ -262,10 +268,21 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(pending.ErrorValue());
             if (!pending.Value())
                 return Result<void>::Success();
-            if (const auto lease = AcquireMetadata(path, files); lease.HasValue())
+            if (const auto lease = AcquireProjectMutation(metadata, files, "package-metadata-recovery"); lease.HasValue())
                 return RecoverMetadata(metadata, limits, files, cancellation);
             else
                 return Result<void>::Failure(lease.ErrorValue());
+        }
+
+        /** @brief Detects external file edits made during the inventory even if the writer bypassed the project lease. */
+        Result<void> RecheckRemovalBase(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                        const MetadataDocuments &previous) {
+            const auto current = ReadDocuments(metadata, limits, {});
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value() != previous)
+                return Result<void>::Failure(MetadataConflict());
+            return Result<void>::Success();
         }
 
         /** @brief Rechecks the request after the lock read and detects an in-flight paired publication. */
@@ -389,7 +406,7 @@ namespace Horo::Application::Internal {
         const auto &metadata = directory.Value();
         if (metadata.parent_path() != expected.application.restore.projectRoot)
             return Publication::Failure(MetadataConflict());
-        auto acquired = AcquireMetadata(JournalPath(metadata), files);
+        auto acquired = AcquireProjectMutation(metadata, files, "package-removal");
         if (acquired.HasError())
             return Publication::Failure(acquired.ErrorValue());
         const auto lease = std::move(acquired).Value();
@@ -403,6 +420,8 @@ namespace Horo::Application::Internal {
         const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, assets);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
+        if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value()); stable.HasError())
+            return Publication::Failure(stable.ErrorValue());
         return CommitDocuments(metadata, previous.Value(), next.Value(), files);
     }
 }  // namespace Horo::Application::Internal
