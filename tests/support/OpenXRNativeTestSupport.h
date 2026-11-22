@@ -36,6 +36,7 @@ namespace Horo::Tests::OpenXR {
         bool synthesisExtension{};
         bool spaceWarpExtension{};
         bool refuseReprojectionInstance{};
+        std::string_view refusedInstanceExtension;
         std::span<const std::string_view> extraExtensions;
         std::uint32_t extraExtensionVersion{1};
         bool gazeExtension{};
@@ -140,6 +141,9 @@ namespace Horo::Tests::OpenXR {
             for (std::uint32_t index = 0; index < info->enabledExtensionCount; ++index)
                 active->enabledExtensions.emplace_back(info->enabledExtensionNames[index]);
             const auto result = Record("instance");
+            if (XR_SUCCEEDED(result) && !active->refusedInstanceExtension.empty() &&
+                std::ranges::find(active->enabledExtensions, active->refusedInstanceExtension) != active->enabledExtensions.end())
+                return XR_ERROR_EXTENSION_NOT_PRESENT;
             if (XR_SUCCEEDED(result) && active->refuseReprojectionInstance &&
                 std::ranges::any_of(active->enabledExtensions, [](std::string_view name) {
                 return name == XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME || name == XR_FB_SPACE_WARP_EXTENSION_NAME;

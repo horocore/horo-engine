@@ -527,8 +527,8 @@ namespace Horo::XR::OpenXRInternal {
                                                      std::uint32_t &availableCount) const;
         /** @brief Returns exactly the provider-owned optional extension requests, in selection order. */
         [[nodiscard]] static std::span<const NativeExtensionRequest> ReprojectionExtensionRequests() noexcept;
-        /** @brief Removes exact enabled optional reprojection names before the sole create-refusal retry. */
-        [[nodiscard]] bool OmitRefusedReprojectionExtensions() noexcept;
+        /** @brief Publishes the required extension closure before the sole extension-refusal retry. */
+        [[nodiscard]] bool OmitOptionalExtensions() noexcept;
         [[nodiscard]] Result<void> CreateInstance(const NativeDiscoveryRequest &request);
         [[nodiscard]] Result<void> ResolveInstance();
         [[nodiscard]] Result<void> SelectSystem();
@@ -640,6 +640,7 @@ namespace Horo::XR::OpenXRInternal {
         struct ExtensionEvidence final {
             std::array<char, XR_MAX_EXTENSION_NAME_SIZE> name{};
             NativeExtensionAdmission admission;
+            NativeExtensionState fallbackState{};
         };
 
         std::array<XrExtensionProperties, MaximumNativeExtensions> discoveredExtensions_{};

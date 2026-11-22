@@ -159,6 +159,60 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.script.liveInstances == 0);
     }
 
+    TEST_CASE("OpenXR extension refusal retries with the exact transitive required closure", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view optional = "XR_TEST_optional";
+        constexpr std::string_view required = "XR_TEST_required";
+        constexpr std::string_view dependency = "XR_TEST_dependency";
+        constexpr std::string_view leaf = "XR_TEST_leaf";
+        constexpr std::string_view core = "XR_TEST_core";
+        constexpr std::array published{optional, required, dependency, leaf};
+        constexpr std::array needsDependency{dependency};
+        constexpr std::array needsLeaf{leaf};
+        constexpr std::array needsOptional{optional};
+        fixture.script.extraExtensions = published;
+        fixture.script.extensionCount += static_cast<std::uint32_t>(published.size());
+        auto discovery = Discovery(fixture);
+        const std::array extensions{NativeExtensionRequest{.name = optional},
+                                    NativeExtensionRequest{.name = required, .required = true, .dependencies = needsDependency},
+                                    NativeExtensionRequest{.name = dependency, .dependencies = needsLeaf},
+                                    NativeExtensionRequest{.name = leaf},
+                                    NativeExtensionRequest{.name = core,
+                                                           .dependencies = needsOptional,
+                                                           .promotedToCore = discovery.requestedApi}};
+        discovery.extensions = extensions;
+
+        SECTION("an optional refusal keeps baseline and removes a now-invalid promoted route") {
+            fixture.script.refusedInstanceExtension = optional;
+            REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+            const auto attempt = discovery.selection.attempt;
+            for (const auto name : {required, dependency, leaf}) {
+                CHECK(fixture.owner.ReadExtensionAdmission(attempt, name).Value().state == NativeExtensionState::Enabled);
+                CHECK(std::ranges::find(fixture.script.enabledExtensions, name) != fixture.script.enabledExtensions.end());
+            }
+            const auto omitted = fixture.owner.ReadExtensionAdmission(attempt, optional).Value();
+            CHECK(omitted.state == NativeExtensionState::ProviderFailed);
+            CHECK(omitted.discoveredVersion == 1);
+            CHECK(std::ranges::find(fixture.script.enabledExtensions, optional) == fixture.script.enabledExtensions.end());
+            const auto promoted = fixture.owner.ReadExtensionAdmission(attempt, core).Value();
+            CHECK(promoted.state == NativeExtensionState::DependencyMissing);
+            CHECK_FALSE(promoted.coreVersion.has_value());
+            REQUIRE(fixture.owner.PrepareSession(Preparation(fixture)).HasValue());
+            const auto session = fixture.Request();
+            REQUIRE(fixture.owner.Activate(session).HasValue());
+            RequireFailureIdentity(fixture.owner.RegisterFeatureProvider(session.candidate, {optional, "xrEndFrame"}),
+                                   XRErrors::OperationUnavailable);
+        }
+        SECTION("refusal of a transitive required dependency remains terminal") {
+            fixture.script.refusedInstanceExtension = leaf;
+            REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasError());
+            CHECK(std::ranges::find(fixture.script.enabledExtensions, leaf) != fixture.script.enabledExtensions.end());
+            CHECK(fixture.script.liveInstances == 0);
+        }
+        CHECK(std::ranges::count(fixture.script.calls, "instance") == 2);
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
+
     TEST_CASE("OpenXR observed system identity survives session retirement but not native rediscovery", "[unit][xr][native]") {
         Fixture fixture;
         CHECK(fixture.owner.PreparedSystem(Preparation(fixture)).HasError());

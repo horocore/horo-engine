@@ -216,6 +216,7 @@ namespace Horo::XR::OpenXRInternal {
             NativeExtensionAdmission evidence;
             bool decided{};
             bool visiting{};
+            bool requiredForFallback{};
         };
 
         /** @brief Checks whether either the exact extension or its declared core route was admitted. */
@@ -248,6 +249,36 @@ namespace Horo::XR::OpenXRInternal {
             return Available(entry.evidence.state);
         }
 
+        /** @brief Preserves the dependency closure of one required admitted route for baseline retry. */
+        void KeepRequiredDependencies(std::span<const NativeExtensionRequest> requests, std::span<PlannedExtension> plan,
+                                      std::size_t index) noexcept {
+            auto &entry = plan[index];
+            if (entry.requiredForFallback)
+                return;
+            entry.requiredForFallback = true;
+            for (const auto name : requests[index].dependencies) {
+                const auto found = std::ranges::find(requests, name, &NativeExtensionRequest::name);
+                if (found != requests.end())
+                    KeepRequiredDependencies(requests, plan, static_cast<std::size_t>(found - requests.begin()));
+            }
+        }
+
+        /** @brief Rechecks core dependencies against the reduced extension set without mutating live evidence. */
+        void PlanExtensionFallback(std::span<const NativeExtensionRequest> requests, std::span<PlannedExtension> plan,
+                                   std::string_view graphics) noexcept {
+            for (std::size_t index = 0; index < requests.size(); ++index)
+                if (requests[index].required)
+                    KeepRequiredDependencies(requests, plan, index);
+            for (auto &entry : plan) {
+                entry.decided = false;
+                entry.visiting = false;
+                if (entry.evidence.state == NativeExtensionState::Enabled && !entry.requiredForFallback)
+                    entry.evidence.state = NativeExtensionState::ProviderFailed;
+            }
+            for (std::size_t index = 0; index < plan.size(); ++index)
+                static_cast<void>(ResolveDependencies(requests, plan, index, graphics));
+        }
+
         /** @brief Preserves distinct reasons for required extension rejection before native instance creation. */
         Error ExtensionRejection(NativeExtensionState state) {
             switch (state) {
@@ -261,6 +292,8 @@ namespace Horo::XR::OpenXRInternal {
                     return MakeError(XRErrors::OperationUnsupported, "Native extension is unsupported by the selected host");
                 case NativeExtensionState::Discovered:
                     return MakeError(XRErrors::OperationUnsupported, "Native extension was discovered without provider admission");
+                case NativeExtensionState::ProviderFailed:
+                    return MakeError(XRErrors::OperationUnavailable, "Optional native extension was omitted after an instance refusal");
                 default:
                     return MakeError(XRErrors::OperationUnsupported, "Native extension is absent");
             }
@@ -522,6 +555,9 @@ namespace Horo::XR::OpenXRInternal {
                     return enabled;
             }
         }
+        PlanExtensionFallback(requested, entries, bindingName);
+        for (std::size_t index = 0; index < entries.size(); ++index)
+            extensionEvidence_[index].fallbackState = entries[index].evidence.state;
         return Result<void>::Success();
     }
 
@@ -536,20 +572,20 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
-    /** @copydoc OpenXRNativeSession::OmitRefusedReprojectionExtensions */
-    bool OpenXRNativeSession::OmitRefusedReprojectionExtensions() noexcept {
-        const auto reprojection = ReprojectionExtensionRequests();
+    /** @copydoc OpenXRNativeSession::OmitOptionalExtensions */
+    bool OpenXRNativeSession::OmitOptionalExtensions() noexcept {
         const auto enabled = std::span{names_.extensions}.first(names_.extensionCount);
         const auto omitted = std::ranges::remove_if(enabled, [&](std::string_view name) {
-            return std::ranges::find(reprojection, name, &NativeExtensionRequest::name) != reprojection.end();
+            const auto slot = ExtensionSlot(name);
+            return slot < extensionEvidenceCount_ && extensionEvidence_[slot].fallbackState != NativeExtensionState::Enabled;
         });
         if (omitted.empty())
             return false;
         names_.extensionCount = static_cast<std::uint32_t>(omitted.begin() - enabled.begin());
-        for (const auto &route : reprojection) {
-            const auto slot = ExtensionSlot(route.name);
-            if (slot < extensionEvidenceCount_ && extensionEvidence_[slot].admission.state == NativeExtensionState::Enabled)
-                extensionEvidence_[slot].admission.state = NativeExtensionState::ProviderFailed;
+        for (auto &record : std::span{extensionEvidence_}.first(extensionEvidenceCount_)) {
+            record.admission.state = record.fallbackState;
+            if (record.fallbackState != NativeExtensionState::PromotedToCore)
+                record.admission.coreVersion.reset();
         }
         return true;
     }
@@ -582,8 +618,7 @@ namespace Horo::XR::OpenXRInternal {
 #endif
         };
         auto result = create();
-        if (result == XR_ERROR_EXTENSION_NOT_PRESENT && candidate == XR_NULL_HANDLE && request.optionalReprojection &&
-            OmitRefusedReprojectionExtensions()) {
+        if (result == XR_ERROR_EXTENSION_NOT_PRESENT && candidate == XR_NULL_HANDLE && OmitOptionalExtensions()) {
             info.enabledExtensionCount = names_.extensionCount;
             result = create();
         }
