@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <stop_token>
 #include <utility>
@@ -33,6 +34,14 @@ namespace Horo::Editor {
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
         using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
+        using SceneReviewClock = std::chrono::steady_clock;
+
+        /** @brief One preview tied to the exact project attachment and disclosed count. */
+        struct SceneQueryReview final {
+            std::size_t count;
+            std::uint64_t projectGeneration;
+            SceneReviewClock::time_point expires;
+        };
 
         struct PatchPreview final {
             std::uint64_t turn;
@@ -248,6 +257,7 @@ namespace Horo::Editor {
 
             void OnPresentationHidden(EditorWorkspaceViewCommandData &) override {
                 textInput_.Reset();
+                sceneQueryReview_.reset();
             }
 
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
@@ -280,7 +290,7 @@ namespace Horo::Editor {
                 textFieldActive_ = false;
                 DrawProvider(locale, fonts);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
-                ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_);
+                ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_ || sceneQueryReview_);
                 static_cast<void>(DrawTextField("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale, fonts);
@@ -342,6 +352,7 @@ namespace Horo::Editor {
                     contextLifetime_->RequestCancellation();
                 contextLifetime_.reset();
                 contextPreview_.reset();
+                sceneQueryReview_.reset();
                 plainReplay_.reset();
                 sceneQuery_.reset();
                 activeSource_ = {};
@@ -406,7 +417,7 @@ namespace Horo::Editor {
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "endpoint"), Theme::Text(), fonts);
-                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || contextPreview_);
+                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || contextPreview_ || sceneQueryReview_);
                 if (DrawTextField("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
@@ -435,6 +446,10 @@ namespace Horo::Editor {
             }
 
             void DrawSendActions(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                if (sceneQueryReview_) {
+                    DrawSceneQueryReview(locale, fonts);
+                    return;
+                }
                 if (contextPreview_) {
                     DrawContextReview(locale);
                     return;
@@ -468,12 +483,34 @@ namespace Horo::Editor {
                     PrepareSceneSelectionReview();
                     return;
                 }
-                const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
-                if (count.has_value()) {
-                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "scene_count") + " " + std::to_string(*count),
-                                    Theme::Text(), fonts);
-                    if (Button(locale, "ask_with_scene_count", ready))
-                        Send(prompt_, count);
+                const auto count = sceneCount_ && !contextProject_.empty() ? sceneCount_() : std::nullopt;
+                if (count && Button(locale, "scene_query_review", ready))
+                    sceneQueryReview_ = SceneQueryReview{*count, contextGeneration_, SceneReviewClock::now() + std::chrono::minutes{1}};
+            }
+
+            /** @brief Displays only host-defined tool details and flushes a stale or denied preview before dispatch. */
+            void DrawSceneQueryReview(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                const auto review = *sceneQueryReview_;
+                if (review.expires <= SceneReviewClock::now() || review.projectGeneration != contextGeneration_ || !sceneCount_ ||
+                    sceneCount_() != std::optional{review.count}) {
+                    sceneQueryReview_.reset();
+                    status_ = "context_stale";
+                    return;
+                }
+                const auto width = ImGui::GetContentRegionAvail().x;
+                Ui::WrappedText(width, LocalSceneCountTool, Theme::Text(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, "scene_query_arguments"), Theme::Muted(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, "scene_query_scope") + " " + contextProject_, Theme::Muted(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, "scene_query_impact"), Theme::Muted(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, "scene_count") + " " + std::to_string(review.count), Theme::Text(), fonts);
+                if (Button(locale, "ask_with_scene_count", CanSendPrompt())) {
+                    sceneQueryReview_.reset();
+                    Send(prompt_, review.count);
+                    return;
+                }
+                if (Button(locale, "scene_query_deny", true)) {
+                    sceneQueryReview_.reset();
+                    status_ = "scene_query_denied";
                 }
             }
 
@@ -1405,6 +1442,7 @@ namespace Horo::Editor {
             std::uint64_t contextGeneration_{};
             std::optional<CancellationSource> contextLifetime_;
             std::optional<EditorLocalAgentContext> contextPreview_;
+            std::optional<SceneQueryReview> sceneQueryReview_;
             std::shared_ptr<BackgroundTurn> background_;
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;

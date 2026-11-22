@@ -7,7 +7,6 @@
 
 namespace Horo::Agent {
     namespace {
-        constexpr std::string_view SceneToolName = "scene.inspect";
         constexpr std::string_view SceneToolDescription = "Read the object count approved by the editor user for this turn.";
         constexpr auto Owner = Mcp::McpOwnerContext::Background;
         using Json = nlohmann::json;
@@ -33,7 +32,7 @@ namespace Horo::Agent {
             if (const auto trusted = authorization->SetTrust({}, 1, true); trusted.HasError())
                 return Outcome::Failure(trusted.ErrorValue());
             const auto registry = std::make_shared<Mcp::McpToolRegistry>(authorization);
-            const auto revision = registry->Publish({{.descriptor = {.id = {std::string{SceneToolName}},
+            const auto revision = registry->Publish({{.descriptor = {.id = {std::string{LocalSceneCountTool}},
                                                                      .description = std::string{SceneToolDescription},
                                                                      .inputSchema = input,
                                                                      .outputSchema = {{"type", "object"},
@@ -87,7 +86,7 @@ namespace Horo::Agent {
         const auto tools = static_cast<std::uint32_t>(ModelFeature::Tools);
         config.enabledFeatures.bits |= tools;
         request.requiredFeatures.bits |= tools;
-        request.tools.emplace_back(std::string{SceneToolName}, std::string{SceneToolDescription}, input.dump());
+        request.tools.emplace_back(std::string{LocalSceneCountTool}, std::string{SceneToolDescription}, input.dump());
         auto provider = CreateOllamaModelProvider(std::move(config));
         AgentTurnRuntime runtime;
         return runtime.Run(*provider, &bridge.Value(), turnId, std::move(request), {.maximumToolCalls = 1}, stop, nullptr, {}, observeTool);

@@ -198,6 +198,61 @@ namespace {
         }
     }
 
+    TEST_CASE("Scene query approval discloses the exact count and retires a denied or changed review", "[editor][agent][gui]") {
+        std::size_t count = 3;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.sceneObjectCount = [&] {
+                return count;
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", "http://127.0.0.1:11434");
+        fixture.Enter("##Model", "local-test");
+        fixture.Enter("##Prompt", "Count the objects");
+        fixture.Activate("###ask_with_scene_count");
+        CHECK(fixture.DrawnText().find("Stop") == std::string::npos);
+        fixture.Activate("###scene_query_review");
+        const auto review = fixture.DrawnText();
+        CHECK(review.find("scene.inspect") != std::string::npos);
+        CHECK(review.find("Arguments: none") != std::string::npos);
+        CHECK(review.find("layout-test") != std::string::npos);
+        CHECK(review.find("Only the displayed count can be sent to the local model.") != std::string::npos);
+        CHECK(review.find("Current scene objects 3") != std::string::npos);
+        fixture.Activate("###scene_query_deny");
+        CHECK(fixture.DrawnText().find("Scene object count query was denied.") != std::string::npos);
+        CHECK(fixture.DrawnText().find("scene.inspect") == std::string::npos);
+
+        fixture.Activate("###scene_query_review");
+        fixture.Draw(420);
+        ++count;
+        fixture.Activate("###ask_with_scene_count");
+        CHECK(fixture.DrawnText().find("scene.inspect") == std::string::npos);
+        CHECK(fixture.DrawnText().find("Stop") == std::string::npos);
+        fixture.Activate("###scene_query_review");
+        CHECK(fixture.DrawnText().find("Current scene objects 4") != std::string::npos);
+    }
+
+    TEST_CASE("An explicitly allowed scene query runs once against the disclosed count", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US", [](PanelContext &context) {
+            context.sceneObjectCount = [] {
+                return std::size_t{3};
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-approved-tool");
+        fixture.Enter("##Prompt", "Count the objects");
+        fixture.Activate("###scene_query_review");
+        CHECK(fixture.DrawnText().find("Stop") == std::string::npos);
+        fixture.Activate("###ask_with_scene_count");
+        REQUIRE(Await([&] {
+            const auto text = fixture.DrawnText();
+            return text.find("Three objects") != std::string::npos && text.find("Scene object count query completed.") != std::string::npos;
+        }));
+    }
+
     TEST_CASE("A real local model reply survives dock hiding and completes while hidden", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");

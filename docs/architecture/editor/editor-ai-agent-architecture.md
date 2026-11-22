@@ -543,6 +543,13 @@ round submits any tool. Tool execution keeps the controller's approval check,
 and termination of the turn cancels a still-pending exact operation. The
 runtime does not retry provider requests or publish partial conversation history.
 
+For the local scene count tool, the chat composer presents the tool, its empty
+argument list, the current project and the exact count before sending a turn.
+The user may deny the review or approve one read-only call for that turn. The
+composer drops the review when it is hidden, the project is detached, the
+observed count changes, or the review expires. The worker receives only the
+approved count and owns the bounded, single-use tool session.
+
 ## Internal IDE Communication
 
 The agent integration uses three distinct channels. They must not be collapsed

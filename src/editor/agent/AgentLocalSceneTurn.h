@@ -4,6 +4,9 @@
 #include "Horo/Security/SecureMemory.h"
 
 namespace Horo::Agent {
+    /** @brief Host-registered tool presented by the editor's scene count approval. */
+    inline constexpr std::string_view LocalSceneCountTool = "scene.inspect";
+
     /** @brief Runs a local worker turn with one explicitly approved, immutable scene object count.
      * @param config Loopback endpoint configuration. @param request Turn without preexisting tool declarations.
      * @param turnId Exact host turn identifier. @param objectCount Value approved by the workspace user.
