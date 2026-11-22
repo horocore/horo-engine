@@ -556,6 +556,9 @@ namespace Horo::Editor {
         }
 
         void ProcessCommand(const EditorWorkspaceViewCommandData &cmd);
+
+        /** @brief Stages the existing activation command for a registered panel, honoring its saved dock placement. */
+        void StagePanelActivation(std::string_view panelId, WorkspaceDockArea fallback, EditorWorkspaceViewCommandData &command) const;
         /** @brief Releases Play debugger control when the inspector was absent from the current draw. */
         void SetPlayDecisionInspectorVisibility(std::optional<AI::AgentHandle> agent);
         void UpdateFps(float fps);

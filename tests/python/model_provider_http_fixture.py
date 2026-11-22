@@ -159,14 +159,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(first)
         self.wfile.flush()
         (gate / "started").touch()
+        if not self.wait_for_release(gate):
+            return
+        self.wfile.write(final)
+        self.wfile.flush()
+        (gate / "finished").touch()
+
+    def wait_for_release(self, gate):
         deadline = time.monotonic() + 12
         while not (gate / "release").exists():
             if time.monotonic() >= deadline or self.server.release_pending.wait(timeout=0.02):
                 self.close_connection = True
-                return
-        self.wfile.write(final)
-        self.wfile.flush()
-        (gate / "finished").touch()
+                return False
+        return True
 
     def hold_local_response(self, begin_stream):
         self.close_connection = True
@@ -189,6 +194,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_records(["{}"], status=400)
             return
         if len(messages) == 1:
+            if messages[0].get("content") == "Hold the approved scene query":
+                gate = self.server.chat_gate / "scene-query"
+                gate.mkdir(exist_ok=True)
+                (gate / "started").touch()
+                if not self.wait_for_release(gate):
+                    return
             frames = [{"message": {"tool_calls": [{"function": {"name": "scene.inspect", "arguments": {}}}]}},
                       {"done": True, "eval_count": 2}]
         elif (len(messages) == 3 and messages[1].get("tool_calls", [{}])[0].get("function", {}).get("name") == "scene.inspect"

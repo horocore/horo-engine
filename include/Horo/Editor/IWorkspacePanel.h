@@ -64,6 +64,7 @@ namespace Horo::Editor {
     struct SourceContextRange;
     struct EditorWorkspaceViewCommandData;
     struct EditorWorkspaceViewModel;
+    struct WorkspaceMcpAuditReference;
 
     namespace Proposals {
         class ChangeSet;
@@ -128,6 +129,8 @@ namespace Horo::Editor {
         std::function<bool(const CancellationToken &, EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};
         /** @brief Reads the current workspace's source transaction outcome and undo availability. */
         std::function<Proposals::SourceTransactionStatus()> sourceReviewTransaction{};
+        /** @brief Stages presentation of one exact redacted MCP operation in the workspace dock. */
+        std::function<void(const WorkspaceMcpAuditReference &, EditorWorkspaceViewCommandData &)> requestMcpAudit{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

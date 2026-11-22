@@ -964,6 +964,8 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "scene_query_cancelled",
                                "scene_query_timeout",
                                "scene_query_failed",
+                               "scene_query_audit",
+                               "scene_query_revoke",
                                "ask_with_scene_count",
                                "tools_unsupported",
                                "history_review",

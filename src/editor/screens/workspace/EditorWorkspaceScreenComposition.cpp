@@ -22,6 +22,7 @@
 #include "PCGPreviewWorkspace.h"
 #include "ScriptModuleHostServices.h"
 #include "editor/input/EditorInputActions.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/source_editor/SourceReviewApplication.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 
@@ -240,6 +241,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .sourceReviewTransaction =
                 [this] {
             return controller_->SourceReviews().Status();
+        },
+            .requestMcpAudit =
+                [this, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}](const WorkspaceMcpAuditReference &reference,
+                                                                                           EditorWorkspaceViewCommandData &command) {
+            if (lifetime.expired() || command.command != EditorWorkspaceViewCommand::None)
+                return;
+            for (const auto &panel : contributions_.panels.GetAllPanels()) {
+                if (auto *dock = dynamic_cast<GlobalDockPanel *>(panel.get()); dock && dock->FocusMcpAudit(reference)) {
+                    controller_->StagePanelActivation(dock->GetId(), dock->GetDefaultDockArea(), command);
+                    return;
+                }
+            }
         },
         };
         contributions_.panels.AttachAll(panelContext);

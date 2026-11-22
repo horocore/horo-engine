@@ -105,6 +105,15 @@ namespace Horo::Editor {
         m_controlError = false;
         m_revision = 0;
         m_rows.clear();
+        m_audit.reset();
+        m_paused = false;
+        m_search.fill('\0');
+        m_filter = Filter::All;
+    }
+
+    /** @copydoc GlobalDockMcpPane::FocusAudit */
+    void GlobalDockMcpPane::FocusAudit(const WorkspaceMcpAuditReference reference) noexcept {
+        m_audit = reference;
         m_paused = false;
         m_search.fill('\0');
         m_filter = Filter::All;
@@ -161,12 +170,20 @@ namespace Horo::Editor {
         const auto metrics = ResolveGlobalDockPaneMetrics();
         const auto &fonts = context.theme.fonts;
         DrawGlobalDockToolbarSurface(origin, width, metrics.toolbarHeight);
+        const bool linked = m_audit.has_value();
         const std::array actions{
-            GlobalDockToolbarChipProps{.id = "McpAll", .label = Text(context, "filter.all"), .active = m_filter == Filter::All},
+            GlobalDockToolbarChipProps{.id = "McpAll",
+                                       .label = Text(context, "filter.all"),
+                                       .active = m_filter == Filter::All && !linked,
+                                       .disabled = linked},
             GlobalDockToolbarChipProps{.id = "McpApprovals",
                                        .label = Text(context, "filter.approvals"),
-                                       .active = m_filter == Filter::Approvals},
-            GlobalDockToolbarChipProps{.id = "McpErrors", .label = Text(context, "filter.errors"), .active = m_filter == Filter::Errors},
+                                       .active = m_filter == Filter::Approvals && !linked,
+                                       .disabled = linked},
+            GlobalDockToolbarChipProps{.id = "McpErrors",
+                                       .label = Text(context, "filter.errors"),
+                                       .active = m_filter == Filter::Errors && !linked,
+                                       .disabled = linked},
             GlobalDockToolbarChipProps{.id = "McpPause", .label = Text(context, m_paused ? "resume" : "pause"), .active = m_paused},
             GlobalDockToolbarChipProps{.id = "McpExport", .label = Text(context, "copy"), .disabled = m_rows.empty()},
         };
@@ -179,8 +196,10 @@ namespace Horo::Editor {
         const float factor = std::clamp((width * 0.76F - gaps) / total, 0.05F, 1.0F);
         const float searchWidth = ResolveGlobalDockSearchWidth(width, total * factor + gaps);
         const float y = origin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
+        ImGui::BeginDisabled(linked);
         float x = DrawGlobalDockSearchControl({origin.x + metrics.toolbarPaddingX, y}, searchWidth, "##McpSearch", m_search,
                                               Text(context, "search"), fonts);
+        ImGui::EndDisabled();
         constexpr std::array filters{Filter::All, Filter::Approvals, Filter::Errors};
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const float actionWidth = widths[index] * factor;
@@ -198,6 +217,8 @@ namespace Horo::Editor {
 
     /** @copydoc GlobalDockMcpPane::Matches */
     bool GlobalDockMcpPane::Matches(const Row &row, const EditorGuiContext &context) const {
+        if (m_audit)
+            return *m_audit == WorkspaceMcpAuditReference{{row.principal, row.session, row.generation}, row.operation};
         if (m_filter == Filter::Approvals && !row.event.starts_with("approval."))
             return false;
         if (m_filter == Filter::Errors && !IsError(row.status))
@@ -268,6 +289,11 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0F, 0.0F});
         ImGui::BeginChild("##McpRows", {width, std::max(1.0F, height)}, false, ImGuiWindowFlags_NoSavedSettings);
+        if (m_audit) {
+            const auto clear = Text(context, "audit.show_all") + "###McpClearAudit";
+            if (Ui::Button({.label = clear.c_str()}))
+                m_audit.reset();
+        }
         DrawSession(ImGui::GetContentRegionAvail().x, context);
         const auto header = ImGui::GetCursorScreenPos();
         const float content = std::max(1.0F, width - metrics.contentPadding * 2.0F);
@@ -282,13 +308,24 @@ namespace Horo::Editor {
             DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), fonts.sansCompact, Theme::TextPx::Caption(), {columns[index], y},
                                       {columns[index + 1], bottom}, Theme::Muted(), Text(context, keys[index]));
         ImGui::Dummy({width, metrics.tableHeaderHeight});
-        if (m_rows.empty())
-            DrawGlobalDockWrappedText(width, Text(context, m_query ? "empty" : "unavailable"), GlobalDockTone::Neutral, fonts);
-        for (const auto &row : m_rows)
-            if (Matches(row, context))
-                DrawRow(row, width, columns, context);
+        DrawHistory(width, columns, context);
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
+    }
+
+    /** @copydoc GlobalDockMcpPane::DrawHistory */
+    void GlobalDockMcpPane::DrawHistory(const float width, const std::array<float, 6> &columns, const EditorGuiContext &context) const {
+        bool drewRow = false;
+        for (const auto &row : m_rows) {
+            if (!Matches(row, context))
+                continue;
+            DrawRow(row, width, columns, context);
+            drewRow = true;
+        }
+        if (!drewRow) {
+            const auto *label = m_audit ? "audit.empty" : m_query ? "empty" : "unavailable";
+            DrawGlobalDockWrappedText(width, Text(context, label), GlobalDockTone::Neutral, context.theme.fonts);
+        }
     }
 
     /** @copydoc GlobalDockMcpPane::DrawRow */

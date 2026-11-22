@@ -53,6 +53,17 @@ namespace Horo::Agent {
             return true;
         }
 
+        /** @brief Notifies presentation once per admitted operation without affecting execution. */
+        void ObserveOperation(const std::function<void(std::uint64_t)> &observer, const std::uint64_t operation) noexcept {
+            if (!observer)
+                return;
+            try {
+                observer(operation);
+            } catch (...) {
+                // Terminal behavior and cancellation are independent of presentation.
+            }
+        }
+
         /** @brief Decodes terminal controller status, with no outcome until the owner settles the operation. */
         std::optional<Result<Json>> ReadToolOutcome(Json value) {
             using namespace Mcp::McpErrors;
@@ -73,9 +84,9 @@ namespace Horo::Agent {
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */
     AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project,
-                               std::function<Result<void>()> pump)
+                               std::function<Result<void>()> pump, std::function<void(std::uint64_t)> observeOperation)
         : adapter_(std::move(adapter)), session_(adapter_ ? adapter_->Session() : Mcp::McpSessionHandle{}), project_(std::move(project)),
-          pump_(std::move(pump)) {}
+          pump_(std::move(pump)), observeOperation_(std::move(observeOperation)) {}
 
     /** @copydoc AgentTurnMcp::ValidArguments */
     bool AgentTurnMcp::ValidArguments(const std::string_view arguments) const {
@@ -125,8 +136,11 @@ namespace Horo::Agent {
             }
             if (state.HasError())
                 return state;
+            const bool accepted = operation == 0;
             if (!ReadOperationId(state.Value(), operation))
                 return Call::Failure(MakeError(ToolOutputInvalid));
+            if (accepted)
+                ObserveOperation(observeOperation_, operation);
             if (auto outcome = ReadToolOutcome(std::move(state).Value()))
                 return std::move(*outcome);
             if (pump_) {

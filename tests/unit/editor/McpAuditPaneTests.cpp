@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
@@ -11,14 +12,15 @@ namespace {
     using namespace Horo::Editor;
 
     /** @brief A host-produced record with an unrelated private field the view must ignore. */
-    Log::StructuredLogRecord Audit(std::string event, std::string status, std::string tool, const std::uint64_t operation) {
+    Log::StructuredLogRecord Audit(std::string event, std::string status, std::string tool, const std::uint64_t operation,
+                                   const WorkspaceMcpSessionKey key = {7, 3, 2}) {
         return {.category = "mcp.audit",
                 .message = std::move(event),
                 .context = "private-ambient-marker",
                 .fields = {{"schema_version", std::uint64_t{1}},
-                           {"principal_id", std::uint64_t{7}},
-                           {"session_id", std::uint64_t{3}},
-                           {"session_generation", std::uint64_t{2}},
+                           {"principal_id", key.principal},
+                           {"session_id", key.session},
+                           {"session_generation", key.generation},
                            {"operation_id", operation},
                            {"approval_id", std::uint64_t{0}},
                            {"elapsed_ms", std::int64_t{12}},
@@ -147,5 +149,37 @@ namespace {
         CHECK(controls.status.requests.empty());
         fixture.PressSessionAction("###McpRevokeSession");
         CHECK(controls.status.revision.session.principal == 0);
+    }
+
+    TEST_CASE("A linked MCP operation resumes history and excludes reused IDs in other sessions", "[mcp][editor][gui]") {
+        AuditPaneFixture fixture;
+        fixture.log.Append(Audit("operation.finished", "failed", "other.principal", 3, {8, 3, 2}));
+        fixture.log.Append(Audit("operation.finished", "failed", "other.session", 3, {7, 4, 2}));
+        fixture.log.Append(Audit("operation.finished", "failed", "other.generation", 3, {7, 3, 4}));
+        fixture.log.Append(Audit("operation.finished", "failed", "other.operation", 4));
+        fixture.Draw();
+        fixture.Press("McpErrors");
+        fixture.Press("McpPause");
+        fixture.pane.FocusAudit({{7, 3, 2}, 3});
+        fixture.Draw();
+        fixture.Press("McpExport");
+        CHECK(fixture.clipboard.find("operation.finished") == std::string::npos);
+        fixture.log.Append(Audit("operation.finished", "succeeded", "scene.inspect", 3));
+        fixture.Press("McpExport");
+        CHECK(fixture.clipboard.find("7,3,2,3,0,operation.finished,scene.inspect,succeeded") != std::string::npos);
+        CHECK(fixture.clipboard.find("other.") == std::string::npos);
+        fixture.PressSessionAction("###McpClearAudit");
+        fixture.Press("McpExport");
+        CHECK(fixture.clipboard.find("other.principal") != std::string::npos);
+        CHECK(fixture.clipboard.find("scene.inspect") != std::string::npos);
+    }
+
+    TEST_CASE("Opening an MCP audit link selects the built-in dock pane", "[mcp][editor][gui]") {
+        GlobalDockPanel panel;
+        CHECK(panel.ActiveTab() == GlobalDockTab::Assets);
+        CHECK_FALSE(panel.FocusMcpAudit({{7, 3, 2}, 0}));
+        CHECK(panel.ActiveTab() == GlobalDockTab::Assets);
+        REQUIRE(panel.FocusMcpAudit({{7, 3, 2}, 4}));
+        CHECK(panel.ActiveTab() == GlobalDockTab::Mcp);
     }
 }  // namespace

@@ -34,6 +34,8 @@ namespace Horo::Editor {
         void Attach(const Log::IStructuredLogQuery *query, IWorkspaceMcpControls *controls = nullptr) noexcept;
         /** @brief Drops the workspace query and all cached presentation state. */
         void Detach() noexcept;
+        /** @brief Reveals only records for the exact operation and resumes live history. */
+        void FocusAudit(WorkspaceMcpAuditReference reference) noexcept;
         /** @brief Draws the filtered history and its local export action. */
         void Draw(const ImVec2 &contentOrigin, float contentWidth, const EditorGuiContext &context);
 
@@ -72,6 +74,8 @@ namespace Horo::Editor {
         void DrawRequest(const WorkspaceMcpRequest &request, float width, const EditorGuiContext &context);
         /** @brief Lays out the audit columns and presents the admitted rows. */
         void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
+        /** @brief Draws the filtered records or the appropriate empty state. */
+        void DrawHistory(float width, const std::array<float, 6> &columns, const EditorGuiContext &context) const;
         /** @brief Draws a validated row using bounded column clipping. */
         void DrawRow(const Row &row, float width, const std::array<float, 6> &columns, const EditorGuiContext &context) const;
         /** @brief Applies the shared display and export filter. */
@@ -86,6 +90,7 @@ namespace Horo::Editor {
         bool m_controlError{};
         std::uint64_t m_revision{};
         std::vector<Row> m_rows;
+        std::optional<WorkspaceMcpAuditReference> m_audit;
         Filter m_filter{Filter::All};
         bool m_paused{};
     };

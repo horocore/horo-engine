@@ -90,6 +90,8 @@ namespace Horo::Editor {
 
         /** @brief Selects a registered pane by stable identity. */
         [[nodiscard]] bool ActivatePane(std::string_view paneId);
+        /** @brief Selects the built-in MCP pane and filters it to the exact logged operation. */
+        [[nodiscard]] bool FocusMcpAudit(const WorkspaceMcpAuditReference &reference);
 
     private:
         struct RegisteredPane {

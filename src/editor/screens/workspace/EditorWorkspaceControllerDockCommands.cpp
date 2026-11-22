@@ -174,14 +174,20 @@ namespace Horo::Editor {
             return false;
         }
 
-        [[nodiscard]] EditorWorkspaceViewCommandData MakeRegionActivationCommand(const std::string_view panelId,
-                                                                                 const ActivityLayoutRegion &region) {
-            EditorWorkspaceViewCommandData command;
+        /** @brief Stages dock activation while retaining independent per-frame observations. */
+        void StageRegionActivation(const std::string_view panelId, const ActivityLayoutRegion &region,
+                                   EditorWorkspaceViewCommandData &command) {
             command.command = EditorWorkspaceViewCommand::ChangeActivePanel;
             command.targetIndex = static_cast<int>(region.area);
             command.stringPayload = std::string(panelId);
             command.sideDockSlot = region.sideSlot;
             command.bottomDockSlot = region.bottomSlot;
+        }
+
+        [[nodiscard]] EditorWorkspaceViewCommandData MakeRegionActivationCommand(const std::string_view panelId,
+                                                                                 const ActivityLayoutRegion &region) {
+            EditorWorkspaceViewCommandData command;
+            StageRegionActivation(panelId, region, command);
             return command;
         }
     }  // namespace
@@ -192,6 +198,16 @@ namespace Horo::Editor {
                                     panelId == m_viewModel.activeRightTopPanelId || panelId == m_viewModel.activeRightBottomPanelId ||
                                     panelId == m_viewModel.activeBottomPanelId || panelId == m_viewModel.activeBottomLeftPanelId ||
                                     panelId == m_viewModel.activeBottomRightPanelId || panelId == m_viewModel.activeDocumentPanelId);
+    }
+
+    /** @copydoc EditorWorkspaceController::StagePanelActivation */
+    void EditorWorkspaceController::StagePanelActivation(const std::string_view panelId, const WorkspaceDockArea fallback,
+                                                         EditorWorkspaceViewCommandData &command) const {
+        if (command.command != EditorWorkspaceViewCommand::None || IsPanelActive(panelId))
+            return;
+        const auto slot = m_viewModel.activityBarLayout.FindSlot(panelId);
+        const auto region = slot ? RegionForActivitySlot(*slot) : std::nullopt;
+        StageRegionActivation(panelId, region.value_or(ActivityLayoutRegion{.area = fallback}), command);
     }
 
     void EditorWorkspaceController::RemovePanelFromDock(const std::string_view panelId, const WorkspaceDockArea area) {

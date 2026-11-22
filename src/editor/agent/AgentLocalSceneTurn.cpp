@@ -24,9 +24,18 @@ namespace Horo::Agent {
             const std::size_t count_;
         };
 
+        /** @brief Owns the exact principal for one turn, including out-of-band revocation. */
+        struct ApprovedSceneSession {
+            std::shared_ptr<Mcp::McpAuthorization> authorization;
+            std::shared_ptr<const Mcp::McpAuthority> principal;
+            AgentTurnMcp bridge;
+        };
+
         /** @brief Authenticates an embedded session scoped to one immutable result and this worker. */
-        Result<AgentTurnMcp> OpenSceneTool(std::size_t count, const Json &input, std::shared_ptr<Security::SecureRandomSource> entropy) {
-            using Outcome = Result<AgentTurnMcp>;
+        Result<ApprovedSceneSession> OpenSceneTool(std::size_t count, const Json &input,
+                                                   std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                   const LocalSceneAuditObserver &observeAudit) {
+            using Outcome = Result<ApprovedSceneSession>;
             using namespace std::chrono_literals;
             auto authorization = std::make_shared<Mcp::McpAuthorization>(std::move(entropy));
             if (const auto trusted = authorization->SetTrust({}, 1, true); trusted.HasError())
@@ -61,34 +70,49 @@ namespace Horo::Agent {
             if (principal.HasError())
                 return Outcome::Failure(principal.ErrorValue());
             admission.authority = std::move(principal).Value();
+            const auto authority = admission.authority;
+            const auto auditPrincipal = authority->AuditIdentity();
             auto embedded = Mcp::McpInProcessAdapter::Start(std::move(sessions).Value(), std::move(admission));
             if (embedded.HasError())
                 return Outcome::Failure(embedded.ErrorValue());
-            return Outcome::Success(AgentTurnMcp{std::move(embedded).Value(), {}, [controller = std::move(configured)] {
+            const auto session = embedded.Value()->Session();
+            std::function<void(std::uint64_t)> observeOperation;
+            if (observeAudit)
+                observeOperation = [observeAudit, auditPrincipal, session](const std::uint64_t operation) {
+                    observeAudit({auditPrincipal, session.id, session.generation, operation});
+                };
+            AgentTurnMcp bridge{std::move(embedded).Value(), {}, [controller = std::move(configured)] {
                 const auto result = controller->Pump(Owner);
                 return result.HasValue() ? Result<void>::Success() : Result<void>::Failure(result.ErrorValue());
-            }});
+            }, std::move(observeOperation)};
+            return Outcome::Success({std::move(authorization), authority, std::move(bridge)});
         }
     }  // namespace
 
     /** @copydoc RunApprovedLocalSceneTurn */
     AgentTurnResult RunApprovedLocalSceneTurn(ModelProviderConfig config, ModelRequest request, std::uint64_t turnId,
                                               std::size_t objectCount, std::shared_ptr<Security::SecureRandomSource> entropy,
-                                              std::stop_token stop, const AgentToolActivityObserver &observeTool) {
+                                              std::stop_token stop, const AgentToolActivityObserver &observeTool,
+                                              const LocalSceneAuditObserver &observeAudit) {
         if (!request.tools.empty() || turnId == 0)
             return {AgentTurnStatus::InvalidRequest};
         if (const auto supported = ConfirmOllamaModelTools(config, request.model, stop); !supported.Succeeded())
             return {.status = AgentTurnStatus::ProviderFailed, .providerError = supported.error->code};
         const Json input = {{"type", "object"}, {"additionalProperties", false}};
-        const auto bridge = OpenSceneTool(objectCount, input, std::move(entropy));
-        if (bridge.HasError())
+        const auto session = OpenSceneTool(objectCount, input, std::move(entropy), observeAudit);
+        if (session.HasError())
             return {AgentTurnStatus::ToolDenied};
+        const auto &admitted = session.Value();
+        const std::stop_callback revoke{stop, [&admitted] {
+            admitted.authorization->Revoke(admitted.principal);
+        }};
         const auto tools = static_cast<std::uint32_t>(ModelFeature::Tools);
         config.enabledFeatures.bits |= tools;
         request.requiredFeatures.bits |= tools;
         request.tools.emplace_back(std::string{LocalSceneCountTool}, std::string{SceneToolDescription}, input.dump());
         auto provider = CreateOllamaModelProvider(std::move(config));
         AgentTurnRuntime runtime;
-        return runtime.Run(*provider, &bridge.Value(), turnId, std::move(request), {.maximumToolCalls = 1}, stop, nullptr, {}, observeTool);
+        return runtime.Run(*provider, &admitted.bridge, turnId, std::move(request), {.maximumToolCalls = 1}, stop, nullptr, {},
+                           observeTool);
     }
 }  // namespace Horo::Agent

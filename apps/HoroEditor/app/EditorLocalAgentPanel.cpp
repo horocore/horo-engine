@@ -11,6 +11,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Platform/SecureRandom.h"
 
 #include <algorithm>
@@ -92,7 +93,26 @@ namespace Horo::Editor {
             TimedOut,
             Failed
         };
-        using SceneQueryProgress = std::atomic<SceneQueryPhase>;
+
+        /** @brief One worker publishes a receipt at most once. The editor reads the immutable value after acquire. */
+        struct SceneQueryProgress final {
+            void Publish(const LocalSceneAuditReference receipt) noexcept {
+                audit = {{receipt.principal, receipt.session, receipt.generation}, receipt.operation};
+                ready.store(true, std::memory_order_release);
+            }
+
+            [[nodiscard]] std::optional<WorkspaceMcpAuditReference> ReadAudit() const noexcept {
+                if (!ready.load(std::memory_order_acquire))
+                    return std::nullopt;
+                return audit;
+            }
+
+            std::atomic<SceneQueryPhase> phase{SceneQueryPhase::Idle};
+
+        private:
+            WorkspaceMcpAuditReference audit;
+            std::atomic_bool ready{};
+        };
 
         /** @brief Projects only the settled tool status, with no provider content or MCP result bytes. */
         SceneQueryPhase ScenePhase(const AgentToolActivity &activity) {
@@ -156,7 +176,9 @@ namespace Horo::Editor {
                 return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
                                                  Platform::CreateNativeSecureRandomSource(), stop,
                                                  [&sceneQuery](const AgentToolActivity activity) {
-                    sceneQuery->store(ScenePhase(activity), std::memory_order_relaxed);
+                    sceneQuery->phase.store(ScenePhase(activity), std::memory_order_relaxed);
+                }, [&sceneQuery](const LocalSceneAuditReference receipt) {
+                    sceneQuery->Publish(receipt);
                 });
             auto provider = CreateOllamaModelProvider(std::move(config));
             if (!request)
@@ -230,6 +252,7 @@ namespace Horo::Editor {
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
                 captureEditorDiagnostics_ = context.captureEditorDiagnostics;
+                requestMcpAudit_ = context.requestMcpAudit;
                 buildOutput_ = context.buildOutputQuery;
                 gameplayBuilds_ = context.gameplayBuilds;
                 if (context.projectFileRoot)
@@ -294,11 +317,12 @@ namespace Horo::Editor {
                 static_cast<void>(DrawTextField("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale, fonts);
-                if (Busy() && Button(locale, "stop", background_->CanCancel()))
+                const auto *cancel = sceneQuery_ ? "scene_query_revoke" : "stop";
+                if (Busy() && Button(locale, cancel, background_->CanCancel()))
                     background_->Cancel();
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
-                DrawSceneQueryActivity(locale, fonts);
+                DrawSceneQueryActivity(locale, fonts, command);
                 if (!response_.empty())
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
                 DrawSourceTransaction(locale, fonts, command);
@@ -369,6 +393,7 @@ namespace Horo::Editor {
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
                 captureEditorDiagnostics_ = {};
+                requestMcpAudit_ = {};
                 sourcePicker_ = SourcePickerMode::None;
                 selectedOpenFiles_.clear();
                 projectFiles_.reset();
@@ -408,11 +433,14 @@ namespace Horo::Editor {
             }
 
             /** @brief Presents the actual admitted scene query's phase in the current response. */
-            void DrawSceneQueryActivity(const ILocalizationService &locale, const Theme::Fonts &fonts) const {
+            void DrawSceneQueryActivity(const ILocalizationService &locale, const Theme::Fonts &fonts,
+                                        EditorWorkspaceViewCommandData &command) const {
                 if (!sceneQuery_)
                     return;
-                if (const auto *key = ScenePhaseKey(sceneQuery_->load(std::memory_order_relaxed)))
+                if (const auto *key = ScenePhaseKey(sceneQuery_->phase.load(std::memory_order_relaxed)))
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Muted(), fonts);
+                if (const auto audit = sceneQuery_->ReadAudit(); audit && requestMcpAudit_ && Button(locale, "scene_query_audit", true))
+                    requestMcpAudit_(*audit, command);
             }
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
@@ -1275,7 +1303,7 @@ namespace Horo::Editor {
                     auto offeredSources = source ? source->PatchSources() : std::vector<SourceDocumentSnapshot>{};
                     auto offeredModel = request && !offeredSources.empty() ? request->model : std::string{};
                     auto draft = request && !sceneCount ? std::make_shared<AgentHistoryLiveDraft>() : nullptr;
-                    auto sceneQuery = sceneCount ? std::make_shared<SceneQueryProgress>(SceneQueryPhase::Idle) : nullptr;
+                    auto sceneQuery = sceneCount ? std::make_shared<SceneQueryProgress>() : nullptr;
                     BackgroundTurn::Operation task{[endpoint = endpoint_, request = std::move(request), sceneCount,
                                                     source = std::move(source), turn = ++turn_, draft,
                                                     sceneQuery](std::stop_token stop) mutable {
@@ -1428,6 +1456,7 @@ namespace Horo::Editor {
             decltype(PanelContext::requestSourceReviewApply) requestSourceReviewApply_;
             decltype(PanelContext::requestSourceReviewUndo) requestSourceReviewUndo_;
             decltype(PanelContext::sourceReviewTransaction) sourceReviewTransaction_;
+            decltype(PanelContext::requestMcpAudit) requestMcpAudit_;
             bool sourceApplyQueued_{};
             EditorLocalAgentPatchSource patchSource_;
             std::optional<EditorLocalAgentPatchReview> patchReview_;

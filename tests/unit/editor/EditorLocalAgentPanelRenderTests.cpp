@@ -7,13 +7,17 @@
 #include "EditorWorkspaceViewModel.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/Platform.h"
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceReviewApplication.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdlib>
@@ -128,6 +132,39 @@ namespace {
         return false;
     }
 
+#if HORO_ENABLE_TELEMETRY
+    /** @brief Captures production MCP events for the duration of one chat scenario. */
+    struct SceneChatAuditLog {
+        Horo::Tests::OwnedTestDirectory directory{"scene-chat-audit"};
+        std::shared_ptr<Log::StructuredLogStore> records{std::make_shared<Log::StructuredLogStore>(32)};
+
+        SceneChatAuditLog() {
+            REQUIRE(Log::Logger::Init({.logDirectory = directory.Path(), .writeSessionMarkers = false, .echoToStderr = false}));
+            Log::Logger::SetStructuredLogStore(records);
+        }
+
+        ~SceneChatAuditLog() {
+            Log::Logger::Shutdown();
+            Log::Logger::SetStructuredLogStore(nullptr);
+        }
+
+        bool ContainsCompletion(const WorkspaceMcpAuditReference &reference) const {
+            const auto snapshot = records->SnapshotIfChanged(0);
+            if (!snapshot)
+                return false;
+            return std::ranges::any_of(snapshot->records, [&](const auto &entry) {
+                const auto matches = [&](const std::string_view name, const std::uint64_t value) {
+                    const auto found = std::ranges::find(entry->fields, name, &Telemetry::Field::key);
+                    return found != entry->fields.end() && found->value == Telemetry::FieldValue{value};
+                };
+                return entry->category == "mcp.audit" && entry->message == "operation.finished" &&
+                       matches("principal_id", reference.session.principal) && matches("session_id", reference.session.session) &&
+                       matches("session_generation", reference.session.generation) && matches("operation_id", reference.operation);
+            });
+        }
+    };
+#endif
+
     TEST_CASE("Local chat owns keyboard input only while its text field is presented", "[editor][agent][gui]") {
         LocalAgentFixture fixture{"en-US"};
         fixture.Draw(420);
@@ -235,9 +272,16 @@ namespace {
     TEST_CASE("An explicitly allowed scene query runs once against the disclosed count", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);
-        LocalAgentFixture fixture{"en-US", [](PanelContext &context) {
+        std::optional<WorkspaceMcpAuditReference> receipt;
+#if HORO_ENABLE_TELEMETRY
+        SceneChatAuditLog audit{};
+#endif
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
             context.sceneObjectCount = [] {
                 return std::size_t{3};
+            };
+            context.requestMcpAudit = [&](const WorkspaceMcpAuditReference &reference, EditorWorkspaceViewCommandData &) {
+                receipt = reference;
             };
         }};
         fixture.Draw(420);
@@ -251,6 +295,48 @@ namespace {
             const auto text = fixture.DrawnText();
             return text.find("Three objects") != std::string::npos && text.find("Scene object count query completed.") != std::string::npos;
         }));
+        fixture.Activate("###scene_query_audit");
+        REQUIRE(receipt);
+        CHECK(receipt->session.principal > 0);
+        CHECK(receipt->operation > 0);
+#if HORO_ENABLE_TELEMETRY
+        REQUIRE(Log::Logger::Flush());
+        CHECK(audit.ContainsCompletion(*receipt));
+#endif
+    }
+
+    TEST_CASE("Revoking the scene query stops the admitted turn before the model can run the tool", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");
+        REQUIRE(endpoint);
+        REQUIRE(gateName);
+        const auto gate = std::filesystem::path{gateName} / "scene-query";
+        LocalAgentFixture fixture{"en-US", [](PanelContext &context) {
+            context.sceneObjectCount = [] {
+                return std::size_t{3};
+            };
+            context.requestMcpAudit = [](const WorkspaceMcpAuditReference &, EditorWorkspaceViewCommandData &) {
+                FAIL("Revoked tool was offered as an accepted audit record");
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-approved-tool");
+        fixture.Enter("##Prompt", "Hold the approved scene query");
+        fixture.Activate("###scene_query_review");
+        fixture.Activate("###ask_with_scene_count");
+        REQUIRE(Await([&] {
+            return std::filesystem::is_regular_file(gate / "started") &&
+                   fixture.DrawnText().find("Revoke scene query permission") != std::string::npos;
+        }));
+        fixture.Activate("###scene_query_revoke");
+        std::ofstream{gate / "release"} << "release";
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Request stopped.") != std::string::npos;
+        }));
+        const auto text = fixture.DrawnText();
+        CHECK(text.find("Three objects") == std::string::npos);
+        CHECK(text.find("View MCP audit record") == std::string::npos);
     }
 
     TEST_CASE("A real local model reply survives dock hiding and completes while hidden", "[.][chat-http]") {

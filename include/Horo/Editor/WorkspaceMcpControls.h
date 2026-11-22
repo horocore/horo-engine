@@ -19,6 +19,14 @@ namespace Horo::Editor {
         [[nodiscard]] bool operator==(const WorkspaceMcpSessionKey &) const = default;
     };
 
+    /** @brief Exact logged operation identity. Used only for local history presentation. */
+    struct WorkspaceMcpAuditReference {
+        WorkspaceMcpSessionKey session;
+        std::uint64_t operation{};
+
+        [[nodiscard]] bool operator==(const WorkspaceMcpAuditReference &) const = default;
+    };
+
     /** @brief Active requests revision within the exact session. */
     struct WorkspaceMcpRevision {
         WorkspaceMcpSessionKey session;

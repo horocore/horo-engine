@@ -145,6 +145,10 @@ namespace Horo::Editor {
                                                           context.gui);
             }
 
+            void FocusAudit(const WorkspaceMcpAuditReference &reference) {
+                pane_.FocusAudit(reference);
+            }
+
         private:
             GlobalDockMcpPane pane_;
             IWorkspaceMcpControls *controls_{};
@@ -242,6 +246,19 @@ namespace Horo::Editor {
         activePaneId_ = selected->pane->Id();
         if (selected->builtIn)
             activeTab_ = selected->builtInTab;
+        return true;
+    }
+
+    /** @copydoc GlobalDockPanel::FocusMcpAudit */
+    bool GlobalDockPanel::FocusMcpAudit(const WorkspaceMcpAuditReference &reference) {
+        if (!reference.operation || !reference.session.principal || !reference.session.session || !reference.session.generation)
+            return false;
+        const auto builtIn = std::ranges::find_if(panes_, [](const RegisteredPane &entry) {
+            return entry.builtIn && entry.builtInTab == GlobalDockTab::Mcp;
+        });
+        if (builtIn == panes_.end() || !ActivatePane(builtIn->pane->Id()))
+            return false;
+        static_cast<McpPaneAdapter &>(*builtIn->pane).FocusAudit(reference);
         return true;
     }
 

@@ -548,7 +548,12 @@ argument list, the current project and the exact count before sending a turn.
 The user may deny the review or approve one read-only call for that turn. The
 composer drops the review when it is hidden, the project is detached, the
 observed count changes, or the review expires. The worker receives only the
-approved count and owns the bounded, single-use tool session.
+approved count and owns the bounded, single-use tool session. Stopping the
+turn revokes that session's exact principal, including during provider I/O.
+Once the controller accepts the call, chat can open the MCP dock at its exact
+audit identity. The history view matches the numeric principal, session,
+generation and operation. The renderer receives no tool arguments or results
+through this link.
 
 ## Internal IDE Communication
 
