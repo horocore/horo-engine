@@ -240,6 +240,7 @@ namespace {
         const bool available = GENERATE(true, false);
         const auto decisionId = Assets::AssetId::FromBytes({103});
         const auto queryAsset = Assets::AssetId::FromBytes({104});
+        const auto policyAsset = Assets::AssetId::FromBytes({105});
         const auto decisionType = Assets::AssetTypeId::Parse(DecisionAssetType(DecisionPlanKind::BehaviorTree)).Value();
         const auto queryType = Assets::AssetTypeId::Parse(EnvironmentQuerySourceAssetType).Value();
         const auto target = Output::Target("headless-null");
@@ -257,6 +258,22 @@ namespace {
         add(decisionId, decisionType, decision.Value(), "assets/decision.horo_bt");
         if (available)
             add(queryAsset, queryType, payload.Value(), "assets/tactics.horo_eqs");
+        AiCapabilityDescriptorRegistry taskRegistry;
+        REQUIRE(taskRegistry.Register({graph.executionTask}).HasValue());
+        const auto tasks = taskRegistry.Freeze();
+        const auto policyTarget = Decisions::MakeIdentity<LocalPolicyTargetId>(51);
+        const LocalPolicyCookTarget policyProfile{policyTarget, true, sizeof(LocalLearnedPolicy), 8};
+        const std::array policyTargets{policyTarget};
+        const std::array policyFeatures{Decisions::MakeIdentity<LocalPolicyFeatureId>(52)};
+        const std::array<std::int16_t, 1> weights{-2};
+        const std::array rows{LocalPolicyRowSource{graph.executionTask, 2, weights}};
+        const auto model =
+            LocalLearnedPolicy::Cook({Decisions::MakeIdentity<LocalPolicyModelId>(53), 1, policyTargets, policyFeatures, rows},
+                                     policyProfile, tasks, fixture.schema->Identity());
+        REQUIRE(model.HasValue());
+        const auto encoded = model.Value().EncodeCooked();
+        REQUIRE(encoded.HasValue());
+        add(policyAsset, Assets::AssetTypeId::Parse(LocalPolicyAssetType).Value(), encoded.Value(), "assets/tactics.horo_policy");
         Horo::Tests::OwnedTestDirectory directory{"headless-query-admission"};
         REQUIRE(Output::PublishFixture(directory.Path(), target, manifest, artifacts).HasValue());
         Assets::AssetRegistry assets;
@@ -278,18 +295,47 @@ namespace {
         REQUIRE(scene.HasValue());
         const auto limits = Prefab::PrefabLimitProfile::Create({});
         REQUIRE(limits.HasValue());
-        const HeadlessCookedDecisionInput input{.committed = *committed.Value(),
-                                                .environment = fixture.Environment(),
-                                                .bindings = {{controller.controller, decisionId}},
-                                                .querySchema = std::make_shared<const QuerySchemaRegistry>(registry.Value())};
-        const auto admitted = AdmitHeadlessCookedControllers(catalog, scene.Value(), input, limits.Value(), {});
+        const CookedSceneLocalPolicySelection policy{policyAsset, policyProfile, tasks, fixture.schema->Identity()};
+        const HeadlessCookedDecisionInput
+            input{.committed = *committed.Value(),
+                  .environment = fixture.Environment(),
+                  .bindings = {{controller.controller, decisionId, {}, std::make_shared<const CookedSceneLocalPolicySelection>(policy)}},
+                  .querySchema = std::make_shared<const QuerySchemaRegistry>(registry.Value())};
+        CookedSceneLocalPolicyCatalog policies;
+        const auto admitted = AdmitHeadlessCookedControllers(catalog, scene.Value(), input, limits.Value(), {}, nullptr, &policies);
         if (available) {
             REQUIRE(admitted.HasValue());
             REQUIRE(admitted.Value().size() == 1);
             CHECK(admitted.Value().front().cookedPlan->Root() == graph.asset);
+            REQUIRE(policies.contains(controller.controller));
+            const auto prior = policies.at(controller.controller);
+            CHECK(prior->Digest() == model.Value().Digest());
+            CHECK(AdmitHeadlessCookedControllers(catalog, scene.Value(), input, limits.Value(), {}).HasError());
+            const auto requireRejected = [&](const CookedSceneLocalPolicySelection &invalid, const ErrorCodeDescriptor &expected) {
+                auto rejectedInput = input;
+                rejectedInput.bindings.front().localPolicy = std::make_shared<const CookedSceneLocalPolicySelection>(invalid);
+                const auto rejected =
+                    AdmitHeadlessCookedControllers(catalog, scene.Value(), rejectedInput, limits.Value(), {}, nullptr, &policies);
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == expected.code.Value());
+                CHECK(policies.at(controller.controller) == prior);
+            };
+            auto wrong = policy;
+            wrong.artifact = queryAsset;
+            requireRejected(wrong, AIErrors::DecisionAssetActivationInvalid);
+            wrong = policy;
+            wrong.target.id = Decisions::MakeIdentity<LocalPolicyTargetId>(54);
+            requireRejected(wrong, AIErrors::CapabilityUnavailable);
+            wrong = policy;
+            wrong.tasks = {};
+            requireRejected(wrong, AIErrors::TaskContextInvalid);
+            wrong = policy;
+            wrong.blackboard = Decisions::MakeIdentity<BlackboardSchemaId>(55);
+            requireRejected(wrong, AIErrors::DecisionAssetSchemaInvalid);
         } else {
             REQUIRE(admitted.HasError());
             CHECK(admitted.ErrorValue().code.Value() == AIErrors::EnvironmentQueryDescriptorUnavailable.code.Value());
+            CHECK(policies.empty());
         }
         CHECK(fixture.probe.factories == 0);
 #if HORO_TEST_PHYSICS_NATIVE

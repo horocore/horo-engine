@@ -40,9 +40,9 @@ namespace Horo::Application::Internal {
     [[nodiscard]] inline Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
         std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
         const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-        HeadlessQueryPlanCatalog *queryPlans = nullptr) {
+        HeadlessQueryPlanCatalog *queryPlans = nullptr, CookedSceneLocalPolicyCatalog *localPolicies = nullptr) {
         return AdmitCookedSceneControllers(catalog, scene,
                                            {input.committed, input.environment, input.bindings, input.limits, input.querySchema},
-                                           prefabLimits, cancellation, queryPlans);
+                                           prefabLimits, cancellation, queryPlans, localPolicies);
     }
 }  // namespace Horo::Application::Internal

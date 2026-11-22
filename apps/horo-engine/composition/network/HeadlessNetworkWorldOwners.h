@@ -2,6 +2,7 @@
 /** @file HeadlessNetworkWorldOwners.h
  * @brief Target-private generation-owned Scene, Physics and fixed-participant lifetimes.
  */
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessPrefabReplica.h"
@@ -77,6 +78,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<InitialTransformCapture> initialTransformCapture;
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<SceneDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
+        CookedSceneLocalPolicyCatalog localPolicies;
         std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
@@ -226,6 +228,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             record.scenes->Shutdown();
         if (record.ai)
             record.ai->BeginShutdown();
+        record.localPolicies.clear();
         if (record.preparedGameplay) {
             record.templates.reset();
             record.scenes.reset();

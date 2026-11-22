@@ -277,6 +277,8 @@ namespace Horo::Application::Internal {
                     assets.decisions.push_back(binding.artifact);
                     if (binding.prefab)
                         assets.decisions.push_back(*binding.prefab);
+                    if (binding.localPolicy)
+                        assets.decisions.push_back(binding.localPolicy->artifact);
                 }
             }
             auto prepared = PrepareHeadlessProjectSceneResources(selection);

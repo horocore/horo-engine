@@ -676,6 +676,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             saves_.ClosePhysicsSaveSource();
             QuiesceGameplay();
             ShutdownSceneOwners();
+            localPolicies_.clear();
             resources_.ShutdownLoadOwners();
         }
 
@@ -782,6 +783,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::vector<AI::AiControllerDescriptor> controllers_;
         std::shared_ptr<AI::AiSceneRuntime> ai_;
         std::shared_ptr<SceneDecisionQueries> decisionQueries_;
+        CookedSceneLocalPolicyCatalog localPolicies_;
         [[nodiscard]] Result<void> PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,
                                                             const Runtime::RuntimeSceneDefinition &definition,
                                                             const EditorProjectScenePolicy &policy);

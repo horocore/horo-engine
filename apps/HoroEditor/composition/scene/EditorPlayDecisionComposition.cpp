@@ -344,9 +344,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Failure(registered.ErrorValue());
         auto schema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(registered).Value());
         CookedSceneQueryPlanCatalog queries;
+        CookedSceneLocalPolicyCatalog models;
         auto selected = AdmitCookedSceneControllers(policy.aiControllers, cooked.Value(),
                                                     {*resources_.assets_, environment, policy.decisions->controllers, {}, schema},
-                                                    limits.Value(), cancellation, &queries);
+                                                    limits.Value(), cancellation, &queries, &models);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
@@ -391,6 +392,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                          : std::nullopt};
         auto admitted = RegisterPresentationParticipants(policy, std::move(execution));
         if (admitted.HasValue()) {
+            localPolicies_ = std::move(models);
             inspectionPolicy_ = inspection;
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
             decisionDebugGranted_ = settings.Value().debugGranted;

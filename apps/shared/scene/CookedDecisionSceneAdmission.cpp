@@ -24,6 +24,7 @@ namespace Horo::Application::Internal {
         struct ControllerSelection final {
             Assets::AssetId artifact;
             std::optional<Assets::AssetId> prefab;
+            std::shared_ptr<const CookedSceneLocalPolicySelection> localPolicy;
             std::optional<AI::AiControllerComponent> authored;
             bool foundInPrefab{};
         };
@@ -178,7 +179,8 @@ namespace Horo::Application::Internal {
                 if (!binding.controller.IsValid() || !binding.artifact.IsValid() || (binding.prefab && !binding.prefab->IsValid()))
                     return Result<Selections>::Failure(MakeError(AI::AIErrors::ControllerDescriptorMissing,
                                                                  "Cooked AI selection requires exact controller and asset identities."));
-                if (!selections.emplace(binding.controller, ControllerSelection{binding.artifact, binding.prefab}).second)
+                if (!selections.emplace(binding.controller, ControllerSelection{binding.artifact, binding.prefab, binding.localPolicy})
+                         .second)
                     return Result<Selections>::Failure(
                         MakeError(AI::AIErrors::DescriptorConflict, "A controller has multiple cooked asset selections."));
                 if (binding.prefab)
@@ -314,11 +316,31 @@ namespace Horo::Application::Internal {
             return AI::ValidateAiControllerDescriptor(descriptor);
         }
 
+        Result<void> AddLocalPolicy(CookedSceneLocalPolicyCatalog &models, const AI::AiControllerDescriptor &descriptor,
+                                    const CookedSceneLocalPolicySelection &selection, const CommittedSceneAssets &committed,
+                                    std::uint64_t &remaining) {
+            const auto *artifact = committed.Find(selection.artifact);
+            if (!artifact || artifact->type.Value() != AI::LocalPolicyAssetType)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetActivationInvalid,
+                                                       "Selected local policy is absent or has the wrong asset type."));
+            if (selection.blackboard && (!descriptor.blackboardSchema || descriptor.blackboardSchema->Identity() != selection.blackboard))
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
+            if (sizeof(AI::LocalLearnedPolicy) > remaining)
+                return Result<void>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
+            auto model = AI::LocalLearnedPolicy::DecodeCooked(artifact->payload, artifact->payloadDigest, selection.target, selection.tasks,
+                                                              selection.blackboard);
+            if (model.HasError())
+                return Result<void>::Failure(std::move(model).ErrorValue());
+            models.emplace(descriptor.controller, std::make_shared<const AI::LocalLearnedPolicy>(std::move(model).Value()));
+            remaining -= sizeof(AI::LocalLearnedPolicy);
+            return Result<void>::Success();
+        }
+
         /** @brief Captures independent public descriptors; all validation occurs before the app constructs its Scene participant. */
         [[nodiscard]] Result<Catalog> Admit(const std::span<const AI::AiControllerDescriptor> catalog,
                                             const Runtime::RuntimeSceneDefinition &scene, const CookedDecisionSceneAdmissionInput &input,
                                             const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-                                            CookedSceneQueryPlanCatalog *queryPlans) {
+                                            CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies) {
             Descriptors descriptors;
             for (const auto &descriptor : catalog)
                 if (!descriptors.emplace(descriptor.controller, descriptor).second)
@@ -332,6 +354,7 @@ namespace Horo::Application::Internal {
                 return Result<Catalog>::Failure(environment.ErrorValue());
             std::map<Assets::AssetId, Plan> plans;
             std::optional<CookedSceneQueryPlanCatalog> queries;
+            CookedSceneLocalPolicyCatalog models;
             auto remaining = input.limits.compilation.maximumCoreBytes;
             for (const auto &[identity, binding] : selected.Value()) {
                 if (cancellation.IsCancellationRequested())
@@ -360,6 +383,13 @@ namespace Horo::Application::Internal {
                 }
                 if (auto bound = BindPlan(*descriptor.Value(), std::move(plan).Value(), authored); bound.HasError())
                     return Result<Catalog>::Failure(bound.ErrorValue());
+                if (binding.localPolicy) {
+                    if (!localPolicies)
+                        return Result<Catalog>::Failure(MakeError(AI::AIErrors::DecisionAssetActivationInvalid));
+                    if (auto added = AddLocalPolicy(models, *descriptor.Value(), *binding.localPolicy, input.committed, remaining);
+                        added.HasError())
+                        return Result<Catalog>::Failure(std::move(added).ErrorValue());
+                }
             }
             if (cancellation.IsCancellationRequested())
                 return Result<Catalog>::Failure(JobCancelled().ErrorValue());
@@ -370,6 +400,8 @@ namespace Horo::Application::Internal {
                 admitted.push_back(std::move(descriptor));
             if (queryPlans)
                 *queryPlans = queries ? std::move(*queries) : CookedSceneQueryPlanCatalog{};
+            if (localPolicies)
+                *localPolicies = std::move(models);
             return Result<Catalog>::Success(std::move(admitted));
         }
     }  // namespace
@@ -379,11 +411,11 @@ namespace Horo::Application::Internal {
                                                 const Runtime::RuntimeSceneDefinition &scene,
                                                 const CookedDecisionSceneAdmissionInput &input,
                                                 const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-                                                CookedSceneQueryPlanCatalog *queryPlans) {
+                                                CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies) {
         if (catalog.size() > AI::MaximumAiSceneAgents || input.bindings.size() > AI::MaximumAiSceneAgents)
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         try {
-            return Admit(catalog, scene, input, prefabLimits, cancellation, queryPlans);
+            return Admit(catalog, scene, input, prefabLimits, cancellation, queryPlans, localPolicies);
         } catch (const std::bad_alloc &) {
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         }

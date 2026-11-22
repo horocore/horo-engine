@@ -642,7 +642,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(limits.ErrorValue());
             if (selection.provider == HeadlessDecisionProvider::Captured)
                 return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
-                                                      &queries);
+                                                      &queries, &record_->localPolicies);
             const auto &gameplay = *owners_->gameplay;
             const Gameplay::GameModuleLoadExpectation expected{gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
                                                                gameplay.descriptorRevision};
@@ -658,7 +658,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             auto configured = selection;
             configured.environment.nodes = std::move(nodes).Value();
             return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, limits.Value(), record_->sceneCancellation,
-                                                  &queries);
+                                                  &queries, &record_->localPolicies);
         }
 
         /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */

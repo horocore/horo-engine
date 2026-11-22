@@ -2652,8 +2652,12 @@ explicit resource contribution. The native prefab cook composition in `apps/`
 obtains the model cooker from the Decision Asset Cook host and registers it
 before freezing the catalog. The prefab cook service consumes that catalog
 through the ordinary asset cooker contract. The cooker checks the current task
-declarations on both fresh inputs and cache hits. Loading rechecks the expected
-digest and current target and task declarations.
+declarations on both fresh inputs and cache hits. An explicitly selected Scene
+controller model is admitted from the same verified generation as that
+controller's Decision graph. Admission rechecks the model digest, target, task
+declarations, and the controller's Blackboard schema when the model declares
+one. The retained model counts against the Scene's aggregate Decision memory
+budget.
 Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model
 digest, deadline and current task declarations before returning a task to the
