@@ -25,6 +25,12 @@ namespace Horo::Editor {
         bool operator==(const InspectionSceneRevision &) const = default;
     };
 
+    /** @brief One typed replacement of a visible authored object's name. */
+    struct AgentSceneObjectRename final {
+        std::uint64_t object{};
+        std::string name;
+    };
+
     /** @brief Explicit world-space ray segment. The owner normalizes direction before sampling. */
     struct InspectionSurfaceRay {
         std::array<double, 3> origin{};
@@ -304,7 +310,8 @@ namespace Horo::Editor {
         std::function<Result<PenetrationInspectionPage>(const ObjectInspectionRequest &)> readPenetrations;
         std::function<Result<VisualInspectionPage>(const ObjectInspectionRequest &)> readVisualIssues;
         /** @brief Stages a review while the originating principal is live. The result confers no mutation authority. */
-        std::function<Result<std::uint64_t>(InspectionSceneRevision, std::span<const AgentViewportTransform>, std::function<bool()>)>
-            proposeTransforms;
+        std::function<Result<std::uint64_t>(InspectionSceneRevision, std::span<const AgentViewportTransform>,
+                                            std::span<const AgentSceneObjectRename>, std::function<bool()>)>
+            proposeEdits;
     };
 }  // namespace Horo::Editor

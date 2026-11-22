@@ -93,6 +93,7 @@ namespace Horo::Editor {
     struct VisualInspectionPage;
     struct EditorInspectionPhysics;
     struct InspectionSceneRevision;
+    struct AgentSceneObjectRename;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
     struct CapturedDecisionExternal;
@@ -338,26 +339,27 @@ namespace Horo::Editor {
         /** @brief Displays a validated batch in the authored viewport while leaving the scene unchanged.
          * @param revision Exact scene opening and revision captured by the proposing client.
          * @param updates Bounded list of proposed object-local transforms.
+         * @param renames Bounded list of proposed object names.
          * @param cancellation Revocable proposal lifetime.
          * @param authorized Optional live client authority for an embedded request.
          * @return Owner-issued review identity or a zero-mutation rejection.
          */
-        [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneTransforms(InspectionSceneRevision revision,
-                                                                        std::span<const SceneObjectTransformUpdate> updates,
-                                                                        CancellationToken cancellation,
-                                                                        std::function<bool()> authorized = {});
+        [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneEdits(InspectionSceneRevision revision,
+                                                                   std::span<const SceneObjectTransformUpdate> updates,
+                                                                   std::span<const AgentSceneObjectRename> renames,
+                                                                   CancellationToken cancellation, std::function<bool()> authorized = {});
 
         /** @brief Applies the displayed proposal after an explicit local approval.
          * @param review Exact owner-issued review identity.
          * @return Success or the scene admission error; the matched review is consumed.
          */
-        [[nodiscard]] Result<void> ApproveAgentSceneTransforms(std::uint64_t review);
+        [[nodiscard]] Result<void> ApproveAgentSceneReview(std::uint64_t review);
 
         /** @brief Cancels the displayed proposal only if its identity still matches.
          * @param review Exact owner-issued review identity.
          * @return Whether a matching review was retired.
          */
-        bool CancelAgentSceneTransforms(std::uint64_t review);
+        bool CancelAgentSceneReview(std::uint64_t review);
 
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */
@@ -1085,17 +1087,18 @@ namespace Horo::Editor {
         std::optional<CancellationSource> m_agentViewportLifetime;
         std::uint64_t m_agentViewportRevision{};
 
-        struct AgentSceneTransformReview final {
+        struct AgentSceneReview final {
             std::uint64_t id;
             CancellationSource lifetime;
             SceneTransactionContext context;
             SceneDocumentTransactions owner;
             SceneDocumentTransactions::ReplacementPreview preview;
             std::function<bool()> authorized;
+            DocumentChangeKind kind;
         };
 
-        std::optional<AgentSceneTransformReview> m_agentSceneTransformReview;
-        std::uint64_t m_agentSceneTransformReviewSerial{};
+        std::optional<AgentSceneReview> m_agentSceneReview;
+        std::uint64_t m_agentSceneReviewSerial{};
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
@@ -1617,9 +1620,11 @@ namespace Horo::Editor {
         void PreviewObjectTransforms(std::span<const SceneObjectTransformUpdate> updates);
         void CancelObjectTransformPreview();
         /** @brief Retires a displayed agent proposal once its authored viewport or authorization becomes stale. */
-        void ReconcileAgentSceneTransformReview();
+        void ReconcileAgentSceneReview();
         /** @brief Checks whether the current authored viewport can safely display or approve a review. */
-        [[nodiscard]] bool CanReviewAgentSceneTransforms() const;
+        [[nodiscard]] bool CanReviewAgentSceneEdits() const;
+        /** @brief Captures one exact visible object's replacement without altering authored state. */
+        [[nodiscard]] Result<SceneObjectReplacement> CaptureAgentSceneReplacement(SceneObjectId id) const;
         void PreviewLightComponent(SceneObjectId object, const Runtime::LightComponent &light);
         void CancelLightComponentPreview();
         void RefreshViewportLightProjection();

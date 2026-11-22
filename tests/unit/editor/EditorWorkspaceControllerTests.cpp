@@ -375,20 +375,28 @@ namespace {
         auto desired = object.localTransform;
         desired.translation.x += 3.0F;
         const std::array updates{SceneObjectTransformUpdate{object.id, desired}};
+        const std::array renames{AgentSceneObjectRename{object.id.value, "Reviewed name"}};
         std::vector<SceneDocumentChangedEvent> events;
         const auto subscription = controller.DataBus().Subscribe<SceneDocumentChangedEvent>([&](const auto &event) {
             events.push_back(event);
         });
         CancellationSource proposal;
-        const auto preview = controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token());
+        const std::array duplicate{renames.front(), renames.front()};
+        CHECK(controller.PreviewAgentSceneEdits(revision, updates, duplicate, proposal.Token()).HasError());
+        CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token());
         REQUIRE(preview.HasValue());
         REQUIRE(controller.ViewModel().agentSceneReview);
         CHECK(controller.ViewModel().agentSceneReview->objectCount == 1);
+        REQUIRE(controller.ViewModel().agentSceneReview->renames.size() == 1);
+        CHECK(controller.ViewModel().agentSceneReview->renames.front().before == object.name);
+        CHECK(controller.ViewModel().agentSceneReview->renames.front().after == renames.front().name);
         CHECK(origin() != baseline);
         CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
+        CHECK(controller.ViewModel().objects.front().name == object.name);
         CHECK_FALSE(controller.ViewModel().isDirty);
         CHECK(events.empty());
-        CHECK(controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token()).HasError());
+        CHECK(controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token()).HasError());
 
         SECTION("approval uses canonical history and consumes the review") {
             EditorWorkspaceViewCommandData approval;
@@ -396,17 +404,19 @@ namespace {
             approval.agentSceneReviewDecision = {preview.Value(), true};
             controller.ProcessCommand(approval);
             CHECK(controller.ViewModel().objects.front().localTransform == desired);
+            CHECK(controller.ViewModel().objects.front().name == renames.front().name);
             CHECK_FALSE(controller.ViewModel().agentSceneReview);
             REQUIRE(events.size() == 1);
             CHECK(events.front().affectedObjects == std::vector{object.id});
-            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
             CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
+            CHECK(controller.ViewModel().objects.front().name == object.name);
             CHECK_FALSE(controller.ViewModel().isDirty);
         }
         SECTION("cancellation removes the overlay without a document event") {
-            CHECK_FALSE(controller.CancelAgentSceneTransforms(preview.Value() + 1));
-            CHECK(controller.CancelAgentSceneTransforms(preview.Value()));
+            CHECK_FALSE(controller.CancelAgentSceneReview(preview.Value() + 1));
+            CHECK(controller.CancelAgentSceneReview(preview.Value()));
             CHECK(origin() == baseline);
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
@@ -415,7 +425,7 @@ namespace {
             controller.RevokeWorkspaceCommands();
             controller.UpdatePlayPresentation(0.0F);
             CHECK(origin() == baseline);
-            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             CHECK(events.empty());
         }
         SECTION("a lost runtime scene cannot leave the retired preview visible") {
@@ -424,7 +434,7 @@ namespace {
             CHECK_FALSE(controller.ViewModel().agentSceneReview);
             CHECK(controller.ViewportScene().instances.empty());
             CHECK(controller.ViewportScene().transformOverrides.empty());
-            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             CHECK(events.empty());
             CHECK_FALSE(controller.ViewModel().isDirty);
         }

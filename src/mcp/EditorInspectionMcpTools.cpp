@@ -13,6 +13,10 @@ namespace Horo::Editor {
         using JsonResult = Result<Json>;
         constexpr auto MaximumObjects = ObjectInspectionRequest::MaximumObjects;
         constexpr auto SmallestPositiveNumber = std::numeric_limits<double>::denorm_min();
+        enum class SceneProposalKind {
+            Transforms,
+            Edits
+        };
 
         /** @brief Describes the numeric Scene fence carried across pages. */
         Json SceneSchema() {
@@ -91,7 +95,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Describes a whole bounded named batch on one exact authored Scene revision. */
-        Json ProposalInputSchema() {
+        Json ProposalInputSchema(const SceneProposalKind kind) {
             Json entry{{"type", "object"},
                        {"properties",
                         {{"object", {{"type", "integer"}, {"minimum", 1}}},
@@ -100,12 +104,25 @@ namespace Horo::Editor {
                          {"scale", LocalTransformVectorSchema(3)}}},
                        {"required", {"object", "translation", "rotationXYZW", "scale"}},
                        {"additionalProperties", false}};
-            return {{"type", "object"},
-                    {"properties",
-                     {{"scene", SceneSchema()},
-                      {"transforms", {{"type", "array"}, {"minItems", 1}, {"maxItems", MaximumObjects}, {"items", std::move(entry)}}}}},
-                    {"required", {"scene", "transforms"}},
-                    {"additionalProperties", false}};
+            Json schema{{"type", "object"},
+                        {"properties",
+                         {{"scene", SceneSchema()},
+                          {"transforms", {{"type", "array"}, {"minItems", 1}, {"maxItems", MaximumObjects}, {"items", std::move(entry)}}}}},
+                        {"required", {"scene", "transforms"}},
+                        {"additionalProperties", false}};
+            if (kind == SceneProposalKind::Edits) {
+                schema["required"] = {"scene"};
+                Json rename{{"type", "object"},
+                            {"properties",
+                             {{"object", {{"type", "integer"}, {"minimum", 1}}}, {"name", {{"type", "string"}, {"minLength", 1}}}}},
+                            {"required", {"object", "name"}},
+                            {"additionalProperties", false}};
+                schema["properties"]["renames"] = {{"type", "array"},
+                                                   {"minItems", 1},
+                                                   {"maxItems", MaximumObjects},
+                                                   {"items", std::move(rename)}};
+            }
+            return schema;
         }
 
         /** @brief Describes a top-left-origin normalized viewport rectangle. */
@@ -550,7 +567,7 @@ namespace Horo::Editor {
 
             JsonResult Invoke(const Json &arguments, const Mcp::McpRequestContext &context) override {
                 const auto endpoint = endpoint_.lock();
-                if (!endpoint || endpoint->owner != std::this_thread::get_id() || !endpoint->proposeTransforms)
+                if (!endpoint || endpoint->owner != std::this_thread::get_id() || !endpoint->proposeEdits)
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
                 if (!context.authority || context.projectIdentity != endpoint->project ||
                     context.authorizationRevision != endpoint->authorizationRevision)
@@ -560,15 +577,26 @@ namespace Horo::Editor {
                 const auto &scene = arguments.at("scene");
                 const InspectionSceneRevision revision{scene.at("epoch").get<std::uint64_t>(), scene.at("revision").get<std::uint64_t>()};
                 std::vector<AgentViewportTransform> transforms;
-                transforms.reserve(arguments.at("transforms").size());
-                for (const auto &row : arguments.at("transforms"))
-                    transforms.push_back({row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
-                                          row.at("rotationXYZW").get<std::array<float, 4>>(), row.at("scale").get<std::array<float, 3>>()});
+                if (const auto rows = arguments.find("transforms"); rows != arguments.end()) {
+                    transforms.reserve(rows->size());
+                    for (const auto &row : *rows)
+                        transforms.push_back({row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
+                                              row.at("rotationXYZW").get<std::array<float, 4>>(),
+                                              row.at("scale").get<std::array<float, 3>>()});
+                }
+                std::vector<AgentSceneObjectRename> renames;
+                if (const auto rows = arguments.find("renames"); rows != arguments.end()) {
+                    renames.reserve(rows->size());
+                    for (const auto &row : *rows)
+                        renames.push_back({row.at("object").get<std::uint64_t>(), row.at("name").get<std::string>()});
+                }
+                if (transforms.size() + renames.size() == 0 || transforms.size() + renames.size() > MaximumObjects)
+                    return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
                 auto authorized = [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
                     const auto active = principal.lock();
                     return active && !active->IsStopRequested();
                 };
-                const auto result = endpoint->proposeTransforms(revision, transforms, std::move(authorized));
+                const auto result = endpoint->proposeEdits(revision, transforms, renames, std::move(authorized));
                 if (result.HasError())
                     return JsonResult::Failure(result.ErrorValue());
                 return JsonResult::Success({{"reviewId", std::to_string(result.Value())}});
@@ -579,11 +607,14 @@ namespace Horo::Editor {
         };
 
         /** @brief Publishes a review-only tool under its own capability. */
-        Mcp::McpToolRegistration ProposalRegistration(const std::shared_ptr<const EditorInspectionCommandEndpoint> &endpoint) {
+        Mcp::McpToolRegistration ProposalRegistration(const std::shared_ptr<const EditorInspectionCommandEndpoint> &endpoint,
+                                                      const SceneProposalKind kind) {
+            const bool broader = kind == SceneProposalKind::Edits;
             return {.descriptor =
-                        {.id = {"scene.propose_transforms"},
-                         .description = "Preview authored local transforms in the viewport for local operator review.",
-                         .inputSchema = ProposalInputSchema(),
+                        {.id = {broader ? "scene.propose_edits" : "scene.propose_transforms"},
+                         .description = broader ? "Preview a batch of authored names and local transforms for local operator review."
+                                                : "Preview authored local transforms in the viewport for local operator review.",
+                         .inputSchema = ProposalInputSchema(kind),
                          .outputSchema = {{"type", "object"},
                                           {"properties", {{"reviewId", {{"type", "string"}, {"minLength", 1}, {"maxLength", 20}}}}},
                                           {"required", {"reviewId"}},
@@ -673,8 +704,10 @@ namespace Horo::Editor {
                              readVisualIssues>(tools, endpoint, "inspect.visual_issues",
                                                "Read projected bounds clipping and overlap within a normalized viewport region.",
                                                VisualSchema, VisualInputSchema);
-        if (endpoint->proposeTransforms)
-            tools.push_back(ProposalRegistration(endpoint));
+        if (endpoint->proposeEdits) {
+            tools.push_back(ProposalRegistration(endpoint, SceneProposalKind::Transforms));
+            tools.push_back(ProposalRegistration(endpoint, SceneProposalKind::Edits));
+        }
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

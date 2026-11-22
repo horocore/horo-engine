@@ -538,25 +538,36 @@ namespace Horo::Editor {
             EditorInspectionCommandEndpoint{std::move(project), authorizationRevision, std::this_thread::get_id(),
                                             [this](const ObjectInspectionRequest &request) {
             return InspectLocalTransforms(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectWorldBounds(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectComponents(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectGeometry(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectDistances(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectGridOffsets(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectSurfaces(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectCollisions(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectPenetrations(request);
-        }, [this](const ObjectInspectionRequest &request) {
+        },
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectVisualIssues(request);
-        }, [this](InspectionSceneRevision scene, std::span<const AgentViewportTransform> proposed, std::function<bool()> authorized) {
+        },
+                                            [this](InspectionSceneRevision scene, std::span<const AgentViewportTransform> proposed,
+                                                   std::span<const AgentSceneObjectRename> renames, std::function<bool()> authorized) {
             std::vector<SceneObjectTransformUpdate> updates;
             updates.reserve(proposed.size());
             for (const auto &local : proposed) {
@@ -565,7 +576,7 @@ namespace Horo::Editor {
                                     {local.rotation[0], local.rotation[1], local.rotation[2], local.rotation[3]},
                                     {local.scale[0], local.scale[1], local.scale[2]}}});
             }
-            return PreviewAgentSceneTransforms(scene, updates, {}, std::move(authorized));
+            return PreviewAgentSceneEdits(scene, updates, renames, {}, std::move(authorized));
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -908,7 +919,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity>) */
     Result<void> EditorWorkspaceController::SynchronizeRuntimeScenePreview(const std::optional<EditorViewportCrossFadeCapacity> capacity) {
-        ReconcileAgentSceneTransformReview();
+        ReconcileAgentSceneReview();
         if (m_playSession.IsActive()) {
             ExtractPlayViewportScene();
             return Result<void>::Success();

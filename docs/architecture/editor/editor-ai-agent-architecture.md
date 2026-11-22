@@ -632,6 +632,9 @@ records one canonical history entry.
 
 `scene.propose_transforms` accepts a bounded batch of local transforms for
 visible authored objects on the exact Scene revision returned by inspection.
+`scene.propose_edits` can combine local transforms and object renames in the
+same review and undo entry. The viewport lists the original and proposed names
+alongside the visual transform preview.
 The MCP proposal grant admits the preview. Apply and discard are local viewport
 controls. The preview is retired when the originating authority expires or the
 authored Scene is replaced.

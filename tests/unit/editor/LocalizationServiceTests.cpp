@@ -61,6 +61,7 @@ namespace {
         "workspace.mcp_commands.open_debug_capture",
         "workspace.mcp_commands.open_scene_proposals",
         "workspace.viewport.agent_review.summary",
+        "workspace.viewport.agent_review.rename",
         "workspace.viewport.agent_review.apply",
         "workspace.viewport.agent_review.discard",
         "workspace.viewport.agent_review.invalid",

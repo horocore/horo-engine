@@ -1,5 +1,6 @@
 #include "EditorInspectionCommandEndpoint.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Utf8.h"
 #include "editor/project_model/EditorModelErrors.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -21,30 +22,46 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc EditorWorkspaceController::CanReviewAgentSceneTransforms */
-    bool EditorWorkspaceController::CanReviewAgentSceneTransforms() const {
+    /** @copydoc EditorWorkspaceController::CanReviewAgentSceneEdits */
+    bool EditorWorkspaceController::CanReviewAgentSceneEdits() const {
         const auto active = m_runtimeScene.ActiveScene();
         return InspectSceneRevision().HasValue() && active && HasCurrentInspectionGeometry(*active) && !m_cameraPreview &&
                !m_activeTerrainDocument && !m_viewModel.recoveryAvailable && !m_playSession.IsActive() && !m_assetPlacementPreviewActive &&
                !m_prefabDrop;
     }
 
-    /** @copydoc EditorWorkspaceController::PreviewAgentSceneTransforms */
-    Result<std::uint64_t> EditorWorkspaceController::PreviewAgentSceneTransforms(const InspectionSceneRevision revision,
-                                                                                 std::span<const SceneObjectTransformUpdate> updates,
-                                                                                 CancellationToken cancellation,
-                                                                                 std::function<bool()> authorized) {
+    /** @copydoc EditorWorkspaceController::CaptureAgentSceneReplacement */
+    Result<SceneObjectReplacement> EditorWorkspaceController::CaptureAgentSceneReplacement(const SceneObjectId id) const {
+        using Output = Result<SceneObjectReplacement>;
+        const auto &objects = m_document.Objects();
+        const auto object = std::ranges::find(objects, id, &SceneObjectSnapshot::id);
+        const auto visible = std::ranges::find(m_viewModel.objects, id, &SceneObject::id);
+        if (object == objects.end() || object->generated || visible == m_viewModel.objects.end() || !visible->effectivelyVisible)
+            return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
+        const auto fingerprint = FingerprintSceneObjectContent(*object, MaximumSceneObjectFingerprintBytes);
+        if (fingerprint.HasError())
+            return Output::Failure(fingerprint.ErrorValue());
+        return Output::Success({.object = id, .priorContent = fingerprint.Value(), .desired = *object});
+    }
+
+    /** @copydoc EditorWorkspaceController::PreviewAgentSceneEdits */
+    Result<std::uint64_t> EditorWorkspaceController::PreviewAgentSceneEdits(const InspectionSceneRevision revision,
+                                                                            std::span<const SceneObjectTransformUpdate> updates,
+                                                                            std::span<const AgentSceneObjectRename> renames,
+                                                                            CancellationToken cancellation,
+                                                                            std::function<bool()> authorized) {
         using Output = Result<std::uint64_t>;
-        ReconcileAgentSceneTransformReview();
-        if (updates.empty() || updates.size() > MaximumProposalObjects)
+        ReconcileAgentSceneReview();
+        if (updates.size() > MaximumProposalObjects || renames.size() > MaximumProposalObjects - updates.size() ||
+            (updates.empty() && renames.empty()))
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
         if (authorized && !authorized())
             return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
         const auto current = InspectSceneRevision();
-        if (current.HasError() || current.Value() != revision || !CanReviewAgentSceneTransforms())
+        if (current.HasError() || current.Value() != revision || !CanReviewAgentSceneEdits())
             return Output::Failure(RejectReview(SceneTransactionFailure::Stale));
-        if (m_agentSceneTransformReview || !m_viewport.Current().transformPreviews.empty() || m_viewport.Current().lightPreview ||
-            m_agentSceneTransformReviewSerial == std::numeric_limits<std::uint64_t>::max() ||
+        if (m_agentSceneReview || !m_viewport.Current().transformPreviews.empty() || m_viewport.Current().lightPreview ||
+            m_agentSceneReviewSerial == std::numeric_limits<std::uint64_t>::max() ||
             revision.epoch == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
         CancellationSource lifetime{cancellation};
@@ -56,45 +73,70 @@ namespace Horo::Editor {
         auto owner = SceneDocumentTransactions::Bind(m_document, m_history, context.session);
         if (owner.HasError())
             return Output::Failure(owner.ErrorValue());
-        const auto &objects = m_document.Objects();
         std::vector<SceneObjectReplacement> changes;
-        changes.reserve(updates.size());
+        changes.reserve(updates.size() + renames.size());
         for (const auto &update : updates) {
-            const auto object = std::ranges::find(objects, update.object, &SceneObjectSnapshot::id);
-            const auto visible = std::ranges::find(m_viewModel.objects, update.object, &SceneObject::id);
-            if (object == objects.end() || object->generated || visible == m_viewModel.objects.end() || !visible->effectivelyVisible)
+            auto replacement = CaptureAgentSceneReplacement(update.object);
+            if (replacement.HasError())
+                return Output::Failure(replacement.ErrorValue());
+            auto change = std::move(replacement).Value();
+            change.desired->localTransform = update.localTransform;
+            changes.push_back(std::move(change));
+        }
+        for (const auto &rename : renames) {
+            if (!IsValidSceneObjectName(rename.name) || !IsValidUtf8ScalarSequence(rename.name) ||
+                std::ranges::any_of(rename.name,
+                                    [](const unsigned char byte) {
+                return byte < 0x20 || byte == 0x7f;
+            }) ||
+                std::ranges::count(renames, rename.object, &AgentSceneObjectRename::object) != 1)
                 return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-            const auto fingerprint = FingerprintSceneObjectContent(*object, MaximumSceneObjectFingerprintBytes);
-            if (fingerprint.HasError())
-                return Output::Failure(fingerprint.ErrorValue());
-            auto desired = *object;
-            desired.localTransform = update.localTransform;
-            changes.push_back({.object = object->id, .priorContent = fingerprint.Value(), .desired = std::move(desired)});
+            const SceneObjectId id{rename.object};
+            const auto changed = std::ranges::find(changes, id, &SceneObjectReplacement::object);
+            if (changed != changes.end()) {
+                changed->desired->name = rename.name;
+                continue;
+            }
+            auto replacement = CaptureAgentSceneReplacement(id);
+            if (replacement.HasError())
+                return Output::Failure(replacement.ErrorValue());
+            auto change = std::move(replacement).Value();
+            change.desired->name = rename.name;
+            changes.push_back(std::move(change));
         }
         auto preview = owner.Value().PreviewReplacements(context, std::move(changes), {.maximumChanges = MaximumProposalObjects});
         if (preview.HasError())
             return Output::Failure(preview.ErrorValue());
-        std::vector<SceneObjectTransformUpdate> effective;
-        for (const auto &change : preview.Value().Changes())
-            effective.push_back({change.object, change.desired->localTransform});
-        if (effective.empty())
+        if (preview.Value().Changes().empty())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        PreviewObjectTransforms(effective);
+        EditorWorkspaceViewModel::AgentSceneReviewView view{.objectCount = preview.Value().Changes().size()};
+        std::vector<SceneObjectTransformUpdate> effective;
+        const auto &objects = m_document.Objects();
+        for (const auto &change : preview.Value().Changes()) {
+            const auto &prior = *std::ranges::find(objects, change.object, &SceneObjectSnapshot::id);
+            if (prior.localTransform != change.desired->localTransform)
+                effective.push_back({change.object, change.desired->localTransform});
+            if (prior.name != change.desired->name)
+                view.renames.push_back({prior.id.value, prior.name, change.desired->name});
+        }
+        if (!effective.empty())
+            PreviewObjectTransforms(effective);
         if (m_viewport.Current().transformPreviews.size() != effective.size())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        const auto id = ++m_agentSceneTransformReviewSerial;
-        m_agentSceneTransformReview.emplace(id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
-                                            std::move(authorized));
-        m_viewModel.agentSceneReview = {id, effective.size()};
-        return Output::Success(id);
+        const auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
+        view.id = ++m_agentSceneReviewSerial;
+        m_agentSceneReview.emplace(view.id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
+                                   std::move(authorized), kind);
+        m_viewModel.agentSceneReview = std::move(view);
+        return Output::Success(m_agentSceneReviewSerial);
     }
 
-    /** @copydoc EditorWorkspaceController::ApproveAgentSceneTransforms */
-    Result<void> EditorWorkspaceController::ApproveAgentSceneTransforms(const std::uint64_t review) {
-        ReconcileAgentSceneTransformReview();
-        if (!m_agentSceneTransformReview || m_agentSceneTransformReview->id != review)
+    /** @copydoc EditorWorkspaceController::ApproveAgentSceneReview */
+    Result<void> EditorWorkspaceController::ApproveAgentSceneReview(const std::uint64_t review) {
+        ReconcileAgentSceneReview();
+        if (!m_agentSceneReview || m_agentSceneReview->id != review)
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
-        auto proposal = std::move(*m_agentSceneTransformReview);
+        auto proposal = std::move(*m_agentSceneReview);
         CancelObjectTransformPreview();
         std::vector<SceneObjectId> affected;
         for (const auto &change : proposal.preview.Changes())
@@ -102,7 +144,7 @@ namespace Horo::Editor {
         const SceneTransactionContext approval{proposal.context.session,
                                                m_document.Revision().value,
                                                m_document.State().value,
-                                               CanReviewAgentSceneTransforms() && (!proposal.authorized || proposal.authorized()),
+                                               CanReviewAgentSceneEdits() && (!proposal.authorized || proposal.authorized()),
                                                {}};
         const auto result = proposal.owner.ApplyReviewedReplacements(approval, std::move(proposal.preview));
         if (result.HasError())
@@ -110,29 +152,28 @@ namespace Horo::Editor {
         HandleDocumentCommandResult(Result<SceneCommandResult>::Success({{},
                                                                          {result.Value().revision},
                                                                          {result.Value().state},
-                                                                         DocumentChangeKind::TransformChanged,
+                                                                         proposal.kind,
                                                                          std::move(affected),
                                                                          result.Value().committed}),
-                                    "Apply reviewed scene transforms");
+                                    "Apply reviewed scene edits");
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorWorkspaceController::CancelAgentSceneTransforms */
-    bool EditorWorkspaceController::CancelAgentSceneTransforms(const std::uint64_t review) {
-        if (!m_agentSceneTransformReview || m_agentSceneTransformReview->id != review)
+    /** @copydoc EditorWorkspaceController::CancelAgentSceneReview */
+    bool EditorWorkspaceController::CancelAgentSceneReview(const std::uint64_t review) {
+        if (!m_agentSceneReview || m_agentSceneReview->id != review)
             return false;
         CancelObjectTransformPreview();
         return true;
     }
 
-    /** @copydoc EditorWorkspaceController::ReconcileAgentSceneTransformReview */
-    void EditorWorkspaceController::ReconcileAgentSceneTransformReview() {
-        if (!m_agentSceneTransformReview)
+    /** @copydoc EditorWorkspaceController::ReconcileAgentSceneReview */
+    void EditorWorkspaceController::ReconcileAgentSceneReview() {
+        if (!m_agentSceneReview)
             return;
-        const auto &review = *m_agentSceneTransformReview;
+        const auto &review = *m_agentSceneReview;
         if ((review.authorized && !review.authorized()) || review.context.cancellation.IsCancellationRequested() ||
-            review.owner.CheckCurrent().HasError() || review.context.revision != m_document.Revision().value ||
-            !CanReviewAgentSceneTransforms())
+            review.owner.CheckCurrent().HasError() || review.context.revision != m_document.Revision().value || !CanReviewAgentSceneEdits())
             CancelObjectTransformPreview();
     }
 
@@ -156,7 +197,7 @@ namespace Horo::Editor {
             CancelLightComponentPreview();
             return;
         }
-        if (m_agentSceneTransformReview)
+        if (m_agentSceneReview)
             CancelObjectTransformPreview();
         m_viewport.ClearTransformPreview();
         m_viewport.ClearLightPreview();
@@ -172,7 +213,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::PreviewObjectTransforms(const std::span<const SceneObjectTransformUpdate> updates) {
-        if (m_agentSceneTransformReview)
+        if (m_agentSceneReview)
             CancelObjectTransformPreview();
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
         if (!active || m_viewportScene.runtimeSceneId != active->RuntimeId() || updates.empty())
@@ -213,8 +254,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::CancelObjectTransformPreview() {
-        const bool retiringReview = m_agentSceneTransformReview.has_value();
-        m_agentSceneTransformReview.reset();
+        const bool retiringReview = m_agentSceneReview.has_value();
+        m_agentSceneReview.reset();
         m_viewModel.agentSceneReview.reset();
         if (m_viewport.Current().transformPreviews.empty() && (!retiringReview || m_viewportScene.transformOverrides.empty())) {
             return;

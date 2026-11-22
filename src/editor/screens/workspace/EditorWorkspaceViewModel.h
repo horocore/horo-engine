@@ -1121,8 +1121,16 @@ namespace Horo::Editor {
 
         /** @brief Bounded impact shown beside the transient authored viewport. */
         struct AgentSceneReviewView final {
+            /** @brief Names displayed before and after a proposed rename. */
+            struct Rename final {
+                std::uint64_t object{};
+                std::string before;
+                std::string after;
+            };
+
             std::uint64_t id{};
             std::size_t objectCount{};
+            std::vector<Rename> renames;
         };
 
         std::optional<AgentSceneReviewView> agentSceneReview;

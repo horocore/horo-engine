@@ -86,17 +86,19 @@ namespace {
 
     TEST_CASE("MCP transform proposal stages only an approved review for a live client", "[unit][editor][mcp][scene-review]") {
         std::function<bool()> retained;
+        std::vector<AgentSceneObjectRename> names;
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",
                                             .authorizationRevision = 3,
                                             .owner = std::this_thread::get_id(),
-                                            .proposeTransforms = [&](InspectionSceneRevision revision,
-                                                                     std::span<const AgentViewportTransform> transforms,
-                                                                     std::function<bool()> active) {
+                                            .proposeEdits =
+                                                [&](InspectionSceneRevision revision, std::span<const AgentViewportTransform> transforms,
+                                                    std::span<const AgentSceneObjectRename> renames, std::function<bool()> active) {
             CHECK((revision == InspectionSceneRevision{6, 19}));
             REQUIRE(transforms.size() == 1);
             CHECK(transforms.front().object == 42);
             CHECK((transforms.front().translation == std::array<float, 3>{1, -2, 3}));
+            names.assign(renames.begin(), renames.end());
             retained = std::move(active);
             return Result<std::uint64_t>::Success(71);
         }});
@@ -127,6 +129,15 @@ namespace {
         CHECK(response.at("result") == Json{{"reviewId", "71"}});
         REQUIRE(retained);
         CHECK(retained());
+        CHECK(names.empty());
+        auto mixed = arguments;
+        mixed["renames"] = Json::array({{{"object", 42}, {"name", "Platform"}}});
+        const auto rename = Command("mixed-proposal", "scene.propose_edits", mixed);
+        Approve(session, rename);
+        CHECK(Execute(session, rename).at("status") == "succeeded");
+        REQUIRE(names.size() == 1);
+        CHECK(names.front().object == 42);
+        CHECK(names.front().name == "Platform");
         REQUIRE(session.Close().HasValue());
         CHECK_FALSE(retained());
     }
