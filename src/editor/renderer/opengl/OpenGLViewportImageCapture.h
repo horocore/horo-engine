@@ -7,6 +7,7 @@
 #include "editor/renderer/EditorViewportImageCapture.h"
 
 #include <chrono>
+#include <functional>
 #include <glad/gl.h>
 #include <optional>
 
@@ -26,7 +27,7 @@ namespace Horo::Editor {
 
         /** @brief Admits one bounded rectangle and remembers its exact texture generation. */
         [[nodiscard]] Result<std::uint64_t> Request(EditorViewportImageRegion region, Render::RenderTargetHandle target,
-                                                    std::uint32_t width, std::uint32_t height);
+                                                    std::uint32_t width, std::uint32_t height, std::function<bool()> authorized = {});
         /** @brief Copies ready artifact ownership without touching native state. */
         [[nodiscard]] std::optional<EditorViewportImageSnapshot> Read(std::uint64_t id);
         /** @brief Prevents a pending copy from publishing without reusing its staging prematurely. */
@@ -41,16 +42,12 @@ namespace Horo::Editor {
 
     private:
         using Clock = std::chrono::steady_clock;
-        enum class CopyCompletion {
-            Pending,
-            Ready,
-            Failed
-        };
 
         void Expire(Clock::time_point now) noexcept;
+        void WithdrawIfUnauthorized();
         void ReconcileSource(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height, bool frameFailed) noexcept;
         bool Submit(GLuint framebuffer);
-        CopyCompletion Poll();
+        void Poll();
         bool CopyPixels();
         void ReleaseCopy() noexcept;
 
@@ -62,6 +59,7 @@ namespace Horo::Editor {
         EditorViewportImageRegion region_;
         EditorViewportImagePhase phase_{EditorViewportImagePhase::Failed};
         std::shared_ptr<const EditorViewportImageArtifact> artifact_;
+        std::function<bool()> authorized_;
         GLuint buffer_{};
         GLsync fence_{};
         bool copyFenceUnavailable_{};

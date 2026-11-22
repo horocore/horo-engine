@@ -22,7 +22,8 @@ namespace Horo::Editor {
 
         /** @brief Creates shader, geometry, and offscreen target state in the current OpenGL context. */
         [[nodiscard]] Result<void> Initialize();
-        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region) override;
+        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
+                                                                std::function<bool()> authorized = {}) override;
         [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
         bool CancelImageCapture(std::uint64_t id) noexcept override;
         [[nodiscard]] Result<void> EnableCameraCrossFade() override;

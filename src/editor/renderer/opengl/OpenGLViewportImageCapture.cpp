@@ -67,7 +67,7 @@ namespace Horo::Editor {
 
     /** @copydoc OpenGLViewportImageCapture::Request */
     Result<std::uint64_t> OpenGLViewportImageCapture::Request(EditorViewportImageRegion region, Render::RenderTargetHandle target,
-                                                              std::uint32_t width, std::uint32_t height) {
+                                                              std::uint32_t width, std::uint32_t height, std::function<bool()> authorized) {
         using Output = Result<std::uint64_t>;
         const auto now = Clock::now();
         Expire(now);
@@ -83,12 +83,14 @@ namespace Horo::Editor {
         region_ = region;
         phase_ = EditorViewportImagePhase::Pending;
         artifact_.reset();
+        authorized_ = std::move(authorized);
         return Output::Success(++serial_);
     }
 
     /** @copydoc OpenGLViewportImageCapture::Read */
     std::optional<EditorViewportImageSnapshot> OpenGLViewportImageCapture::Read(std::uint64_t id) {
         Expire(Clock::now());
+        WithdrawIfUnauthorized();
         if (!started_ || serial_ != id)
             return std::nullopt;
         return EditorViewportImageSnapshot{phase_, artifact_};
@@ -111,14 +113,13 @@ namespace Horo::Editor {
     /** @copydoc OpenGLViewportImageCapture::Advance */
     void OpenGLViewportImageCapture::Advance(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height, bool frameFailed,
                                              std::optional<GLuint> renderedFramebuffer) {
-        if (phase_ != EditorViewportImagePhase::Pending && !fence_)
+        if (phase_ != EditorViewportImagePhase::Pending && phase_ != EditorViewportImagePhase::Ready && !fence_)
             return;
         Expire(Clock::now());
         ReconcileSource(target, width, height, frameFailed);
+        WithdrawIfUnauthorized();
         if (fence_) {
-            const auto result = Poll();
-            if (phase_ == EditorViewportImagePhase::Pending && result != CopyCompletion::Pending)
-                phase_ = result == CopyCompletion::Ready ? EditorViewportImagePhase::Ready : EditorViewportImagePhase::Failed;
+            Poll();
             return;
         }
         if (NeedsFramebuffer() && renderedFramebuffer && !Submit(*renderedFramebuffer))
@@ -141,7 +142,17 @@ namespace Horo::Editor {
         if (started_ && now - *started_ >= Lifetime) {
             artifact_.reset();
             phase_ = EditorViewportImagePhase::Expired;
+            authorized_ = {};
         }
+    }
+
+    /** @brief Revokes both pending and detached image evidence when the owner leaves its admitted scope. */
+    void OpenGLViewportImageCapture::WithdrawIfUnauthorized() {
+        if (!authorized_ || authorized_())
+            return;
+        authorized_ = {};
+        artifact_.reset();
+        phase_ = EditorViewportImagePhase::Cancelled;
     }
 
     /** @brief Queues one bounded color rectangle into an OpenGL pixel pack buffer. */
@@ -172,14 +183,15 @@ namespace Horo::Editor {
     }
 
     /** @brief Observes native completion at zero timeout, retaining cancelled staging until its fence signals. */
-    OpenGLViewportImageCapture::CopyCompletion OpenGLViewportImageCapture::Poll() {
+    void OpenGLViewportImageCapture::Poll() {
         const auto wait = glClientWaitSync(fence_, 0, 0);
         if (wait == GL_TIMEOUT_EXPIRED)
-            return CopyCompletion::Pending;
-        const bool completed = wait == GL_ALREADY_SIGNALED || wait == GL_CONDITION_SATISFIED;
-        const bool copied = completed && phase_ == EditorViewportImagePhase::Pending && CopyPixels();
+            return;
+        if (phase_ == EditorViewportImagePhase::Pending) {
+            const bool completed = wait == GL_ALREADY_SIGNALED || wait == GL_CONDITION_SATISFIED;
+            phase_ = completed && CopyPixels() ? EditorViewportImagePhase::Ready : EditorViewportImagePhase::Failed;
+        }
         ReleaseCopy();
-        return copied ? CopyCompletion::Ready : CopyCompletion::Failed;
     }
 
     /** @brief Maps only completed storage, flips rows, and publishes no native identities. */
@@ -222,6 +234,7 @@ namespace Horo::Editor {
         ReleaseCopy();
         artifact_.reset();
         started_.reset();
+        authorized_ = {};
         phase_ = EditorViewportImagePhase::Failed;
         copyFenceUnavailable_ = false;
     }

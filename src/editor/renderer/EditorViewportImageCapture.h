@@ -17,6 +17,8 @@ namespace Horo::Editor {
         std::uint32_t width{};
         std::uint32_t height{};
 
+        bool operator==(const EditorViewportImageRegion &) const = default;
+
         /** @brief Checks the resolution budget and exact source extent without overflowing offsets. */
         [[nodiscard]] constexpr bool Fits(std::uint32_t sourceWidth, std::uint32_t sourceHeight) const noexcept {
             return width > 0 && height > 0 && width <= MaximumDimension && height <= MaximumDimension && x <= sourceWidth &&

@@ -131,6 +131,90 @@ namespace {
         CHECK_FALSE(authorized());
     }
 
+    TEST_CASE("Approved viewport crops return bounded chunks to the exact MCP session", "[unit][editor][mcp][debug-capture]") {
+        constexpr EditorViewportImageRegion region{1, 2, 256, 3};
+        auto image = std::make_shared<EditorViewportImageArtifact>(
+            EditorViewportImageArtifact{region, std::vector<std::byte>(region.Bytes(), std::byte{0xf0})});
+        auto phase = EditorViewportImagePhase::Pending;
+        std::function<bool()> authorized;
+        const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(EditorDebugCaptureEndpoint{
+            .project = "project-one",
+            .authorizationRevision = 3,
+            .owner = std::this_thread::get_id(),
+            .start =
+                [](const EditorDebugCaptureRequest &, std::function<bool()>) {
+            return Result<std::uint64_t>::Success(12);
+        },
+            .read =
+                [](std::uint64_t) {
+            return std::optional<EditorDebugCaptureArtifact>{};
+        },
+            .cancel =
+                [](std::uint64_t) {
+            return false;
+        },
+            .startImage =
+                [&](EditorViewportImageRegion requested, std::function<bool()> active) {
+            CHECK(requested == region);
+            authorized = std::move(active);
+            return Result<std::uint64_t>::Success(12);
+        },
+            .readImage = [&](std::uint64_t id) -> std::optional<EditorViewportImageSnapshot> {
+            CHECK(id == 12);
+            return EditorViewportImageSnapshot{phase, image};
+        },
+            .cancelImage =
+                [&](std::uint64_t id) {
+            CHECK(id == 12);
+            phase = EditorViewportImagePhase::Cancelled;
+            return true;
+        },
+        });
+        const EditorCommandMcpAdmission admission{"capture-client", "project-one", 3, {std::string{EditorDebugCaptureGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        auto &session = *opened.Value();
+        const auto start = Command("start-image", "viewport.capture_image", {{"x", 1}, {"y", 2}, {"width", 256}, {"height", 3}});
+        CHECK(session.Client()->Call(start).HasError());
+        Approve(session, start);
+        const auto started = Execute(session, start);
+        REQUIRE(started["status"] == "succeeded");
+        const auto args = started["result"];
+        const auto pending = Execute(session, Command("pending-image", "debug.get_image", args));
+        CHECK(pending["result"]["phase"] == "pending");
+        CHECK_FALSE(pending["result"].contains("data"));
+
+        phase = EditorViewportImagePhase::Ready;
+        const auto first = Execute(session, Command("first-chunk", "debug.get_image", args));
+        REQUIRE(first["status"] == "succeeded");
+        CHECK(first["result"]["totalBytes"] == 3072);
+        CHECK(first["result"]["encoding"] == "rgba8-hex");
+        CHECK(first["result"]["data"].get<std::string>().size() == 4096);
+        CHECK(first["result"]["data"].get<std::string>().starts_with("f0f0"));
+        const auto next = first["result"]["nextOffset"];
+        REQUIRE(next == 2048);
+        const auto second = Execute(session, Command("second-chunk", "debug.get_image", {{"captureId", "12"}, {"offset", next}}));
+        REQUIRE(second["status"] == "succeeded");
+        CHECK(second["result"]["offset"] == 2048);
+        CHECK(second["result"]["data"].get<std::string>().size() == 2048);
+        CHECK_FALSE(second["result"].contains("nextOffset"));
+        CHECK(Execute(session, Command("wrong-id", "debug.get_image", {{"captureId", "13"}}))["status"] != "succeeded");
+        image->region.x = 3;
+        CHECK(Execute(session, Command("wrong-region", "debug.get_image", args))["status"] != "succeeded");
+        auto other = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
+        REQUIRE(other.HasValue());
+        CHECK(Execute(*other.Value(), Command("other-session", "debug.get_image", args))["status"] != "succeeded");
+
+        const auto cancel = Command("cancel-image", "debug.cancel_image", args);
+        CHECK(session.Client()->Call(cancel).HasError());
+        Approve(session, cancel);
+        CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
+        REQUIRE(authorized);
+        CHECK(authorized());
+        CHECK(session.Close().HasValue());
+        CHECK_FALSE(authorized());
+    }
+
     TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {
         std::vector<ObjectInspectionRequest> reads;
         const InspectionSceneRevision scene{7, 19};

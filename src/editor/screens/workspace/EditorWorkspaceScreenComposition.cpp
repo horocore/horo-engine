@@ -291,13 +291,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceCommandAccess access{
             .projectIdentity = projectIdentity,
             .bind =
-                [workspace, lifetime, project = std::move(projectIdentity)](const std::uint64_t trustRevision) {
+                [workspace, lifetime, viewport = panelServices_.viewportRenderer,
+                 project = std::move(projectIdentity)](const std::uint64_t trustRevision) {
             if (lifetime.expired())
                 return EditorWorkspaceCommandEndpoints{};
             return EditorWorkspaceCommandEndpoints{
-                workspace->BindSourcePresentation(project, trustRevision),   workspace->BindGameplayBuildCommands(project, trustRevision),
-                workspace->BindGameplayTestCommands(project, trustRevision), workspace->BindSceneInspection(project, trustRevision),
-                workspace->BindDebugCapture(project, trustRevision),
+                workspace->BindSourcePresentation(project, trustRevision),     workspace->BindGameplayBuildCommands(project, trustRevision),
+                workspace->BindGameplayTestCommands(project, trustRevision),   workspace->BindSceneInspection(project, trustRevision),
+                workspace->BindDebugCapture(project, trustRevision, viewport),
             };
         },
             .revoke =

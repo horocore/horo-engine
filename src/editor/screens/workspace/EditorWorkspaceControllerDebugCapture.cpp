@@ -1,3 +1,5 @@
+#include "EditorInspectionCommandEndpoint.h"
+#include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -12,30 +14,72 @@ namespace Horo::Editor {
                                               .code = ErrorCode{"capture_busy"},
                                               .defaultSeverity = ErrorSeverity::Warning,
                                               .summary = "A capture is already running or its start rate is limited."};
+        const ErrorCodeDescriptor ImageUnavailable{.domain = ErrorDomainId{"editor.debug_capture"},
+                                                   .code = ErrorCode{"image_unavailable"},
+                                                   .defaultSeverity = ErrorSeverity::Warning,
+                                                   .summary = "The exact authored viewport is unavailable."};
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::BindDebugCapture */
     std::weak_ptr<const EditorDebugCaptureEndpoint> EditorWorkspaceController::BindDebugCapture(std::string project,
-                                                                                                std::uint64_t authorizationRevision) {
+                                                                                                std::uint64_t authorizationRevision,
+                                                                                                IEditorViewportRenderer *viewport) {
         m_debugCapture.Clear();
         m_debugCaptureAuthorized = {};
         m_debugCaptureEntity.reset();
-        m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(
-            EditorDebugCaptureEndpoint{.project = std::move(project),
-                                       .authorizationRevision = authorizationRevision,
-                                       .owner = std::this_thread::get_id(),
-                                       .start =
-                                           [this](const EditorDebugCaptureRequest &request, std::function<bool()> authorized) {
+        EditorDebugCaptureEndpoint endpoint{.project = std::move(project),
+                                            .authorizationRevision = authorizationRevision,
+                                            .owner = std::this_thread::get_id(),
+                                            .start =
+                                                [this](const EditorDebugCaptureRequest &request, std::function<bool()> authorized) {
             return StartDebugCapture(request, std::move(authorized));
         },
-                                       .read =
-                                           [this](std::uint64_t id) {
+                                            .read =
+                                                [this](std::uint64_t id) {
             return m_debugCapture.Read(id, EditorDebugCaptureStorage::Clock::now());
         },
-                                       .cancel = [this](std::uint64_t id) {
+                                            .cancel = [this](std::uint64_t id) {
             return m_debugCapture.Cancel(id, EditorDebugCaptureStorage::Clock::now());
-        }});
+        }};
+        if (viewport) {
+            endpoint.startImage = [this, viewport](EditorViewportImageRegion region, std::function<bool()> authorized) {
+                return StartDebugImage(*viewport, region, std::move(authorized));
+            };
+            endpoint.readImage = [viewport](std::uint64_t id) {
+                return viewport->ReadImageCapture(id);
+            };
+            endpoint.cancelImage = [viewport](std::uint64_t id) {
+                return viewport->CancelImageCapture(id);
+            };
+        }
+        m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(std::move(endpoint));
         return m_debugCaptureEndpoint;
+    }
+
+    /** @copydoc EditorWorkspaceController::StartDebugImage */
+    Result<std::uint64_t> EditorWorkspaceController::StartDebugImage(IEditorViewportRenderer &viewport, EditorViewportImageRegion region,
+                                                                     std::function<bool()> authorized) {
+        const auto expected = InspectSceneRevision();
+        const auto active = m_runtimeScene.ActiveScene();
+        if (!expected.HasValue() || !active || !HasCurrentInspectionGeometry(*active))
+            return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
+        auto valid = [this, lease = std::weak_ptr{m_debugCaptureEndpoint}, scene = expected.Value(), runtime = active->RuntimeId(),
+                      authorized = std::move(authorized)] {
+            return !lease.expired() && authorized && authorized() && IsCurrentDebugImageSource(scene, runtime);
+        };
+        if (!valid())
+            return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
+        return viewport.RequestImageCapture(region, std::move(valid));
+    }
+
+    /** @copydoc EditorWorkspaceController::IsCurrentDebugImageSource */
+    bool EditorWorkspaceController::IsCurrentDebugImageSource(InspectionSceneRevision revision, Runtime::SceneRuntimeId runtime) const {
+        if (m_playSession.State() != EditorPlaySessionState::Idle || m_cameraPreview || m_activeTerrainDocument)
+            return false;
+        const auto current = InspectSceneRevision();
+        const auto active = m_runtimeScene.ActiveScene();
+        return current.HasValue() && current.Value() == revision && active && active->RuntimeId() == runtime &&
+               HasCurrentInspectionGeometry(*active);
     }
 
     /** @copydoc EditorWorkspaceController::StartDebugCapture */

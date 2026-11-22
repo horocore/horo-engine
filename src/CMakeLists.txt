@@ -4801,6 +4801,8 @@ endforeach ()
 configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers}/EditorCommandMcpSession.h" COPYONLY)
 configure_file(mcp/EditorDebugCaptureMcpTools.h "${_horo_mcp_editor_command_headers}/EditorDebugCaptureMcpTools.h" COPYONLY)
 configure_file(editor/screens/workspace/EditorDebugCapture.h "${_horo_mcp_editor_command_headers}/EditorDebugCapture.h" COPYONLY)
+configure_file(editor/renderer/EditorViewportImageCapture.h
+    "${_horo_mcp_editor_command_headers}/editor/renderer/EditorViewportImageCapture.h" COPYONLY)
 configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
 configure_file(editor/screens/workspace/EditorWorkspaceCommandAccess.h
     "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)

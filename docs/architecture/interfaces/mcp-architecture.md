@@ -778,6 +778,15 @@ the active trace. The workspace retains one trace for up to 30 seconds and
 stops sampling when the Play generation or target changes. Workspace retirement
 withdraws the artifact.
 
+The same pack offers an approved `viewport.capture_image` crop on the OpenGL
+authored viewport while Play is idle. Coordinates use a top-left pixel origin,
+with at most 256 pixels per axis. `debug.get_image` reports capture status and
+returns ready RGBA8 pixels as hexadecimal in chunks of up to 2,048 bytes. Start
+at offset zero and use `nextOffset` until the result omits it. Reads belong to the
+same authenticated session and source revision. `debug.cancel_image` requires
+exact approval. Workspace retirement, a source change, or loss of authority
+withdraws the image.
+
 ## Editor gameplay build commands
 
 The editor command pack offers `editor.build.start`, `editor.build.status`,

@@ -182,6 +182,8 @@ namespace Horo::Editor {
         const EditorInspectionPhysics *inspectionPhysics{};
     };
 
+    class IEditorViewportRenderer;
+
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
         /** Explicit host operation on actual isolated Play; source must already be an authenticated immutable capture.
@@ -239,7 +241,8 @@ namespace Horo::Editor {
                                                                                                std::uint64_t authorizationRevision);
         /** @brief Binds approved debug capture to this exact committed editor workspace. */
         [[nodiscard]] std::weak_ptr<const EditorDebugCaptureEndpoint> BindDebugCapture(std::string project,
-                                                                                       std::uint64_t authorizationRevision);
+                                                                                       std::uint64_t authorizationRevision,
+                                                                                       IEditorViewportRenderer *viewport = nullptr);
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -841,6 +844,11 @@ namespace Horo::Editor {
 
         /** @brief Admits one capture in an existing active Play scene. */
         [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request, std::function<bool()> authorized);
+        /** @brief Captures pixels only while the approved authored scene remains the viewport source. */
+        [[nodiscard]] Result<std::uint64_t> StartDebugImage(IEditorViewportRenderer &viewport, EditorViewportImageRegion region,
+                                                            std::function<bool()> authorized);
+        /** @brief Checks that the exact authored Scene still owns the viewport. */
+        [[nodiscard]] bool IsCurrentDebugImageSource(InspectionSceneRevision revision, Runtime::SceneRuntimeId runtime) const;
         /** @brief Samples the committed Play transformation on the editor owner lane. */
         void UpdateDebugCapture();
         /** @brief Reads a numeric page without changing authored state, selection, or presentation. */

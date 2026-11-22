@@ -7,11 +7,12 @@
 
 namespace Horo::Editor {
     /** @copydoc IEditorViewportRenderer::RequestImageCapture */
-    Result<std::uint64_t> EditorViewportRendererOpenGL::RequestImageCapture(EditorViewportImageRegion region) {
+    Result<std::uint64_t> EditorViewportRendererOpenGL::RequestImageCapture(EditorViewportImageRegion region,
+                                                                            std::function<bool()> authorized) {
         const auto extent = resources_.AllocatedExtent();
         if (!initialized_ || !requestedExtent_.IsValid())
             return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
-        return imageCapture_.Request(region, resources_.Target(), extent.width, extent.height);
+        return imageCapture_.Request(region, resources_.Target(), extent.width, extent.height, std::move(authorized));
     }
 
     /** @copydoc IEditorViewportRenderer::ReadImageCapture */

@@ -176,6 +176,32 @@ namespace {
         CHECK(gl.fake.retired == 1);
     }
 
+    TEST_CASE("OpenGL viewport capture withdraws pending and ready evidence when authority ends", "[editor][opengl][image-capture]") {
+        ScopedCaptureDispatch gl;
+        OpenGLViewportImageCapture capture;
+        bool authorized = true;
+        const auto id = capture.Request({0, 0, 2, 2}, Target, 10, 10, [&] {
+            return authorized;
+        });
+        REQUIRE(id.HasValue());
+        capture.Advance(Target, 10, 10, false, 20);
+        gl.fake.waitStatus = GL_CONDITION_SATISFIED;
+        SECTION("pending copies are retired without mapping") {
+            authorized = false;
+            capture.Advance(Target, 10, 10, false, std::nullopt);
+            CHECK(gl.fake.maps == 0);
+        }
+        SECTION("completed pixels are withdrawn before a later read") {
+            capture.Advance(Target, 10, 10, false, std::nullopt);
+            REQUIRE(capture.Read(id.Value())->artifact);
+            authorized = false;
+        }
+        const auto withdrawn = capture.Read(id.Value());
+        REQUIRE(withdrawn);
+        CHECK(withdrawn->phase == EditorViewportImagePhase::Cancelled);
+        CHECK_FALSE(withdrawn->artifact);
+    }
+
     TEST_CASE("OpenGL viewport capture suppresses copied pixels after retirement", "[editor][opengl][image-capture]") {
         ScopedCaptureDispatch gl;
         OpenGLViewportImageCapture capture;

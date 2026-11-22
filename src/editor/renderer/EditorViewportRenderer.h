@@ -7,14 +7,15 @@
 
 #include "EditorRendererErrors.h"
 #include "EditorViewportColorTypes.h"
-#include "EditorViewportImageCapture.h"
 #include "EditorViewportLighting.h"
 #include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "editor/renderer/EditorViewportImageCapture.h"
 #include "editor/renderer/EditorViewportScene.h"
 
+#include <functional>
 #include <optional>
 
 namespace Horo::Render {
@@ -60,7 +61,7 @@ namespace Horo::Editor {
         virtual ~IEditorViewportRenderer() = default;
 
         /** @brief Requests a bounded copy from the exact currently allocated offscreen viewport. */
-        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion) {
+        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion, std::function<bool()> = {}) {
             return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
         }
 

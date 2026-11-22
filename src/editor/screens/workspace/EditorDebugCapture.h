@@ -2,6 +2,7 @@
 
 /** @file EditorDebugCapture.h @brief Bounded numeric debug capture at the editor owner boundary. */
 
+#include "editor/renderer/EditorViewportImageCapture.h"
 #include "Horo/Foundation/Result.h"
 
 #include <array>
@@ -132,5 +133,8 @@ namespace Horo::Editor {
         std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &, std::function<bool()>)> start;
         std::function<std::optional<EditorDebugCaptureArtifact>(std::uint64_t)> read;
         std::function<bool(std::uint64_t)> cancel;
+        std::function<Result<std::uint64_t>(EditorViewportImageRegion, std::function<bool()>)> startImage;
+        std::function<std::optional<EditorViewportImageSnapshot>(std::uint64_t)> readImage;
+        std::function<bool(std::uint64_t)> cancelImage;
     };
 }  // namespace Horo::Editor
