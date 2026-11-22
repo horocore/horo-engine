@@ -462,7 +462,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         /** @brief Adds the canonical Character geometry and the authored decision closure to the real cooked Navigation project. */
         Assets::AssetId PublishDecisionMotionProject(NavigationProductFixture &navigation, DecisionFixture::Fixture &decision,
                                                      const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller,
-                                                     std::optional<Animation::GraphParameterId> trigger) {
+                                                     std::optional<Animation::GraphParameterId> trigger, bool addSecondAgent = false) {
             Fixture character;
             auto &project = navigation.project;
             const auto root = project.project.dir.path;
@@ -499,6 +499,13 @@ namespace Horo::Application::CharacterSceneProductTest {
                 auto &floor = scene.objects[1].components;
                 floor.rigidBody = character.source.objects[1].components.rigidBody;
                 floor.colliders = character.source.objects[1].components.colliders;
+                if (addSecondAgent) {
+                    scene.objects.push_back(
+                        {.id = {4},
+                         .name = "Second decision agent",
+                         .components = {.aiAgent = AI::AiAgentComponent{.agent = DecisionFixture::MakeIdentity<AI::AgentId>(51)},
+                                        .aiController = actor.components.aiController}});
+                }
             });
             return asset;
         }
@@ -895,7 +902,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(replayComparison.Value()->boundary == AI::AiReplayBoundary::QueryPublication);
     }
 
-    TEST_CASE("Standalone and dedicated AI products retire failed and pending decision callbacks",
+    TEST_CASE("Standalone and dedicated AI products bound decision admission and retire callbacks",
               "[ai][qualification][character][product]") {
         using Role = Network::NetworkProjectRole;
         const auto role = GENERATE(Role::Standalone, Role::DedicatedServer);
@@ -908,13 +915,20 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                             .decisionAsset = source.asset,
                                                             .decisionKind = AI::DecisionPlanKind::BehaviorTree,
                                                             .blackboardSchema = decision.schema}};
-        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt);
         bool failStart{};
+        bool overload{};
         SECTION("Provider failure has one typed terminal cleanup") {
             failStart = true;
             decision.probe.startOutcome = Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
         }
         SECTION("Host shutdown cancels a pending callback once") {}
+        SECTION("Deterministic budget overload rejects the entire Scene") {
+            overload = true;
+        }
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt, overload);
+        AI::AiTaskSchedulerSettings scheduler;
+        if (overload)
+            scheduler.evaluationsPerTick = 1;
 
         NativeNavigationProductWorld product;
         const auto started =
@@ -924,8 +938,24 @@ namespace Horo::Application::CharacterSceneProductTest {
                 Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
                                                       .environment = decision.Environment(),
                                                       .bindings = {{catalog.front().controller, asset}},
-                                                      .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, {}, {}}});
+                                                      .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, scheduler, {}}});
         }, role, role == Role::DedicatedServer ? std::optional{Internal::HeadlessSimulationAssets{.decisions = {asset}}} : std::nullopt);
+        if (overload) {
+            REQUIRE(started.HasError());
+            CHECK(started.ErrorValue().code.Value() == AI::AIErrors::SchedulerBudgetExhausted.code.Value());
+            CHECK(decision.probe.starts == 0);
+            if (product.scheduled) {
+                const auto kind = Network::NetworkModeWorldKind::AuthorityServer;
+                CHECK(product.scheduled->Role(kind, {31}).HasError());
+                CHECK_FALSE(product.scheduled->AiHealth({kind, {31}}));
+            } else {
+                REQUIRE(product.scene);
+                CHECK_FALSE(Internal::InspectHeadlessScene(*product.scene));
+            }
+            product.Stop();
+            CHECK(decision.probe.cleanups == 0);
+            return;
+        }
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().message);
         REQUIRE(started.HasValue());
