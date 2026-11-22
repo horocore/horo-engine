@@ -75,17 +75,28 @@ namespace Horo::Editor {
             return card.destination ? &*card.destination : nullptr;
         }
 
+        /** @brief Adds the opt-in destination to the offer once, preserving the original source order. */
+        void AllowSelectedPatchDestination(const EditorPatchDestination *destination, std::vector<SourceDocumentId> &offeredPaths,
+                                           std::vector<Proposals::PathRule> &rules) {
+            if (!destination || std::ranges::find(offeredPaths, destination->path) != offeredPaths.end())
+                return;
+            rules.push_back({destination->path, false});
+            offeredPaths.push_back(destination->path);
+        }
+
         /** @brief Verifies the selected destination appears in the proposal before observing its filesystem evidence. */
         Result<void> ObserveSelectedPatchDestination(const std::span<const EditorPatchFileCard> cards,
-                                                     const EditorPatchDestination &destination,
+                                                     const EditorPatchDestination *destination,
                                                      std::vector<Proposals::SourcePathObservation> &observations) {
-            const bool matches = std::ranges::any_of(cards, [&destination](const auto &card) {
+            if (!destination)
+                return Result<void>::Success();
+            const bool matches = std::ranges::any_of(cards, [destination](const auto &card) {
                 const auto *path = DestinationPath(card);
-                return path && *path == destination.path;
+                return path && *path == destination->path;
             });
             if (!matches)
                 return Result<void>::Failure(MakeError(Proposals::Errors::PolicyDenied));
-            ObserveEditorPatchDestinations(cards, destination.root, destination.files, observations, destination.stop);
+            ObserveEditorPatchDestinations(cards, destination->root, destination->files, observations, destination->stop);
             return Result<void>::Success();
         }
     }  // namespace
@@ -152,10 +163,7 @@ namespace Horo::Editor {
             observations.push_back({path, source});
             offeredPaths.push_back(path);
         }
-        if (destination && std::ranges::find(offeredPaths, destination->path) == offeredPaths.end()) {
-            rules.push_back({destination->path, false});
-            offeredPaths.push_back(destination->path);
-        }
+        AllowSelectedPatchDestination(destination, offeredPaths, rules);
         auto policy = ProjectPolicy::Capture(std::string{project}, generation, std::move(rules));
         if (policy.HasError())
             return ReviewResult::Failure(policy.ErrorValue());
@@ -167,11 +175,8 @@ namespace Horo::Editor {
         if (proposal.HasError())
             return ReviewResult::Failure(proposal.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
-        if (destination) {
-            const auto observed = ObserveSelectedPatchDestination(cards, *destination, observations);
-            if (observed.HasError())
-                return ReviewResult::Failure(observed.ErrorValue());
-        }
+        if (const auto observed = ObserveSelectedPatchDestination(cards, destination, observations); observed.HasError())
+            return ReviewResult::Failure(observed.ErrorValue());
         auto plan = PlanWorkspaceEdits(proposal.Value(), policy.Value(), observations);
         if (plan.HasError())
             return ReviewResult::Failure(plan.ErrorValue());
