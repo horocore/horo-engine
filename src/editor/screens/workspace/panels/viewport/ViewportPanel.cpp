@@ -94,6 +94,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         contributions_ = context.extensionViewport;
+        offerAgentViewportReview_ = context.offerAgentViewportReview;
         viewportRenderer_ = context.viewportRenderer;
         navigationOverlays_ = context.navigationOverlays;
         navigationProjectRoot_ = context.projectRoot;
@@ -109,6 +110,7 @@ namespace Horo::Editor {
         terrainTool_->Cancel();
         interaction_.Detach();
         contributions_ = nullptr;
+        offerAgentViewportReview_ = {};
         activeContribution_ = {};
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
@@ -214,7 +216,9 @@ namespace Horo::Editor {
                                                      .tool = viewModel.activeTransformTool,
                                                      .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
                                                      .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
-                                                     .objectCount = viewModel.objects.size()},
+                                                     .objectCount = viewModel.objects.size(),
+                                                     .canReviewWithAgent =
+                                                         offerAgentViewportReview_ && viewModel.playState == EditorPlayState::Idle},
                                 context.theme.fonts, context.localization);
         if (overlay.projection) {
             command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
@@ -231,6 +235,8 @@ namespace Horo::Editor {
         }
         if (overlay.toggleGrid)
             gridOverride_ = !gridOverride_.value_or(context.settings.settings.gridOverlay);
+        if (overlay.reviewWithAgent)
+            offerAgentViewportReview_(command);
         if (!hasRenderedViewport)
             DrawMissingRendererMessage(centerX, origin.y, height, context);
 

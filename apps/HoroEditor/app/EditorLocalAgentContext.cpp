@@ -13,30 +13,55 @@ namespace Horo::Editor {
         constexpr auto Residence = Security::AgentProviderResidence::Local;
         constexpr auto PreviewLifetime = std::chrono::minutes{5};
 
-        /** @brief Encodes the exact public numeric fields shown in the consent preview. */
-        std::optional<std::string> ViewportEvidence(const AgentViewportOverview &viewport) {
-            constexpr std::array modes{"select", "move", "rotate", "scale"};
-            const auto tool = static_cast<std::size_t>(viewport.tool);
-            if (!viewport.revision || tool >= modes.size() || !(viewport.verticalExtent > 0) || !(viewport.nearPlane > 0) ||
-                !(viewport.farPlane > viewport.nearPlane))
-                return std::nullopt;
-            const auto vector = [](const std::array<float, 3> &value) -> std::optional<std::string> {
-                if (!std::ranges::all_of(value, [](const float component) {
-                    return std::isfinite(component);
-                }))
-                    return std::nullopt;
-                return std::format("[{}, {}, {}]", value[0], value[1], value[2]);
-            };
-            const auto position = vector(viewport.position);
-            const auto target = vector(viewport.target);
-            const auto up = vector(viewport.up);
-            if (!position || !target || !up || !std::isfinite(viewport.verticalExtent) || !std::isfinite(viewport.farPlane))
-                return std::nullopt;
+        constexpr std::array ViewportModes{"select", "move", "rotate", "scale"};
+
+        /** @brief Rejects nonfinite data before producing any provider-bound text. */
+        bool FiniteValues(const std::span<const float> values) {
+            return std::ranges::all_of(values, [](const float value) {
+                return std::isfinite(value);
+            });
+        }
+
+        /** @brief Checks the closed viewport mode and finite projection before serialization. */
+        bool ValidViewport(const AgentViewportOverview &viewport) {
+            const std::array projection{viewport.verticalExtent, viewport.nearPlane, viewport.farPlane};
+            return viewport.revision && static_cast<std::size_t>(viewport.tool) < ViewportModes.size() && viewport.verticalExtent > 0 &&
+                   viewport.nearPlane > 0 && viewport.farPlane > viewport.nearPlane && FiniteValues(projection) &&
+                   FiniteValues(viewport.position) && FiniteValues(viewport.target) && FiniteValues(viewport.up);
+        }
+
+        /** @brief Formats a validated three-component vector with invariant separators. */
+        std::string VectorEvidence(const std::array<float, 3> &value) {
+            return std::format("[{}, {}, {}]", value[0], value[1], value[2]);
+        }
+
+        /** @brief Encodes exactly the public camera fields shown in the consent preview. */
+        std::string ViewportEvidence(const AgentViewportOverview &viewport) {
             return std::format("camera.position = {}\ncamera.target = {}\ncamera.up = {}\ncamera.projection = {}\n"
                                "camera.{} = {}\ncamera.clip = [{}, {}]\nviewport.tool = {}\n",
-                               *position, *target, *up, viewport.orthographic ? "orthographic" : "perspective",
+                               VectorEvidence(viewport.position), VectorEvidence(viewport.target), VectorEvidence(viewport.up),
+                               viewport.orthographic ? "orthographic" : "perspective",
                                viewport.orthographic ? "height" : "verticalFovRadians", viewport.verticalExtent, viewport.nearPlane,
-                               viewport.farPlane, modes[tool]);
+                               viewport.farPlane, ViewportModes[static_cast<std::size_t>(viewport.tool)]);
+        }
+
+        /** @brief Checks scope membership before adding the explicitly selected component values. */
+        bool AppendLocalTransforms(const AgentSceneSelectionSnapshot &selection, std::string &text) {
+            if (selection.transformCount == 0)
+                return true;
+            if (!selection.viewport || selection.transformCount != selection.objectCount)
+                return false;
+            for (std::size_t index = 0; index < selection.transformCount; ++index) {
+                const auto &transform = selection.transforms[index];
+                if (transform.object != selection.objects[index] || !FiniteValues(transform.translation) ||
+                    !FiniteValues(transform.rotation) || !FiniteValues(transform.scale))
+                    return false;
+                const auto &r = transform.rotation;
+                text += std::format("object {} local transform: translation = {}, rotationXYZW = [{}, {}, {}, {}], scale = {}\n",
+                                    transform.object, VectorEvidence(transform.translation), r[0], r[1], r[2], r[3],
+                                    VectorEvidence(transform.scale));
+            }
+            return true;
         }
 
         /** @brief Reuses the host's bounded plain-display redaction without passing any raw data into history. */
@@ -331,22 +356,32 @@ namespace Horo::Editor {
         auto revision = std::format("scene:{}:{}:{}", selection.documentEpoch, selection.documentRevision, selection.selectionRevision);
         std::string text;
         if (selection.viewport) {
-            auto evidence = ViewportEvidence(*selection.viewport);
-            if (!evidence)
+            if (!ValidViewport(*selection.viewport))
                 return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
-            text = std::move(*evidence);
+            text = ViewportEvidence(*selection.viewport);
             revision += std::format(":viewport:{}", selection.viewport->revision);
         }
-        for (const auto id : objects)
-            text += std::format("Selected object ID {}\n", id);
+        if (selection.transformCount == 0) {
+            for (const auto id : objects)
+                text += std::format("Selected object ID {}\n", id);
+        }
+        if (!AppendLocalTransforms(selection, text))
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
         const AgentContextSelection selected = AgentContextAttachment{AgentContextAttachmentKind::Selection, "scene selection", revision,
                                                                       std::move(text), selection.truncated};
         AgentContextReaders readers{.redact = RedactEvidence,
                                     .isCurrent = [witness = selection.lifetime, revision](const AgentContextProvenance &item) {
             return !witness.IsCancellationRequested() && item.kind == AgentContextKind::Selection && item.revision == revision;
         }};
-        return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
-                       requestId, {}, {}, {}, {});
+        auto captured =
+            Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
+                    requestId, {}, {}, {}, {});
+        if (captured.HasError() || !selection.viewport)
+            return captured;
+        auto context = std::move(captured).Value();
+        context.viewport_ = ViewportChoice{!objects.empty(), selection.transformCount ? AgentViewportComponents::LocalTransforms
+                                                                                      : AgentViewportComponents::None};
+        return Output::Success(std::move(context));
     }
 
     /** @copydoc EditorLocalAgentContext::PrepareClipboardAttachment */

@@ -10,6 +10,21 @@
 #include <optional>
 
 namespace Horo::Editor {
+    inline constexpr char LocalAgentWorkspacePanelId[] = "horo.local_agent";
+
+    /** @brief Explicit component data scope for a viewport review. */
+    enum class AgentViewportComponents : std::uint8_t {
+        None,
+        LocalTransforms
+    };
+
+    /** @brief Authored position, quaternion (x, y, z, w), and scale of one selected object. */
+    struct AgentViewportTransform final {
+        std::uint64_t object{};
+        std::array<float, 3> translation{};
+        std::array<float, 4> rotation{};
+        std::array<float, 3> scale{};
+    };
     /** @brief Editor tool mode at the time of explicit viewport capture. */
     enum class AgentViewportTool : std::uint8_t {
         Select,
@@ -42,5 +57,7 @@ namespace Horo::Editor {
         bool truncated{};
         CancellationToken lifetime;                    /**< Revoked by the owner when the source scene or selection changes. */
         std::optional<AgentViewportOverview> viewport; /**< Present only for a separately requested viewport review. */
+        std::array<AgentViewportTransform, MaximumObjects> transforms{};
+        std::size_t transformCount{};
     };
 }  // namespace Horo::Editor

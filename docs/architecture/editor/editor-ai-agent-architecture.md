@@ -92,8 +92,10 @@ depend on it.
 The local chat composer offers a separate numeric viewport review. It shows
 camera position, target, up, projection and clipping values, the active edit
 tool and bounded selected IDs. The viewport lease is retired by camera, tool,
-selection, Scene, preview or Play transitions. Selection-only review keeps its
-own lease and does not admit camera data.
+selection, Scene, preview or Play transitions. The viewport action opens the
+local chat and stages this review before any prompt is sent. The user can add
+or remove authored local transforms for the same selected IDs. Selection-only
+review keeps its own lease and does not admit camera data.
 
 ```cpp
 struct ViewportInlineInvocation {

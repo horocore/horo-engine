@@ -221,7 +221,7 @@ namespace Horo::Editor {
             }
 
             std::string GetId() const override {
-                return "horo.local_agent";
+                return LocalAgentWorkspacePanelId;
             }
 
             std::string GetDisplayName() const override {
@@ -252,6 +252,7 @@ namespace Horo::Editor {
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
                 captureAgentViewport_ = context.captureAgentViewport;
+                takeAgentViewportReview_ = context.takeAgentViewportReview;
                 captureEditorDiagnostics_ = context.captureEditorDiagnostics;
                 requestMcpAudit_ = context.requestMcpAudit;
                 buildOutput_ = context.buildOutputQuery;
@@ -312,9 +313,10 @@ namespace Horo::Editor {
                 const auto &fonts = context.theme.fonts;
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 textFieldActive_ = false;
+                ReviewOfferedViewport();
                 DrawProvider(locale, fonts);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
-                ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_ || sceneQueryReview_);
+                ImGui::BeginDisabled(awaitingCheckpoint_ || ContextLocksComposer() || sceneQueryReview_);
                 static_cast<void>(DrawTextField("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale, fonts);
@@ -394,6 +396,7 @@ namespace Horo::Editor {
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
                 captureAgentViewport_ = {};
+                takeAgentViewportReview_ = {};
                 captureEditorDiagnostics_ = {};
                 requestMcpAudit_ = {};
                 sourcePicker_ = SourcePickerMode::None;
@@ -447,7 +450,8 @@ namespace Horo::Editor {
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "endpoint"), Theme::Text(), fonts);
-                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || contextPreview_ || sceneQueryReview_);
+                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || ContextLocksComposer() ||
+                                     sceneQueryReview_);
                 if (DrawTextField("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
@@ -515,11 +519,11 @@ namespace Horo::Editor {
             void DrawSceneActions(const ILocalizationService &locale, const bool ready) {
                 const bool contextReady = ready && contextLifetime_ && !contextProject_.empty();
                 if (Button(locale, "context_scene_selection_offer", contextReady && captureSceneSelection_)) {
-                    PrepareSceneSelectionReview(captureSceneSelection_, "context_scene_selection_unavailable");
+                    PrepareSceneSelectionReview(captureSceneSelection_(), "context_scene_selection_unavailable");
                     return;
                 }
                 if (captureAgentViewport_ && Button(locale, "context_viewport_offer", contextReady)) {
-                    PrepareSceneSelectionReview(captureAgentViewport_, "context_viewport_unavailable");
+                    PrepareSceneSelectionReview(captureAgentViewport_(AgentViewportComponents::None), "context_viewport_unavailable");
                     return;
                 }
                 const auto count = sceneCount_ && !contextProject_.empty() ? sceneCount_() : std::nullopt;
@@ -626,9 +630,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Requests only the current bounded scene selection from the workspace owner. */
-            void PrepareSceneSelectionReview(const std::function<std::optional<AgentSceneSelectionSnapshot>()> &capture,
-                                             const char *unavailable) {
-                const auto snapshot = capture();
+            void PrepareSceneSelectionReview(const std::optional<AgentSceneSelectionSnapshot> &snapshot, const char *unavailable) {
                 if (!snapshot) {
                     status_ = unavailable;
                     return;
@@ -641,6 +643,19 @@ namespace Horo::Editor {
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
                 status_ = nullptr;
+            }
+
+            /** @brief Lets an offered viewport preview coexist with a prompt composed after opening it. */
+            bool ContextLocksComposer() const noexcept {
+                return contextPreview_ && !contextPreview_->Viewport();
+            }
+
+            /** @brief Adopts an explicit viewport action on the editor lane, without sending a turn. */
+            void ReviewOfferedViewport() {
+                if (!takeAgentViewportReview_ || Busy() || contextPreview_ || sceneQueryReview_ || awaitingCheckpoint_)
+                    return;
+                if (auto offered = takeAgentViewportReview_())
+                    PrepareSceneSelectionReview(offered, "context_viewport_unavailable");
             }
 
             /** @brief Offers the independent active-tab, active-range and open-file selections. */
@@ -909,6 +924,8 @@ namespace Horo::Editor {
                     ImGui::TextUnformatted(payload.data(), payload.data() + payload.size());
                 }
                 ImGui::PopTextWrapPos();
+                if (DrawViewportComponentChoice(locale))
+                    return;
                 if (Button(locale, "context_approve", CanSendPrompt())) {
                     const bool selected = ReviewSelectionCurrent();
                     auto approved = std::exchange(contextPreview_, std::nullopt);
@@ -920,6 +937,20 @@ namespace Horo::Editor {
                 }
                 if (Button(locale, "context_cancel", true))
                     contextPreview_.reset();
+            }
+
+            /** @brief Rebuilds the preview only when the user changes the component disclosure scope. */
+            bool DrawViewportComponentChoice(const ILocalizationService &locale) {
+                const auto scope = contextPreview_->Viewport();
+                if (!scope || !scope->hasSelection || !captureAgentViewport_)
+                    return false;
+                const bool hasTransforms = scope->components == AgentViewportComponents::LocalTransforms;
+                const auto *label = hasTransforms ? "context_viewport_remove_transforms" : "context_viewport_add_transforms";
+                if (!Button(locale, label, true))
+                    return false;
+                const auto components = hasTransforms ? AgentViewportComponents::None : AgentViewportComponents::LocalTransforms;
+                PrepareSceneSelectionReview(captureAgentViewport_(components), "context_viewport_unavailable");
+                return true;
             }
 
             /** @brief Prepares only complete model edits backed by the exact offered source. */
@@ -1460,7 +1491,8 @@ namespace Horo::Editor {
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
-            std::function<std::optional<AgentSceneSelectionSnapshot>()> captureAgentViewport_;
+            decltype(PanelContext::captureAgentViewport) captureAgentViewport_;
+            decltype(PanelContext::takeAgentViewportReview) takeAgentViewportReview_;
             std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;

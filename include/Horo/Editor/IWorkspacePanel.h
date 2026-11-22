@@ -132,7 +132,11 @@ namespace Horo::Editor {
         /** @brief Stages presentation of one exact redacted MCP operation in the workspace dock. */
         std::function<void(const WorkspaceMcpAuditReference &, EditorWorkspaceViewCommandData &)> requestMcpAudit{};
         /** @brief Copies bounded numeric camera state and selection on explicit user request. */
-        std::function<std::optional<AgentSceneSelectionSnapshot>()> captureAgentViewport{};
+        std::function<std::optional<AgentSceneSelectionSnapshot>(AgentViewportComponents)> captureAgentViewport{};
+        /** @brief Opens chat and stages the exact viewport selection for explicit review. */
+        std::function<void(EditorWorkspaceViewCommandData &)> offerAgentViewportReview{};
+        /** @brief Transfers one pending viewport review to the attached chat. */
+        std::function<std::optional<AgentSceneSelectionSnapshot>()> takeAgentViewportReview{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

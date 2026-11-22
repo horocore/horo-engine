@@ -72,10 +72,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::CaptureAgentViewport */
-    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentViewport() {
+    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentViewport(const AgentViewportComponents components) {
         const auto &camera = m_viewport.Current().camera;
         if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() ||
-            m_viewModel.playState != EditorPlayState::Idle || m_cameraPreview || !camera.IsValid())
+            m_viewModel.playState != EditorPlayState::Idle || m_cameraPreview || m_activeTerrainDocument || !camera.IsValid())
             return std::nullopt;
         if (!m_agentViewportLifetime) {
             m_agentViewportLifetime.emplace();
@@ -92,6 +92,20 @@ namespace Horo::Editor {
                                                   .farPlane = camera.farPlane,
                                                   .orthographic = orthographic,
                                                   .tool = CapturedViewportTool(m_viewModel.activeTransformTool)};
+        if (components == AgentViewportComponents::LocalTransforms) {
+            for (const auto id : std::span{snapshot.objects}.first(snapshot.objectCount)) {
+                const auto object = std::ranges::find_if(m_viewModel.objects, [id](const SceneObject &entry) {
+                    return entry.id.value == id;
+                });
+                if (object == m_viewModel.objects.end())
+                    return std::nullopt;
+                const auto &value = object->localTransform;
+                snapshot.transforms[snapshot.transformCount++] = {id,
+                                                                  {value.translation.x, value.translation.y, value.translation.z},
+                                                                  {value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w},
+                                                                  {value.scale.x, value.scale.y, value.scale.z}};
+            }
+        }
         return snapshot;
     }
 

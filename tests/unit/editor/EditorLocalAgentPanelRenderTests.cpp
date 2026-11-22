@@ -239,7 +239,7 @@ namespace {
         CancellationSource owner;
         int captured{};
         LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
-            context.captureAgentViewport = [&] {
+            context.captureAgentViewport = [&](AgentViewportComponents) {
                 ++captured;
                 return AgentSceneSelectionSnapshot{.documentEpoch = 1,
                                                    .lifetime = owner.Token(),
@@ -266,6 +266,40 @@ namespace {
         CHECK(fixture.DrawnText().find("camera.position") == std::string::npos);
         CHECK(fixture.DrawnText().find("Stop") == std::string::npos);
         CHECK(captured == 1);
+    }
+
+    TEST_CASE("A viewport action opens an editable chat preview with opt-in transforms", "[editor][agent][gui][viewport]") {
+        AgentSceneSelectionSnapshot selection{.documentEpoch = 1,
+                                              .objects = {42},
+                                              .objectCount = 1,
+                                              .viewport = AgentViewportOverview{.revision = 1,
+                                                                                .position = {4, 5, 6},
+                                                                                .up = {0, 1, 0},
+                                                                                .verticalExtent = 1,
+                                                                                .nearPlane = 0.1F,
+                                                                                .farPlane = 100}};
+        auto offered = std::optional{selection};
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.takeAgentViewportReview = [&] {
+                return std::exchange(offered, std::nullopt);
+            };
+            context.captureAgentViewport = [&](const AgentViewportComponents scope) {
+                auto result = selection;
+                if (scope == AgentViewportComponents::LocalTransforms) {
+                    result.transforms[0] = {42, {7, 8, 9}, {0, 0, 0, 1}, {1, 1, 1}};
+                    result.transformCount = 1;
+                }
+                return result;
+            };
+        }};
+        CHECK(fixture.DrawnText().find("camera.position = [4, 5, 6]") != std::string::npos);
+        CHECK_FALSE(offered);
+        CHECK(fixture.DrawnText().find("local transform:") == std::string::npos);
+        fixture.Enter("##Prompt", "Explain the selected transform");
+        fixture.Activate("###context_viewport_add_transforms");
+        CHECK(fixture.DrawnText().find("object 42 local transform: translation = [7, 8, 9]") != std::string::npos);
+        fixture.Activate("###context_viewport_remove_transforms");
+        CHECK(fixture.DrawnText().find("local transform:") == std::string::npos);
     }
 
     TEST_CASE("Scene query approval discloses the exact count and retires a denied or changed review", "[editor][agent][gui]") {

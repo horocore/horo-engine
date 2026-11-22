@@ -145,6 +145,16 @@ namespace Horo::Editor {
             return !Items().empty() && Items().front().provenance.kind == Agent::AgentContextKind::Selection;
         }
 
+        struct ViewportChoice {
+            bool hasSelection{};
+            AgentViewportComponents components{};
+        };
+
+        /** @brief Returns the disclosure scope only for a numeric viewport review. */
+        [[nodiscard]] std::optional<ViewportChoice> Viewport() const noexcept {
+            return viewport_;
+        }
+
         /** @brief Identifies a preview of saved bytes captured through the workspace reader. */
         [[nodiscard]] bool IsSavedFile() const noexcept {
             return static_cast<bool>(savedFiles_);
@@ -188,6 +198,7 @@ namespace Horo::Editor {
         std::function<bool(const Agent::AgentContextProvenance &)> current_;
         std::optional<SourceContextRange> selection_;
         std::optional<OperationId> buildOperation_;
+        std::optional<ViewportChoice> viewport_;
         Agent::AgentHistoryReference historyReference_;
         std::shared_ptr<const Platform::IProjectReadFiles> savedFiles_;
     };

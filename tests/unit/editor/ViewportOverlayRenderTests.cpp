@@ -87,5 +87,19 @@ TEST_CASE("Viewport grid control follows shading control", "[unit][editor][viewp
     static_cast<void>(draw());
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     REQUIRE(draw().toggleGrid);
+    // The same pointer gesture is inert until the workspace offers the local agent route.
+    const auto row = ResolveViewportStatusRow({0.0F, 0.0F}, {800.0F, 500.0F}, state.objectCount, localization);
+    io.AddMousePosEvent(row.actionsPosition.x + 20.0F, row.actionsPosition.y + row.height * 0.5F);
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    CHECK_FALSE(draw().reviewWithAgent);
+    state.canReviewWithAgent = true;
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    CHECK(draw().reviewWithAgent);
     ImGui::DestroyContext();
 }

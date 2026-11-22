@@ -308,7 +308,7 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection();
 
         /** @brief Captures the currently authored camera and selection for one explicit local review. */
-        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport();
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport(AgentViewportComponents components);
 
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */

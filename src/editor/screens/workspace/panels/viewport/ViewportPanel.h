@@ -105,5 +105,6 @@ namespace Horo::Editor {
         bool assetPlacementPreviewActive_{false};
         bool assetPlacementCancelled_{false};
         std::optional<bool> gridOverride_;
+        decltype(PanelContext::offerAgentViewportReview) offerAgentViewportReview_;
     };
 }  // namespace Horo::Editor

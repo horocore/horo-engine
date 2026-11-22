@@ -255,10 +255,28 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
         },
             .captureAgentViewport =
-                [this] {
-            return controller_->CaptureAgentViewport();
+                [this](const AgentViewportComponents components) {
+            return controller_->CaptureAgentViewport(components);
         },
         };
+        if (std::ranges::any_of(contributions_.panels.GetAllPanels(), [](const auto &panel) {
+            return panel->GetId() == LocalAgentWorkspacePanelId;
+        })) {
+            const auto viewportOffer = std::make_shared<std::optional<AgentSceneSelectionSnapshot>>();
+            panelContext.takeAgentViewportReview = [viewportOffer] {
+                return std::exchange(*viewportOffer, std::nullopt);
+            };
+            panelContext.offerAgentViewportReview =
+                [this, viewportOffer,
+                 lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}](EditorWorkspaceViewCommandData &command) {
+                if (lifetime.expired() || command.command != EditorWorkspaceViewCommand::None)
+                    return;
+                if (auto snapshot = controller_->CaptureAgentViewport(AgentViewportComponents::None)) {
+                    *viewportOffer = std::move(snapshot);
+                    controller_->StagePanelActivation(LocalAgentWorkspacePanelId, WorkspaceDockArea::Right, command);
+                }
+            };
+        }
         contributions_.panels.AttachAll(panelContext);
     }
 
