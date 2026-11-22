@@ -141,8 +141,9 @@ namespace {
         ControlledSource source{graph.bytes};
         std::unique_ptr<PackageProjectHost> host;
         std::shared_ptr<const Platform::IProjectReadFiles> projectReadFiles;
+        std::shared_ptr<const Packages::VerifiedPackageInstallRecord> removalInstall;
 
-        HostFixture() {
+        explicit HostFixture(bool runtime = false) : graph(runtime, runtime) {
             const auto root = std::filesystem::canonical(project.Path());
             std::filesystem::create_directories(root / ".horo");
             std::filesystem::create_directories(root / "Assets");
@@ -160,7 +161,7 @@ namespace {
                                                    .fileManifestDigest = graph.archive.Manifest().Digest(),
                                                    .packageFormatVersion = 1,
                                                    .platforms = {},
-                                                   .contributions = {"assets"}};
+                                                   .contributions = {runtime ? "native" : "assets"}};
             auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1U}, request.Value().Digest(),
                                                                        std::span{&artifact, 1U});
             REQUIRE(lock.HasValue());
@@ -199,7 +200,20 @@ namespace {
         }
 
         std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource() {
-            auto native = Platform::CreateNativeProjectReadFiles(std::filesystem::canonical(project.Path()), "package-removal-test", 1);
+            const auto root = std::filesystem::canonical(project.Path());
+            const auto lock = Packages::ValidatedPackageLockfileV1::Parse(Read("packages.lock"));
+            REQUIRE(lock.HasValue());
+            auto install = Packages::PackageInstallService::Create(files, root);
+            REQUIRE(install.HasValue());
+            const auto verified = std::make_shared<const Packages::PackageRestoreGraph>(
+                Packages::PackageRestoreGraph{.requestHash = lock.Value().RequestHash(),
+                                              .platform = {"linux", "x64", "horo-sdk-2"},
+                                              .packages = {{lock.Value().Packages().front(),
+                                                            std::make_shared<const Packages::ValidatedPackageArchive>(graph.archive)}}});
+            auto service = std::move(install).Value();
+            REQUIRE(service.Install(verified, {}).HasValue());
+            removalInstall = service.InstalledRecord();
+            auto native = Platform::CreateNativeProjectReadFiles(root, "package-removal-test", 1);
             REQUIRE(native.HasValue());
             projectReadFiles = std::move(native).Value();
             auto registry = CreateProjectAssetRegistrySource(projectReadFiles, ReadContext());
@@ -214,7 +228,7 @@ namespace {
         }
 
         PackageRemovalSources RemovalSources(const Assets::IAssetRegistrySource &assets) const {
-            return {assets, *projectReadFiles, ReadContext(), {}};
+            return {assets, *projectReadFiles, ReadContext(), {}, removalInstall};
         }
 
         std::shared_ptr<PackageApplication> Acquire() {
@@ -350,7 +364,7 @@ namespace {
     }
 
     TEST_CASE("Package removal reports the saved Scene and Prefab attachments of a departing behavior", "[packages][application][host]") {
-        HostFixture fixture;
+        HostFixture fixture{true};
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
                                           .platform = {"linux", "x64", "horo-sdk-2"}};
         const auto expected = PreparePackageProject(policy, fixture.files, {});
@@ -363,10 +377,16 @@ namespace {
                                                                                      locked.version,
                                                                                      locked.artifactDigest,
                                                                                      1,
-                                                                                     "game.tests",
+                                                                                     "com.horo.application-fixture.native",
                                                                                      {type},
-                                                                                     {}}};
+                                                                                     {},
+                                                                                     "extensions/native/extension.json"}};
         auto sources = fixture.RemovalSources(*assets);
+        const auto unobserved = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(unobserved.HasError());
+        CHECK(unobserved.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
+        REQUIRE(unobserved.ErrorValue().diagnostics.size() == 1);
+        CHECK(unobserved.ErrorValue().diagnostics.front().path == "com.horo.application-fixture.native");
         sources.registrations = owners;
 
         const auto writeAsset = [&](const char *filename, const Assets::AssetId &asset, const char *kind, std::string_view bytes) {
@@ -414,7 +434,7 @@ namespace {
         owners.front().artifact = {};
         const auto stale = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(stale.HasError());
-        CHECK(stale.ErrorValue().code.Value() == "packages.host.behavior_ownership_stale");
+        CHECK(stale.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
         owners.front().artifact = locked.artifactDigest;
         writeAsset("Scene.horoasset", sceneAsset, "core.scene", "{");
         const auto unreadable = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);

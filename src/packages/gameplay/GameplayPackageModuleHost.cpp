@@ -352,6 +352,7 @@ namespace Horo::Packages {
                 const auto &locked = state->verified.Package().lock;
                 auto &inventory =
                     registrations.emplace_back(locked.package, locked.version, locked.artifactDigest, report.generation, report.module);
+                inventory.descriptorPath = state->verified.Descriptor().Value();
                 for (const auto &behavior : loaded.Registry().Registrations())
                     inventory.behaviors.push_back(behavior.descriptor.typeId);
                 for (const auto &service : loaded.Services().Registrations())

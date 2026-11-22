@@ -20,7 +20,8 @@ namespace Horo::Application::Internal {
         Result<void> MergeRegistration(PackageRemovalRegistrationEvidence &evidence, Registration observed) {
             auto match = std::ranges::find_if(evidence.registrations, [&observed](const auto &previous) {
                 return previous.package == observed.package && previous.version == observed.version &&
-                       previous.artifact == observed.artifact && previous.moduleId == observed.moduleId;
+                       previous.artifact == observed.artifact && previous.moduleId == observed.moduleId &&
+                       previous.descriptorPath == observed.descriptorPath;
             });
             if (match != evidence.registrations.end()) {
                 observed.behaviors.insert(observed.behaviors.end(), match->behaviors.begin(), match->behaviors.end());

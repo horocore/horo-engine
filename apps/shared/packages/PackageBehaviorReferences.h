@@ -20,7 +20,13 @@ namespace Horo::Application::Internal {
         const Platform::IProjectReadFiles &files;
         Platform::ProjectReadContext context;
         std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
+        std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install; /**< Sealed archive evidence for the current lock. */
     };
+
+    /** @brief Requires observed registrations for every departing declared runtime role in the exact sealed archives. */
+    [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,
+                                                                const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                const Packages::PackageRemovalGraphPreview &removal);
 
     /** @brief A saved Scene or Prefab attachment using an exactly attributed package behavior. */
     struct PackageBehaviorReference final {

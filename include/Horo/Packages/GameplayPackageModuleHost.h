@@ -96,6 +96,7 @@ namespace Horo::Packages {
             std::string moduleId;
             std::vector<Gameplay::BehaviorTypeId> behaviors;
             std::vector<Gameplay::GameplayServiceDescriptor> services;
+            std::string descriptorPath; /**< Canonical path of the declaring descriptor inside the verified archive. */
         };
 
         /** @brief Copies behavior IDs and service requirements from frozen registries of exact published runtime roles.

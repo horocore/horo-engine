@@ -326,6 +326,8 @@ namespace Horo::Application::Internal {
         /** @brief Reports both supported reference categories before creating the new metadata. */
         Result<void> CheckRemovalReferences(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
                                             const Packages::PackageRemovalGraphPreview &impact) {
+            if (auto coverage = CheckRemovalRegistrationCoverage(sources, lock, impact); coverage.HasError())
+                return coverage;
             const auto importers = InspectPackageRemovalImporters(sources.assets, impact);
             if (importers.HasError())
                 return Result<void>::Failure(importers.ErrorValue());

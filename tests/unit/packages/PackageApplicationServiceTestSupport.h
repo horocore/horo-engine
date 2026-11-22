@@ -30,7 +30,7 @@ namespace Horo::Tests::PackageApplicationService {
     }
 
     /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
-    inline std::vector<std::byte> NativeAdmissionArchiveBytes() {
+    inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false) {
         constexpr auto root = "extensions/native";
 #if defined(_WIN32)
         constexpr auto image = "module.dll";
@@ -41,12 +41,15 @@ namespace Horo::Tests::PackageApplicationService {
 #endif
         constexpr auto id = "com.horo.application-fixture";
         constexpr auto module = "com.horo.application-fixture.native";
-        const nlohmann::json
-            descriptor{{"id", id},
-                       {"version", "1.0.0"},
-                       {"modules",
-                        {{{"id", module}, {"version", "1.0.0"}, {"kind", "native"}, {"roles", {"backend-capability"}}, {"entry", image}}}},
-                       {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", module}}}}};
+        const nlohmann::json descriptor{{"id", id},
+                                        {"version", "1.0.0"},
+                                        {"modules",
+                                         {{{"id", module},
+                                           {"version", "1.0.0"},
+                                           {"kind", "native"},
+                                           {"roles", {runtime ? "runtime-participant" : "backend-capability"}},
+                                           {"entry", image}}}},
+                                        {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", module}}}}};
         const std::array files{std::pair{std::string{"horo-package.toml"}, std::string{"schemaVersion = 1\n"}},
                                std::pair{std::string{root} + "/extension.json", descriptor.dump()},
                                std::pair{std::string{root} + '/' + image, std::string{"unloadable fixture image"}}};
@@ -74,8 +77,8 @@ namespace Horo::Tests::PackageApplicationService {
         Sha256Digest requestHash{ComputeSha256(std::as_bytes(std::span{std::string_view{"application-request"}}))};
         std::optional<ValidatedPackageLockfileV1> lock;
 
-        explicit AssetGraph(bool native = false)
-            : bytes(native ? NativeAdmissionArchiveBytes() : Tests::Packages::ValidPackageArchiveBytes()) {
+        explicit AssetGraph(bool native = false, bool runtime = false)
+            : bytes(native ? NativeAdmissionArchiveBytes(runtime) : Tests::Packages::ValidPackageArchiveBytes()) {
             PackageResolutionPlan plan{.packages = {{package, version, source, archive.Digest(), {}}}};
             PackageLockArtifact artifact{.package = package,
                                          .version = version,

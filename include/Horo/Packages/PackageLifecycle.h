@@ -17,6 +17,19 @@ namespace Horo::Extensions {
 }
 
 namespace Horo::Packages {
+    /** @brief Runtime role declared by a verified package, independent of activation or host compatibility. */
+    struct PackageRuntimeRoleDeclaration final {
+        PackagePath descriptor;
+        std::string moduleId;
+    };
+
+    /** @brief Enumerates the runtime roles in one sealed installed archive without loading executable code.
+     * @param install Exact sealed install. @param package Package in the installed graph.
+     * @return Complete runtime declarations or a typed invalid/missing descriptor failure.
+     */
+    [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectPackageRuntimeRoles(const VerifiedPackageInstallRecord &install,
+                                                                                                const HoroPackageId &package);
+
     /** @brief Explicit portable enablement selection; it carries no execution trust or host path. */
     struct EnabledPackageExtension final {
         HoroPackageId package;

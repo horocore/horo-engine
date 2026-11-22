@@ -228,3 +228,31 @@ namespace Horo::Packages::Detail {
         return OrderCandidates(std::move(pending).Value(), install->Graph()->packages);
     }
 }  // namespace Horo::Packages::Detail
+
+namespace Horo::Packages {
+    /** @copydoc InspectPackageRuntimeRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectPackageRuntimeRoles(const VerifiedPackageInstallRecord &install,
+                                                                                  const HoroPackageId &package) {
+        using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
+        const auto graph = install.Graph();
+        const auto installed = std::ranges::find_if(graph->packages, [&package](const auto &entry) {
+            return entry.lock.package == package;
+        });
+        if (installed == graph->packages.end())
+            return Roles::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        std::vector<PackageRuntimeRoleDeclaration> roles;
+        for (const auto &file : installed->archive->Manifest().Entries()) {
+            const auto &path = file.id.path.Value();
+            if (!path.starts_with("extensions/") || !path.ends_with("/extension.json"))
+                continue;
+            const auto declared = Detail::ReadDeclaredPackageDescriptor(*installed, file.id.path);
+            if (declared.HasError())
+                return Roles::Failure(declared.ErrorValue());
+            for (const auto &entry : declared.Value().manifest.modules) {
+                if (std::ranges::find(entry.roles, Extensions::ExtensionModuleRole::RuntimeParticipant) != entry.roles.end())
+                    roles.emplace_back(file.id.path, entry.id);
+            }
+        }
+        return Roles::Success(std::move(roles));
+    }
+}  // namespace Horo::Packages

@@ -1,6 +1,7 @@
 #include "PackageBehaviorReferences.h"
 
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
 
@@ -26,8 +27,8 @@ namespace Horo::Application::Internal {
                 if (std::ranges::find(removal.removed, registration.package, &Packages::LockedPackageReference::package) ==
                     removal.removed.end())
                     continue;
-                const auto entry = std::ranges::find(lock.Packages(), registration.package, &Packages::LockedPackage::package);
-                if (entry == lock.Packages().end() || entry->version != registration.version ||
+                if (const auto entry = std::ranges::find(lock.Packages(), registration.package, &Packages::LockedPackage::package);
+                    entry == lock.Packages().end() || entry->version != registration.version ||
                     entry->artifactDigest != registration.artifact)
                     return Result<Owners>::Failure(ReferenceError("packages.host.behavior_ownership_stale"));
                 for (const auto &type : registration.behaviors)
@@ -108,6 +109,44 @@ namespace Horo::Application::Internal {
             return Result<References>::Success(std::move(references));
         }
     }  // namespace
+
+    /** @copydoc CheckRemovalRegistrationCoverage */
+    Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                                  const Packages::PackageRemovalGraphPreview &removal) {
+        if (removal.removed.empty())
+            return Result<void>::Success();
+        if (!sources.install || sources.install->Graph()->requestHash != lock.RequestHash())
+            return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+        Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
+        for (const auto &reference : removal.removed) {
+            const auto expected = std::ranges::find(lock.Packages(), reference.package, &Packages::LockedPackage::package);
+            const auto &installed = sources.install->Graph()->packages;
+            const auto actual = std::ranges::find_if(installed, [&reference](const auto &entry) {
+                return entry.lock.package == reference.package;
+            });
+            if (expected == lock.Packages().end() || actual == installed.end() || actual->lock.version != expected->version ||
+                actual->lock.artifactDigest != expected->artifactDigest)
+                return Result<void>::Failure(
+                    ReferenceError("packages.host.removal_archive_evidence_unavailable", reference.package.Value()));
+            const auto declared = Packages::InspectPackageRuntimeRoles(*sources.install, reference.package);
+            if (declared.HasError())
+                return Result<void>::Failure(declared.ErrorValue());
+            for (const auto &role : declared.Value()) {
+                const auto observed = std::ranges::any_of(sources.registrations, [&](const auto &entry) {
+                    return entry.activationGeneration != 0 && entry.package == expected->package && entry.version == expected->version &&
+                           entry.artifact == expected->artifactDigest && entry.moduleId == role.moduleId &&
+                           entry.descriptorPath == role.descriptor.Value();
+                });
+                if (!observed)
+                    missing.diagnostics.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"},
+                                                     DiagnosticSeverity::Error, reference.package.Value(),
+                                                     SourceLocation{role.descriptor.Value()}, role.moduleId);
+            }
+        }
+        if (!missing.diagnostics.empty())
+            return Result<void>::Failure(std::move(missing));
+        return Result<void>::Success();
+    }
 
     /** @copydoc InspectPackageBehaviorReferences */
     Result<References> InspectPackageBehaviorReferences(
