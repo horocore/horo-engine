@@ -1,8 +1,11 @@
 #include "AiTestSupport.h"
+#include "AllocationProbe.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -198,6 +201,88 @@ namespace Horo::AI {
             std::vector overLimit(PerceptionSpatialLimits::Sources + 1, source);
             ExpectError(broadphase.Publish(view, 2, std::span{&listener, 1}, overLimit), AIErrors::PerceptionSpatialLimitExceeded);
             CHECK(broadphase.Current() == snapshot.Value());
+        }
+
+        TEST_CASE("Clustered Perception bursts bound worker visits and retained candidates through teardown",
+                  "[unit][ai][perception][spatial][qualification]") {
+            constexpr std::size_t sourceBurst = 256;
+            constexpr std::size_t clusters = PerceptionSpatialLimits::Sources / sourceBurst;
+            constexpr std::size_t listenersPerCluster = 16;
+            constexpr std::size_t listenerCount = clusters * listenersPerCluster;
+            constexpr auto sourcesCount = PerceptionSpatialLimits::Sources;
+            constexpr auto candidateLimit = PerceptionSpatialLimits::CandidatesPerQuery;
+
+            auto scene = MakeScene(listenerCount + sourcesCount);
+            const auto view = scene->View();
+            const auto clusterPosition = [](const std::size_t cluster) {
+                return static_cast<std::int64_t>(cluster) * 4'000'000;
+            };
+            std::vector<PerceptionSpatialListener> listeners;
+            listeners.reserve(listenerCount);
+            for (std::size_t i = 0; i < listenerCount; ++i) {
+                auto listener = Listener(Entity(view, i + 1));
+                listener.position = Math::WorldCoordinate64::FromMillimeters(clusterPosition(i / listenersPerCluster), 0, 0);
+                listeners.push_back(listener);
+            }
+            std::vector<PerceptionSpatialSource> sources;
+            sources.reserve(sourcesCount);
+            std::array<Runtime::EntityRef, clusters> firstCandidates{};
+            std::array<Runtime::EntityRef, clusters> lastCandidates{};
+            for (std::size_t i = 0; i < sourcesCount; ++i) {
+                const auto entity = Entity(view, listenerCount + i + 1);
+                sources.push_back(Source(entity, clusterPosition(i / sourceBurst)));
+                if (i % sourceBurst == 0)
+                    firstCandidates[i / sourceBurst] = entity;
+                if (i % sourceBurst == candidateLimit - 1)
+                    lastCandidates[i / sourceBurst] = entity;
+            }
+            std::ranges::reverse(sources);
+
+            std::shared_ptr<const PerceptionSpatialSnapshot> snapshot;
+            const auto firstQuery = SightQuery(listeners.front().entity);
+            {
+                PerceptionSpatialBroadphase broadphase;
+                const auto published = broadphase.Publish(view, 1, listeners, sources);
+                REQUIRE(published.HasValue());
+                snapshot = published.Value();
+                CHECK(snapshot->SourceCount() == sourcesCount);
+                CHECK(snapshot->ListenerCount() == listenerCount);
+
+                std::size_t examined{};
+                std::size_t maximumExamined{};
+                std::size_t matchingQueries{};
+                Tests::AllocationProbe::Measurement allocations;
+                const auto start = std::chrono::steady_clock::now();
+                {
+                    const Tests::AllocationProbe::ScopedMeasurement measurement;
+                    for (std::size_t i = 0; i < listeners.size(); ++i) {
+                        auto query = SightQuery(listeners[i].entity);
+                        query.maximumCandidates = candidateLimit;
+                        const auto result = snapshot->Query(query);
+                        if (result.HasError())
+                            continue;
+                        const auto &facts = result.Value();
+                        const auto cluster = i / listenersPerCluster;
+                        examined += facts.examinedSources;
+                        maximumExamined = std::max(maximumExamined, facts.examinedSources);
+                        matchingQueries += facts.count == candidateLimit && facts.truncated &&
+                                           facts.candidates.front().entity == firstCandidates[cluster] &&
+                                           facts.candidates[candidateLimit - 1].entity == lastCandidates[cluster];
+                    }
+                    allocations = measurement.Snapshot();
+                }
+                const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
+                INFO("clustered queries=" << listenerCount << " leaves inspected=" << examined << " max leaves/query=" << maximumExamined
+                                            << " allocation bytes=" << allocations.requestedBytes << " elapsed us=" << elapsed.count());
+                CHECK(matchingQueries == listenerCount);
+                CHECK(maximumExamined <= sourceBurst * 2);
+                CHECK(examined <= listenerCount * sourceBurst * 2);
+                CHECK(allocations.requests == 0);
+                CHECK(allocations.requestedBytes == 0);
+            }
+            scene.reset();
+            CHECK_FALSE(snapshot->ReadAuthorization()->IsCurrent());
+            ExpectError(snapshot->Query(firstQuery), AIErrors::PerceptionSpatialStale);
         }
 
         TEST_CASE("Perception broadphase scene replacement fences old workers without retaining Scene", "[unit][ai][perception][spatial]") {

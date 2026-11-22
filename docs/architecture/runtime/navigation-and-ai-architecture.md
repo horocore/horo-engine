@@ -1379,6 +1379,16 @@ capacity. The Agent inspector reports omitted observations for that batch.
 The full memory snapshot keeps its raw observations. A spatial authorization
 renewal with unchanged values refreshes reads without waking the Decision.
 
+Local Perception qualification uses the deterministic "Clustered Perception
+bursts" case in HoroAITests. The fixture publishes 8,192 sources across 32
+separated clusters and queries them from 512 listeners. It checks the stable
+128-candidate prefix, examined leaves, zero worker allocations, and query
+revocation after teardown. The mixed Gameplay sensing window in the same
+target exercises hearing, damage, contact, team, capacity, expiry, and
+retirement. With native Physics enabled, HoroAISightTests adds occlusion,
+ray-budget, and late completion checks. The scale fixture reports elapsed
+time separately from its deterministic work and memory assertions.
+
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
 existing Lua sandbox and allocator with a bounded instruction hook. Its callback

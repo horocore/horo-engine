@@ -287,7 +287,7 @@ namespace Horo::AI {
         PerceptionSpatialResult result;
         if (!nodes_.empty())
             Visit(0, *listener, query, result);
-        if (listener->ownerCancellation.IsCancellationRequested())
+        if (!authorization_->IsCurrent() || listener->ownerCancellation.IsCancellationRequested())
             return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         return Result<PerceptionSpatialResult>::Success(std::move(result));
     }
