@@ -498,9 +498,17 @@ namespace Horo::Editor {
         std::uint32_t scoreWeight{1};
     };
 
+    /** @brief Native point-test edit, keyed by exact descriptor and optional existing stage identity. */
+    struct EnvironmentQueryGameplayStageEdit final {
+        AI::QueryTestId test;
+        AI::QueryStageId stage;                                        /**< Empty when appending a test. */
+        std::optional<std::vector<AI::QueryPropertyValue>> properties; /**< Empty optional removes a stage. */
+    };
+
     /** @brief An optional structural edit: append a typed test or remove one exact stage. */
-    using EnvironmentQueryStageChange = std::variant<std::monostate, AI::QueryPointDistanceTest, EnvironmentQueryVisibilityStageAddition,
-                                                     EnvironmentQueryNavigationStageAddition, AI::QueryStageId>;
+    using EnvironmentQueryStageChange =
+        std::variant<std::monostate, AI::QueryPointDistanceTest, EnvironmentQueryVisibilityStageAddition,
+                     EnvironmentQueryNavigationStageAddition, AI::QueryStageId, EnvironmentQueryGameplayStageEdit>;
 
     /** @brief A typed transaction correlated to exactly one authoring revision. */
     struct EnvironmentQueryEditRequest final {
@@ -529,6 +537,7 @@ namespace Horo::Editor {
         bool conflict{};
         std::optional<Error> diagnostic;
         std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::shared_ptr<const AI::QuerySchemaRegistry> authoringSchema;
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
@@ -989,7 +998,7 @@ namespace Horo::Editor {
                 .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision},
                                                                     action,
                                                                     std::move(settings),
-                                                                    stageChange,
+                                                                    std::move(stageChange),
                                                                     document.recovery}};
     }
 

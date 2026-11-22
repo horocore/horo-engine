@@ -171,7 +171,18 @@ namespace Horo::Editor {
                 AI::QueryDistanceScoreResponse response;
             };
 
+            struct GameplayProperty final {
+                AI::QueryPropertyDescriptor descriptor;
+                AI::QueryPropertyData value;
+                bool included{};
+                bool validHex{true};
+                std::array<char, AI::EnvironmentQuerySchemaLimits::CanonicalBytes * 2 + 1> hex{};
+            };
+
             EnvironmentQueryDocumentFence fence;
+            AI::QueryTestId gameplayTest;
+            AI::QueryStageId gameplayStage;
+            std::vector<GameplayProperty> gameplayProperties;
             std::uint64_t step{};
             std::uint64_t outer{};
             std::uint64_t inner{};
@@ -214,6 +225,14 @@ namespace Horo::Editor {
         /** @brief Draws external provider choices and emits at most one structural edit. */
         [[nodiscard]] EnvironmentQueryStageChange DrawEnvironmentQueryProviderStages(
             EnvironmentQueryFields &fields, std::span<const PhysicsQueryChannelChoice> channels) const;
+        /** @brief Draws native point-test editing using only inert descriptors and authored properties. */
+        [[nodiscard]] EnvironmentQueryStageChange DrawGameplayQueryTests(const EnvironmentQueryWorkspaceDocument &document,
+                                                                         EnvironmentQueryFields &fields, bool editable) const;
+        void DrawGameplayQuerySelection(const EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryFields &fields) const;
+        /** @brief Edits one typed gameplay property and reports whether its current input can be applied. */
+        [[nodiscard]] bool DrawGameplayQueryProperty(EnvironmentQueryFields::GameplayProperty &field) const;
+        static void SelectGameplayQueryTest(EnvironmentQueryFields &fields, const AI::QueryTestDescriptor &descriptor,
+                                            const AI::QueryAssetStage *stage);
         /** @brief Draws typed Perception controls against the current document revision. */
         void DrawPerceptionQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                          EditorWorkspaceViewCommandData &outCommand) const;

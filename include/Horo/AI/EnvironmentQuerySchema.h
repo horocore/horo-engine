@@ -232,6 +232,11 @@ namespace Horo::AI {
         /** @brief Resolves one test by stable identity. @param id Exact ID. @return Descriptor or null. */
         [[nodiscard]] const QueryTestDescriptor *Find(QueryTestId id) const noexcept;
 
+        /** @brief Borrows the immutable test descriptors in stable identity order. */
+        [[nodiscard]] std::span<const QueryTestDescriptor> Tests() const noexcept {
+            return tests_;
+        }
+
     private:
         std::vector<QueryItemTypeDescriptor> items_;
         std::vector<QueryContextDescriptor> contexts_;

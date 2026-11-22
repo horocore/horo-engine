@@ -1054,9 +1054,7 @@ namespace Horo::AI {
             if (provider.HasError())
                 return Settings::Failure(provider.ErrorValue());
             const auto *descriptor = registry.Find(stage.test);
-            const bool gameplay =
-                descriptor && descriptor->origin.kind == QueryDescriptorSourceKind::Native && descriptor->origin != BuiltinOrigin();
-            if (provider.Value() || gameplay)
+            if (provider.Value() || (descriptor && IsGameplayPointTest(*descriptor)))
                 continue;
             const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())
@@ -1186,6 +1184,63 @@ namespace Horo::AI {
 
     QueryItemTypeId BuiltinQueryPointItemType() noexcept {
         return QueryItemTypeId::Create(PointItem).Value();
+    }
+
+    bool IsGameplayPointTest(const QueryTestDescriptor &descriptor) noexcept {
+        return descriptor.inputItemType.Value() == PointItem && descriptor.origin.kind == QueryDescriptorSourceKind::Native &&
+               descriptor.origin != BuiltinOrigin();
+    }
+
+    namespace {
+        Result<void> UpdateGameplayPointStage(QueryAssetSource &source, const QueryTestDescriptor &descriptor, const QueryStageId stage,
+                                              const std::optional<std::span<const QueryPropertyValue>> properties) {
+            using Changed = Result<void>;
+            const auto existing = std::ranges::find(source.stages, stage, &QueryAssetStage::id);
+            if (existing != source.stages.end()) {
+                if (existing->kind != QueryStageKind::Test || existing->test != descriptor.id)
+                    return Changed::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+                if (properties)
+                    existing->properties.assign(properties->begin(), properties->end());
+                else
+                    source.stages.erase(existing);
+                return Changed::Success();
+            }
+            if (!properties)
+                return Changed::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto last = std::ranges::max_element(source.stages, {}, &QueryAssetStage::executionOrder);
+            if (source.stages.size() >= EnvironmentQuerySchemaLimits::Stages || last == source.stages.end() ||
+                last->executionOrder == std::numeric_limits<std::uint32_t>::max())
+                return Changed::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            source.stages.push_back({.id = stage,
+                                     .kind = QueryStageKind::Test,
+                                     .executionOrder = last->executionOrder + 1,
+                                     .test = descriptor.id,
+                                     .descriptorVersion = {descriptor.origin.version, descriptor.origin.version},
+                                     .properties = {properties->begin(), properties->end()}});
+            return Changed::Success();
+        }
+    }  // namespace
+
+    Result<EnvironmentQueryAsset> EditGameplayPointTest(const EnvironmentQueryAsset &source, const QuerySchemaRegistry &registry,
+                                                        const QueryTestId test, const QueryStageId stage,
+                                                        const std::optional<std::span<const QueryPropertyValue>> properties) {
+        using Edited = Result<EnvironmentQueryAsset>;
+        const auto *descriptor = registry.Find(test);
+        if (!descriptor || !IsGameplayPointTest(*descriptor) || !HasBuiltinPointStages(source) || !stage.IsValid())
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        if (properties && properties->size() > EnvironmentQuerySchemaLimits::PropertiesPerStage)
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        QueryAssetSource edited{.id = source.Id(),
+                                .displayName = source.DisplayName(),
+                                .result = source.ResultSchema(),
+                                .stages = {source.Stages().begin(), source.Stages().end()}};
+        if (const auto changed = UpdateGameplayPointStage(edited, *descriptor, stage, properties); changed.HasError())
+            return Edited::Failure(changed.ErrorValue());
+        auto captured = EnvironmentQueryAsset::Capture(edited);
+        if (captured.HasError())
+            return captured;
+        const auto validated = EnvironmentQueryPlan::Compile(captured.Value(), registry);
+        return validated.HasError() ? Edited::Failure(validated.ErrorValue()) : std::move(captured);
     }
 
     Result<GameplayQueryTestRegistry> GameplayQueryTestRegistry::Capture(const QuerySchemaRegistry &schema,

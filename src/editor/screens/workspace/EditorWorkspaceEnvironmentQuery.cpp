@@ -4,6 +4,7 @@
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
@@ -1072,6 +1073,165 @@ namespace Horo::Editor {
         return {};
     }
 
+    namespace {
+        AI::QueryPropertyData DefaultGameplayQueryProperty(AI::QueryPropertyKind kind) {
+            using enum AI::QueryPropertyKind;
+            switch (kind) {
+                case Signed64:
+                    return std::int64_t{};
+                case Unsigned64:
+                    return std::uint64_t{};
+                case Float64:
+                    return double{};
+                case CanonicalBytes:
+                    return std::vector<std::byte>{};
+                default:
+                    return false;
+            }
+        }
+
+        bool ParseGameplayQueryBytes(const std::string_view input, const std::size_t maximum, std::vector<std::byte> &bytes) {
+            if (input.size() > maximum * 2 || input.size() % 2 != 0)
+                return false;
+            std::vector<std::byte> parsed;
+            parsed.reserve(input.size() / 2);
+            for (std::size_t offset = 0; offset < input.size(); offset += 2) {
+                unsigned int byte{};
+                const auto end = input.data() + offset + 2;
+                const auto result = std::from_chars(input.data() + offset, end, byte, 16);
+                if (result.ec != std::errc{} || result.ptr != end)
+                    return false;
+                parsed.push_back(static_cast<std::byte>(byte));
+            }
+            bytes = std::move(parsed);
+            return true;
+        }
+    }  // namespace
+
+    void EditorWorkspaceView::SelectGameplayQueryTest(EnvironmentQueryFields &fields, const AI::QueryTestDescriptor &descriptor,
+                                                      const AI::QueryAssetStage *stage) {
+        fields.gameplayTest = descriptor.id;
+        fields.gameplayStage = stage ? stage->id : AI::QueryStageId{};
+        fields.gameplayProperties.clear();
+        fields.gameplayProperties.reserve(descriptor.properties.size());
+        const auto authored =
+            stage ? std::span<const AI::QueryPropertyValue>{stage->properties} : std::span<const AI::QueryPropertyValue>{};
+        for (const auto &property : descriptor.properties) {
+            const auto saved = std::ranges::find(authored, property.id, &AI::QueryPropertyValue::id);
+            auto &field =
+                fields.gameplayProperties.emplace_back(property,
+                                                       saved == authored.end() ? DefaultGameplayQueryProperty(property.kind) : saved->value,
+                                                       property.required || saved != authored.end());
+            if (const auto *bytes = std::get_if<std::vector<std::byte>>(&field.value)) {
+                auto output = field.hex.begin();
+                for (const auto byte : *bytes)
+                    output = std::format_to(output, "{:02x}", std::to_integer<unsigned int>(byte));
+            }
+        }
+    }
+
+    bool EditorWorkspaceView::DrawGameplayQueryProperty(EnvironmentQueryFields::GameplayProperty &field) const {
+        const auto id = std::format("{}", field.descriptor.id.Value());
+        ImGui::PushID(id.c_str());
+        const auto &fonts = m_context.theme.fonts;
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto label = std::format("{} {}", text("workspace.environment_query.gameplay_property"), id);
+        Ui::FieldLabel(label.c_str(), fonts);
+        if (!field.descriptor.required)
+            static_cast<void>(
+                Ui::CheckboxControl(text("workspace.environment_query.gameplay_use_property").c_str(), &field.included, fonts));
+        const bool valid = !field.included || std::visit([&](auto &value) {
+            using Value = std::remove_cvref_t<decltype(value)>;
+            if constexpr (std::is_same_v<Value, bool>) {
+                static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.gameplay_value").c_str(), &value, fonts));
+            } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+                ImGui::InputScalar("##value", ImGuiDataType_S64, &value);
+            } else if constexpr (std::is_same_v<Value, std::uint64_t>) {
+                ImGui::InputScalar("##value", ImGuiDataType_U64, &value);
+            } else if constexpr (std::is_same_v<Value, double>) {
+                ImGui::InputDouble("##value", &value);
+                return std::isfinite(value);
+            } else {
+                Ui::FieldLabel(text("workspace.environment_query.gameplay_hex").c_str(), fonts);
+                if (ImGui::InputText("##value", field.hex.data(), field.descriptor.maximumBytes * 2 + 1,
+                                     ImGuiInputTextFlags_CharsHexadecimal))
+                    field.validHex = ParseGameplayQueryBytes(field.hex.data(), field.descriptor.maximumBytes, value);
+                return field.validHex;
+            }
+            return true;
+        }, field.value);
+        ImGui::PopID();
+        return valid;
+    }
+
+    void EditorWorkspaceView::DrawGameplayQuerySelection(const EnvironmentQueryWorkspaceDocument &document,
+                                                         EnvironmentQueryFields &fields) const {
+        const auto &schema = *document.authoringSchema;
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        const auto title = text("workspace.environment_query.gameplay_test");
+        const auto label = [&](AI::QueryTestId test, AI::QueryStageId stage) {
+            return stage.IsValid() ? std::format("{} {} / {}", title, test.Value(), stage.Value())
+                                   : std::format("{} {}", title, test.Value());
+        };
+        Ui::FieldLabel(title.c_str(), fonts);
+        const auto selected = fields.gameplayTest.IsValid() ? label(fields.gameplayTest, fields.gameplayStage)
+                                                            : text("workspace.environment_query.gameplay_choose");
+        if (ImGui::BeginCombo("##gameplay_test", selected.c_str())) {
+            for (const auto &stage : document.query->Stages()) {
+                const auto *descriptor = schema.Find(stage.test);
+                if (descriptor && AI::IsGameplayPointTest(*descriptor) &&
+                    ImGui::Selectable(label(stage.test, stage.id).c_str(), fields.gameplayStage == stage.id))
+                    SelectGameplayQueryTest(fields, *descriptor, &stage);
+            }
+            if (fields.providerRoom) {
+                for (const auto &descriptor : schema.Tests()) {
+                    if (AI::IsGameplayPointTest(descriptor) &&
+                        ImGui::Selectable(label(descriptor.id, {}).c_str(),
+                                          !fields.gameplayStage.IsValid() && fields.gameplayTest == descriptor.id))
+                        SelectGameplayQueryTest(fields, descriptor, nullptr);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    EnvironmentQueryStageChange EditorWorkspaceView::DrawGameplayQueryTests(const EnvironmentQueryWorkspaceDocument &document,
+                                                                            EnvironmentQueryFields &fields, const bool editable) const {
+        const auto &schema = document.authoringSchema;
+        if (!schema || !std::ranges::any_of(schema->Tests(), AI::IsGameplayPointTest))
+            return {};
+        DrawGameplayQuerySelection(document, fields);
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        if (!fields.gameplayTest.IsValid())
+            return {};
+
+        bool valid = editable && (fields.gameplayStage.IsValid() || fields.providerRoom);
+        for (auto &field : fields.gameplayProperties)
+            valid = DrawGameplayQueryProperty(field) && valid;
+        const auto apply =
+            fields.gameplayStage.IsValid() ? "workspace.environment_query.gameplay_apply" : "workspace.environment_query.gameplay_add";
+        if (Ui::Button({.label = text(apply).c_str(), .enabled = valid, .font = fonts.sans})) {
+            std::vector<AI::QueryPropertyValue> properties;
+            properties.reserve(fields.gameplayProperties.size());
+            for (const auto &field : fields.gameplayProperties)
+                if (field.included)
+                    properties.emplace_back(field.descriptor.id, field.value);
+            return EnvironmentQueryGameplayStageEdit{fields.gameplayTest, fields.gameplayStage, std::move(properties)};
+        }
+        if (fields.gameplayStage.IsValid() &&
+            Ui::Button({.label = text("workspace.environment_query.gameplay_remove").c_str(), .enabled = editable, .font = fonts.sans}))
+            return EnvironmentQueryGameplayStageEdit{fields.gameplayTest, fields.gameplayStage, std::nullopt};
+        return {};
+    }
+
     void EditorWorkspaceView::DrawEnvironmentQueryDistanceResponse(AI::QueryDistanceScoreResponse &response) const {
         const auto text = [&](std::string_view key) {
             return m_context.localization.Get("editor", key);
@@ -1292,6 +1452,9 @@ namespace Horo::Editor {
             number("workspace.environment_query.new_distance_radius", "##new_distance_radius", fields.newDistanceRadius);
         auto change = DrawEnvironmentQueryProviderStages(fields, channels);
         const bool valid = fields.IsValid();
+        auto gameplay = DrawGameplayQueryTests(document, fields, valid);
+        if (!std::holds_alternative<std::monostate>(gameplay))
+            change = std::move(gameplay);
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
         };
@@ -1304,7 +1467,8 @@ namespace Horo::Editor {
                 change = *remove;
             else if (add)
                 change = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(fields.newDistanceRadius)};
-            outCommand = MakeEnvironmentQueryEditCommand(document, Apply, valid ? std::optional{fields.Capture()} : std::nullopt, change);
+            outCommand =
+                MakeEnvironmentQueryEditCommand(document, Apply, valid ? std::optional{fields.Capture()} : std::nullopt, std::move(change));
         }
         DrawEnvironmentQueryHistory(document, outCommand);
         ImGui::PopID();

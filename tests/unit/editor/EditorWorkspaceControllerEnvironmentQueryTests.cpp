@@ -1214,6 +1214,20 @@ TEST_CASE("Environment Query workspace saves built-in changes alongside a gamepl
     controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
     CHECK(document.query->Stages().size() == 2);
     controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Redo));
+    const auto gameplay = [&](QueryStageId selected, std::optional<std::vector<QueryPropertyValue>> properties) {
+        controller.ProcessCommand(
+            MakeEnvironmentQueryEditCommand(document, Apply, document.settings,
+                                            EnvironmentQueryGameplayStageEdit{test, selected, std::move(properties)}));
+    };
+    gameplay(stage, std::vector<QueryPropertyValue>{{property, std::uint64_t{730}}});
+    REQUIRE_FALSE(document.diagnostic);
+    gameplay({}, std::vector<QueryPropertyValue>{{property, std::uint64_t{900}}});
+    REQUIRE_FALSE(document.diagnostic);
+    const auto added = document.query->Stages().back().id;
+    REQUIRE(added != stage);
+    gameplay(added, std::nullopt);
+    REQUIRE_FALSE(document.diagnostic);
+    CHECK(document.query->Stages().size() == 3);
     controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Save));
     REQUIRE_FALSE(document.diagnostic);
     REQUIRE_FALSE(document.dirty);
@@ -1232,7 +1246,7 @@ TEST_CASE("Environment Query workspace saves built-in changes alongside a gamepl
     CHECK(saved->executionOrder == 27);
     REQUIRE(saved->properties.size() == 1);
     CHECK(saved->properties.front().id == property);
-    CHECK(std::get<std::uint64_t>(saved->properties.front().value) == 625);
+    CHECK(std::get<std::uint64_t>(saved->properties.front().value) == 730);
 }
 
 TEST_CASE("Environment Query New creates the first registered source from explicit native lattice settings",

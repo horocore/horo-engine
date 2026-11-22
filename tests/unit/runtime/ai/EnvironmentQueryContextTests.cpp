@@ -1,6 +1,7 @@
 #include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
@@ -442,6 +443,31 @@ namespace Horo::AI {
             REQUIRE(reopened.HasValue());
             CHECK(reopened.Value().maximumResults == 3);
             CHECK(reopened.Value().lattice.stepMillimeters == 750);
+
+            const auto append = MakeIdentity<QueryStageId>(91);
+            const std::array authored{QueryPropertyValue{property, std::uint64_t{555}}};
+            const auto appended = EditGameplayPointTest(saved.Value(), registry.Value(), custom.id, append, std::span{authored});
+            REQUIRE(appended.HasValue());
+            CHECK(appended.Value().Stages().back().id == append);
+            CHECK(appended.Value().Stages().back().descriptorVersion == QueryVersionRange{2, 2});
+            CHECK(appended.Value().Stages().back().executionOrder > customStage.executionOrder);
+            const auto updated = EditGameplayPointTest(appended.Value(), registry.Value(), custom.id, customStage.id, std::span{authored});
+            REQUIRE(updated.HasValue());
+            const auto changed = std::ranges::find(updated.Value().Stages(), customStage.id, &QueryAssetStage::id);
+            REQUIRE(changed != updated.Value().Stages().end());
+            CHECK(changed->executionOrder == customStage.executionOrder);
+            CHECK(changed->displayName == customStage.displayName);
+            REQUIRE(changed->properties.size() == 1);
+            CHECK(changed->properties.front() == authored.front());
+            CHECK_FALSE(EditGameplayPointTest(updated.Value(), registry.Value(), custom.id, append, std::span<const QueryPropertyValue>{})
+                            .HasValue());
+            CHECK_FALSE(
+                EditGameplayPointTest(updated.Value(), registry.Value(), custom.id, MakeIdentity<QueryStageId>(82), std::span{authored})
+                    .HasValue());
+            const auto removed = EditGameplayPointTest(updated.Value(), registry.Value(), custom.id, append, std::nullopt);
+            REQUIRE(removed.HasValue());
+            CHECK(removed.Value().Stages().size() + 1 == updated.Value().Stages().size());
+            CHECK(std::ranges::find(removed.Value().Stages(), append, &QueryAssetStage::id) == removed.Value().Stages().end());
         }
 
         TEST_CASE("EQS authored point generation rejects incomplete position lists before writing", "[unit][ai][eqs][generator]") {

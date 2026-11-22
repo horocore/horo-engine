@@ -38,6 +38,15 @@ namespace Horo::AI {
     /** @brief Returns the stable item identity accepted by native point tests. */
     [[nodiscard]] QueryItemTypeId BuiltinQueryPointItemType() noexcept;
 
+    /** @brief Identifies gameplay-owned native test descriptors for the built-in point item. */
+    [[nodiscard]] bool IsGameplayPointTest(const QueryTestDescriptor &descriptor) noexcept;
+
+    /** @brief Appends or updates a native test, or removes an existing test when properties are absent. */
+    [[nodiscard]] Result<EnvironmentQueryAsset> EditGameplayPointTest(const EnvironmentQueryAsset &source,
+                                                                      const QuerySchemaRegistry &registry, QueryTestId test,
+                                                                      QueryStageId stage,
+                                                                      std::optional<std::span<const QueryPropertyValue>> properties);
+
     /** @brief Native game modules can export this optional versioned table alongside their descriptor bundle. */
     struct NativeGameplayQueryTestRegistration final {
         QueryTestDescriptor descriptor;

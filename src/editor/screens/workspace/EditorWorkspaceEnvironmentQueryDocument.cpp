@@ -1,6 +1,7 @@
 #include "AuthoredAiSourceInventory.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
@@ -86,15 +87,28 @@ namespace Horo::Editor {
 
         /** @brief Applies one typed structural edit to a detached, already validated query. */
         Result<AI::EnvironmentQueryAsset> ChangePointStages(const AI::EnvironmentQueryAsset &source,
-                                                            const EnvironmentQueryStageChange &change) {
+                                                            const EnvironmentQueryStageChange &change,
+                                                            const AI::QuerySchemaRegistry &schema) {
             if (const auto *remove = std::get_if<AI::QueryStageId>(&change))
                 return AI::RemoveBuiltinPointTest(source, *remove);
+            const auto *gameplay = std::get_if<EnvironmentQueryGameplayStageEdit>(&change);
+            const auto properties = gameplay && gameplay->properties
+                                        ? std::optional{std::span<const AI::QueryPropertyValue>{*gameplay->properties}}
+                                        : std::nullopt;
+            if (gameplay && gameplay->stage.IsValid()) {
+                const auto existing = std::ranges::find(source.Stages(), gameplay->stage, &AI::QueryAssetStage::id);
+                if (existing == source.Stages().end())
+                    return Result<AI::EnvironmentQueryAsset>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+                return AI::EditGameplayPointTest(source, schema, gameplay->test, gameplay->stage, properties);
+            }
             std::set<AI::QueryStageId> occupied;
             for (const auto &stage : source.Stages())
                 occupied.insert(stage.id);
             const auto id = AuthoredAiSources::Issue(occupied);
             if (id.HasError())
                 return Result<AI::EnvironmentQueryAsset>::Failure(id.ErrorValue());
+            if (gameplay)
+                return AI::EditGameplayPointTest(source, schema, gameplay->test, id.Value(), properties);
             if (const auto *visibility = std::get_if<EnvironmentQueryVisibilityStageAddition>(&change))
                 return AI::AddBuiltinPointVisibilityTest(source, id.Value(), visibility->channel);
             if (const auto *navigation = std::get_if<EnvironmentQueryNavigationStageAddition>(&change))
@@ -120,7 +134,7 @@ namespace Horo::Editor {
             if (edited.HasError())
                 return Prepared::Failure(edited.ErrorValue());
             if (changesStages) {
-                edited = ChangePointStages(edited.Value(), request.stageChange);
+                edited = ChangePointStages(edited.Value(), request.stageChange, registry);
                 if (edited.HasError())
                     return Prepared::Failure(edited.ErrorValue());
             }
@@ -200,6 +214,7 @@ namespace Horo::Editor {
         EnvironmentQueryWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
                                                     std::make_shared<const AI::EnvironmentQueryAsset>(std::move(query).Value())};
         const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+        candidate.authoringSchema = schema;
         candidate.descriptors = DescriptorAvailability(*candidate.query, schema.get());
         decltype(m_environmentQueryDrafts) prepared;
         if (schema && m_mutations && m_durableFiles) {
@@ -378,6 +393,7 @@ namespace Horo::Editor {
                 return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
             draft.history.Commit(*history);
             draft.current = std::move(next);
+            document.authoringSchema = schema;
         }
         ++document.revision;
         ProjectEnvironmentQueryDraft(document, draft);
