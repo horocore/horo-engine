@@ -186,6 +186,33 @@ namespace Horo::Editor {
                 line(std::format("{} {}", text("ai_inspection_trace_overflow"), trace.DroppedRecords()), Theme::Warn());
         }
 
+        /** @brief Shows the active Scene budgets without writing project or user settings. */
+        void DrawAiPolicy(const EditorPlayAiPolicy &policy, const EditorGuiContext &context) {
+            const auto text = [&](const std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            const auto title = std::format("{}###PlayAiPolicy", text("ai_policy_title"));
+            if (!ImGui::CollapsingHeader(title.c_str()))
+                return;
+            const auto line = [&](const std::string &value) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, Theme::Muted(), context.theme.fonts);
+            };
+            const auto &scheduler = policy.scheduler;
+            const auto mode = scheduler.mode == AI::AiSchedulingMode::BestEffort ? "ai_policy_best_effort" : "ai_policy_deterministic";
+            line(std::format("{} · {} {} · {} {}", text(mode), text("ai_policy_evaluations"), scheduler.evaluationsPerTick,
+                             text("ai_policy_decision_work"), scheduler.workUnitsPerTick));
+            if (const auto &profile = scheduler.simulationProfile)
+                line(std::format("{} {}/{}/{} · {} {}/{}", text("ai_policy_distance_bands"), profile->fullDistanceMillimeters,
+                                 profile->reducedDistanceMillimeters, profile->suspensionDistanceMillimeters, text("ai_policy_cadence"),
+                                 profile->reducedIntervalTicks, profile->demotionDelayTicks));
+            const auto sceneWork = policy.scenePerceptionWork ? std::to_string(*policy.scenePerceptionWork) : "—";
+            line(std::format("{} {}/{} · {} {}", text("ai_policy_perception_work"), sceneWork, policy.perceptionLimit,
+                             text("ai_policy_query_work"), policy.queryLimit));
+            if (const auto &cache = policy.queryCache)
+                line(std::format("{} {}/{}/{}", text("ai_policy_query_cache"), cache->maximumEntries, cache->maximumBytes,
+                                 cache->lifetimeTicks));
+        }
+
         /** @brief Displays the actual provider contract and availability copied at the selected tick. */
         void DrawSenseProvider(const AI::AiInspectionSenseProvider &provider, const EditorGuiContext &context) {
             using enum AI::PerceptionCapability;
@@ -318,6 +345,8 @@ namespace Horo::Editor {
                                     : nullptr;
             if (debug)
                 DrawDecisionDebug(*debug, command, context);
+            if (const auto &policy = history.back().policy)
+                DrawAiPolicy(*policy, context);
             const auto *comparison = ChooseComparison(std::span{history}.first(history.size() - 1), comparisonTick_, context);
             static_cast<void>(
                 Ui::InputTextControl("##AgentKeyFilter", inspectionFilter_, 65, fonts, {.hint = text("ai_inspection_filter").c_str()}));

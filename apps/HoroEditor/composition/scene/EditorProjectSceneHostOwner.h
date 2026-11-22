@@ -789,6 +789,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         JobSystem *decisionJobs_{};
         std::unique_ptr<PlayPerception> playPerception_;
         std::vector<EditorPlayInspectionKey> inspectionKeys_;
+        std::optional<Editor::EditorPlayAiPolicy> inspectionPolicy_;
         std::optional<Editor::EditorPlayDecisionDebugState> decisionDebug_;
         Sha256Digest decisionBreakpointPlan_{};
         bool decisionDebugGranted_{};

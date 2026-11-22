@@ -1003,7 +1003,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         const auto evaluations = watchedScheduler ? 2 : 1;
         metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + writtenMode +
                                                         R"("evaluationsPerTick":)" + std::to_string(evaluations) +
-                                                        R"(},"development":{"liveMutation":false}})");
+                                                        R"(},"query":{"maximumWorkUnitsPerTick":2048},)"
+                                                        R"("development":{"liveMutation":false}})");
         project.WriteText(".horo/project.json", metadata);
     }
     SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
@@ -1162,6 +1163,17 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     const auto &inspection = play.AgentInspectionHistory().front();
     CHECK(inspection.owner == entity);
     CHECK(inspection.tick == 1);
+    REQUIRE(inspection.policy);
+    const auto &activePolicy = *inspection.policy;
+    CHECK(activePolicy.scheduler.mode == watchedScheduler.value_or(AI::AiSchedulingMode::Deterministic));
+    if (projectDisallowsDebug || watchedScheduler) {
+        CHECK(activePolicy.scheduler.evaluationsPerTick == (watchedScheduler ? 2 : 1));
+        CHECK(activePolicy.queryLimit == 2048);
+    }
+    CHECK(activePolicy.scenePerceptionWork.has_value() == livePerception);
+    if (activePolicy.scenePerceptionWork)
+        CHECK(*activePolicy.scenePerceptionWork <= activePolicy.perceptionLimit);
+    CHECK_FALSE(activePolicy.queryCache);
     REQUIRE(inspection.snapshot);
     if (!watchedScheduler) {
         REQUIRE(inspection.decisionTrace);

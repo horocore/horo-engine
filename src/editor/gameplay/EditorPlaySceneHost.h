@@ -6,7 +6,9 @@
  */
 #include "EditorPlaySaveSession.h"
 #include "Horo/AI/AIIdentity.h"
+#include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/DecisionIdentity.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -117,7 +119,16 @@ namespace Horo::Editor {
         bool enabled{};
     };
 
-    /** @brief Play-committed identity and immutable copied inspection data. */
+    /** @brief Scheduler and subsystem budgets admitted by the active Play Scene. */
+    struct EditorPlayAiPolicy final {
+        AI::AiTaskSchedulerSettings scheduler;
+        std::size_t perceptionLimit{};
+        std::optional<std::size_t> scenePerceptionWork;
+        std::size_t queryLimit{};
+        std::optional<AI::QueryResultCacheLimits> queryCache;
+    };
+
+    /** @brief Owned observations captured for the exact Play Scene and agent. */
     struct EditorPlayAgentInspection final {
         Runtime::EntityRef owner;
         AI::AgentHandle agent;
@@ -125,6 +136,7 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::AiAgentInspectionSnapshot> snapshot;
         std::optional<EditorPlayAgentNavigation> navigation;
         std::shared_ptr<const AI::DecisionStepTrace> decisionTrace;
+        std::optional<EditorPlayAiPolicy> policy;
     };
 
     /** @brief A node in one exact cooked graph occurrence. */
