@@ -937,6 +937,10 @@ the panel reports a read or publication error.
 Each record has a project-local sequence, assigned under the writer lease.
 The editor advances only the outcome of that exact record. An application is
 saved when every changed revision has a durable in-place source save receipt.
+Post-apply validation captures a live saved review from the source owner.
+Later edits, closed buffers, and history restored on reopen cannot supply that
+receipt. Renames and deletions contribute their original paths for a separate
+disk check before execution.
 Source Save As, later edits, and unconfirmed writes cannot supply that proof.
 An explicit group undo records a reverted application. An invalidated unsaved
 revision or an applied-only record reopened without live ownership is stale.

@@ -28,6 +28,15 @@ namespace Horo::Editor {
         std::shared_ptr<const Proposals::WorkspaceEditPlan> plan;
     };
 
+    /** @brief Live owner evidence for one exact saved proposal, ready for a separate disk verification.
+     * @details The receipt carries no permission to save, build, or run tests.
+     */
+    struct SavedSourceReview final {
+        std::shared_ptr<const Proposals::SourceReviewAudit> audit;
+        std::vector<SourceDocumentSnapshot> sources;
+        std::vector<SourceDocumentId> removed;
+    };
+
     /** @brief Queues an exact source review only within the current workspace and an idle command slot. */
     [[nodiscard]] bool QueueSourceReviewApplication(std::string_view project, const Proposals::ReviewDecisions &decisions,
                                                     const Proposals::ProjectPolicy &policy,
@@ -85,6 +94,11 @@ namespace Horo::Editor {
          * @return True for a changed edit, draft, or rename whose exact application receipt remains current.
          */
         [[nodiscard]] bool IsAppliedSource(const SourceDocumentSnapshot &source) const noexcept;
+        /** @brief Captures the current durable editor revision of every changed or moved source in the latest review.
+         * @param documents Current workspace source owner.
+         * @return Evidence for an exact saved application, or a typed stale result. A reopened historical audit has no authority.
+         */
+        [[nodiscard]] Result<SavedSourceReview> CaptureSavedReview(const SourceDocumentService &documents) const;
         /** @brief Stages one grouped undo when its receipt remains current. */
         [[nodiscard]] bool QueueUndo(const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) const;
 

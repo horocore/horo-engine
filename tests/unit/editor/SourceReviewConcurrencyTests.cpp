@@ -263,6 +263,10 @@ namespace {
             CHECK_FALSE(saved.Value().snapshot.Dirty());
             CHECK(std::filesystem::is_regular_file(native));
             CHECK(reviews.Status().disposition == SourceReviewDisposition::Saved);
+            const auto receipt = reviews.CaptureSavedReview(open.Documents());
+            REQUIRE(receipt.HasValue());
+            REQUIRE(receipt.Value().sources.size() == 1);
+            CHECK(receipt.Value().sources.front().SharesStateWith(saved.Value().snapshot));
         }
         SECTION("Undo retires the exact unsaved draft") {
             EditorWorkspaceViewCommandData undo;
@@ -479,6 +483,11 @@ namespace {
                 CHECK_FALSE(std::filesystem::exists(native));
                 CHECK_FALSE(open.DocumentRegistry().Find(identity.instance));
                 CHECK(reviews.Status().disposition == SourceReviewDisposition::Saved);
+                const auto receipt = reviews.CaptureSavedReview(open.Documents());
+                REQUIRE(receipt.HasValue());
+                CHECK(receipt.Value().sources.empty());
+                REQUIRE(receipt.Value().removed.size() == 1);
+                CHECK(receipt.Value().removed.front() == identity.key.source);
             } else {
                 CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
                 CHECK(reviews.Status().disposition == SourceReviewDisposition::Stale);
@@ -643,6 +652,17 @@ namespace {
         {
             std::ifstream disk(movedPath, std::ios::binary);
             CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "alpha beta"));
+        }
+        SECTION("A saved rename records both the live destination and original path") {
+            CHECK(reviews.CaptureSavedReview(open.Documents()).HasError());
+            const auto saved = open.Documents().Save({identity.instance, current.Revision(), {}}, files);
+            REQUIRE(saved.HasValue());
+            const auto receipt = reviews.CaptureSavedReview(open.Documents());
+            REQUIRE(receipt.HasValue());
+            REQUIRE(receipt.Value().sources.size() == 1);
+            CHECK(receipt.Value().sources.front().Identity().key.source == destination);
+            REQUIRE(receipt.Value().removed.size() == 1);
+            CHECK(receipt.Value().removed.front() == identity.key.source);
         }
         SECTION("Document undo reverses text while the confirmed path stays current") {
             const auto undo = open.Documents().Undo(identity.instance, current.Revision());
@@ -941,14 +961,32 @@ namespace {
         workspace.Drain();
         const auto applied = workspace.Snapshots();
         REQUIRE(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
+        CHECK(workspace.reviews.CaptureSavedReview(workspace.documents).HasError());
         REQUIRE(workspace.documents.Save({workspace.a.instance, applied[0].Revision(), {}}, workspace.files).HasValue());
         CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
+        CHECK(workspace.reviews.CaptureSavedReview(workspace.documents).HasError());
         SECTION("Every changed source was saved at the applied revision") {
             REQUIRE(workspace.documents.Save({workspace.b.instance, applied[1].Revision(), {}}, workspace.files).HasValue());
             CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
+            const auto receipt = workspace.reviews.CaptureSavedReview(workspace.documents);
+            REQUIRE(receipt.HasValue());
+            CHECK(receipt.Value().audit == workspace.reviews.Status().audit);
+            REQUIRE(receipt.Value().sources.size() == 2);
+            CHECK(receipt.Value().removed.empty());
+            CHECK(std::ranges::all_of(receipt.Value().sources, &SourceDocumentSnapshot::IsCurrent));
             REQUIRE(workspace.documents.Close(workspace.a.instance).HasValue());
             REQUIRE(workspace.documents.Close(workspace.b.instance).HasValue());
             CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
+            CHECK(workspace.reviews.CaptureSavedReview(workspace.documents).HasError());
+        }
+        SECTION("Editing and restoring identical bytes invalidates the saved validation revision") {
+            const auto saved = workspace.documents.Save({workspace.b.instance, applied[1].Revision(), {}}, workspace.files);
+            REQUIRE(saved.HasValue());
+            const auto revision = saved.Value().snapshot.Revision();
+            REQUIRE(workspace.documents.Edit(workspace.b.instance, {revision, 0, 5, "user"}).HasValue());
+            REQUIRE(workspace.documents.Edit(workspace.b.instance, {revision + 1, 0, 4, "agent"}).HasValue());
+            CHECK_FALSE(workspace.Snapshots()[1].Dirty());
+            CHECK(workspace.reviews.CaptureSavedReview(workspace.documents).HasError());
         }
         SECTION("An intervening user edit invalidates the unsaved review") {
             const auto edited = workspace.documents.Edit(workspace.b.instance, {applied[1].Revision(), 0, 5, "user"});

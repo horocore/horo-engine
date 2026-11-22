@@ -284,6 +284,20 @@ namespace Horo::Editor {
                 return Stale;
             return pending ? Applied : Saved;
         }
+
+        /** @brief Admits only the clean applied root or its immediate confirmed in-place save publication. */
+        bool CaptureSavedSource(const SourceDocumentService &documents, const SourceDocumentSnapshot &applied,
+                                std::vector<SourceDocumentSnapshot> &sources) {
+            auto current = documents.Snapshot(applied.Identity().instance);
+            if (current.HasError() || current.Value().Dirty() || current.Value().ExternalState() != SourceExternalState::InSync)
+                return false;
+            const auto &source = current.Value();
+            if (!source.SharesStateWith(applied) &&
+                (!applied.WasSavedInPlace() || source.Revision() - 1 != applied.Revision() || source.BaseRevision() != source.Revision()))
+                return false;
+            sources.push_back(std::move(current).Value());
+            return true;
+        }
     }  // namespace
 
     /** @copydoc QueueSourceReviewApplication */
@@ -330,6 +344,46 @@ namespace Horo::Editor {
         if (fileGroup_)
             return std::ranges::any_of(fileGroup_->drafts, matches) || std::ranges::any_of(fileGroup_->renames, matches);
         return matches(draft_) || matches(renamed_);
+    }
+
+    /** @copydoc SourceReviewTransactions::CaptureSavedReview */
+    Result<SavedSourceReview> SourceReviewTransactions::CaptureSavedReview(const SourceDocumentService &documents) const {
+        using Output = Result<SavedSourceReview>;
+        const auto stale = [] {
+            return Output::Failure(MakeError(Proposals::Errors::StaleBase));
+        };
+        if (!audit_ || preparing_ || Disposition() != Proposals::SourceReviewDisposition::Saved)
+            return stale();
+        SavedSourceReview receipt{.audit = audit_};
+        const auto capture = [&](const SourceDocumentSnapshot &source) {
+            return CaptureSavedSource(documents, source, receipt.sources);
+        };
+        const auto removed = [&](const SourceDocumentSnapshot &source) {
+            receipt.removed.push_back(source.Identity().key.source);
+        };
+        const auto &edits = fileGroup_ ? fileGroup_->edits : batch_;
+        if (!std::ranges::all_of(edits.Items(), [&](const SourceBatchItem &item) {
+            return !item.changed || capture(item.snapshot);
+        }))
+            return stale();
+        if (fileGroup_) {
+            if (!TrashReceiptsCurrent(*fileGroup_, fileGroupTrash_) || fileGroup_->renames.size() != fileGroup_->renamedFrom.size() ||
+                !std::ranges::all_of(fileGroup_->drafts, capture) || !std::ranges::all_of(fileGroup_->renames, capture))
+                return stale();
+            for (const auto &original : fileGroup_->renamedFrom)
+                removed(original);
+            for (const auto &entry : fileGroupTrash_)
+                removed(entry.source);
+        }
+        if ((draft_.Revision() && !capture(draft_)) || (renamed_.Revision() && !capture(renamed_)))
+            return stale();
+        if (beforeRename_.Revision())
+            removed(beforeRename_);
+        if (deleted_)
+            removed(deleted_->source);
+        if (receipt.sources.empty() && receipt.removed.empty())
+            return stale();
+        return Output::Success(std::move(receipt));
     }
 
     /** @copydoc SourceReviewTransactions::Disposition */
