@@ -25,6 +25,9 @@ PROVENANCE_DIGEST = "b" * 64
 SOURCE_REVISION = "c" * 40
 HOST_IMAGE_DIGEST = "9" * 64
 LOADER_IMAGE_DIGEST = "8" * 64
+DEVICE_BUILD = "example/headset/model:14/build/incremental:user/release-keys"
+DEVICE_BUILD_DIGEST = hashlib.sha256(DEVICE_BUILD.encode("ascii")).hexdigest()
+DEVICE_BUILD_QUERY = ("shell", "getprop", "ro.build.fingerprint")
 PACKAGE = "/data/app/~~hash/example==/base.apk"
 LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window=5 presentation=8 "
              "factsRevision=5 extent=1280x720 nativeAvailable=1 ready=1 hasWindow=1 hasPresentation=1 "
@@ -82,6 +85,7 @@ class AndroidDeployTests(unittest.TestCase):
             ("shell", "am", "get-current-user"): "10",
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
+            DEVICE_BUILD_QUERY: DEVICE_BUILD,
             ("shell", "pm", "path", "--user", "10", application): f"package:{PACKAGE}",
             ("shell", "toybox", "sha256sum", PACKAGE): f"{DIGEST}  {PACKAGE}",
             launch: f"Status: ok\nLaunchState: COLD\nActivity: {application}/.PackageActivity",
@@ -299,10 +303,40 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["qualification"]["runtime"],
                          {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"})
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertEqual(report["device"], {"androidApi": 36, "abi": "arm64-v8a", "buildSha256": DEVICE_BUILD_DIGEST})
         self.assertEqual(report["observed"]["openxr"]["runtimeVersion"], {"major": 1, "minor": 1, "patch": 63})
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertIn(("shell", "am", "force-stop", "--user", "10", profile["applicationId"]), commands)
         self.assertNotIn("private", json.dumps(report))
+        self.assertNotIn(DEVICE_BUILD, json.dumps(report))
+
+    def test_openxr_checks_the_selected_system_build_before_install(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        for digest, expected_status in ((DEVICE_BUILD_DIGEST, 0), ("f" * 64, 1)):
+            with self.subTest(match=expected_status == 0):
+                options = (*OPENXR_OPTIONS, "--expect-device-build-sha256", digest)
+                status, report, commands = self.execute({LOGCAT: log_line(OPENXR)}, options, name)
+                self.assertEqual(status, expected_status)
+                self.assertEqual(report["device"]["expectedBuildSha256"], digest)
+                self.assertEqual(report["device"]["buildSha256"], DEVICE_BUILD_DIGEST)
+                if status:
+                    self.assertEqual((report["stage"], report["error"]), ("device", "device_build_mismatch"))
+                    self.assertFalse(any(command[0] == "install" for command in commands))
+                else:
+                    self.assertEqual(commands.count(DEVICE_BUILD_QUERY), 2)
+
+    def test_openxr_rejects_unverifiable_or_changed_system_builds(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        for build in ("", "private\nsecond-line", "x" * 257, "özel-build"):
+            with self.subTest(build=build[:16]):
+                status, report, commands = self.execute({DEVICE_BUILD_QUERY: build}, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["stage"], report["error"]), (1, "device", "device_build_unverifiable"))
+                self.assertFalse(any(command[0] == "install" for command in commands))
+        status, report, commands = self.execute(
+            {DEVICE_BUILD_QUERY: [DEVICE_BUILD, "example/changed:14/build"], LOGCAT: log_line(OPENXR)}, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "device_build_changed"))
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertEqual(commands.count(DEVICE_BUILD_QUERY), 2)
 
     def test_openxr_image_evidence_uses_the_verified_native_entries_for_each_abi(self):
         _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a", "x86_64"])

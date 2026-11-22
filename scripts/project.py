@@ -1220,6 +1220,14 @@ def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: fr
     return user, api, abi
 
 
+def deploy_device_build_digest(device: AdmittedAdbDevice) -> str:
+    """Bind XR evidence to the Android system build without exporting the raw fingerprint."""
+    fingerprint = device.run("shell", "getprop", "ro.build.fingerprint")
+    if re.fullmatch(r"[!-~]{1,256}", fingerprint) is None:
+        raise AndroidDeployError("device_build_unverifiable")
+    return hashlib.sha256(fingerprint.encode("ascii")).hexdigest()
+
+
 def deploy_verified_install(device: AdmittedAdbDevice, application: str, user: str, digest_value: str) -> None:
     """Require the same installed package digest before launch and evidence admission."""
     reported = device.run("shell", "pm", "path", "--user", user, application)
@@ -1754,6 +1762,7 @@ def android_deploy_main(argv=None) -> int:
     parser.add_argument("--expect-runtime-version", type=expected_openxr_runtime_version,
                         help="Require this exact OpenXR runtime version from the cold process.")
     parser.add_argument("--expect-apk-sha256", help="Require the exact verified APK SHA-256 before contacting the device.")
+    parser.add_argument("--expect-device-build-sha256", help="Require the SHA-256 of the selected Android build fingerprint for OpenXR.")
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
     parser.add_argument("--timeout", type=int, default=120,
                         help=f"Total host command deadline in seconds (1-{DEPLOY_MAX_SECONDS}).")
@@ -1766,6 +1775,11 @@ def android_deploy_main(argv=None) -> int:
         parser.error("--expect-apk-sha256 requires 64 lowercase hexadecimal digits.")
     if arguments.expect_runtime_version is not None and arguments.runtime != "openxr":
         parser.error("--expect-runtime-version requires --runtime openxr.")
+    if arguments.expect_device_build_sha256 is not None:
+        if not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_device_build_sha256):
+            parser.error("--expect-device-build-sha256 requires 64 lowercase hexadecimal digits.")
+        if arguments.runtime != "openxr":
+            parser.error("--expect-device-build-sha256 requires --runtime openxr.")
     deadline = time.monotonic() + arguments.timeout
     host = android_deploy_host()
     runtime = {"requested": arguments.runtime, "status": "not_requested" if arguments.runtime == "none" else "not_observed"}
@@ -1822,6 +1836,13 @@ def android_deploy_main(argv=None) -> int:
             current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
             if openxr:
+                device_build = deploy_device_build_digest(device)
+                report["device"]["buildSha256"] = device_build
+                expected_build = arguments.expect_device_build_sha256
+                if expected_build is not None:
+                    report["device"]["expectedBuildSha256"] = expected_build
+                    if expected_build != device_build:
+                        raise AndroidDeployError("device_build_mismatch")
                 report["artifact"]["openxrImages"] = select_openxr_device_images(artifact, abi)
             user = str(current_user)
             report["stage"] = "install"
@@ -1848,6 +1869,8 @@ def android_deploy_main(argv=None) -> int:
             elif not applicable:
                 raise AndroidDeployError("application_evidence_unavailable")
             deploy_verified_install(device, application, user, artifact.apk_sha256)
+            if openxr and deploy_device_build_digest(device) != device_build:
+                raise AndroidDeployError("device_build_changed")
             report["status"] = "diagnostic_complete" if openxr else "complete"
             exit_code = 0
     except KeyboardInterrupt:

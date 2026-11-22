@@ -369,6 +369,11 @@ Use `--expect-apk-sha256` to bind a run to an independently selected APK.
 An APK mismatch stops before device access. Use `--expect-runtime-version`
 with OpenXR to check the exact runtime version reported by the launched process.
 A version mismatch keeps the observed version and retires the diagnostic process.
+OpenXR evidence also records the SHA-256 of the selected device's Android build
+fingerprint, excluding the raw fingerprint. The digest covers the ASCII output of
+`getprop ro.build.fingerprint` without its trailing newline. Supply
+`--expect-device-build-sha256` to require a previously recorded build before
+installation. The same build must still be present before accepting the result.
 
 The command emits one JSON record. Process evidence is restricted to the
 matching package UID, PID and kernel start ticks. The log query accepts only
