@@ -508,6 +508,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         [[nodiscard]] Result<Editor::EnvironmentQueryPreviewPhysics::Visibility> CapturePreviewVisibility(
             const Runtime::RuntimeSceneView &scene, const AI::QueryPhysicsVisibilityRequest &request);
+        /** @brief Samples overlap of the exact published authoring body pair on a project query channel. */
+        [[nodiscard]] Result<std::optional<Editor::InspectionPenetrationSample>> CapturePreviewPenetration(
+            const Runtime::RuntimeSceneView &scene, const Runtime::PhysicsBodyReference &source,
+            const Runtime::PhysicsBodyReference &target, std::string_view channelId);
         [[nodiscard]] Result<Editor::EnvironmentQueryPreviewNavigation::Evaluate> CapturePreviewNavigation(
             const std::filesystem::path &previewRoot, const std::optional<SceneCookSelection> &cook, JobSystem &jobs,
             const Editor::EnvironmentQueryPreviewNavigationRequest &request) const;

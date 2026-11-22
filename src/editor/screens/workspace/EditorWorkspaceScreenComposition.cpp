@@ -1,3 +1,4 @@
+#include "EditorInspectionPhysics.h"
 #include "EditorWorkspaceCommandAccess.h"
 #include "EditorWorkspaceScreen.h"
 #include "EnvironmentQueryPreviewNavigation.h"
@@ -487,7 +488,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>(),
                                            .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{},
                                            .queryPreviewPhysics = services_.TryGetConst<EnvironmentQueryPreviewPhysics>(),
-                                           .queryPreviewNavigation = services_.TryGetConst<EnvironmentQueryPreviewNavigation>()};
+                                           .queryPreviewNavigation = services_.TryGetConst<EnvironmentQueryPreviewNavigation>(),
+                                           .inspectionPhysics = services_.TryGetConst<EditorInspectionPhysics>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

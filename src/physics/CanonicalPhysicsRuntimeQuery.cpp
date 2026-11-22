@@ -192,9 +192,20 @@ namespace Horo::Physics::Detail {
                                                                          const PhysicsQueryGeometry &geometry) {
             if (const auto *sweep = std::get_if<PhysicsSweepQuery>(&geometry))
                 return FindCanonicalFixture(access, sweep->shape);
-            if (const auto *overlap = std::get_if<PhysicsOverlapQuery>(&geometry))
-                return FindCanonicalFixture(access, overlap->shape);
             return nullptr;
+        }
+
+        struct OverlapSource {
+            const JPH::Shape *shape{};
+            bool poseIsBodyOrigin{};
+        };
+
+        /** @brief Resolves either an existing query fixture or an exact retained Scene shape generation. */
+        [[nodiscard]] OverlapSource ResolveOverlapSource(const CanonicalQueryAccess &access, const ShapeHandle shape) {
+            if (const auto *fixture = FindCanonicalFixture(access, shape))
+                return {fixture->shape.GetPtr(), false};
+            const auto record = std::ranges::find(access.sceneShapes, shape, &CanonicalSceneShapeRecord::handle);
+            return record == access.sceneShapes.end() ? OverlapSource{} : OverlapSource{record->shape.GetPtr(), true};
         }
 
         [[nodiscard]] std::optional<Math::Vec3> RayNormal(const CanonicalQueryAccess &access, const JPH::BodyID body,
@@ -225,10 +236,11 @@ namespace Horo::Physics::Detail {
                                                      JPH::RVec3(pose.translation.x, pose.translation.y, pose.translation.z));
         }
 
-        void CollectOverlapQuery(const CanonicalQueryAccess &access, const PhysicsOverlapQuery &query,
-                                 const CanonicalQueryFixtureRecord &source, CanonicalQueryCollectors &collectors,
-                                 const QueryBodyFilter &bodyFilter) {
-            const JPH::RMat44 transform = ToNativeTransform(query.pose);
+        void CollectOverlapQuery(const CanonicalQueryAccess &access, const PhysicsOverlapQuery &query, const OverlapSource &source,
+                                 CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            auto transform = ToNativeTransform(query.pose);
+            if (source.poseIsBodyOrigin)
+                transform = transform.PreTranslated(source.shape->GetCenterOfMass());
             access.system.GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
                                                              JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
@@ -266,10 +278,10 @@ namespace Horo::Physics::Detail {
 
         [[nodiscard]] Result<void> CollectCanonicalQuery(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
                                                          CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
-            const auto *source = FindSourceShape(access, descriptor.geometry);
-            if ((std::holds_alternative<PhysicsSweepQuery>(descriptor.geometry) ||
-                 std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry)) &&
-                source == nullptr)
+            const auto *sweepSource = FindSourceShape(access, descriptor.geometry);
+            const auto *overlap = std::get_if<PhysicsOverlapQuery>(&descriptor.geometry);
+            const auto overlapSource = overlap ? ResolveOverlapSource(access, overlap->shape) : OverlapSource{};
+            if ((std::holds_alternative<PhysicsSweepQuery>(descriptor.geometry) && !sweepSource) || (overlap && !overlapSource.shape))
                 return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
 
             std::visit([&]<typename Query>(const Query &query) {
@@ -278,9 +290,9 @@ namespace Horo::Physics::Detail {
                 else if constexpr (std::is_same_v<Query, PhysicsPointQuery>)
                     CollectPointQuery(access, query, collectors, bodyFilter);
                 else if constexpr (std::is_same_v<Query, PhysicsOverlapQuery>)
-                    CollectOverlapQuery(access, query, *source, collectors, bodyFilter);
+                    CollectOverlapQuery(access, query, overlapSource, collectors, bodyFilter);
                 else if constexpr (std::is_same_v<Query, PhysicsSweepQuery>)
-                    CollectSweepQuery(access, query, *source, collectors, bodyFilter);
+                    CollectSweepQuery(access, query, *sweepSource, collectors, bodyFilter);
                 else
                     CollectCapsuleQuery(access, query, collectors, bodyFilter);
             }, descriptor.geometry);

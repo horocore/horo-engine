@@ -276,6 +276,35 @@ namespace {
         CHECK((second["result"]["records"][0]["shape"] == Json{{"kind", "asset"}}));
     }
 
+    TEST_CASE("Penetration inspection accepts an exact body pair and a project channel", "[unit][editor][mcp][inspection]") {
+        const std::string channel = "5d45c3ed-ffa0-447e-a44f-a700b729d2f1";
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readPenetrations = [&channel](const ObjectInspectionRequest &request) {
+            CHECK(request.physicsChannel == channel);
+            CHECK(request.objects.size() == 2);
+            InspectedPenetration row{request.objects[0], request.objects[1], InspectionPenetrationSample{0.25F, {1, 2, 3}}};
+            return Result<PenetrationInspectionPage>::Success({.scene = {7, 19}, .records = {row}});
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        CHECK(Execute(session, Command("missing", "inspect.penetrations", {{"objects", {42, 9}}})).at("status") == "failed");
+        CHECK(Execute(session, Command("extra", "inspect.penetrations", {{"objects", {42, 9, 7}}, {"channel", channel}})).at("status") ==
+              "failed");
+        const auto measured =
+            Execute(session, Command("penetration", "inspect.penetrations", {{"objects", {42, 9}}, {"channel", channel}}));
+        REQUIRE(measured.at("status") == "succeeded");
+        const auto &row = measured["result"]["records"][0];
+        CHECK(row["object"] == 42);
+        CHECK(row["referenceObject"] == 9);
+        CHECK(row["sample"]["depthMeters"] == 0.25);
+        CHECK(row["sample"]["originFramePositionMeters"] == Json::array({1, 2, 3}));
+    }
+
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",

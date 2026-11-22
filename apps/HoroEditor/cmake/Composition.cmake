@@ -236,7 +236,7 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Applica
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
-foreach(preview_header IN ITEMS EnvironmentQueryPreviewPhysics.h EnvironmentQueryPreviewNavigation.h)
+foreach(preview_header IN ITEMS EnvironmentQueryPreviewPhysics.h EnvironmentQueryPreviewNavigation.h EditorInspectionPhysics.h)
     file(GENERATE OUTPUT "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/${preview_header}"
         CONTENT "#pragma once\n#include \"${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/${preview_header}\"\n")
 endforeach()

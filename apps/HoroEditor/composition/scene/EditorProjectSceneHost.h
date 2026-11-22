@@ -5,6 +5,7 @@
  */
 #include "CommittedSceneAssets.h"
 #include "CookedDecisionSceneAdmission.h"
+#include "EditorInspectionPhysics.h"
 #include "EditorMountedWorldViewport.h"
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
@@ -95,6 +96,7 @@ namespace Horo::Application::Internal {
         Physics::PhysicsRuntimeMode physicsMode; /**< Actual successfully created peer, never inferred from a schema file. */
         Editor::EnvironmentQueryPreviewPhysics queryPreviewPhysics;
         Editor::EnvironmentQueryPreviewNavigation queryPreviewNavigation;
+        Editor::EditorInspectionPhysics inspectionPhysics;
     };
 
     /** @brief Prepares explicit project preview resources without starting/publishing a Scene candidate.

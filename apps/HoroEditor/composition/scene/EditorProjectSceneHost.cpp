@@ -19,6 +19,7 @@
 #include <exception>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace Horo::Application::Internal {
     /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices */
@@ -106,6 +107,54 @@ namespace Horo::Application::Internal {
         return Visibility::Success(clear);
     }
 
+    /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::CapturePreviewPenetration */
+    Result<std::optional<Editor::InspectionPenetrationSample>> EditorProjectSceneDetail::ProjectPlaySceneHost::CapturePreviewPenetration(
+        const Runtime::RuntimeSceneView &scene, const Runtime::PhysicsBodyReference &source, const Runtime::PhysicsBodyReference &target,
+        const std::string_view channelId) {
+        using Output = Result<std::optional<Editor::InspectionPenetrationSample>>;
+        const auto channel = Physics::PhysicsQueryChannelId::Parse(channelId);
+        if (channel.HasError())
+            return Output::Failure(channel.ErrorValue());
+        auto scope = native_.Borrow();
+        if (scope.HasError())
+            return Output::Failure(scope.ErrorValue());
+        const auto &binding = scope.Value();
+        if (!scene.IsCurrent() || binding.scene != scene.RuntimeId())
+            return Output::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto findBody = [&binding](const Runtime::PhysicsBodyReference &ref) {
+            return std::ranges::find_if(binding.bodyBindings, [&ref](const Physics::PhysicsSceneBodyBinding &body) {
+                return body.object == ref.object && body.body == ref.body;
+            });
+        };
+        const auto from = findBody(source);
+        const auto to = findBody(target);
+        if (from == binding.bodyBindings.end() || to == binding.bodyBindings.end() || from == to)
+            return Output::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
+        const auto body = binding.physics.ReadSceneBodyReconciliation(from->handle);
+        if (body.HasError())
+            return Output::Failure(body.ErrorValue());
+        const auto &state = body.Value();
+        const Physics::PhysicsQueryDescriptor descriptor{.world = binding.physics.Identity(),
+                                                         .sceneGeneration = binding.scene.value,
+                                                         .geometry = Physics::PhysicsOverlapQuery{state.observedShape, state.state.pose},
+                                                         .filter = {.channel = channel.Value(), .excludedBody = from->handle},
+                                                         .collection = Physics::PhysicsQueryCollection::All,
+                                                         .maximumHitCount = Physics::MaximumPhysicsQueryHits};
+        std::vector<Physics::PhysicsQueryHit> hits(descriptor.maximumHitCount);
+        const auto result = binding.physics.Query(descriptor, hits);
+        if (result.HasError())
+            return Output::Failure(result.ErrorValue());
+        if (result.Value().truncated)
+            return Output::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
+        std::optional<Editor::InspectionPenetrationSample> strongest;
+        for (const auto &hit : std::span{hits}.first(result.Value().hitCount)) {
+            const auto depth = hit.penetrationDepthMeters;
+            if (hit.body == to->handle && depth > (strongest ? strongest->depthMeters : 0.0F))
+                strongest = Editor::InspectionPenetrationSample{depth, {hit.position.x, hit.position.y, hit.position.z}};
+        }
+        return Output::Success(strongest);
+    }
+
     /** @copydoc PrepareEditorProjectPreview */
     Result<EditorProjectPreviewScene> PrepareEditorProjectPreview(const std::filesystem::path &root, JobSystem &jobs,
                                                                   const EditorProjectScenePolicy &policy) {
@@ -123,8 +172,13 @@ namespace Horo::Application::Internal {
             [native = owner.get(), root, cook = policy.cooked, &jobs](const Editor::EnvironmentQueryPreviewNavigationRequest &request) {
             return native->CapturePreviewNavigation(root, cook, jobs, request);
         }};
+        Editor::EditorInspectionPhysics inspection{
+            [native = owner.get()](const Runtime::RuntimeSceneView &scene, const Runtime::PhysicsBodyReference &source,
+                                   const Runtime::PhysicsBodyReference &target, std::string_view channel) {
+            return native->CapturePreviewPenetration(scene, source, target, channel);
+        }};
         return Result<EditorProjectPreviewScene>::Success(
-            {std::move(owner), std::move(scenes), mode, std::move(queryPreview), std::move(navigationPreview)});
+            {std::move(owner), std::move(scenes), mode, std::move(queryPreview), std::move(navigationPreview), std::move(inspection)});
     }
 
     /** @copydoc ValidateEditorPreviewProjectScope */

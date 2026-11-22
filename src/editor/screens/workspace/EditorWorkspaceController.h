@@ -88,6 +88,8 @@ namespace Horo::Editor {
     struct GridInspectionPage;
     struct SurfaceInspectionPage;
     struct CollisionInspectionPage;
+    struct PenetrationInspectionPage;
+    struct EditorInspectionPhysics;
     struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
@@ -175,6 +177,7 @@ namespace Horo::Editor {
         AI::QueryContextProviderAccess queryContextAccess;
         const EnvironmentQueryPreviewPhysics *queryPreviewPhysics{};
         const EnvironmentQueryPreviewNavigation *queryPreviewNavigation{};
+        const EditorInspectionPhysics *inspectionPhysics{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -842,6 +845,9 @@ namespace Horo::Editor {
 
         /** @brief Inspects the authored collider shapes contributed by one visible object. */
         [[nodiscard]] Result<CollisionInspectionPage> InspectCollisions(const ObjectInspectionRequest &request) const;
+
+        /** @brief Reads positive penetration for an exact visible authored body pair. */
+        [[nodiscard]] Result<PenetrationInspectionPage> InspectPenetrations(const ObjectInspectionRequest &request) const;
         /** @brief Checks that the current extraction belongs to the committed authored Scene. */
         [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
         /** @brief Fences inspection against the authored Scene and its current editor projection. */
@@ -932,6 +938,7 @@ namespace Horo::Editor {
         AI::QueryContextProviderAccess m_queryContextAccess;
         const EnvironmentQueryPreviewPhysics *m_queryPreviewPhysics{};
         const EnvironmentQueryPreviewNavigation *m_queryPreviewNavigation{};
+        const EditorInspectionPhysics *m_inspectionPhysics{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
 

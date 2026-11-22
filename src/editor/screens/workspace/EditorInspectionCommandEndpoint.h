@@ -41,6 +41,7 @@ namespace Horo::Editor {
         std::optional<std::uint64_t> referenceObject; /**< Used only by the distance tool. */
         std::optional<double> gridStep;               /**< Used only by the grid-offset tool. */
         std::optional<InspectionSurfaceRay> surfaceRay;
+        std::optional<std::string> physicsChannel;
     };
 
     /** @brief Authored TRS, local and world matrices, and the authored object's world pivot. */
@@ -223,6 +224,26 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Strongest positive overlap against the exact target body, in the current Physics origin frame. */
+    struct InspectionPenetrationSample {
+        float depthMeters{};
+        std::array<float, 3> positionMeters{};
+    };
+
+    /** @brief One authorized pair of authored body owners and its optional contact. */
+    struct InspectedPenetration {
+        std::uint64_t object{};
+        std::uint64_t referenceObject{};
+        std::optional<InspectionPenetrationSample> sample;
+    };
+
+    /** @brief Exact Scene fence on the authored pair. */
+    struct PenetrationInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedPenetration> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -236,5 +257,6 @@ namespace Horo::Editor {
         std::function<Result<GridInspectionPage>(const ObjectInspectionRequest &)> readGridOffsets;
         std::function<Result<SurfaceInspectionPage>(const ObjectInspectionRequest &)> readSurfaces;
         std::function<Result<CollisionInspectionPage>(const ObjectInspectionRequest &)> readCollisions;
+        std::function<Result<PenetrationInspectionPage>(const ObjectInspectionRequest &)> readPenetrations;
     };
 }  // namespace Horo::Editor

@@ -492,6 +492,13 @@ visible object. Each row identifies the visible body and collider slots and
 reports the body-local pose, scale, flags, and analytic shape dimensions.
 Asset-backed shapes expose their kind. A reference to an unavailable body
 fails explicitly. Continuations use the same Scene fence as the other tools.
+`inspect.penetrations` takes an ordered pair of visible body owners and an
+explicit project Physics query-channel UUID. It reads the source body's
+published shape and pose, excludes self-hits, and reports the deepest
+positive overlap against the second body. Contact position is measured in
+the current Physics origin frame. The sample is absent for an admitted pair
+with no positive contact. Disabled or unavailable Physics and capacity
+failures propagate as explicit errors.
 
 ## MCP History Retention And Redaction
 

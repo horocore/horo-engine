@@ -47,6 +47,19 @@ namespace Horo::Editor {
             return result;
         }
 
+        /** @brief Takes an ordered fixed body pair and an exact project query channel. */
+        Json PenetrationInputSchema() {
+            auto result = InputSchema();
+            auto &fields = result.at("properties");
+            fields.at("objects")["minItems"] = 2;
+            fields.at("objects")["maxItems"] = 2;
+            fields.erase("offset");
+            fields.erase("limit");
+            fields["channel"] = {{"type", "string"}, {"minLength", 36}, {"maxLength", 36}};
+            result["required"].push_back("channel");
+            return result;
+        }
+
         /** @brief Requires a separate visible reference for paginated target measurements. */
         Json DistanceInputSchema() {
             auto result = InputSchema();
@@ -234,6 +247,22 @@ namespace Horo::Editor {
                               CollisionInspectionPage::MaximumColliders, CollisionInspectionPage::MaximumOffset);
         }
 
+        /** @brief Describes the strongest contact against the requested body when one exists. */
+        Json PenetrationSchema() {
+            const Json id{{"type", "integer"}, {"minimum", 1}};
+            const Json sample{{"type", "object"},
+                              {"properties",
+                               {{"depthMeters", {{"type", "number"}, {"minimum", SmallestPositiveNumber}}},
+                                {"originFramePositionMeters", VectorSchema(3)}}},
+                              {"required", {"depthMeters", "originFramePositionMeters"}},
+                              {"additionalProperties", false}};
+            return PageSchema({{"type", "object"},
+                               {"properties", {{"object", id}, {"referenceObject", id}, {"sample", sample}}},
+                               {"required", {"object", "referenceObject"}},
+                               {"additionalProperties", false}},
+                              1);
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -249,6 +278,8 @@ namespace Horo::Editor {
                 request.surfaceRay =
                     InspectionSurfaceRay{ray->at("origin").get<std::array<double, 3>>(), ray->at("direction").get<std::array<double, 3>>(),
                                          ray->at("maximumDistance").get<double>()};
+            if (const auto channel = arguments.find("channel"); channel != arguments.end())
+                request.physicsChannel = channel->get<std::string>();
             return request;
         }
 
@@ -351,6 +382,15 @@ namespace Horo::Editor {
                     {"shape", std::visit(WriteColliderShape{}, entry.shape)},
                     {"enabled", entry.enabled},
                     {"sensor", entry.sensor}};
+        }
+
+        /** @brief Emits the exact authored pair and optional origin-frame contact. */
+        Json WriteRecord(const InspectedPenetration &entry) {
+            Json result{{"object", entry.object}, {"referenceObject", entry.referenceObject}};
+            if (entry.sample)
+                result["sample"] = {{"depthMeters", entry.sample->depthMeters},
+                                    {"originFramePositionMeters", entry.sample->positionMeters}};
+            return result;
         }
 
         /** @brief Exports an owner-produced page with an optional continuation offset. */
@@ -459,6 +499,10 @@ namespace Horo::Editor {
                              readCollisions>(tools, endpoint, "inspect.collisions",
                                              "Page through authored collider shapes and body-local placement for one visible object.",
                                              CollisionSchema, CollisionInputSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::
+                             readPenetrations>(tools, endpoint, "inspect.penetrations",
+                                               "Read the deepest published Physics overlap between two visible authored bodies.",
+                                               PenetrationSchema, PenetrationInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

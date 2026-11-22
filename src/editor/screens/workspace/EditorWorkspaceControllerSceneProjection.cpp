@@ -1,5 +1,6 @@
 #include "EditorInspectionCommandEndpoint.h"
 #include "EditorInspectionMath.h"
+#include "EditorInspectionPhysics.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -483,6 +484,8 @@ namespace Horo::Editor {
             return InspectSurfaces(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectCollisions(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectPenetrations(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -634,6 +637,32 @@ namespace Horo::Editor {
         if (request.offset + count < colliders.size())
             page.nextOffset = request.offset + count;
         return Output::Success(std::move(page));
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectPenetrations */
+    Result<PenetrationInspectionPage> EditorWorkspaceController::InspectPenetrations(const ObjectInspectionRequest &request) const {
+        using Output = Result<PenetrationInspectionPage>;
+        const auto scene = InspectSceneRevision();
+        if (const auto admitted = CheckInspectionScene(scene, request); admitted.HasError())
+            return Output::Failure(admitted.ErrorValue());
+        if (request.objects.size() != 2 || request.offset != 0 || !request.physicsChannel)
+            return Output::Failure(MakeError(InspectionInvalidPage));
+        const auto resolved = ResolveInspectionObjects(m_viewModel.objects, request.objects);
+        if (resolved.HasError())
+            return Output::Failure(resolved.ErrorValue());
+        const auto *source = resolved.Value()[0];
+        const auto *target = resolved.Value()[1];
+        if (!source->components.rigidBody || !target->components.rigidBody)
+            return Output::Failure(MakeError(ColliderBodyUnavailable));
+        const auto active = m_runtimeScene.ActiveScene();
+        if (!m_inspectionPhysics || !m_inspectionPhysics->capture || !active ||
+            active->DefinitionRevision().value != m_document.State().value)
+            return Output::Failure(MakeError(InspectionUnavailable));
+        const auto sample = m_inspectionPhysics->capture(*active, {{source->id.value}, source->components.rigidBody->body},
+                                                         {{target->id.value}, target->components.rigidBody->body}, *request.physicsChannel);
+        if (sample.HasError())
+            return Output::Failure(sample.ErrorValue());
+        return Output::Success({.scene = scene.Value(), .records = {{source->id.value, target->id.value, sample.Value()}}});
     }
 
     /** @copydoc EditorWorkspaceController::HasCurrentInspectionGeometry */
