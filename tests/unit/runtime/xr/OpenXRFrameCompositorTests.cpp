@@ -75,6 +75,21 @@ namespace Horo::Tests::OpenXR {
                 CHECK(f.script.projectionFlags == XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
                 CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
             }
+            SECTION("consent withdrawn during native submission pauses the provider before returning") {
+                f.script.onEnd = [&] {
+                    f.native.owner.RevokePassthrough(scope);
+                    CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
+                    CHECK(f.passthrough.running);
+                };
+                REQUIRE(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt).HasValue());
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+                CHECK_FALSE(f.passthrough.running);
+                CHECK(f.passthrough.pauses == 1);
+                REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+                CHECK(f.passthrough.pauses == 1);
+                CHECK_FALSE(f.passthrough.liveFeature);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+            }
             SECTION("foreign frame and World origin leave the transaction available for abort") {
                 auto wrong = receipt;
                 wrong.frame = {};

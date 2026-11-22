@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <functional>
 
 namespace Horo::Tests::OpenXR {
     /** @brief Official native frame dispatch script, never a physical-device qualification. */
@@ -20,6 +21,7 @@ namespace Horo::Tests::OpenXR {
         bool render{true};
         bool missingEnd{};
         NativeFramePacingPolicy *mutatePacing{};
+        std::function<void()> onEnd;
         std::uint32_t waits{};
         std::uint32_t begins{};
         std::uint32_t ends{};
@@ -83,6 +85,8 @@ namespace Horo::Tests::OpenXR {
                     active->CaptureViewExtension(index, layer->views[index].next);
                 }
             }
+            if (active->onEnd)
+                active->onEnd();
             return active->endResult;
         }
 
