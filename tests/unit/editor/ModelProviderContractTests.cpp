@@ -324,11 +324,10 @@ TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent]
 
 TEST_CASE("Cloud adapter preserves HTTP failure status after a truncated error body", "[agent][model][http]") {
     auto provider = Create(true);
-    const auto [model, status, code] = GENERATE(
-        Catch::Generators::table<const char *, long, ModelErrorCode>({
-            {"truncated-authentication", 401, ModelErrorCode::Authentication},
-            {"truncated-rate-limit", 429, ModelErrorCode::RateLimited},
-        }));
+    const auto [model, status, code] = GENERATE(Catch::Generators::table<const char *, long, ModelErrorCode>({
+        {"truncated-authentication", 401, ModelErrorCode::Authentication},
+        {"truncated-rate-limit", 429, ModelErrorCode::RateLimited},
+    }));
     const auto outcome = provider->Stream(Request(model), [](const ModelEvent &) {
         FAIL("An HTTP error cannot publish a model event");
         return true;
