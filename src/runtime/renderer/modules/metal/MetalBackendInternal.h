@@ -240,7 +240,8 @@ namespace Horo::Render::Detail {
         static void PublishPersistent(MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue, void *waitContext,
                                       MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
                                       MetalEditorGraphicsBridge::RetainTextureFunction retainTexture = nullptr,
-                                      MetalEditorGraphicsBridge::ReadColorFunction readColor = nullptr) noexcept;
+                                      MetalEditorGraphicsBridge::ReadColorFunction readColor = nullptr,
+                                      MetalEditorGraphicsBridge::RecordColorFunction recordColor = nullptr) noexcept;
         static void PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer, void *renderPassDescriptor,
                                  void *renderEncoder) noexcept;
         static void ClearFrame(MetalEditorGraphicsBridge &bridge) noexcept;

@@ -391,6 +391,27 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc MetalResourceRuntime::RecordViewportColor */
+    Result<void> MetalResourceRuntime::RecordViewportColor(void *commandBuffer, std::uint64_t identity, std::uint64_t staging,
+                                                           RenderMaterialRegion region) {
+        auto *view = Decode<MetalTextureViewInstance>(identity);
+        auto *destination = Decode<MetalBufferInstance>(staging);
+        id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
+        if (!commands || !impl_->textureViews.contains(view) || !impl_->buffers.contains(destination) || destination->use.retired)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        auto *source = view->sourceInstance;
+        if (!impl_->textures.contains(source) || source->use.retired || source->texture != view->sourceTexture)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        const RenderGraphColorReadback copy{{}, {}, region.x, region.y, {region.width, region.height}};
+        if (!ValidColorReadbackSource(copy, *source) || !ValidColorReadbackStorage(*destination, copy.PackedBytes()))
+            return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+        if (const auto encoded = EncodeColorReadback(commands, *source, *destination, copy); encoded.HasError())
+            return encoded;
+        Impl::TrackUse(source->use, commands);
+        Impl::TrackUse(destination->use, commands);
+        return Result<void>::Success();
+    }
+
     /** @copydoc MetalResourceRuntime::TrackParallelGraphUse */
     void MetalResourceRuntime::TrackParallelGraphUse(void *finalCommands,
                                                      const std::span<const RenderGraphResourceInstance> resources) noexcept {

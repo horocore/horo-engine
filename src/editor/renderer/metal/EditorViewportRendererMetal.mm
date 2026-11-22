@@ -83,6 +83,27 @@ namespace Horo::Editor {
             return {resources.Target(), resources.PresentationTexture(), {extent.width, extent.height}};
         }
 
+        /** @brief Encodes one authorized crop after the legacy render encoder has stored the color attachment. */
+        void RecordLegacyCapture() {
+            const auto copy = imageCapture.Pending();
+            if (!copy)
+                return;
+            using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
+            const auto view = ResourceAccess::BackendInstance(*frontend, resources.ColorTextureView());
+            const auto staging = ResourceAccess::BackendInstance(*frontend, copy->staging);
+            if (view.HasError() || staging.HasError()) {
+                imageCapture.Fail();
+                return;
+            }
+            const auto &region = copy->region;
+            if (graphicsBridge->RecordViewportColor(view.Value(), staging.Value(), {region.x, region.y, region.width, region.height})
+                    .HasError()) {
+                imageCapture.Fail();
+                return;
+            }
+            imageCapture.Recorded();
+        }
+
         __strong id<MTLDevice> device{nil};
         __strong id<MTLLibrary> library{nil};
         __strong id<MTLRenderPipelineState> pipeline{nil};
@@ -818,7 +839,7 @@ namespace Horo::Editor {
     /** @copydoc IEditorViewportRenderer::RequestImageCapture */
     Result<std::uint64_t> EditorViewportRendererMetal::RequestImageCapture(EditorViewportImageRegion region,
                                                                            std::function<bool()> authorized) {
-        if (impl_->owner != std::this_thread::get_id() || !impl_->initialized || !impl_->nativeLightingActive)
+        if (impl_->owner != std::this_thread::get_id() || !impl_->initialized)
             return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
         return impl_->imageCapture.Request(impl_->ImageSource(), region, std::move(authorized));
     }
@@ -867,7 +888,10 @@ namespace Horo::Editor {
             if (encoded.HasError())
                 return encoded;
         }
-        return impl_->EncodeViewportPass(commandBuffer, descriptor, shadow.Value(), frameResources.Value(), aspect);
+        const auto rendered = impl_->EncodeViewportPass(commandBuffer, descriptor, shadow.Value(), frameResources.Value(), aspect);
+        if (rendered.HasValue())
+            impl_->RecordLegacyCapture();
+        return rendered;
     }
 
     /** @copydoc EditorViewportRendererMetal::TextureView */

@@ -116,6 +116,12 @@ namespace Horo::Render::Detail {
                     if (runtime.ownerThread_ != std::this_thread::get_id() || runtime.commandBuffer_ != nil)
                         return Result<bool>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
                     return runtime.resources_.ReadCompletedColor(instance, destination);
+                }, [](void *context, std::uint64_t view, std::uint64_t staging, RenderMaterialRegion region) {
+                    auto &runtime = *static_cast<MetalRuntime *>(context);
+                    if (runtime.ownerThread_ != std::this_thread::get_id() || runtime.commandBuffer_ == nil ||
+                        runtime.renderEncoder_ != nil)
+                        return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+                    return runtime.resources_.RecordViewportColor((__bridge void *)runtime.commandBuffer_, view, staging, region);
                 });
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError()) {

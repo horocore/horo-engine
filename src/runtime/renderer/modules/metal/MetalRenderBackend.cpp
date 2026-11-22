@@ -852,6 +852,13 @@ namespace Horo::Render {
         return readColor_(waitContext_, instance, destination);
     }
 
+    /** @copydoc MetalEditorGraphicsBridge::RecordViewportColor */
+    Result<void> MetalEditorGraphicsBridge::RecordViewportColor(std::uint64_t view, std::uint64_t staging, RenderMaterialRegion region) {
+        if (!recordColor_ || !waitContext_ || !commandBuffer_)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+        return recordColor_(waitContext_, view, staging, region);
+    }
+
     /** @copydoc MetalEditorGraphicsBridge::WaitUntilIdle */
     void MetalEditorGraphicsBridge::WaitUntilIdle() noexcept {
         if (waitUntilIdle_ != nullptr) {
@@ -871,13 +878,15 @@ namespace Horo::Render {
                                                           void *waitContext,  // NOSONAR(cpp:S5008)
                                                           MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
                                                           MetalEditorGraphicsBridge::RetainTextureFunction retainTexture,
-                                                          MetalEditorGraphicsBridge::ReadColorFunction readColor) noexcept {
+                                                          MetalEditorGraphicsBridge::ReadColorFunction readColor,
+                                                          MetalEditorGraphicsBridge::RecordColorFunction recordColor) noexcept {
             bridge.device_ = device;
             bridge.commandQueue_ = commandQueue;
             bridge.waitContext_ = waitContext;
             bridge.waitUntilIdle_ = wait;
             bridge.retainTexture_ = retainTexture;
             bridge.readColor_ = readColor;
+            bridge.recordColor_ = recordColor;
         }
 
         void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer,  // NOSONAR(cpp:S5008)

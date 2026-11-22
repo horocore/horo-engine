@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -270,6 +271,10 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
                                                 .lightSnapshotRevision = 1};
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
+    constexpr EditorViewportImageRegion region{63, 63, 3, 2};
+    const auto requested = viewport.RequestImageCapture(region);
+    REQUIRE(requested.HasValue());
+    REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
     Check(frontend->Resize(FramebufferExtent{256, 256}).HasValue());
     AwaitPresentation(*frontend, {256, 256});
     auto begun = frontend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {256, 256}});
@@ -308,7 +313,15 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(textureView.u0 == 0.0F && textureView.v0 == 0.0F);
     Check(textureView.u1 == 1.0F && textureView.v1 == 1.0F);
     Check(frame.Present().HasValue());
+    viewport.FinishColorFrame(true);
     graphicsBridge.WaitUntilIdle();
+    REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
+    const auto crop = viewport.ReadImageCapture(requested.Value());
+    REQUIRE(crop);
+    REQUIRE(crop->phase == EditorViewportImagePhase::Ready);
+    REQUIRE(crop->artifact);
+    CHECK(crop->artifact->region == region);
+    REQUIRE(crop->artifact->rgba.size() == region.Bytes());
 
     id<MTLTexture> texture = (__bridge id<MTLTexture>)(reinterpret_cast<void *>(textureView.textureId));
     Check(texture != nil);
@@ -334,6 +347,11 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     [readbackCommands waitUntilCompleted];
     std::vector<std::uint8_t> rgba(byteCount);
     std::copy_n(static_cast<const std::uint8_t *>(readback.contents), byteCount, rgba.data());
+    const auto cropRowBytes = std::size_t{region.width} * EditorViewportImageRegion::Channels;
+    for (std::size_t row = 0; row < region.height; ++row) {
+        const auto offset = (region.y + row) * bytesPerRow + region.x * EditorViewportImageRegion::Channels;
+        CHECK(std::memcmp(crop->artifact->rgba.data() + row * cropRowBytes, rgba.data() + offset, cropRowBytes) == 0);
+    }
 
     std::uint8_t minimum = 255;
     std::uint8_t maximum = 0;
