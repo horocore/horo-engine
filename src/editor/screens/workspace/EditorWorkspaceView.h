@@ -188,6 +188,10 @@ namespace Horo::Editor {
             std::uint64_t pathCostWeight{1};
             bool providerRoom{};
             std::string widgetId;
+            std::vector<Math::WorldCoordinate64> authoredPoints;
+            bool navigationSurface{};
+            std::uint64_t surfaceRadius{};
+            std::uint64_t surfaceMaximum{};
 
             /** @brief Checks all editable fields before narrowing user input. */
             [[nodiscard]] bool IsValid() const;
@@ -198,6 +202,10 @@ namespace Horo::Editor {
         };
 
         mutable EnvironmentQueryFields m_environmentQueryFields;
+        /** @brief Edits the ordered point inventory within the native schema's bounds. */
+        void DrawAuthoredPointFields(EnvironmentQueryFields &fields) const;
+        /** @brief Draws the controls for the document's current generator. */
+        void DrawPointGeneratorFields(EnvironmentQueryFields &fields, const AI::BuiltinPointQuerySettings &current) const;
         /** @brief Draws the existing distance stages and returns the identity selected for removal. */
         [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
         /** @brief Draws external provider choices and emits at most one structural edit. */

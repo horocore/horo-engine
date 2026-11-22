@@ -1266,6 +1266,61 @@ TEST_CASE("Environment Query New creates the first registered source from explic
         CHECK(UsesBuiltinPointVisibility(cooked.Value()));
         CHECK(UsesBuiltinPointNavigation(cooked.Value()));
     }
+    SECTION("Authored and surface generators retain settings through registered save and cook") {
+        using enum EnvironmentQueryPointGenerator;
+        draft.pointGenerator = GENERATE(Authored, NavigationSurface);
+        draft.distance = true;
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command);
+        controller.ProcessCommand(*command);
+        const auto &documents = controller.ViewModel().environmentQueryDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &document = documents.front();
+        REQUIRE(document.settings);
+        const auto stage = document.query->Stages().front().id;
+        const auto oldSource = document.query;
+        auto changed = *document.settings;
+        auto *surface = std::get_if<QueryNavigationSurfaceSettings>(&changed.alternateGenerator);
+        if (surface) {
+            surface->radiusMillimeters = 3000;
+            surface->maximumCandidates = 12;
+        } else {
+            auto &points = std::get<std::vector<Math::WorldCoordinate64>>(changed.alternateGenerator);
+            points.insert(points.begin(), Math::WorldCoordinate64::FromMillimeters(-9223372036854775807LL, 12, 34));
+        }
+        using enum EnvironmentQueryEditAction;
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Apply, changed));
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.dirty);
+        CHECK(document.query->Stages().front().id == stage);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
+        CHECK(document.query == oldSource);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Redo));
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Save));
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE_FALSE(document.dirty);
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+        REQUIRE(documents.empty());
+        Project::Open(controller, path);
+        REQUIRE(documents.size() == 1);
+        const auto &reopened = documents.front();
+        REQUIRE(reopened.settings);
+        if (surface) {
+            const auto &settings = std::get<QueryNavigationSurfaceSettings>(reopened.settings->alternateGenerator);
+            CHECK(settings.radiusMillimeters == surface->radiusMillimeters);
+            CHECK(settings.maximumCandidates == surface->maximumCandidates);
+        } else {
+            using Points = std::vector<Math::WorldCoordinate64>;
+            CHECK(std::get<Points>(reopened.settings->alternateGenerator) == std::get<Points>(changed.alternateGenerator));
+        }
+        REQUIRE(reopened.settings->distanceTests.size() == 1);
+        const auto encoded = EnvironmentQueryCookedCodec::Encode(*reopened.query, registry.Value());
+        REQUIRE(encoded.HasValue());
+        const auto cooked = EnvironmentQueryCookedCodec::Decode(encoded.Value(), registry.Value());
+        REQUIRE(cooked.HasValue());
+        CHECK(UsesBuiltinNavigationSurface(cooked.Value()) == (surface != nullptr));
+    }
     SECTION("Perception creation and history publish the exact cooked actor query") {
         draft.perceivedActors = true;
         draft.currentlySensed = false;

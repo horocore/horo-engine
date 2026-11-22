@@ -91,12 +91,6 @@ namespace Horo::AI {
 
     inline constexpr std::size_t MaximumBuiltinAuthoredQueryPoints = EnvironmentQuerySchemaLimits::PropertiesPerStage;
 
-    /** @brief Samples at most one projected point per reachable polygon in a bounded neighborhood. */
-    struct QueryNavigationSurfaceSettings final {
-        std::uint32_t radiusMillimeters{};
-        std::uint32_t maximumCandidates{};
-    };
-
     /** @brief Creates an EQS source centered on the querier, with stable Navigation provider ordering. */
     [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinNavigationSurfaceQuery(QueryId query, QueryStageId stage,
                                                                                     QueryResultSchemaId result, std::string displayName,

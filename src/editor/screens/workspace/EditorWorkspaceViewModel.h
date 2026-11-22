@@ -420,6 +420,7 @@ namespace Horo::Editor {
         std::uint32_t maximumResults{};
         std::optional<AI::QueryPointDistanceTest> distance;
         std::optional<AI::QueryPerceptionMatch> perception; /**< Present for an Actor Perception query. */
+        AI::AlternatePointGenerator alternateGenerator;
     };
 
     /** @brief Result of checking a saved query against the application's current descriptor registry. */

@@ -22,7 +22,13 @@ namespace Horo::Editor {
         std::string numericDefault;
     };
 
-    /** @brief Draft of the typed point-lattice creation dialog. Signed controls preserve invalid draft values. */
+    enum class EnvironmentQueryPointGenerator : std::uint8_t {
+        Lattice,
+        Authored,
+        NavigationSurface
+    };
+
+    /** @brief Draft of the typed query creation dialog. Signed controls preserve invalid draft values. */
     struct EnvironmentQueryCreationDraft final {
         std::string directory;
         std::array<char, AI::EnvironmentQuerySchemaLimits::DisplayNameBytes + 1> name{};
@@ -31,6 +37,7 @@ namespace Horo::Editor {
         int innerSteps{};
         int maximumResults{9};
         bool perceivedActors{};
+        EnvironmentQueryPointGenerator pointGenerator{};
         bool currentlySensed{true};
         bool annulus{};
         bool distance{};

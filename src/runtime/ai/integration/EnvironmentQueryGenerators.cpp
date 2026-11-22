@@ -855,6 +855,48 @@ namespace Horo::AI {
             return Read::Success(true);
         }
 
+        Result<void> ReadPointGeneratorSettings(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                BuiltinPointQuerySettings &settings) {
+            using Read = Result<void>;
+            const auto &stage = plan.Stages().front();
+            const auto *descriptor = registry.Find(stage.generator);
+            if (!descriptor || descriptor->origin != BuiltinOrigin() || descriptor->outputItemType.Value() != PointItem)
+                return Read::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if (UsesBuiltinNavigationSurface(plan)) {
+                const auto surface = ReadBuiltinNavigationSurface(plan, registry);
+                if (surface.HasError())
+                    return Read::Failure(surface.ErrorValue());
+                settings.alternateGenerator = surface.Value();
+                return Read::Success();
+            }
+            if (stage.generator.Value() == AuthoredPointGenerator) {
+                const auto points = CaptureAuthoredPoints(stage);
+                if (points.HasError())
+                    return Read::Failure(points.ErrorValue());
+                const auto first = points.Value().values.begin();
+                settings.alternateGenerator = std::vector<Math::WorldCoordinate64>(first, first + points.Value().count);
+                return Read::Success();
+            }
+            if (stage.generator.Value() != LatticeGenerator)
+                return Read::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto lattice = PlanLattice(stage);
+            if (!lattice || !ValidLattice(*lattice))
+                return Read::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            settings.lattice = *lattice;
+            settings.latticeCenters = PointCenterOptions(descriptor->contextChoice, registry);
+            return Read::Success();
+        }
+
+        Result<EnvironmentQueryAsset> CreateEditedPointGenerator(const EnvironmentQueryAsset &asset, const QueryStageId stage,
+                                                                 const BuiltinPointQuerySettings &settings) {
+            const auto id = asset.ResultSchema().id;
+            if (const auto *surface = std::get_if<QueryNavigationSurfaceSettings>(&settings.alternateGenerator))
+                return CreateBuiltinNavigationSurfaceQuery(asset.Id(), stage, id, asset.DisplayName(), *surface, settings.maximumResults);
+            if (const auto *points = std::get_if<std::vector<Math::WorldCoordinate64>>(&settings.alternateGenerator))
+                return CreateBuiltinAuthoredPointQuery(asset.Id(), stage, id, asset.DisplayName(), *points, settings.maximumResults);
+            return CreateBuiltinLatticeQuery(asset.Id(), stage, id, asset.DisplayName(), settings.lattice, settings.maximumResults);
+        }
+
         void WritePointTestSettings(QueryAssetStage &stage, const BuiltinPointQuerySettings &settings) {
             if (stage.test.Value() == PointVisibilityTest) {
                 stage.properties = VisibilityProperties(settings.visibility->channel);
@@ -877,14 +919,10 @@ namespace Horo::AI {
         if (plan.HasError())
             return Settings::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
-        const auto *generator = registry.Find(stages.front().generator);
-        if (!generator || generator->origin != BuiltinOrigin() || generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
-            return Settings::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-        const auto lattice = PlanLattice(stages.front());
-        if (!lattice || !ValidLattice(*lattice))
-            return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        BuiltinPointQuerySettings settings{*lattice, asset.ResultSchema().maximumResults};
-        settings.latticeCenters = PointCenterOptions(generator->contextChoice, registry);
+        BuiltinPointQuerySettings settings{.maximumResults = asset.ResultSchema().maximumResults};
+        const auto generator = ReadPointGeneratorSettings(plan.Value(), registry, settings);
+        if (generator.HasError())
+            return Settings::Failure(generator.ErrorValue());
         settings.distanceTests.reserve(stages.size() - 1);
         for (const auto &stage : stages.subspan(1)) {
             const auto provider = ReadPointProviderSettings(stage, registry, settings);
@@ -912,7 +950,8 @@ namespace Horo::AI {
         const auto identity = [](const auto &stage) {
             return stage ? std::optional{stage->stage} : std::nullopt;
         };
-        if (!std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId) ||
+        if (previous.Value().alternateGenerator.index() != settings.alternateGenerator.index() ||
+            !std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId) ||
             identity(previous.Value().visibility) != identity(settings.visibility) ||
             identity(previous.Value().navigation) != identity(settings.navigation) ||
             (settings.navigation &&
@@ -920,8 +959,7 @@ namespace Horo::AI {
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
 
         const auto generator = std::ranges::find(asset.Stages(), QueryStageKind::Generator, &QueryAssetStage::kind);
-        auto generated = CreateBuiltinLatticeQuery(asset.Id(), generator->id, asset.ResultSchema().id, asset.DisplayName(),
-                                                   settings.lattice, settings.maximumResults);
+        auto generated = CreateEditedPointGenerator(asset, generator->id, settings);
         if (generated.HasError())
             return generated;
         QueryAssetSource edited{.id = asset.Id(),

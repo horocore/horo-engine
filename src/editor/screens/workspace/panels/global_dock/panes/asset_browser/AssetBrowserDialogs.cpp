@@ -659,6 +659,26 @@ namespace Horo::Editor {
             PopModalStyle();
         }
 
+        void DrawCreateQueryGenerator(EnvironmentQueryCreationDraft &draft, const EditorGuiContext &context) {
+            constexpr std::array keys{"workspace.environment_query.lattice_points", "workspace.environment_query.authored_points",
+                                      "workspace.environment_query.surface_points", "workspace.environment_query.perceived_actors"};
+            const auto text = [&](std::string_view key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            const auto selected = draft.perceivedActors ? keys.size() - 1 : static_cast<std::size_t>(draft.pointGenerator);
+            Ui::FieldLabel(text("workspace.environment_query.generator").c_str(), context.theme.fonts);
+            if (!ImGui::BeginCombo("##NewQueryGenerator", text(keys[selected]).c_str()))
+                return;
+            for (std::size_t index = 0; index < keys.size(); ++index) {
+                if (ImGui::Selectable(text(keys[index]).c_str(), index == selected)) {
+                    draft.perceivedActors = index == keys.size() - 1;
+                    if (!draft.perceivedActors)
+                        draft.pointGenerator = static_cast<EnvironmentQueryPointGenerator>(index);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
         void DrawCreateQueryPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
             constexpr const char *popupId = "##ContentBrowserCreateEnvironmentQuery";
@@ -686,19 +706,20 @@ namespace Horo::Editor {
                     Ui::FieldLabel(text(label).c_str(), fonts);
                     Ui::InputIntControl(identity, &value, fonts);
                 };
-                static_cast<void>(
-                    Ui::CheckboxControl(text("workspace.environment_query.perceived_actors").c_str(), &draft.perceivedActors, fonts));
+                DrawCreateQueryGenerator(draft, context);
                 integer("##NewQueryMaximum", "workspace.environment_query.create_limit", draft.maximumResults);
                 if (draft.perceivedActors) {
                     static_cast<void>(
                         Ui::CheckboxControl(text("workspace.environment_query.currently_sensed").c_str(), &draft.currentlySensed, fonts));
                 } else {
-                    integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
-                    integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
-                    static_cast<void>(
-                        Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
-                    if (draft.annulus)
-                        integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                    if (draft.pointGenerator == EnvironmentQueryPointGenerator::Lattice) {
+                        integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
+                        integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
+                        static_cast<void>(
+                            Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
+                        if (draft.annulus)
+                            integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                    }
                     static_cast<void>(
                         Ui::CheckboxControl(text("workspace.environment_query.create_distance").c_str(), &draft.distance, fonts));
                     if (draft.distance) {

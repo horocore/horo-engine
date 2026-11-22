@@ -6,6 +6,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -299,6 +300,53 @@ namespace Horo::AI {
             CHECK(generated.Value().provenance.revision == 19);
             CHECK(items[0] == QueryGeneratedItem{points[0]});
             CHECK(items[1] == QueryGeneratedItem{points[1]});
+        }
+
+        TEST_CASE("EQS alternate point generators retain their bounds and stage identities through authoring edits",
+                  "[unit][ai][eqs][generator]") {
+            const bool surface = GENERATE(false, true);
+            const auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto id = MakeIdentity<QueryId>(21);
+            const auto stage = MakeIdentity<QueryStageId>(22);
+            const auto result = MakeIdentity<QueryResultSchemaId>(23);
+            const auto test = MakeIdentity<QueryStageId>(24);
+            using Points = std::vector<Math::WorldCoordinate64>;
+            const Points initial{Math::WorldCoordinate64::FromMillimeters(1, 2, 3)};
+            auto source = surface ? CreateBuiltinNavigationSurfaceQuery(id, stage, result, "Surface", {2000, 16}, 4)
+                                  : CreateBuiltinAuthoredPointQuery(id, stage, result, "Points", initial, 4);
+            REQUIRE(source.HasValue());
+            auto withDistance = AddBuiltinPointDistanceTest(source.Value(), test, {2000, true});
+            REQUIRE(withDistance.HasValue());
+            auto read = ReadBuiltinPointQuerySettings(withDistance.Value(), registry.Value());
+            REQUIRE(read.HasValue());
+            auto settings = std::move(read).Value();
+
+            const Points changed{Math::WorldCoordinate64::FromMillimeters(-9000000000000000000LL, 2, 3), initial.front()};
+            settings.alternateGenerator =
+                surface ? AlternatePointGenerator{QueryNavigationSurfaceSettings{4200, 9}} : AlternatePointGenerator{changed};
+            settings.maximumResults = 2;
+            auto edited = EditBuiltinPointQuerySettings(withDistance.Value(), registry.Value(), settings);
+            REQUIRE(edited.HasValue());
+            CHECK(edited.Value().Stages().front().id == stage);
+            CHECK(edited.Value().Stages().back().id == test);
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(edited.Value());
+            REQUIRE(encoded.HasValue());
+            const auto decoded = EnvironmentQuerySourceCodec::Decode(encoded.Value());
+            REQUIRE(decoded.HasValue());
+            const auto reopened = ReadBuiltinPointQuerySettings(decoded.Value(), registry.Value());
+            REQUIRE(reopened.HasValue());
+            CHECK(reopened.Value().maximumResults == 2);
+            if (surface) {
+                const auto stored = std::get<QueryNavigationSurfaceSettings>(reopened.Value().alternateGenerator);
+                CHECK(stored.radiusMillimeters == 4200);
+                CHECK(stored.maximumCandidates == 9);
+            } else {
+                CHECK(std::get<Points>(reopened.Value().alternateGenerator) == changed);
+            }
+            settings.alternateGenerator = std::monostate{};
+            ExpectError(EditBuiltinPointQuerySettings(decoded.Value(), registry.Value(), settings),
+                        AIErrors::EnvironmentQuerySchemaInvalid);
         }
 
         TEST_CASE("EQS authored point generation rejects incomplete position lists before writing", "[unit][ai][eqs][generator]") {

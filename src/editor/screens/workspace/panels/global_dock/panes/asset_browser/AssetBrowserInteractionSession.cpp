@@ -160,10 +160,16 @@ namespace Horo::Editor {
         if (draft.directory.empty() || draft.name.front() == char{} || draft.maximumResults <= 0 ||
             draft.maximumResults > static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults))
             return false;
-        return draft.perceivedActors || (draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
-                                         draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) &&
-                                         (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps)) &&
-                                         (!draft.distance || draft.radiusMillimeters > 0));
+        if (draft.perceivedActors)
+            return true;
+        if (draft.distance && draft.radiusMillimeters <= 0)
+            return false;
+        if (draft.pointGenerator != EnvironmentQueryPointGenerator::Lattice)
+            return draft.pointGenerator == EnvironmentQueryPointGenerator::Authored ||
+                   draft.pointGenerator == EnvironmentQueryPointGenerator::NavigationSurface;
+        return draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
+               draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) &&
+               (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps));
     }
 
     /** @copydoc AssetBrowserInteractionSession::ConfirmCreateQuery */
@@ -179,9 +185,20 @@ namespace Horo::Editor {
         if (draft.perceivedActors) {
             request.perception = draft.currentlySensed ? AI::QueryPerceptionMatch::CurrentlySensed : AI::QueryPerceptionMatch::Remembered;
         } else {
-            request.lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
-                               .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
-                               .innerSteps = draft.annulus ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)} : std::nullopt};
+            switch (draft.pointGenerator) {
+                case EnvironmentQueryPointGenerator::Authored:
+                    request.alternateGenerator = std::vector{Math::WorldCoordinate64::FromMillimeters(0, 0, 0)};
+                    break;
+                case EnvironmentQueryPointGenerator::NavigationSurface:
+                    request.alternateGenerator = AI::QueryNavigationSurfaceSettings{2000, 16};
+                    break;
+                case EnvironmentQueryPointGenerator::Lattice:
+                    request.lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
+                                       .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
+                                       .innerSteps =
+                                           draft.annulus ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)} : std::nullopt};
+                    break;
+            }
             if (draft.distance)
                 request.distance = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(draft.radiusMillimeters), draft.preferNearer};
         }

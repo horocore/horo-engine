@@ -4,9 +4,11 @@
  */
 
 #include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/Math/WorldCoordinate64.h"
 
 #include <array>
 #include <optional>
+#include <variant>
 #include <vector>
 
 namespace Horo::AI {
@@ -55,7 +57,16 @@ namespace Horo::AI {
         std::uint32_t scoreWeight{1};
     };
 
-    /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
+    /** @brief Samples at most one projected point per reachable polygon in a bounded neighborhood. */
+    struct QueryNavigationSurfaceSettings final {
+        std::uint32_t radiusMillimeters{};
+        std::uint32_t maximumCandidates{};
+    };
+
+    /** @brief Monostate selects the regular lattice controls. */
+    using AlternatePointGenerator = std::variant<std::monostate, std::vector<Math::WorldCoordinate64>, QueryNavigationSurfaceSettings>;
+
+    /** @brief Editable native point generator and its existing tests. */
     struct BuiltinPointQuerySettings final {
         QueryPointLattice lattice;
         std::uint32_t maximumResults{};
@@ -63,6 +74,7 @@ namespace Horo::AI {
         std::vector<QueryPointContextOption> latticeCenters;        /**< Available generator choices in registered order. */
         std::optional<QueryPointVisibilityStageSettings> visibility;
         std::optional<QueryPointNavigationStageSettings> navigation;
+        AlternatePointGenerator alternateGenerator;
     };
 
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */
