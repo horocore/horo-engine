@@ -322,6 +322,28 @@ TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent]
     }
 }
 
+TEST_CASE("Cloud adapter preserves HTTP failure status after a truncated error body", "[agent][model][http]") {
+    auto provider = Create(true);
+    const auto [model, status, code] = GENERATE(
+        Catch::Generators::table<const char *, long, ModelErrorCode>({
+            {"truncated-authentication", 401, ModelErrorCode::Authentication},
+            {"truncated-rate-limit", 429, ModelErrorCode::RateLimited},
+        }));
+    const auto outcome = provider->Stream(Request(model), [](const ModelEvent &) {
+        FAIL("An HTTP error cannot publish a model event");
+        return true;
+    }, {});
+    REQUIRE(outcome.error);
+    CHECK(outcome.error->code == code);
+    CHECK(outcome.error->httpStatus == status);
+    CHECK(outcome.error->message.find("private") == std::string::npos);
+
+    const auto recovered = provider->Stream(Request("normal"), [](const ModelEvent &) {
+        return true;
+    }, {});
+    CHECK(recovered.Succeeded());
+}
+
 TEST_CASE("HTTP adapters bound response records even without a final newline", "[agent][model][http]") {
     const auto cloud = GENERATE(false, true);
     const auto model = GENERATE("oversized-record", "oversized-final-fragment");

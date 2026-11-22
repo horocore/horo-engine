@@ -84,6 +84,16 @@ class Handler(BaseHTTPRequestHandler):
         if payload["model"] == "limited":
             self.send_records([json.dumps({"error": "private"})], status=429)
             return
+        if payload["model"] in {"truncated-authentication", "truncated-rate-limit"}:
+            status = 401 if payload["model"] == "truncated-authentication" else 429
+            data = b'{"error":"private'
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(data) + 1))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            self.wfile.write(data)
+            return
         if payload["model"] == "malformed":
             self.send_records(["not json\n"], status=200)
             return

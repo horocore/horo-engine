@@ -165,7 +165,9 @@ namespace Horo::Agent {
                 }
                 long responseStatus = 0;
                 curl_easy_getinfo(state.curl, CURLINFO_RESPONSE_CODE, &responseStatus);
-                if (responseStatus < 200 || responseStatus >= 300)
+                if (responseStatus >= 300)
+                    return 0;  // The final status is sufficient. Stop reading the remote error body.
+                if (responseStatus < 200)
                     return bytes;
                 if (bytes > kMaximumDiscoveryBytes || state.pending.size() > kMaximumDiscoveryBytes - bytes) {
                     state.oversized = true;
@@ -231,9 +233,11 @@ namespace Horo::Agent {
                 return {ModelError{Protocol, "Model response exceeds limit", std::nullopt}};
             if (context.invalid)
                 return {ModelError{Protocol, "Invalid model response", std::nullopt}};
+            if (status >= 300)
+                return {HttpError(status)};
             if (result != CURLE_OK)
                 return {TransportError(protocol, result)};
-            if (status < 200 || status >= 300)
+            if (status < 200)
                 return {HttpError(status)};
             if (!context.pending.empty()) {
                 try {
