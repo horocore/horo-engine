@@ -4458,6 +4458,12 @@ target_compile_features(HoroMcpEditorBuildTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpEditorBuildTests PRIVATE HoroMcpEditorCommandsInternal)
 horo_register_catch_test(HoroMcpEditorBuildTests LABELS "unit;editor;mcp;build")
 
+add_executable(HoroMcpEditorTestTests unit/editor/EditorTestMcpToolsTests.cpp)
+target_compile_features(HoroMcpEditorTestTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroMcpEditorTestTests PRIVATE HORO_EDITOR_TEST_CTEST="${CMAKE_CTEST_COMMAND}")
+target_link_libraries(HoroMcpEditorTestTests PRIVATE HoroMcpEditorCommandsInternal HoroEngine::McpController HoroEngine::Platform)
+horo_register_catch_test(HoroMcpEditorTestTests LABELS "unit;editor;mcp;gameplay-test")
+
 add_executable(HoroSourceDocumentCodeQueryTests unit/editor/SourceDocumentCodeQueryTests.cpp)
 target_compile_features(HoroSourceDocumentCodeQueryTests PRIVATE cxx_std_20)
 target_include_directories(HoroSourceDocumentCodeQueryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

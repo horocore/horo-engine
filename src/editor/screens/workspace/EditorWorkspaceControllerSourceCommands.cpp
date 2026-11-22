@@ -1,5 +1,6 @@
 #include "EditorBuildCommandEndpoint.h"
 #include "EditorSourcePresentation.h"
+#include "EditorTestCommandEndpoint.h"
 #include "EditorWorkspaceController.h"
 
 namespace Horo::Editor {
@@ -59,9 +60,40 @@ namespace Horo::Editor {
         return started;
     }
 
+    /** @copydoc EditorWorkspaceController::BindGameplayTestCommands */
+    std::weak_ptr<const EditorTestCommandEndpoint> EditorWorkspaceController::BindGameplayTestCommands(
+        std::string project, const std::uint64_t authorizationRevision) {
+        RevokeGameplayTestCommands();
+        if (!m_gameplayTests || m_gameplayTestEnvironment.ctest.empty())
+            return {};
+        m_testCommandEndpoint = std::make_shared<const EditorTestCommandEndpoint>(
+            EditorTestCommandEndpoint{std::move(project), authorizationRevision, std::this_thread::get_id(),
+                                      [this](const std::function<bool()> &stop) {
+            auto started = m_gameplayTests->Start(ProjectRoot(), m_gameplayTestEnvironment, stop);
+            if (started.HasValue())
+                m_commandTestOperation = started.Value();
+            return started;
+        }, [this](const OperationId id) {
+            return m_commandTestOperation == id ? m_gameplayTests->Query(id) : std::nullopt;
+        }, [this](const OperationId id) {
+            return m_commandTestOperation == id && m_gameplayTests->RequestCancel(id);
+        }});
+        return m_testCommandEndpoint;
+    }
+
+    /** @copydoc EditorWorkspaceController::RevokeGameplayTestCommands */
+    void EditorWorkspaceController::RevokeGameplayTestCommands() noexcept {
+        m_testCommandEndpoint.reset();
+        if (m_commandTestOperation) {
+            static_cast<void>(m_gameplayTests->RequestCancel(*m_commandTestOperation));
+            m_commandTestOperation.reset();
+        }
+    }
+
     /** @copydoc EditorWorkspaceController::RevokeWorkspaceCommands */
     void EditorWorkspaceController::RevokeWorkspaceCommands() noexcept {
         m_sourceCommandEndpoint.reset();
+        RevokeGameplayTestCommands();
         m_buildCommandEndpoint.reset();
         if (m_commandBuildSession) {
             static_cast<void>(m_gameplayBuilds->RequestCancel(*m_commandBuildSession));

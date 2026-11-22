@@ -693,6 +693,14 @@ and bounded error identities for correlation. The build cannot coalesce
 with a different caller's ordinary Play or editor build. Workspace
 retirement cancels only the isolated build it admitted.
 
+The same command pack can publish `editor.test.start`, `editor.test.status`,
+and `editor.test.cancel` against the active workspace's native configured test
+service. Test execution and observation grants are independent of the build
+grants. Start and cancel use exact single-use approval, and status reads only
+the starting session's operation. The test identity correlates with the
+native operation and Build Output stores. The workspace owns cancellation
+when its endpoint is withdrawn.
+
 ## Related Documents
 
 - [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,

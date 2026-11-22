@@ -125,10 +125,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, const GuiScreenHost &host,
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
+            const auto *testEnvironment = services.TryGetConst<Application::GameplayTestEnvironment>();
             auto *saveRetirement = services.TryGet<EditorPlaySaveRetirement>();
             auto *moduleScripts = services.TryGet<Extensions::ScriptModuleHostServices>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
                     .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
+                    .tests = services.TryGet<Application::GameplayTestService>(),
+                    .testEnvironment = testEnvironment ? *testEnvironment : Application::GameplayTestEnvironment{},
                     .retirements = host.GameplayRetirements(),
                     .saveRetirement = saveRetirement ? saveRetirement->shared_from_this() : nullptr,
                     .moduleScripts = moduleScripts ? moduleScripts->shared_from_this() : nullptr,

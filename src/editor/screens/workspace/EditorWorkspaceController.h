@@ -4,6 +4,7 @@
 #include "EnvironmentQueryPreviewNavigation.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Application/TerrainAuthoringAssets.h"
 #include "Horo/Application/TerrainAuthoringCook.h"
 #include "Horo/Application/WorldBakeApplication.h"
@@ -78,6 +79,7 @@ namespace Horo::Application {
 namespace Horo::Editor {
     struct EditorSourceCommandEndpoint;
     struct EditorBuildCommandEndpoint;
+    struct EditorTestCommandEndpoint;
     struct CapturedDecisionExternal;
     struct EnvironmentQueryPreviewPhysics;
 
@@ -101,6 +103,8 @@ namespace Horo::Editor {
     struct EditorWorkspaceGameplayServices {
         Application::GameplayBuildService *builds{};
         Application::GameplayBuildEnvironment environment{};
+        Application::GameplayTestService *tests{};
+        Application::GameplayTestEnvironment testEnvironment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
         std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
         std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScripts;
@@ -206,7 +210,13 @@ namespace Horo::Editor {
          */
         [[nodiscard]] std::weak_ptr<const EditorBuildCommandEndpoint> BindGameplayBuildCommands(std::string project,
                                                                                                 std::uint64_t authorizationRevision);
-        /** @brief Revokes workspace command leases and cancels their isolated build before project retirement. */
+        /** @brief Binds the active workspace's configured native test operations.
+         * @param project Host-issued project identity. @param authorizationRevision Exact active trust revision.
+         * @return Borrowed endpoint, or an empty lease when the host lacks CTest capability.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorTestCommandEndpoint> BindGameplayTestCommands(std::string project,
+                                                                                              std::uint64_t authorizationRevision);
+        /** @brief Revokes workspace command leases and cancels command-owned work before project retirement. */
         void RevokeWorkspaceCommands() noexcept;
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
@@ -794,7 +804,9 @@ namespace Horo::Editor {
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
         std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;
+        std::shared_ptr<const EditorTestCommandEndpoint> m_testCommandEndpoint;
         std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;
+        std::optional<OperationId> m_commandTestOperation;
         Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
         std::uint64_t m_scriptLanguageApiRevision{};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
@@ -952,6 +964,8 @@ namespace Horo::Editor {
         BuildOutputStore *m_diagnosticOutput{};
         Application::GameplayBuildService *m_gameplayBuilds{};
         Application::GameplayBuildEnvironment m_gameplayBuildEnvironment;
+        Application::GameplayTestService *m_gameplayTests{};
+        Application::GameplayTestEnvironment m_gameplayTestEnvironment;
         const ILocalizationService *m_localization{};
         std::optional<Application::GameplayBuildSessionId> m_gameplayBuildSession;
         bool m_playAfterGameplayBuild{false};
@@ -1327,6 +1341,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool FocusSourceDefinition(const Language::LanguageLocation &target);
         /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
+        /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */
+        void RevokeGameplayTestCommands() noexcept;
         /** @brief Opens embedded source and publishes a validated optional text location on the editor lane. */
         [[nodiscard]] Result<void> PresentSourceCommand(const SourceDocumentId &path, std::optional<Language::LanguageLocation> target,
                                                         const std::function<bool()> &stop);
