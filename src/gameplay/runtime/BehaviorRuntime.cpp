@@ -82,7 +82,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta,
-                                              BehaviorFixedEvidence *evidence) const {
+                                              BehaviorFixedEvidence *evidence, const GameplayAssistPreferences *assists) const {
         impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
@@ -96,7 +96,7 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         Runtime::SceneCommandBuffer commands;
         for (std::size_t index = 0; index < impl_->instances.size(); ++index)
-            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence); updated.HasError())
+            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence, assists); updated.HasError())
                 return updated;
         if (!commands.Empty()) {
             Result<void> committed = impl_->CommitCommands(std::move(commands));
@@ -114,13 +114,14 @@ namespace Horo::Gameplay {
     }
 
     Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,
-                                                   Runtime::SceneCommandBuffer &commands, BehaviorFixedEvidence *evidence) const {
+                                                   Runtime::SceneCommandBuffer &commands, BehaviorFixedEvidence *evidence,
+                                                   const GameplayAssistPreferences *assists) const {
         auto &instance = impl_->instances[index];
         if (!instance.component.enabled)
             return Result<void>::Success();
         Impl::ContextBackend backend{*impl_, instance, input, commands};
         backend.fixedEvidence = evidence;
-        BehaviorContext context{backend};
+        BehaviorContext context{backend, assists};
         if (!instance.started) {
             instance.implementation->OnStart(context);
             instance.started = true;

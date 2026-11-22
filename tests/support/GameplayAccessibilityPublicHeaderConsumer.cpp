@@ -1,4 +1,12 @@
+#include "Horo/Gameplay/Behavior.h"
 #include "Horo/Gameplay/GameplayAccessibility.h"
+
+#include <concepts>
+#include <optional>
+#include <utility>
+
+static_assert(std::same_as<decltype(std::declval<const Horo::Gameplay::BehaviorContext &>().AssistPreferences()),
+                           std::optional<Horo::Gameplay::GameplayAssistPreferences>>);
 
 int main() {
     Horo::ConfigurationSchema schema;

@@ -1,6 +1,7 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 
 #include "EditorPlayXrHost.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Scene/SceneSource.h"
 #include "ProjectGameplayRegistry.h"
@@ -604,6 +605,10 @@ namespace Horo::Editor {
             return prepared;
         if (!ShouldTick())
             return Result<void>::Success();
+        if (auto assists = CaptureGameplayAssists(); assists.HasError()) {
+            Fail(assists.ErrorValue());
+            return assists;
+        }
         stepPending_ = false;
         if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError()) {
             Fail(gameplay.ErrorValue());
@@ -624,9 +629,25 @@ namespace Horo::Editor {
                                                                const Gameplay::FixedDeltaTime delta) {
         if (auto admitted = sceneHost_->BeginFixedUpdate(delta); admitted.HasError())
             return admitted;
-        if (auto updated = behaviors_->FixedUpdate(input, delta); updated.HasError())
+        const auto assists = assistPreferences_;
+        if (auto updated = behaviors_->FixedUpdate(input, delta, nullptr, assists ? &*assists : nullptr); updated.HasError())
             return updated;
         return CommitSceneChanges();
+    }
+
+    /** @copydoc EditorPlaySessionController::CaptureGameplayAssists */
+    Result<void> EditorPlaySessionController::CaptureGameplayAssists() {
+        if (!assistConfiguration_)
+            return Result<void>::Success();
+        auto snapshot = assistConfiguration_->Snapshot();
+        if (assistPreferences_ && snapshot.Revision() == assistRevision_)
+            return Result<void>::Success();
+        const auto captured = Gameplay::GameplayAssistTickSnapshot::Capture(std::move(snapshot));
+        if (captured.HasError())
+            return Result<void>::Failure(captured.ErrorValue());
+        assistPreferences_ = captured.Value().Preferences();
+        assistRevision_ = captured.Value().Revision();
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorPlaySessionController::PresentationUpdate */

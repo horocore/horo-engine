@@ -4,19 +4,9 @@
  * @brief Gameplay-owned snapshot preferences and coarse revision hints; no simulation authority is granted.
  */
 #include "Horo/Foundation/ModuleHost.h"
+#include "Horo/Gameplay/GameplayAssistPreferences.h"
 
 namespace Horo::Gameplay {
-    /** @brief Desired preferences only; each gameplay consumer still applies its normal capability/authority rules. */
-    struct GameplayAssistPreferences final {
-        float aimAssist{};
-        bool autoAimSnap{};
-        float aggressionReduction{};
-        float reactionTimeMultiplier{1};
-        bool skipQuickTimeEvents{};
-        float postHitInvulnerabilitySeconds{};
-        float damageMultiplier{1};
-    };
-
     /** @brief Sole approved accessibility bus payload: a hint, never authoritative assist values. */
     struct GameplayAccessibilityStateEvent final {
         static constexpr std::string_view HoroEventTypeName = "horo::GameplayAccessibilityStateEvent";

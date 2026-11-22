@@ -25,7 +25,7 @@ target_link_libraries(HoroVisualAccessibility PUBLIC HoroEngine::Foundation)
 add_library(HoroGameplayAccessibility STATIC gameplay/accessibility/GameplayAccessibility.cpp)
 add_library(HoroEngine::GameplayAccessibility ALIAS HoroGameplayAccessibility)
 target_compile_features(HoroGameplayAccessibility PUBLIC cxx_std_20)
-target_link_libraries(HoroGameplayAccessibility PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroGameplayAccessibility PUBLIC HoroEngine::Foundation HoroEngine::GameplayApi)
 
 # Optional adapter boundary; the baseline Platform target acquires no UI dependency.
 add_library(HoroPlatformAccessibility STATIC platform/NullAccessibilityBridge.cpp platform/AccessibilitySettings.cpp)
@@ -4200,6 +4200,7 @@ target_link_libraries(HoroEditorServices
         HoroThirdParty::Lua
         HoroEngine::Security
         HoroEditorPlaySceneHostInternal
+        HoroEngine::GameplayAccessibility
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal

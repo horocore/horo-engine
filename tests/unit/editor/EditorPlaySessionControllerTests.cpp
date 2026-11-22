@@ -9,6 +9,7 @@
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
@@ -34,6 +35,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <thread>
@@ -49,7 +51,8 @@ namespace {
             auto transform = context.LocalTransform();
             REQUIRE(transform.HasValue());
             Math::Transform moved = transform.Value();
-            moved.translation.x += 1.0F;
+            const auto assists = context.AssistPreferences();
+            moved.translation.x += assists ? 1.0F - assists->aggressionReduction : 1.0F;
             REQUIRE(context.SetLocalTransform(moved).HasValue());
         }
     };
@@ -255,6 +258,7 @@ namespace {
         std::size_t prepares{}, publications{}, aborts{};
         Editor::EditorPlaySessionController *stopDuringUpdate{}, *stopDuringPrepare{};
         bool failPrepare{}, pending{}, stopRetainedOwner{};
+        std::function<void()> beforeGameplay;
     };
 
     /** @brief Exercises the injected owner protocol using an actual assetless Scene service; no native backend claim. */
@@ -273,6 +277,12 @@ namespace {
 
         Runtime::RuntimeSceneService &Scenes() noexcept override {
             return scenes_;
+        }
+
+        Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) override {
+            if (observations_->beforeGameplay)
+                observations_->beforeGameplay();
+            return Result<void>::Success();
         }
 
         Result<void> FixedUpdate(Gameplay::FixedDeltaTime) override {
@@ -767,7 +777,7 @@ namespace {
     };
 
     struct PlayFixedFixture final {
-        PlayFixedFixture() {
+        explicit PlayFixedFixture(const ConfigurationService *configuration = nullptr) : play(nullptr, configuration) {
             auto made = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
             REQUIRE(made.HasValue());
             scheduler = std::move(made).Value();
@@ -1998,6 +2008,35 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     lifecycle.Shutdown();
 }
 #endif
+
+TEST_CASE("Play holds committed gameplay assists through the fixed dispatch", "[editor][play][accessibility]") {
+    ConfigurationSchema schema;
+    for (const auto &setting : Gameplay::MakeGameplayAccessibilityContribution().settings)
+        REQUIRE(schema.Register(setting).HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    ConfigurationService configuration{std::move(schema)};
+    PlayFixedFixture fixture{&configuration};
+    const auto actor = fixture.play.SceneView()->Find({2});
+    REQUIRE(actor);
+
+    const auto originalRevision = configuration.Snapshot().Revision();
+    const SettingKey aggression{"accessibility.gameplay.aggression_reduction"};
+    fixture.observations->beforeGameplay = [&configuration, &aggression, originalRevision] {
+        REQUIRE(configuration
+                    .Commit({.baseRevision = originalRevision,
+                             .proposedValues = {{aggression, std::int64_t{750}}},
+                             .source = ConfigurationSource::User})
+                    .HasValue());
+    };
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(fixture.play.SceneView()->Get(*actor).Value().localTransform->translation.x == 1.0F);
+
+    fixture.observations->beforeGameplay = {};
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(fixture.play.SceneView()->Get(*actor).Value().localTransform->translation.x == 1.25F);
+}
 
 TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {
     PlayFixedFixture fixture;

@@ -138,7 +138,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                     .retirements = host.GameplayRetirements(),
                     .saveRetirement = saveRetirement ? saveRetirement->shared_from_this() : nullptr,
                     .moduleScripts = moduleScripts ? moduleScripts->shared_from_this() : nullptr,
-                    .sceneFactory = std::move(sceneFactory)};
+                    .sceneFactory = std::move(sceneFactory),
+                    .assistConfiguration = services.TryGetConst<ConfigurationService>()};
         }
 
     }  // namespace

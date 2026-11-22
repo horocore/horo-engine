@@ -582,6 +582,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/NativePerceptionSense.h
     Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
+    Horo/Gameplay/GameplayAssistPreferences.h
     Horo/Gameplay/BehaviorRestore.h
     Horo/Gameplay/PersistenceSource.h
     Horo/Gameplay/PersistenceRegistration.h

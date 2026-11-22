@@ -4492,6 +4492,7 @@ namespace Horo::Editor {
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
                                                    packages,          p.operationServices.shaderReload, playSaveRetirement};
             screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
+            screenHost.Services().RegisterConst<ConfigurationService>(p.configuration);
             if (querySchema.HasValue()) {
                 screenHost.Services().RegisterConst(querySchema.Value());
                 screenHost.Services().RegisterConst(latticeQueryFactory);

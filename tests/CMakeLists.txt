@@ -3259,7 +3259,7 @@ target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE
     HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
     HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
 add_dependencies(HoroEditorPlaySessionControllerTests HoroTestAiGameModule)
-target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices HoroEngine::GameplayAccessibility)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings
         HoroEngine::NavigationApi HoroEngine::DecisionCookHost)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)

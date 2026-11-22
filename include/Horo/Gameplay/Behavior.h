@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/GameplayAssistPreferences.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
 #include <cstddef>
@@ -164,6 +165,20 @@ namespace Horo::Gameplay {
     public:
         explicit BehaviorContext(Detail::IBehaviorContextBackend &backend) noexcept : backend_(&backend) {}
 
+        /** @brief Binds preferences retained by the host for this exact fixed dispatch.
+         * @param backend Callback-scoped Scene adapter.
+         * @param assists Borrowed desired preferences, valid for the complete callback, or null when withheld.
+         */
+        BehaviorContext(Detail::IBehaviorContextBackend &backend, const GameplayAssistPreferences *assists) noexcept
+            : backend_(&backend), assists_(assists) {}
+
+        /** @brief Reads the fixed-dispatch preferences without obtaining simulation authority.
+         * @return A copy of the preferences, or empty when the host withheld them or outside fixed dispatch.
+         */
+        [[nodiscard]] std::optional<GameplayAssistPreferences> AssistPreferences() const noexcept {
+            return assists_ ? std::optional{*assists_} : std::nullopt;
+        }
+
         [[nodiscard]] GameplayEntityRef Entity() const noexcept {
             return backend_->Entity();
         }
@@ -233,6 +248,7 @@ namespace Horo::Gameplay {
 
     private:
         Detail::IBehaviorContextBackend *backend_{};
+        const GameplayAssistPreferences *assists_{};
     };
 
     /** @brief Scene-scoped gameplay behavior lifecycle implemented by native code or a script adapter. */

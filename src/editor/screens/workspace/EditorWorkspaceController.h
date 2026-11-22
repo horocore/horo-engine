@@ -125,7 +125,8 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
         std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
         std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScripts;
-        EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
+        EditorPlaySceneFactory sceneFactory{};             /**< Host composition capturing the selected native and asset authorities. */
+        const ConfigurationService *assistConfiguration{}; /**< Process authority outliving the workspace. */
     };
 
     /** @brief Explicit host composition for prefab source capture and isolated authoring previews. */

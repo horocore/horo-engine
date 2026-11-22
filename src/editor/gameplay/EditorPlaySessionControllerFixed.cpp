@@ -40,6 +40,8 @@ namespace Horo::Editor {
         if (!ShouldTick())
             return Result<void>::Success();
         fixedAttempt_.emplace(sceneHost_.get(), context.dispatchEvidence, facts, state_ == EditorPlaySessionState::Paused);
+        if (auto assists = CaptureGameplayAssists(); assists.HasError())
+            return RejectFixedAttempt(context, assists.ErrorValue());
         const Gameplay::FixedDeltaTime delta{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0};
         const auto evaluated = fixedAttempt_->scene->EvaluateDecisionBeforeGameplay(context);
         if (evaluated.HasError())

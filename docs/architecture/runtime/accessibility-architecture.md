@@ -497,6 +497,10 @@ cross-domain notification rather than state storage.
   unpublished setting cannot emit a hint.
 - One snapshot governs the entire tick. No settings callback mutates gameplay
   mid-tick. All local consumers share the tick's captured revision.
+- Editor Play captures the committed revision before Decision or gameplay
+  callbacks run. Native behavior callbacks can copy desired settings via
+  `BehaviorContext::AssistPreferences()` during fixed dispatch. Presentation
+  callbacks and hosts without the configuration authority receive an empty value.
 - Desired preferences persist in user settings. Applying an assist still respects
   game/server authority and supported capabilities; accessibility labeling cannot
   bypass configuration or ADR-018 command authorization.

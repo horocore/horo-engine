@@ -10,6 +10,7 @@
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
 #include "Horo/Application/NetworkDebugger.h"
+#include "Horo/Foundation/Configuration.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
@@ -43,8 +44,11 @@ namespace Horo::Editor {
     class EditorPlaySessionController final {
     public:
         /** @brief Borrows optional host diagnostics for the complete Play controller lifetime.
-         * @param debugger Host service; must outlive this controller. */
-        explicit EditorPlaySessionController(Application::NetworkDebuggerService *debugger = nullptr) noexcept : debugger_(debugger) {}
+         * @param debugger Host service; must outlive this controller.
+         * @param assistConfiguration Process authority with gameplay descriptors, or null to withhold preferences. */
+        explicit EditorPlaySessionController(Application::NetworkDebuggerService *debugger = nullptr,
+                                             const ConfigurationService *assistConfiguration = nullptr) noexcept
+            : debugger_(debugger), assistConfiguration_(assistConfiguration) {}
 
         /** @brief Stops publication before releasing the clone. */
         ~EditorPlaySessionController();
@@ -204,6 +208,8 @@ namespace Horo::Editor {
     private:
         [[nodiscard]] bool ShouldTick() const noexcept;
         [[nodiscard]] Result<void> RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        /** @brief Refreshes the native gameplay preference cache from the start of this dispatch. */
+        [[nodiscard]] Result<void> CaptureGameplayAssists();
         [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
         [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
         void FlushPendingStop() noexcept;
@@ -264,6 +270,9 @@ namespace Horo::Editor {
         std::optional<Error> moduleScriptError_;
 
         Application::NetworkDebuggerService *debugger_{};
+        const ConfigurationService *assistConfiguration_{};
+        std::optional<Gameplay::GameplayAssistPreferences> assistPreferences_;
+        ConfigurationRevision assistRevision_{};
         std::uint64_t diagnosticGeneration_{};
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
         Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert schema snapshot, fixed for the complete Scene epoch. */

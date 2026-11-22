@@ -5,7 +5,7 @@ include_guard(GLOBAL)
 horo_allow_target_dependencies(TARGET HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroCaptionTransport)
 horo_allow_target_dependencies(TARGET HoroVisualAccessibility DEPENDENCIES HoroFoundation)
-horo_allow_target_dependencies(TARGET HoroGameplayAccessibility DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroGameplayAccessibility DEPENDENCIES HoroFoundation HoroGameplayApi)
 horo_allow_target_dependencies(TARGET HoroPlatformAccessibility DEPENDENCIES HoroFoundation HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET HoroPlatformDesktop DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroFoundationJsonInternal)
@@ -369,7 +369,7 @@ horo_allow_target_dependencies(TARGET HoroXRSimulatorSample DEPENDENCIES HoroXRS
 horo_allow_target_dependencies(TARGET HoroEditorLanguageProtocolInternal DEPENDENCIES HoroFoundation HoroFoundationJsonInternal)
 horo_allow_target_dependencies(TARGET HoroEditorServices
     DEPENDENCIES HoroPlatformServicesAuthoring HoroSecurity HoroScriptModuleHostInternal HoroEditorPlayXrHostInterface HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPrefabProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroProjectSurfaceSettings HoroSceneRuntimeConversion HoroSceneSource HoroProjectReadFilesApi HoroWorldBakeApplication
-        HoroAnimationGraphSourceCodec HoroAI HoroFoundation HoroHostErrors HoroCinematicRuntime
+        HoroAnimationGraphSourceCodec HoroAI HoroFoundation HoroHostErrors HoroCinematicRuntime HoroGameplayAccessibility
         HoroNetworkApi
         HoroNetworkDebuggerApplication
         HoroEditorLanguageProtocolInternal

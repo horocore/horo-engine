@@ -129,9 +129,11 @@ namespace Horo::Gameplay {
         /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
          * @param input Current tick input. @param delta Validated fixed step.
          * @param evidence Optional fresh diagnostic storage, valid only for this call. Ignore it on failure.
+         * @param assists Optional desired preferences from the host's authoritative snapshot for this dispatch.
          * @return Success or a lifecycle/callback error. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta,
-                                               BehaviorFixedEvidence *evidence = nullptr) const;
+                                               BehaviorFixedEvidence *evidence = nullptr,
+                                               const GameplayAssistPreferences *assists = nullptr) const;
         /** @brief Runs presentation-only callbacks without committing simulation mutation.
          * @param delta Current presentation frame delta. */
         void PresentationUpdate(FrameDeltaTime delta) const;
@@ -180,7 +182,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<void> CheckRestoreServices(const Impl &, BehaviorRestoreServices);
         [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
         [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
-                                                    Runtime::SceneCommandBuffer &, BehaviorFixedEvidence *) const;
+                                                    Runtime::SceneCommandBuffer &, BehaviorFixedEvidence *,
+                                                    const GameplayAssistPreferences *) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.
