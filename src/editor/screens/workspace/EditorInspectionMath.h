@@ -1,6 +1,6 @@
 #pragma once
 
-/** @file EditorInspectionDistance.h @brief Pure distance measurement over validated world bounds. */
+/** @file EditorInspectionMath.h @brief Pure measurements over committed scene geometry and positions. */
 
 #include "EditorInspectionCommandEndpoint.h"
 
@@ -32,6 +32,22 @@ namespace Horo::Editor {
         }
         result.gap = std::hypot(result.nearestReference[0] - result.nearestTarget[0], result.nearestReference[1] - result.nearestTarget[1],
                                 result.nearestReference[2] - result.nearestTarget[2]);
+        return result;
+    }
+
+    /** @brief Measures a finite world position against a zero-origin grid with a positive finite step.
+     * @details Midpoints round away from zero, matching the editor's translation convention.
+     */
+    inline InspectedGridOffset MeasureInspectionGridOffset(const std::uint64_t object, const std::array<double, 3> position,
+                                                           const double gridStep) {
+        InspectedGridOffset result{.object = object, .gridStep = gridStep, .position = position};
+        for (std::size_t axis = 0; axis < position.size(); ++axis) {
+            const double remainder = std::fmod(position[axis], gridStep);
+            const double upperDistance = gridStep - std::abs(remainder);
+            const double offset = std::abs(remainder) >= upperDistance ? std::copysign(upperDistance, position[axis]) : -remainder;
+            result.offset[axis] = offset == 0 ? 0.0 : offset;
+            result.snappedPosition[axis] = position[axis] + offset;
+        }
         return result;
     }
 }  // namespace Horo::Editor

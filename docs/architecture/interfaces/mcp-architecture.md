@@ -459,8 +459,9 @@ lists in one response. Streaming JSONL tools declare a per-record schema and
 bounded chunk size.
 
 The embedded editor's scene inspection grant exposes `inspect.transforms`
-as an owner-lane query. It returns only authored local translations,
-quaternions and scales for explicitly supplied visible object IDs. The
+as an owner-lane query. It returns authored local translations, quaternions
+and scales, local and committed world matrices in row-major order, and the
+world-space pivot for explicitly supplied visible object IDs. The
 request is bounded to 16 IDs and continuations repeat the exact Scene epoch
 and revision from the previous result. Play copies, retired workspaces and
 missing or hidden objects fail closed.
@@ -476,6 +477,10 @@ unavailable result when no matching geometry is published.
 visible reference object. It returns the world AABB gap, per-axis overlap
 depths, a deterministic nearest-point pair and the angle between the two
 committed transformed local forward axes.
+`inspect.grid_offsets` uses the same committed world pivot and an explicit
+positive step on a zero-origin world grid. It reports the nearest aligned
+position and the signed correction on each axis without editing the Scene.
+Midpoints round away from zero.
 
 ## MCP History Retention And Redaction
 

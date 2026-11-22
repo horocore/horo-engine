@@ -3,6 +3,9 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpErrors.h"
 
+#include <cmath>
+#include <type_traits>
+
 namespace Horo::Editor {
     namespace {
         using Json = nlohmann::json;
@@ -41,6 +44,14 @@ namespace Horo::Editor {
             return result;
         }
 
+        /** @brief Requires an explicit numeric grid spacing. */
+        Json GridInputSchema() {
+            auto result = InputSchema();
+            result["properties"]["gridStep"] = {{"type", "number"}, {"minimum", 0}};
+            result["required"].push_back("gridStep");
+            return result;
+        }
+
         /** @brief Describes numeric records without names, free text, or runtime handles. */
         Json VectorSchema(const std::size_t count) {
             return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
@@ -57,16 +68,21 @@ namespace Horo::Editor {
                     {"additionalProperties", false}};
         }
 
-        /** @brief Describes authored transform values only. */
+        /** @brief Describes authored local values and the committed world pose. */
         Json TransformSchema() {
-            return PageSchema({{"type", "object"},
-                               {"properties",
-                                {{"object", {{"type", "integer"}, {"minimum", 1}}},
-                                 {"translation", VectorSchema(3)},
-                                 {"rotationXYZW", VectorSchema(4)},
-                                 {"scale", VectorSchema(3)}}},
-                               {"required", {"object", "translation", "rotationXYZW", "scale"}},
-                               {"additionalProperties", false}});
+            return PageSchema(
+                {{"type", "object"},
+                 {"properties",
+                  {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                   {"translation", VectorSchema(3)},
+                   {"rotationXYZW", VectorSchema(4)},
+                   {"scale", VectorSchema(3)},
+                   {"localMatrixRowMajor", VectorSchema(16)},
+                   {"worldMatrixRowMajor", VectorSchema(16)},
+                   {"worldPivot", VectorSchema(3)}}},
+                 {"required",
+                  {"object", "translation", "rotationXYZW", "scale", "localMatrixRowMajor", "worldMatrixRowMajor", "worldPivot"}},
+                 {"additionalProperties", false}});
         }
 
         /** @brief Describes world-space axis-aligned bounds. */
@@ -126,6 +142,19 @@ namespace Horo::Editor {
                  {"additionalProperties", false}});
         }
 
+        /** @brief Describes the original and nearest aligned positions. */
+        Json GridSchema() {
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                                 {"gridStep", {{"type", "number"}, {"minimum", 0}}},
+                                 {"position", VectorSchema(3)},
+                                 {"snappedPosition", VectorSchema(3)},
+                                 {"offset", VectorSchema(3)}}},
+                               {"required", {"object", "gridStep", "position", "snappedPosition", "offset"}},
+                               {"additionalProperties", false}});
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -135,12 +164,20 @@ namespace Horo::Editor {
                     InspectionSceneRevision{scene->at("epoch").get<std::uint64_t>(), scene->at("revision").get<std::uint64_t>()};
             if (const auto reference = arguments.find("referenceObject"); reference != arguments.end())
                 request.referenceObject = reference->get<std::uint64_t>();
+            if (const auto step = arguments.find("gridStep"); step != arguments.end())
+                request.gridStep = step->get<double>();
             return request;
         }
 
-        /** @brief Serializes local numeric TRS values. */
-        Json WriteRecord(const AgentViewportTransform &entry) {
-            return {{"object", entry.object}, {"translation", entry.translation}, {"rotationXYZW", entry.rotation}, {"scale", entry.scale}};
+        /** @brief Serializes local and world transform values. */
+        Json WriteRecord(const InspectedTransform &entry) {
+            return {{"object", entry.local.object},
+                    {"translation", entry.local.translation},
+                    {"rotationXYZW", entry.local.rotation},
+                    {"scale", entry.local.scale},
+                    {"localMatrixRowMajor", entry.localMatrixRowMajor},
+                    {"worldMatrixRowMajor", entry.worldMatrixRowMajor},
+                    {"worldPivot", entry.worldPivot}};
         }
 
         /** @brief Serializes numeric world-space limits. */
@@ -172,6 +209,15 @@ namespace Horo::Editor {
                     {"forwardAngleRadians", entry.forwardAngleRadians}};
         }
 
+        /** @brief Serializes world-space grid alignment with the exact requested spacing. */
+        Json WriteRecord(const InspectedGridOffset &entry) {
+            return {{"object", entry.object},
+                    {"gridStep", entry.gridStep},
+                    {"position", entry.position},
+                    {"snappedPosition", entry.snappedPosition},
+                    {"offset", entry.offset}};
+        }
+
         /** @brief Exports an owner-produced page with an optional continuation offset. */
         template <typename Page> Json WritePage(const Page &page) {
             Json rows = Json::array();
@@ -199,6 +245,8 @@ namespace Horo::Editor {
                 const auto request = ReadRequest(arguments);
                 if (request.offset && !request.expected)
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
+                if (request.gridStep && (!std::isfinite(*request.gridStep) || *request.gridStep <= 0))
+                    return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
                 const auto page = (endpoint.get()->*Read)(request);
                 if (page.HasError())
                     return JsonResult::Failure(page.ErrorValue());
@@ -213,14 +261,17 @@ namespace Horo::Editor {
         template <auto Read>
         Mcp::McpToolRegistration Registration(const std::weak_ptr<const EditorInspectionCommandEndpoint> &workspace, std::string id,
                                               std::string description, Json input, Json schema) {
-            return {.descriptor =
-                        {.id = {std::move(id)},
-                         .description = std::move(description),
-                         .inputSchema = std::move(input),
-                         .outputSchema = std::move(schema),
-                         .effect = Mcp::McpToolEffect::Query,
-                         .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
-                         .bounds = {.maximumInputBytes = 1024, .maximumResultBytes = 8192, .maximumDepth = 6, .maximumNodes = 512}},
+            constexpr bool includesMatrices = std::is_same_v<decltype(Read), decltype(&EditorInspectionCommandEndpoint::readTransforms)>;
+            return {.descriptor = {.id = {std::move(id)},
+                                   .description = std::move(description),
+                                   .inputSchema = std::move(input),
+                                   .outputSchema = std::move(schema),
+                                   .effect = Mcp::McpToolEffect::Query,
+                                   .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
+                                   .bounds = {.maximumInputBytes = 1024,
+                                              .maximumResultBytes = includesMatrices ? 16384U : 8192U,
+                                              .maximumDepth = 6,
+                                              .maximumNodes = includesMatrices ? 1024U : 512U}},
                     .adapter = std::make_shared<InspectionTool<Read>>(workspace),
                     .owner = Mcp::McpOwnerContext::Editor};
         }
@@ -246,7 +297,7 @@ namespace Horo::Editor {
         std::vector<Mcp::McpToolRegistration> tools;
         AppendInspection<
             &EditorInspectionCommandEndpoint::readTransforms>(tools, endpoint, "inspect.transforms",
-                                                              "Read visible authored local transforms by exact Scene object ID.",
+                                                              "Read visible authored local transforms and committed world poses.",
                                                               TransformSchema);
         AppendInspection<
             &EditorInspectionCommandEndpoint::readBounds>(tools, endpoint, "inspect.bounds",
@@ -263,6 +314,10 @@ namespace Horo::Editor {
                                                                           "Measure world-axis-aligned bounds and forward angles from a "
                                                                           "visible reference object to visible targets.",
                                                                           DistanceSchema, DistanceInputSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::
+                             readGridOffsets>(tools, endpoint, "inspect.grid_offsets",
+                                              "Measure committed object origins against an explicit zero-origin world grid.", GridSchema,
+                                              GridInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

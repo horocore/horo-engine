@@ -30,12 +30,21 @@ namespace Horo::Editor {
         std::size_t limit{MaximumObjects};
         std::optional<InspectionSceneRevision> expected;
         std::optional<std::uint64_t> referenceObject; /**< Used only by the distance tool. */
+        std::optional<double> gridStep;               /**< Used only by the grid-offset tool. */
+    };
+
+    /** @brief Authored TRS, local and world matrices, and the authored object's world pivot. */
+    struct InspectedTransform {
+        AgentViewportTransform local;
+        std::array<float, 16> localMatrixRowMajor{};
+        std::array<float, 16> worldMatrixRowMajor{};
+        std::array<float, 3> worldPivot{};
     };
 
     /** @brief One page from the caller's ordered set of exact scene object IDs. */
     struct TransformInspectionPage {
         InspectionSceneRevision scene;
-        std::vector<AgentViewportTransform> records;
+        std::vector<InspectedTransform> records;
         std::optional<std::size_t> nextOffset;
     };
 
@@ -120,6 +129,22 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Committed world position and numeric translation needed to reach the specified grid. */
+    struct InspectedGridOffset {
+        std::uint64_t object{};
+        double gridStep{};
+        std::array<double, 3> position{};
+        std::array<double, 3> snappedPosition{};
+        std::array<double, 3> offset{};
+    };
+
+    /** @brief Requested grid offsets in target order. */
+    struct GridInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedGridOffset> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -130,5 +155,6 @@ namespace Horo::Editor {
         std::function<Result<ComponentInspectionPage>(const ObjectInspectionRequest &)> readComponents;
         std::function<Result<GeometryInspectionPage>(const ObjectInspectionRequest &)> readGeometry;
         std::function<Result<DistanceInspectionPage>(const ObjectInspectionRequest &)> readDistances;
+        std::function<Result<GridInspectionPage>(const ObjectInspectionRequest &)> readGridOffsets;
     };
 }  // namespace Horo::Editor

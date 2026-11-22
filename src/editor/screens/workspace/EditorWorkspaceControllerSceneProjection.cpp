@@ -1,10 +1,11 @@
 #include "EditorInspectionCommandEndpoint.h"
-#include "EditorInspectionDistance.h"
+#include "EditorInspectionMath.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -47,6 +48,27 @@ namespace Horo::Editor {
                     {value.translation.x, value.translation.y, value.translation.z},
                     {value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w},
                     {value.scale.x, value.scale.y, value.scale.z}};
+        }
+
+        /** @brief Copies a matrix in wire order independent of its storage convention. */
+        std::array<float, 16> RowMajorMatrix(const Math::Mat4 &matrix) {
+            std::array<float, 16> values{};
+            for (std::size_t row = 0; row < 4; ++row)
+                for (std::size_t column = 0; column < 4; ++column)
+                    values[row * 4 + column] = matrix.At(row, column);
+            return values;
+        }
+
+        /** @brief Returns only a committed pose from the matching authored definition. */
+        Result<Math::Mat4> ReadInspectionPose(const std::optional<Runtime::RuntimeSceneView> &scene, const bool current,
+                                              const SceneObjectId object) {
+            using Output = Result<Math::Mat4>;
+            if (!current)
+                return Output::Failure(MakeError(InspectionUnavailable));
+            const auto pose = ResolveSceneObjectWorldTransforms(*scene, object);
+            if (pose.HasError() || !Math::IsFinite(pose.Value().localToWorld))
+                return Output::Failure(MakeError(InspectionObjectUnavailable));
+            return Output::Success(pose.Value().localToWorld);
         }
 
         /** @brief Projects numeric presence and collection sizes from the authored component set. */
@@ -320,15 +342,30 @@ namespace Horo::Editor {
             return InspectGeometry(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectDistances(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectGridOffsets(request);
         }});
         return m_inspectionCommandEndpoint;
     }
 
     /** @copydoc EditorWorkspaceController::InspectLocalTransforms */
     Result<TransformInspectionPage> EditorWorkspaceController::InspectLocalTransforms(const ObjectInspectionRequest &request) const {
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && active->DefinitionRevision().value == m_document.State().value;
         return ReadInspectionPage<TransformInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
-                                                           [](const SceneObject &object) {
-            return Result<AgentViewportTransform>::Success(LocalTransform(object));
+                                                           [&active, current](const SceneObject &object) {
+            using Output = Result<InspectedTransform>;
+            const auto world = ReadInspectionPose(active, current, object.id);
+            if (world.HasError())
+                return Output::Failure(world.ErrorValue());
+            const auto local = object.localTransform.TryToMatrix();
+            if (local.HasError())
+                return Output::Failure(MakeError(InspectionObjectUnavailable));
+            const auto pivot = Math::TransformPoint(world.Value(), {});
+            if (!Math::IsFinite(pivot))
+                return Output::Failure(MakeError(InspectionObjectUnavailable));
+            return Output::Success(
+                {LocalTransform(object), RowMajorMatrix(local.Value()), RowMajorMatrix(world.Value()), {pivot.x, pivot.y, pivot.z}});
         });
     }
 
@@ -390,6 +427,25 @@ namespace Horo::Editor {
             const double dot = Math::Dot(reference->forward, target.Value().forward);
             return Output::Success(
                 MeasureInspectionDistance(reference->bounds, target.Value().bounds, std::acos(std::clamp(dot, -1.0, 1.0))));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectGridOffsets */
+    Result<GridInspectionPage> EditorWorkspaceController::InspectGridOffsets(const ObjectInspectionRequest &request) const {
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && active->DefinitionRevision().value == m_document.State().value;
+        return ReadInspectionPage<GridInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                      [&active, step = request.gridStep, current](const SceneObject &object) {
+            using Output = Result<InspectedGridOffset>;
+            if (!step || !std::isfinite(*step) || *step <= 0)
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            const auto pose = ReadInspectionPose(active, current, object.id);
+            if (pose.HasError())
+                return Output::Failure(pose.ErrorValue());
+            const auto origin = Math::TransformPoint(pose.Value(), {});
+            if (!Math::IsFinite(origin))
+                return Output::Failure(MakeError(InspectionObjectUnavailable));
+            return Output::Success(MeasureInspectionGridOffset(object.id.value, {origin.x, origin.y, origin.z}, *step));
         });
     }
 

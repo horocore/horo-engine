@@ -1,7 +1,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorCommandMcpSession.h"
-#include "EditorInspectionDistance.h"
+#include "EditorInspectionMath.h"
 #include "EditorInspectionMcpTools.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "EditorSourceMcpTools.h"
@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <fstream>
+#include <numeric>
 
 namespace {
     using namespace Horo;
@@ -61,10 +62,16 @@ namespace {
         const InspectionSceneRevision scene{7, 19};
         const auto reader = [&](const ObjectInspectionRequest &request) {
             reads.push_back(request);
-            TransformInspectionPage page{.scene = scene,
-                                         .records = {{request.objects.at(request.offset), {1, 2, 3}, {0, 0, 0, 1}, {1, 1, 1}}}};
-            if (request.offset + 1 < request.objects.size())
-                page.nextOffset = request.offset + 1;
+            TransformInspectionPage page{.scene = scene};
+            const auto end = std::min(request.objects.size(), request.offset + request.limit);
+            for (std::size_t index = request.offset; index < end; ++index) {
+                page.records.push_back({.local = {request.objects.at(index), {1, 2, 3}, {0, 0, 0, 1}, {1, 1, 1}},
+                                        .localMatrixRowMajor = {1, 0, 0, 1, 0, 1, 0, 2, 0, 0, 1, 3, 0, 0, 0, 1},
+                                        .worldMatrixRowMajor = {1, 0, 0, 4, 0, 1, 0, 2, 0, 0, 1, 3, 0, 0, 0, 1},
+                                        .worldPivot = {4, 2, 3}});
+            }
+            if (end < request.objects.size())
+                page.nextOffset = end;
             return Result<TransformInspectionPage>::Success(std::move(page));
         };
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
@@ -82,6 +89,10 @@ namespace {
         const auto first = Execute(session, Command("first", "inspect.transforms", {{"objects", {42, 9}}, {"limit", 1}}));
         REQUIRE(first.at("status") == "succeeded");
         CHECK(first["result"]["records"][0]["object"] == 42);
+        CHECK(first["result"]["records"][0]["localMatrixRowMajor"].size() == 16);
+        CHECK(first["result"]["records"][0]["localMatrixRowMajor"][3] == 1);
+        CHECK(first["result"]["records"][0]["worldMatrixRowMajor"][3] == 4);
+        CHECK(first["result"]["records"][0]["worldPivot"] == Json::array({4, 2, 3}));
         CHECK(first["result"]["nextOffset"] == 1);
         CHECK_FALSE(reads.front().expected);
         const auto missingFence = Execute(session, Command("no-fence", "inspect.transforms", {{"objects", {42, 9}}, {"offset", 1}}));
@@ -98,6 +109,43 @@ namespace {
                                      {{"objects", std::vector<std::uint64_t>(ObjectInspectionRequest::MaximumObjects + 1, 42)}}));
         CHECK(oversize.at("status") == "failed");
         CHECK(reads.size() == 2);
+        std::vector<std::uint64_t> ids(ObjectInspectionRequest::MaximumObjects);
+        std::iota(ids.begin(), ids.end(), std::uint64_t{1});
+        const auto full = Execute(session, Command("full", "inspect.transforms", {{"objects", ids}}));
+        REQUIRE(full.at("status") == "succeeded");
+        CHECK(full["result"]["records"].size() == ObjectInspectionRequest::MaximumObjects);
+    }
+
+    TEST_CASE("Grid inspection requires a positive step and reports signed world offsets", "[unit][editor][mcp][inspection]") {
+        unsigned reads{};
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readGridOffsets = [&](const ObjectInspectionRequest &request) {
+            ++reads;
+            return Result<GridInspectionPage>::Success(
+                {.scene = {7, 19}, .records = {MeasureInspectionGridOffset(request.objects.at(0), {1.25, -1.25, 2.0}, *request.gridStep)}});
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        const auto missing = Execute(session, Command("missing", "inspect.grid_offsets", {{"objects", {42}}}));
+        CHECK(missing.at("status") == "failed");
+        const auto zero = Execute(session, Command("zero", "inspect.grid_offsets", {{"objects", {42}}, {"gridStep", 0}}));
+        CHECK(zero.at("status") == "failed");
+        CHECK(reads == 0);
+        const auto measured = Execute(session, Command("grid", "inspect.grid_offsets", {{"objects", {42}}, {"gridStep", 0.5}}));
+        REQUIRE(measured.at("status") == "succeeded");
+        const auto &row = measured["result"]["records"][0];
+        CHECK(row["object"] == 42);
+        CHECK(row["gridStep"] == 0.5);
+        CHECK(row["snappedPosition"] == Json::array({1.5, -1.5, 2.0}));
+        CHECK(row["offset"] == Json::array({0.25, -0.25, 0.0}));
+        CHECK(reads == 1);
+        const auto nearest = MeasureInspectionGridOffset(42, {1.4, -1.6, 0.1}, 1.0);
+        CHECK((nearest.snappedPosition == std::array<double, 3>{1.0, -2.0, 0.0}));
     }
 
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
