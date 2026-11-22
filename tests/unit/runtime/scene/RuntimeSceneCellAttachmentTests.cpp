@@ -1,4 +1,5 @@
 #include "../world_streaming/StreamingCellCandidateTestSupport.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
@@ -299,6 +300,73 @@ namespace Horo::Runtime {
         REQUIRE_FALSE(service.ActiveScene()->Find({10}).has_value());
         REQUIRE(service.ActiveScene()->Find({20}) == unaffected);
         REQUIRE(service.ActiveScene()->BaselineCount() == 1);
+    }
+
+    TEST_CASE("EQS retires an in-flight result at the actual Scene cell unload cutoff", "[scene][cell_attachment][lifecycle][eqs]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto cell = Payload();
+        const auto request = Request(service, cell);
+        Attach(service, cell, request, Owner(cell, request, counts));
+        const auto before = *service.ActiveScene();
+        const auto actor = *before.Find({10});
+
+        const std::array points{Math::WorldCoordinate64::FromMillimeters(1'000, 0, 0)};
+        const auto registry = AI::CaptureBuiltinQuerySchema().Value();
+        const auto authored = AI::CreateBuiltinAuthoredPointQuery(IdentityFrom<AI::QueryId>(1), IdentityFrom<AI::QueryStageId>(1),
+                                                                  IdentityFrom<AI::QueryResultSchemaId>(1), "Cell query", points, 1);
+        REQUIRE(authored.HasValue());
+        const auto distance = AI::AddBuiltinPointDistanceTest(authored.Value(), IdentityFrom<AI::QueryStageId>(2), {5'000, true});
+        REQUIRE(distance.HasValue());
+        const auto plan = AI::EnvironmentQueryPlan::Compile(distance.Value(), registry);
+        REQUIRE(plan.HasValue());
+        const auto providers = AI::QueryContextProviderRegistry::Capture({}, registry).Value();
+        AI::QueryContextCapture capture;
+        const auto submit = [&capture, &plan, &registry, &providers](const RuntimeSceneView &view, const EntityRef querier,
+                                                                     const std::uint64_t tick) {
+            const auto context = capture.Capture(plan.Value(), registry, providers, view, {.querier = querier, .executionRevision = tick});
+            REQUIRE(context.HasValue());
+            const AI::AgentHandle agent{IdentityFrom<AI::AiRuntimeIncarnation>(1), {1, 1}};
+            auto query =
+                AI::AdmitBuiltinPointQuery(plan.Value(), registry, view, {agent, context.Value()},
+                                           {.submittedTick = tick, .deadlineTick = tick + 8, .maximumCandidates = 1, .bestCount = 1});
+            REQUIRE(query.HasValue());
+            return std::move(query).Value();
+        };
+
+        auto pending = submit(before, actor, 1);
+        AI::AiWorkBudget initialBudget{128};
+        REQUIRE_FALSE(pending->Sync(2));
+        pending->Advance(2, {initialBudget, initialBudget, initialBudget});
+        REQUIRE(initialBudget.Remaining() < 128);
+        REQUIRE_FALSE(pending->Published());
+
+        REQUIRE(QueueRuntimeSceneCellDetachment(service, cell.Identity(), request, Owner(cell, request, counts)).HasValue());
+        Commit(service);
+        REQUIRE_FALSE(service.TakeOperationError().has_value());
+        REQUIRE(service.ActiveScene()->Get(actor).HasError());
+        REQUIRE(pending->Sync(3));
+        REQUIRE(pending->Published());
+        CHECK(pending->Published()->status == AI::QueryExecutionStatus::StaleInputs);
+        CHECK(pending->Published()->winners.empty());
+
+        auto reload = request;
+        reload.fence.generation = IdentityFrom<W::StreamingGeneration>(2);
+        Attach(service, cell, reload, Owner(cell, reload, counts));
+        const auto after = *service.ActiveScene();
+        const auto renewedActor = *after.Find({10});
+        CHECK(after.RuntimeId() == before.RuntimeId());
+        CHECK(renewedActor != actor);
+        auto renewed = submit(after, renewedActor, 3);
+        for (std::uint64_t tick = 4; tick <= 11 && !renewed->Sync(tick); ++tick) {
+            AI::AiWorkBudget budget{128};
+            renewed->Advance(tick, {budget, budget, budget});
+        }
+        REQUIRE(renewed->Published());
+        CHECK(renewed->Published()->status == AI::QueryExecutionStatus::Completed);
+        REQUIRE(renewed->Published()->winners.size() == 1);
+        CHECK(renewed->Published()->winners.front().item == AI::QueryGeneratedItem{points.front()});
     }
 
     TEST_CASE("Perception retires listeners and sources when their Scene cell unloads", "[scene][cell_attachment][lifecycle][ai]") {
