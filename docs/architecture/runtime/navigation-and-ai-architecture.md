@@ -2648,9 +2648,12 @@ canonical digest covering its schema, selected target and tensor contents.
 against the selected package's explicit interpreter, task declarations and
 budgets before publishing it through the ordinary asset transaction. The
 Scene and release cook hosts can register the same target-scoped model as an
-explicit resource contribution. The cooker checks the current task declarations
-on both fresh inputs and cache hits. Loading rechecks the expected digest and
-current target and task declarations.
+explicit resource contribution. The native prefab cook composition in `apps/`
+obtains the model cooker from the Decision Asset Cook host and registers it
+before freezing the catalog. The prefab cook service consumes that catalog
+through the ordinary asset cooker contract. The cooker checks the current task
+declarations on both fresh inputs and cache hits. Loading rechecks the expected
+digest and current target and task declarations.
 Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model
 digest, deadline and current task declarations before returning a task to the

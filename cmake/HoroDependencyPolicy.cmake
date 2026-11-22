@@ -22,7 +22,7 @@ horo_allow_target_dependencies(TARGET HoroProjectAssetRegistrySource DEPENDENCIE
 horo_allow_target_dependencies(TARGET HoroBuiltinAssetCookerHostInternal DEPENDENCIES HoroAssets)
 horo_allow_target_dependencies(TARGET HoroNativePrefabCookHost
     DEPENDENCIES HoroAssets HoroPrefabCookHost HoroProjectAssetRegistrySource HoroPlatformProjectIo
-        HoroProjectMutationGuard HoroBuiltinAssetCookerHostInternal)
+        HoroProjectMutationGuard HoroBuiltinAssetCookerHostInternal HoroDecisionCookHost)
 horo_allow_target_dependencies(TARGET HoroNativeNavigationBakeHost
     DEPENDENCIES HoroNavigationBakeAutomation HoroNavigationRecastDetour HoroPlatformProjectIo HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroProjectSceneNavigationHostInternal
