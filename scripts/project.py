@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import pathlib
 import platform as host_platform
@@ -37,6 +38,9 @@ OPENXR_LOADER_NAME = "libopenxr_loader.so"
 OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
 OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
 DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
+DEPLOY_DEADLINE_EXTRA = "org.horocore.qualification.DEADLINE_MS"
+DEPLOY_DEADLINE_MARKER = "host-launch-deadline nonce="
+DEPLOY_MAX_SECONDS = 300
 DEPLOY_LAUNCH_MARKER = "host-launch nonce="
 DEPLOY_LAUNCH_CRASH_MARKER = "host-launch-crash nonce="
 DEPLOY_ENTRY_MARKER = "host-entry input=accepted"
@@ -637,6 +641,8 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
     java_root.mkdir(parents=True)
     activity_base = "org.horocore.platform.HoroInputActivity"
     crash_observer = ""
+    deadline_members = ""
+    deadline_intent = ""
     if profile["renderer"] == "vulkan-android":
         package = Path("org/horocore/qualification")
         destination = stage / "java" / package
@@ -649,10 +655,42 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         destination = stage / "java" / observer
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "apps/android-package-qualification/java" / observer, destination)
-        crash_observer = "                org.horocore.qualification.OpenXRLaunchCrashObserver.install(nonce, started);\n"
+        deadline_members = (
+            "    private static long diagnosticExpiresAt;\n"
+            "    private final android.os.Handler diagnosticHandler = new android.os.Handler(android.os.Looper.getMainLooper());\n"
+            "    private final Runnable endDiagnostic = () -> { if (!isFinishing() && !isDestroyed()) finishAndRemoveTask(); };\n"
+            "    private boolean scheduleDiagnosticEnd() {\n"
+            "        diagnosticHandler.removeCallbacks(endDiagnostic);\n"
+            "        long remaining = Math.max(0L, diagnosticExpiresAt - android.os.SystemClock.elapsedRealtime());\n"
+            "        return diagnosticHandler.postDelayed(endDiagnostic, remaining);\n"
+            "    }\n"
+            "    private boolean armDiagnosticDeadline(int milliseconds) {\n"
+            f"        if (milliseconds <= 0 || milliseconds > {DEPLOY_MAX_SECONDS * 1000}) return false;\n"
+            "        diagnosticExpiresAt = android.os.SystemClock.elapsedRealtime() + milliseconds;\n"
+            "        if (scheduleDiagnosticEnd()) return true;\n"
+            "        diagnosticExpiresAt = 0L;\n"
+            "        return false;\n"
+            "    }\n"
+            "    @Override public void onResume() {\n"
+            "        super.onResume();\n"
+            "        if (diagnosticExpiresAt != 0L) scheduleDiagnosticEnd();\n"
+            "    }\n"
+            "    @Override public void onDestroy() {\n"
+            "        diagnosticHandler.removeCallbacks(endDiagnostic);\n"
+            "        super.onDestroy();\n"
+            "    }\n")
+        deadline_intent = (f"        int deadlineMs = intent.getIntExtra(\"{DEPLOY_DEADLINE_EXTRA}\", 0);\n"
+                           f"        intent.removeExtra(\"{DEPLOY_DEADLINE_EXTRA}\");\n")
+        crash_observer = (
+            "                org.horocore.qualification.OpenXRLaunchCrashObserver.install(nonce, started);\n"
+            "                if (armDiagnosticDeadline(deadlineMs)) {\n"
+            f"                    android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_DEADLINE_MARKER}\"\n"
+            "                            + nonce + \" startTicks=\" + started + \" milliseconds=\" + deadlineMs);\n"
+            "                }\n")
     source = (f"package {profile['applicationId']};\n"
               f"public final class PackageActivity extends {activity_base} {{\n"
               f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n"
+              f"{deadline_members}"
               "    private static boolean activityCreated;\n"
               "    private static String processStartTicks() {\n"
               "        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(\"/proc/self/stat\"))) {\n"
@@ -670,6 +708,7 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
               "        android.content.Intent intent = getIntent();\n"
               f"        String nonce = intent.getStringExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
               f"        intent.removeExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
+              f"{deadline_intent}"
               "        super.onCreate(state);\n"
               "        if (firstActivity && state == null && nonce != null && nonce.matches(\"[0-9a-f]{32}\")) {\n"
               "            String started = processStartTicks();\n"
@@ -1477,6 +1516,13 @@ class AndroidLaunchRecovery:
     uid: int
     started: AndroidLogClock
     nonce: str
+    deadline_ms: int | None
+
+
+@dataclass(frozen=True)
+class AndroidLaunchReceipt:
+    process: DeployedProcess
+    deadline_timestamp: int | None
 
 
 @dataclass
@@ -1487,7 +1533,7 @@ class AndroidPackageLaunch:
     application: str
     user: str
     digest: str
-    capture_retired_openxr: bool = False
+    openxr_diagnostic: bool = False
     process: DeployedProcess | None = None
     attempted: bool = False
     recovery: AndroidLaunchRecovery | None = None
@@ -1500,10 +1546,17 @@ class AndroidPackageLaunch:
         component = f"{self.application}/{self.application}.{PACKAGE_ACTIVITY}"
         start = AndroidLogClock.read(self.device)
         nonce = secrets.token_hex(16)
-        self.recovery = AndroidLaunchRecovery(uid, start, nonce)
+        launch_options = ["--es", DEPLOY_LAUNCH_EXTRA, nonce]
+        deadline_ms = None
+        if self.openxr_diagnostic:
+            remaining = math.ceil((self.device.deadline - time.monotonic()) * 1000)
+            if remaining <= 0:
+                raise AndroidDeployError("deadline_exceeded")
+            deadline_ms = min(remaining, DEPLOY_MAX_SECONDS * 1000)
+            launch_options.extend(("--ei", DEPLOY_DEADLINE_EXTRA, str(deadline_ms)))
+        self.recovery = AndroidLaunchRecovery(uid, start, nonce, deadline_ms)
         self.attempted = True
-        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component,
-                                   "--es", DEPLOY_LAUNCH_EXTRA, nonce)
+        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component, *launch_options)
         allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
         states = re.findall(r"^LaunchState: ([A-Z]+)$", launched, re.MULTILINE)
         activities = re.findall(r"^Activity: (\S+)$", launched, re.MULTILINE)
@@ -1517,18 +1570,23 @@ class AndroidPackageLaunch:
                 self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
         try:
-            self.process, receipt_time = self.recover_process(self.device, uid)
+            receipt = self.recover_process(self.device, uid)
+            self.process = receipt.process
         except AndroidDeployError as error:
-            if (self.capture_retired_openxr and states == ["COLD"] and error.code == "application_process_unavailable"
+            if (self.openxr_diagnostic and states == ["COLD"] and error.code == "application_process_unavailable"
                     and self.device.process_id(self.application) is None and self.confirm_retired_crash()):
                 self.retired_crash = True
                 raise AndroidDeployError("application_crashed") from None
             raise
-        # OpenXR probes only after Activity resume; their facts must follow the first-Activity receipt.
-        evidence_after = receipt_time if self.capture_retired_openxr else start.nanoseconds
+        # Keep the exact process for cleanup even if an old APK did not arm its Activity deadline.
+        evidence_after = start.nanoseconds
+        if self.openxr_diagnostic:
+            if receipt.deadline_timestamp is None:
+                raise AndroidDeployError("openxr_launch_deadline_unconfirmed")
+            evidence_after = receipt.deadline_timestamp
         return self.process, AndroidDiagnosticWindow(start, evidence_after)
 
-    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> tuple[DeployedProcess, int]:
+    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> AndroidLaunchReceipt:
         """Prove that this operation started a first Activity in the live package process."""
         recovery = self.recovery
         if recovery is None or recovery.uid != uid:
@@ -1536,14 +1594,24 @@ class AndroidPackageLaunch:
         process = deployed_process(device, self.application, uid)
         log, through = read_deployed_process_log(device, process, recovery.started)
         marker = f"{DEPLOY_LAUNCH_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
-        timestamps = [logged for logged, priority, tag, message
-                      in process_log_entries(log, process, recovery.started.nanoseconds, through)
-                      if priority == "I" and tag == "HoroPackageQualification" and message == marker]
+        deadline_marker = (f"{DEPLOY_DEADLINE_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
+                           f" milliseconds={recovery.deadline_ms}")
+        timestamps = []
+        deadline_timestamps = []
+        for logged, priority, tag, message in process_log_entries(log, process, recovery.started.nanoseconds, through):
+            if priority != "I" or tag != "HoroPackageQualification":
+                continue
+            if message == marker:
+                timestamps.append(logged)
+            elif recovery.deadline_ms is not None and message == deadline_marker:
+                deadline_timestamps.append(logged)
         if len(timestamps) != 1:
             raise AndroidDeployError("launch_process_unattributed")
         if deployed_process(device, self.application, uid) != process:
             raise AndroidDeployError("application_process_changed")
-        return process, timestamps[0]
+        confirmed_deadline = (deadline_timestamps[0]
+                              if len(deadline_timestamps) == 1 and deadline_timestamps[0] > timestamps[0] else None)
+        return AndroidLaunchReceipt(process, confirmed_deadline)
 
     def confirm_retired_crash(self) -> bool:
         """Read exact app receipts for a cold OpenXR Activity that exited before PID admission."""
@@ -1687,11 +1755,13 @@ def android_deploy_main(argv=None) -> int:
                         help="Require this exact OpenXR runtime version from the cold process.")
     parser.add_argument("--expect-apk-sha256", help="Require the exact verified APK SHA-256 before contacting the device.")
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
-    parser.add_argument("--timeout", type=int, default=120, help="Total host command deadline in seconds (1-300).")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help=f"Total host command deadline in seconds (1-{DEPLOY_MAX_SECONDS}).")
     parser.add_argument("--diagnostic-bundle", type=Path, help="New absolute ZIP path for redacted deployment evidence.")
     arguments = parser.parse_args(argv)
-    if not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device) or not 1 <= arguments.timeout <= 300:
-        parser.error("Supply a valid explicit ADB serial and a deadline of 1-300 seconds.")
+    if (not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device)
+            or not 1 <= arguments.timeout <= DEPLOY_MAX_SECONDS):
+        parser.error(f"Supply a valid explicit ADB serial and a deadline of 1-{DEPLOY_MAX_SECONDS} seconds.")
     if arguments.expect_apk_sha256 is not None and not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_apk_sha256):
         parser.error("--expect-apk-sha256 requires 64 lowercase hexadecimal digits.")
     if arguments.expect_runtime_version is not None and arguments.runtime != "openxr":
@@ -1763,7 +1833,7 @@ def android_deploy_main(argv=None) -> int:
             report["stage"] = "verify_install"
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             report["stage"] = "launch"
-            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, capture_retired_openxr=openxr)
+            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, openxr_diagnostic=openxr)
             process, window = launch.start()
             report["stage"] = "diagnostics"
             observed, applicable = await_deploy_diagnostics(device, application, process, window, profile)

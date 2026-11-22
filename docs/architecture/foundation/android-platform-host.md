@@ -376,8 +376,12 @@ entries timestamped after the device clock sample immediately before launch and
 through the sample after capture. The host's monotonic interval bounds both
 samples. Unavailable timestamps or a detected clock discontinuity yield a
 partial result. The process identity is rechecked before accepting the capture.
-OpenXR evidence must also be strictly newer than the attributed first-Activity
-receipt. The private receipt timestamp and launch nonce stay out of the report.
+The OpenXR diagnostic Activity schedules its own end using the remaining host
+launch budget. It retains the deadline through Activity recreation in the same
+process. OpenXR evidence must follow both the attributed first-Activity receipt
+and the matching deadline receipt. The receipt timestamps and launch nonce stay
+out of the report. An APK without the deadline receipt cannot supply a successful
+OpenXR diagnostic.
 Before reporting completion, the host also rechecks the installed APK digest.
 For OpenXR, that final check follows diagnostic process retirement.
 Only closed, profile-specific facts leave the tool. The input-only package

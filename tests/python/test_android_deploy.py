@@ -36,6 +36,7 @@ ENTRY = project.DEPLOY_ENTRY_MARKER
 OPENXR_OPTIONS = ("--host", "linux-x64", "--connection", "emulator", "--runtime", "openxr")
 LAUNCH_NONCE = "d" * 32
 LAUNCH_MARKER = f"{project.DEPLOY_LAUNCH_MARKER}{LAUNCH_NONCE} startTicks=123456"
+DEADLINE_MARKER = f"{project.DEPLOY_DEADLINE_MARKER}{LAUNCH_NONCE} startTicks=123456 milliseconds=1000"
 LAUNCH_CRASH_MARKER = f"{project.DEPLOY_LAUNCH_CRASH_MARKER}{LAUNCH_NONCE} startTicks=123456"
 DEVICE_CLOCK = ("shell", "toybox", "date", "+%s.%N")
 UID_QUERY = ("shell", "toybox", "ps", "-p", "123", "-o", "UID")
@@ -45,6 +46,7 @@ LOGCAT = ("logcat", "--pid=123", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
 QUALIFICATION_LOGCAT = ("logcat", "-v", "time,epoch,nsec,uid", "-t", "200", "-s", "HoroPackageQualification:I")
 START = "1795000000.100000000"
 LAUNCH_TIME = "1795000000.104000000"
+DEADLINE_TIME = "1795000000.104500000"
 LOG_TIME = "1795000000.105000000"
 END = "1795000000.110000000"
 
@@ -58,9 +60,10 @@ def proc_stat(start_ticks=123456):
     return f"123 (probe ) main) S {'0 ' * 18}{start_ticks} 0"
 
 
-def launch_command(application):
-    return ("shell", "am", "start", "-W", "--user", "10", "-n", f"{application}/{application}.PackageActivity",
-            "--es", project.DEPLOY_LAUNCH_EXTRA, LAUNCH_NONCE)
+def launch_command(application, *, openxr=False):
+    command = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{application}/{application}.PackageActivity",
+               "--es", project.DEPLOY_LAUNCH_EXTRA, LAUNCH_NONCE)
+    return command + ("--ei", project.DEPLOY_DEADLINE_EXTRA, "1000") if openxr else command
 
 
 class AndroidDeployTests(unittest.TestCase):
@@ -68,7 +71,8 @@ class AndroidDeployTests(unittest.TestCase):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(profile_name, ["arm64-v8a"])
         application = profile["applicationId"]
-        launch = launch_command(application)
+        openxr = "openxrProfile" in profile
+        launch = launch_command(application, openxr=openxr)
         stop = ("shell", "am", "force-stop", "--user", "10", application)
         replies = {
             ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
@@ -117,7 +121,12 @@ class AndroidDeployTests(unittest.TestCase):
                 return 1, ""
             if args == LOGCAT and awaiting_receipt:
                 awaiting_receipt = False
-                return 0, log_line(LAUNCH_MARKER, stamp=LAUNCH_TIME) if launch_receipt is None else launch_receipt
+                if launch_receipt is not None:
+                    return 0, launch_receipt
+                receipt = log_line(LAUNCH_MARKER, stamp=LAUNCH_TIME)
+                if openxr:
+                    receipt += log_line(DEADLINE_MARKER, stamp=DEADLINE_TIME)
+                return 0, receipt
             response = replies[args]
             if isinstance(response, list):
                 response = response.pop(0)
@@ -332,7 +341,7 @@ class AndroidDeployTests(unittest.TestCase):
 
     def test_openxr_requires_diagnostics_strictly_after_the_attributed_launch_receipt(self):
         stale = OPENXR.replace("runtimePatch=63", "runtimePatch=62")
-        invalid_window = log_line(stale, stamp="1795000000.103000000") + log_line(stale, stamp=LAUNCH_TIME)
+        invalid_window = log_line(stale, stamp="1795000000.103000000") + log_line(stale, stamp=DEADLINE_TIME)
         status, report, commands = self.execute(
             {LOGCAT: [invalid_window, invalid_window + log_line(OPENXR)]}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
         self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
@@ -340,8 +349,23 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["openxr"]["runtimeVersion"], {"major": 1, "minor": 1, "patch": 63})
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         exported = json.dumps(report)
-        for private in (LAUNCH_TIME, LAUNCH_NONCE, "startTicks"):
+        for private in (LAUNCH_TIME, DEADLINE_TIME, LAUNCH_NONCE, "startTicks"):
             self.assertNotIn(private, exported)
+
+    def test_openxr_requires_an_exact_activity_deadline_receipt_before_diagnostics(self):
+        launch = log_line(LAUNCH_MARKER, stamp=LAUNCH_TIME)
+        deadline = log_line(DEADLINE_MARKER, stamp=DEADLINE_TIME)
+        for evidence in ("", deadline * 2, deadline.replace("milliseconds=1000", "milliseconds=999"),
+                         deadline.replace(DEADLINE_TIME, LAUNCH_TIME), deadline.replace("startTicks=123456", "startTicks=123457")):
+            with self.subTest(evidence=evidence):
+                status, report, commands = self.execute(
+                    {LOGCAT: log_line(OPENXR)}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE,
+                    launch_receipt=launch + evidence)
+                self.assertEqual((status, report["stage"], report["error"]), (1, "launch", "openxr_launch_deadline_unconfirmed"))
+                self.assertNotIn("observed", report)
+                self.assertEqual(commands.count(LOGCAT), 1)
+                self.assertEqual(report["cleanup"], {"status": "stopped"})
+                self.assertNotIn(LAUNCH_NONCE, json.dumps(report))
 
     def test_openxr_checks_numeric_runtime_version_and_retires_a_mismatch(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
@@ -692,7 +716,7 @@ class AndroidDeployTests(unittest.TestCase):
                              ("10200", {"status": "unconfirmed", "reason": "launch_process_unattributed"})):
             with self.subTest(uid=uid):
                 status, report, commands = self.execute(
-                    {launch_command(application): f"LaunchState: COLD\nActivity: {application}/.PackageActivity"},
+                    {launch_command(application, openxr=True): f"LaunchState: COLD\nActivity: {application}/.PackageActivity"},
                     OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE, launch_receipt=log_line(LAUNCH_MARKER, uid=uid))
                 self.assertEqual((status, report["stage"], report["error"]), (1, "launch", "launch_unconfirmed"))
                 self.assertNotIn("observed", report)

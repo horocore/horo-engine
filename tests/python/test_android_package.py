@@ -756,12 +756,18 @@ class AndroidAssemblyTests(unittest.TestCase):
                         self.assertEqual((stage / path).read_bytes(), source.read_bytes())
                     self.assertIn("extends org.horocore.qualification.HoroVulkanQualificationActivity", entry.read_text())
                     self.assertFalse((stage / crash_observer).exists())
+                    self.assertNotIn(android_package.DEPLOY_DEADLINE_EXTRA, entry.read_text())
                 else:
                     self.assertTrue(all(not (stage / path).exists() for path in paths))
                     self.assertIn("extends org.horocore.platform.HoroInputActivity", entry.read_text())
                     self.assertEqual((stage / crash_observer).read_bytes(),
                                      (android_package.ROOT / "apps/android-package-qualification" / crash_observer).read_bytes())
                     self.assertIn("OpenXRLaunchCrashObserver.install(nonce, started)", entry.read_text())
+                    source = entry.read_text()
+                    self.assertIn(f'intent.removeExtra("{android_package.DEPLOY_DEADLINE_EXTRA}")', source)
+                    self.assertIn(android_package.DEPLOY_DEADLINE_MARKER, source)
+                    self.assertIn("finishAndRemoveTask()", source)
+                    self.assertIn("if (diagnosticExpiresAt != 0L) scheduleDiagnosticEnd()", source)
 
 
 if __name__ == "__main__":
