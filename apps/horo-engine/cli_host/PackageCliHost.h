@@ -12,6 +12,11 @@ namespace Horo::Application::Internal {
     /** @brief Creates the headless adapter for the package update preview. @return Owned dispatcher registration. */
     [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageUpdatePreviewCommandAdapter();
 
+    /** @brief Declares the approved package update command. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageApplyUpdateCommand();
+    /** @brief Creates the approved package update adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageApplyUpdateCommandAdapter();
+
     /** @brief Concrete services for one CLI/MCP process invocation, retained until all package callbacks are acknowledged. */
     class PackageCliHost final {
     public:

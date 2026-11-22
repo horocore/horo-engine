@@ -135,16 +135,21 @@ namespace {
         fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
         auto registration = MakePackageUpdatePreviewCommandAdapter();
         const auto descriptor = registration.adapter->GetDescriptor();
+        auto applyRegistration = MakePackageApplyUpdateCommandAdapter();
+        const auto applyDescriptor = applyRegistration.adapter->GetDescriptor();
+        const std::array descriptors{descriptor, applyDescriptor};
         CHECK(descriptor.sideEffects == CliSideEffectPolicy::ReadsState);
+        CHECK(applyDescriptor.sideEffects == CliSideEffectPolicy::WritesFiles);
         const CliDispatchPolicy policy{.activeHost = CliHostKind::HoroEngine,
-                                       .maximumSideEffects = CliSideEffectPolicy::ReadsState,
+                                       .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
                                        .grantedCapabilities = registration.capabilities};
-        auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, {.activeHost = policy.activeHost,
-                                                                               .supportedContractVersion = {1, 0, 0},
-                                                                               .grantedCapabilities = policy.grantedCapabilities});
+        auto registry = CliCommandRegistry::Create(descriptors, {.activeHost = policy.activeHost,
+                                                                 .supportedContractVersion = {1, 0, 0},
+                                                                 .grantedCapabilities = policy.grantedCapabilities});
         REQUIRE(registry.HasValue());
         std::vector<CliCommandAdapterRegistration> adapters;
         adapters.push_back(std::move(registration));
+        adapters.push_back(std::move(applyRegistration));
         auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(adapters), policy);
         REQUIRE(dispatcher.HasValue());
         auto admitted = std::move(dispatcher).Value();
@@ -159,16 +164,56 @@ namespace {
         const auto execute = [&] {
             return admitted.Dispatch(command, {.invocation = {1}, .configuration = &configuration.Value()});
         };
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        const auto apply = [&](const std::string &fingerprint) {
+            auto approved = command;
+            approved.command = applyDescriptor.path;
+            approved.options.push_back({"approve", {{fingerprint, CliValueSource::Invocation, {}}}});
+            approved.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            return admitted.Dispatch(approved, {.invocation = {2}, .configuration = &configuration.Value()});
+        };
         SECTION("the preview reports the exact removal") {
             const auto result = execute();
             REQUIRE(result.Outcome().HasValue());
             const auto &fields = result.Outcome().Value().fields;
-            REQUIRE(fields.size() == 4);
+            REQUIRE(fields.size() == 5);
             CHECK(std::get<bool>(fields[0].value));
             CHECK(std::get<std::int64_t>(fields[1].value) == 1);
             CHECK(std::get<std::int64_t>(fields[2].value) == -1);
             CHECK(std::get<std::string>(fields[3].value).starts_with("com.horo.application-fixture [1.0.0 fixture.source "));
             CHECK(std::get<std::string>(fields[3].value).ends_with("] -> [absent]"));
+            const auto fingerprint = std::get<std::string>(fields[4].value);
+            const auto blocked = apply(fingerprint);
+            REQUIRE(blocked.Outcome().HasError());
+            CHECK(blocked.Outcome().ErrorValue().code.Value() == "packages.host.update_requires_migration_review");
+            fixture.Write("candidate.json", candidate.dump() + '\n');
+            const auto stale = apply(fingerprint);
+            REQUIRE(stale.Outcome().HasError());
+            CHECK(stale.Outcome().ErrorValue().code.Value() == "packages.host.update_approval_mismatch");
+        }
+        SECTION("an approved update can change a request while preserving the verified locked packages") {
+            auto next = nlohmann::json::parse(originalRequest);
+            next["dependencies"][fixture.graph.package.Value()]["version"] = "^1.0.0";
+            const auto updated = Packages::ValidatedPackageRequest::Parse(next.dump());
+            REQUIRE(updated.HasValue());
+            auto nextLock = nlohmann::json::parse(originalLock);
+            nextLock["requestHash"] = FormatSha256(updated.Value().Digest());
+            fixture.Write("candidate.json", next.dump());
+            fixture.Write("candidate.lock", nextLock.dump());
+            NativeDurableFileSystem files;
+            auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+            REQUIRE(cache.HasValue());
+            auto verifiedCache = std::move(cache).Value();
+            REQUIRE(verifiedCache.Publish(fixture.graph.archive).HasValue());
+            const auto result = execute();
+            REQUIRE(result.Outcome().HasValue());
+            const auto fingerprint = std::get<std::string>(result.Outcome().Value().fields.back().value);
+            const auto applied = apply(fingerprint);
+            REQUIRE(applied.Outcome().HasValue());
+            CHECK_FALSE(std::get<bool>(applied.Outcome().Value().fields.front().value));
+            CHECK(read(metadata / "packages.json") == next.dump());
+            CHECK(read(metadata / "packages.lock") == nextLock.dump());
+            return;
         }
         SECTION("a pending publication is left intact") {
             std::filesystem::create_directory(metadata / "local");

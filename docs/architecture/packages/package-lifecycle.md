@@ -381,8 +381,15 @@ horo-engine package preview-update --project /path/to/project \
 
 The command returns the total number of changes, up to 32 ordered rows and
 the next offset. Pass `--offset` to read the following page. A next offset of
-`-1` means there are no more rows. A pending package metadata recovery blocks
+`-1` means there are no more rows. The approval fingerprint identifies the
+reviewed project and the exact current and candidate documents. A pending package metadata recovery blocks
 the preview until a recovery-capable operation repairs the project.
+
+`horo-engine package apply-update` takes the same project and candidate options,
+plus `--approve` with the preview fingerprint and `--package-cache-root` with the
+absolute path to an existing verified cache. This path stages offline and
+publishes updates that preserve every existing locked package. A change that
+withdraws or replaces an existing entry needs a migration and reference review.
 
 The update host publishes a previously reviewed candidate only when the exact
 base and candidate documents still match the review and the candidate lock
