@@ -1,8 +1,13 @@
 #pragma once
 /** @file EditorVulkanViewportShader.h
  * @brief Portable authored viewport interface and final-artifact loading shared by offline cook and runtime consumer. */
+#include "Horo/Runtime/Render/MotionHistory.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "ShaderReflectionCook.h"
+
+namespace Horo::Render {
+    struct MaterialBindingLayout;
+}
 
 namespace Horo::Editor {
     /** @brief The closed stereo reduction package after its bound reflection is validated. */
@@ -116,6 +121,31 @@ namespace Horo::Editor {
         LinearDepth,
         Motion,
     };
+
+    /** @brief Returns the ordinary single-view depth-tested raster state for the selected guide.
+     * @param input Requested guide. @return Exact color/depth formats or a typed invalid guide error.
+     */
+    [[nodiscard]] Result<Render::RenderGraphicsPipelineState> EditorVulkanTemporalInputPipelineState(EditorVulkanTemporalInput input);
+
+    /** @brief Packs the linear-depth draw using the same raster clip transform as scene geometry.
+     * @param layout Validated guide uniform layout. @param rasterLocalToClip Jittered Vulkan raster transform.
+     * @param localToView Canonical camera-space transform. @param destination Caller-owned uniform bytes.
+     * @return Written prefix size or typed transform/layout failure without changing the buffer.
+     */
+    [[nodiscard]] Result<std::size_t> PackEditorVulkanTemporalDepth(const Render::MaterialBindingLayout &layout,
+                                                                    const Math::Mat4 &rasterLocalToClip, const Math::Mat4 &localToView,
+                                                                    std::span<std::byte> destination);
+
+    /** @brief Packs the motion draw using unjittered history separate from its raster coverage.
+     * @param layout Validated guide layout. @param rasterLocalToClip Jittered Vulkan raster transform.
+     * @param camera Camera history in canonical upward-Y clip space. @param object Object history from the same frame.
+     * @param destination Caller-owned uniform bytes. @return Written prefix size or typed failure without changing the buffer.
+     */
+    [[nodiscard]] Result<std::size_t> PackEditorVulkanTemporalMotion(const Render::MaterialBindingLayout &layout,
+                                                                     const Math::Mat4 &rasterLocalToClip,
+                                                                     const Render::RenderMotionCameraPair &camera,
+                                                                     const Render::RenderMotionObjectPair &object,
+                                                                     std::span<std::byte> destination);
 
     /** @brief Describes the selected prepass's separate float attachment and reflected matrix ABI. */
     [[nodiscard]] Render::ShaderManifest EditorVulkanTemporalInputShaderManifest(EditorVulkanTemporalInput input);

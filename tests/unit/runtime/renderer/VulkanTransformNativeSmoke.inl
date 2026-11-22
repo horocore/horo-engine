@@ -1,7 +1,7 @@
 namespace {
     /** @brief Real-device indexed draw fixture using the canonical typed matrix/array packer. */
     struct NativeTransformFixture : NativePreparationFixture {
-        std::uint64_t vertices{}, indices{}, mesh{}, output{}, outputView{}, target{};
+        std::uint64_t vertices{}, indices{}, mesh{}, output{}, outputView{}, target{}, depthImage{}, depthAttachment{};
 
         std::uint64_t Buffer(const std::span<const std::byte> bytes, const RenderBufferUsage usage) {
             const RenderBufferDescriptor descriptor{bytes.size(), usage, RenderBufferAccess::HostVisible};
@@ -37,7 +37,7 @@ namespace {
             return std::move(packed).Value();
         }
 
-        void PrepareDraw(const bool layered = false, const Math::Vec3 normal = {}) {
+        void PrepareDraw(const bool layered = false, const Math::Vec3 normal = {}, const RenderGraphicsPipelineState *guide = nullptr) {
             const std::array<MeshVertex, 3> vertexData{{{{-1, -1, 0}, normal}, {{1, -1, 0}, normal}, {{0, 1, 0}, normal}}};
             const std::array<std::uint32_t, 3> indexData{0, 1, 2};
             vertices = Buffer(std::as_bytes(std::span{vertexData}), RenderBufferUsage::Vertex);
@@ -52,7 +52,7 @@ namespace {
             REQUIRE(createdMesh.HasValue());
             mesh = createdMesh.Value();
             const RenderTextureDescriptor color{.extent = {8, 8},
-                                                .format = RenderTextureFormat::Rgba8Unorm,
+                                                .format = guide ? guide->colorFormat : RenderTextureFormat::Rgba8Unorm,
                                                 .layerCount = layered ? 2U : 1U,
                                                 .usage = RenderTextureUsage::RenderAttachment};
             const auto cost = backend->QueryTextureMemoryCost(color);
@@ -60,20 +60,45 @@ namespace {
             auto createdColor = backend->CreateTexture(color, {}, TestSupport::PlacementFor(cost.Value(), 9));
             REQUIRE(createdColor.HasValue());
             output = createdColor.Value();
-            auto createdView = backend->CreateTextureView({.texture = {{1}, 9, 1}}, output);
+            auto createdView = backend->CreateTextureView({.texture = {{1}, 9, 1}, .format = color.format}, output);
             REQUIRE(createdView.HasValue());
             outputView = createdView.Value();
-            auto createdTarget = backend->CreateRenderTarget({.colorAttachment = {{1}, 10, 1}, .extent = {8, 8}}, outputView, 0);
+            RenderTargetDescriptor attachments{.colorAttachment = {{1}, 10, 1}, .extent = {8, 8}};
+            if (guide && guide->depthFormat) {
+                const RenderTextureDescriptor depth{.extent = {8, 8},
+                                                    .format = *guide->depthFormat,
+                                                    .usage = RenderTextureUsage::RenderAttachment};
+                const auto depthCost = backend->QueryTextureMemoryCost(depth);
+                REQUIRE(depthCost.HasValue());
+                const auto image = backend->CreateTexture(depth, {}, TestSupport::PlacementFor(depthCost.Value(), 11));
+                REQUIRE(image.HasValue());
+                depthImage = image.Value();
+                const auto view =
+                    backend->CreateTextureView({.texture = {{1}, 11, 1}, .format = depth.format, .aspect = RenderTextureAspect::Depth},
+                                               depthImage);
+                REQUIRE(view.HasValue());
+                depthAttachment = view.Value();
+                attachments.depthAttachment = {{1}, 12, 1};
+            }
+            auto createdTarget = backend->CreateRenderTarget(attachments, outputView, depthAttachment);
             REQUIRE(createdTarget.HasValue());
             target = createdTarget.Value();
         }
 
         void Submit() {
-            auto parameters = Parameters();
-            buffer = Buffer(parameters.bytes, RenderBufferUsage::Uniform);
+            Submit(Parameters());
+        }
+
+        void Submit(MaterialParameterBinding parameters) {
             auto material = metadata.Material();
+            const auto nativeSize = backend->QueryMaterialParameterBufferSize(native, material, {1});
+            REQUIRE(nativeSize.HasValue());
+            REQUIRE(nativeSize.Value() >= parameters.bytes.size());
+            std::vector<std::byte> padded(nativeSize.Value());
+            std::ranges::copy(parameters.bytes, padded.begin());
+            buffer = Buffer(padded, RenderBufferUsage::Uniform);
             material.resources[0].value = std::move(parameters);
-            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer, 0, 2144}};
+            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer, 0, padded.size()}};
             auto realized = backend->RealizeResolved(material, native, resources);
             INFO((realized.HasError() ? realized.ErrorValue().message : "transform material realized"));
             REQUIRE(realized.HasValue());
@@ -110,7 +135,9 @@ namespace {
             const std::array draws{RenderMaterialDrawInstance{mesh, table.get()}};
             RenderGraphLeaseTransfer transfer;
             const RenderQueueSubmission submission{{1}, {1}, {}, {{1}, 1}};
-            const RenderMaterialExecutionRequest request{frame.Value(), target, {8, 8}, {}, {}, draws, &lease, &transfer, submission};
+            const auto depthClear = depthAttachment ? std::optional{1.0F} : std::nullopt;
+            const RenderMaterialExecutionRequest request{frame.Value(), target, {8, 8},    {},        depthClear,
+                                                         draws,         &lease, &transfer, submission};
             auto consumed = backend->ExecuteMaterialPass(request);
             INFO((consumed.HasError() ? consumed.ErrorValue().message : "transform draw recorded"));
             REQUIRE(consumed.HasValue());
@@ -122,6 +149,10 @@ namespace {
             backend->DestroyRenderTarget(target);
             backend->DestroyTextureView(outputView);
             backend->DestroyTexture(output);
+            if (depthAttachment) {
+                backend->DestroyTextureView(depthAttachment);
+                backend->DestroyTexture(depthImage);
+            }
             backend->DestroyMesh(mesh);
             backend->DestroyBuffer(vertices);
             backend->DestroyBuffer(indices);

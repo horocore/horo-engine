@@ -7050,6 +7050,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan
             HoroRenderVulkanExternalImagesInterface
+            HoroEditorVulkanShaderInternal
             ${CMAKE_DL_LIBS}
             Vulkan::Headers
     )

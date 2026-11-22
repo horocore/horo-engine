@@ -1,6 +1,7 @@
 #include "EditorVulkanViewportShader.h"
 
 #include "EditorViewportShaderRecipe.h"
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
@@ -346,12 +347,41 @@ namespace Horo::Editor {
         return {{{1}, "type.ViewportTemporalParameters", {{{1}, "RasterLocalToClip"}, {{2}, "LocalToView"}}}};
     }
 
+    namespace {
+        /** @brief Checks that one raster endpoint exposes exactly one attribute of the expected shape. */
+        bool HasTemporalEndpoint(const Render::NormalizedShaderReflection &reflection, const Render::ShaderStage stage,
+                                 const Render::ShaderInterfaceDirection direction, const unsigned columns) {
+            const auto matches = [stage, direction](const auto &attribute) {
+                return attribute.stage == stage && attribute.direction == direction;
+            };
+            const auto &attributes = reflection.stageInterface;
+            const auto attribute = std::ranges::find_if(attributes, matches);
+            return attribute != attributes.end() && attribute->location == 0 && attribute->type == Render::ShaderValueType::Float32 &&
+                   attribute->rows == 1 && attribute->columns == columns && attribute->arrayCount == 1 &&
+                   std::none_of(attribute + 1, attributes.end(), matches);
+        }
+
+        /** @brief Exercises the same reflected uniform block used to prepare a live guide draw. */
+        Result<std::size_t> ValidateTemporalUniformLayout(const Render::NormalizedShaderReflection &reflection,
+                                                          const EditorVulkanTemporalInput input) {
+            const auto layout = Render::PrepareMaterialBindingLayout(reflection);
+            if (layout.HasError())
+                return Result<std::size_t>::Failure(layout.ErrorValue());
+            constexpr auto identity = Math::Mat4::Identity();
+            std::array<std::byte, 3 * sizeof(identity) + 16> uniform{};
+            return input == EditorVulkanTemporalInput::Motion ? PackEditorVulkanTemporalMotion(layout.Value(), identity, {}, {}, uniform)
+                                                              : PackEditorVulkanTemporalDepth(layout.Value(), identity, identity, uniform);
+        }
+    }  // namespace
+
     /** @copydoc ValidateEditorVulkanTemporalInputCook */
     Result<Render::ReflectedShaderArtifact> ValidateEditorVulkanTemporalInputCook(EditorVulkanTemporalInput input,
                                                                                   std::span<const std::uint8_t> payload,
                                                                                   std::span<const std::uint8_t> metadata) {
         using namespace Render;
         using Outcome = Result<ReflectedShaderArtifact>;
+        if (const auto state = EditorVulkanTemporalInputPipelineState(input); state.HasError())
+            return Outcome::Failure(state.ErrorValue());
         const auto manifest = EditorVulkanTemporalInputShaderManifest(input);
         const auto target = EditorVulkanViewportShaderTarget();
         if (const auto stages = ValidateViewportStageEntries(manifest, target, payload); stages.HasError())
@@ -359,27 +389,72 @@ namespace Horo::Editor {
         auto result = DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
         if (result.HasError())
             return result;
-        const auto exact = [](const auto &attribute, unsigned columns) {
-            return attribute.location == 0 && attribute.type == ShaderValueType::Float32 && attribute.rows == 1 &&
-                   attribute.columns == columns && attribute.arrayCount == 1;
-        };
-        unsigned vertex{}, fragment{};
-        const unsigned columns = input == EditorVulkanTemporalInput::Motion ? 2U : 1U;
-        for (const auto &attribute : result.Value().reflection.stageInterface) {
-            if (attribute.stage == ShaderStage::Vertex && attribute.direction == ShaderInterfaceDirection::Input) {
-                if (!exact(attribute, 3))
-                    return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-                ++vertex;
-            }
-            if (attribute.stage == ShaderStage::Fragment && attribute.direction == ShaderInterfaceDirection::Output) {
-                if (!exact(attribute, columns))
-                    return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-                ++fragment;
-            }
-        }
-        if (vertex != 1 || fragment != 1)
+        const auto &reflection = result.Value().reflection;
+        if (const unsigned columns = input == EditorVulkanTemporalInput::Motion ? 2U : 1U;
+            !HasTemporalEndpoint(reflection, ShaderStage::Vertex, ShaderInterfaceDirection::Input, 3) ||
+            !HasTemporalEndpoint(reflection, ShaderStage::Fragment, ShaderInterfaceDirection::Output, columns))
             return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        if (const auto packed = ValidateTemporalUniformLayout(reflection, input); packed.HasError())
+            return Outcome::Failure(packed.ErrorValue());
         return result;
+    }
+
+    /** @copydoc EditorVulkanTemporalInputPipelineState */
+    Result<Render::RenderGraphicsPipelineState> EditorVulkanTemporalInputPipelineState(const EditorVulkanTemporalInput input) {
+        using namespace Render;
+        using Outcome = Result<RenderGraphicsPipelineState>;
+        using enum EditorVulkanTemporalInput;
+        using enum RenderTextureFormat;
+        if (input != LinearDepth && input != Motion)
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        return Outcome::Success(
+            {.cull = RenderCullMode::None, .colorFormat = input == LinearDepth ? R32Float : Rg32Float, .depthFormat = Depth32Float});
+    }
+
+    namespace {
+        /** @brief Packs mathematical row-major components for the canonical reflected material writer. */
+        std::array<float, 16> TemporalMatrix(const Math::Mat4 &matrix, const bool flipY = false) {
+            std::array<float, 16> values;
+            for (int row = 0; row < 4; ++row)
+                for (int column = 0; column < 4; ++column)
+                    values[static_cast<std::size_t>(row * 4 + column)] =
+                        flipY && row == 1 ? -matrix.At(row, column) : matrix.At(row, column);
+            return values;
+        }
+    }  // namespace
+
+    /** @copydoc PackEditorVulkanTemporalDepth */
+    Result<std::size_t> PackEditorVulkanTemporalDepth(const Render::MaterialBindingLayout &layout, const Math::Mat4 &rasterLocalToClip,
+                                                      const Math::Mat4 &localToView, std::span<std::byte> destination) {
+        using namespace Render;
+        if (!Math::IsFinite(rasterLocalToClip) || !Math::IsFinite(localToView))
+            return Result<std::size_t>::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        const auto raster = TemporalMatrix(rasterLocalToClip);
+        const auto view = TemporalMatrix(localToView);
+        const std::array values{MaterialParameterValue{{1}, std::span<const float>{raster}},
+                                MaterialParameterValue{{2}, std::span<const float>{view}}};
+        return PackMaterialParameterBinding(layout, {1}, values, destination);
+    }
+
+    /** @copydoc PackEditorVulkanTemporalMotion */
+    Result<std::size_t> PackEditorVulkanTemporalMotion(const Render::MaterialBindingLayout &layout, const Math::Mat4 &rasterLocalToClip,
+                                                       const Render::RenderMotionCameraPair &camera,
+                                                       const Render::RenderMotionObjectPair &object, std::span<std::byte> destination) {
+        using namespace Render;
+        const std::array<std::uint32_t, 1> history{camera.hasPrevious && object.hasPrevious ? 1U : 0U};
+        const auto current = Math::Multiply(camera.currentUnjitteredViewProjection, object.currentLocalToWorld);
+        const auto previous =
+            history.front() ? Math::Multiply(camera.previousUnjitteredViewProjection, object.previousLocalToWorld) : current;
+        if (!Math::IsFinite(rasterLocalToClip) || !Math::IsFinite(current) || !Math::IsFinite(previous))
+            return Result<std::size_t>::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        const auto raster = TemporalMatrix(rasterLocalToClip);
+        const auto currentValues = TemporalMatrix(current, true);
+        const auto previousValues = TemporalMatrix(previous, true);
+        const std::array values{MaterialParameterValue{{1}, std::span<const float>{raster}},
+                                MaterialParameterValue{{2}, std::span<const float>{currentValues}},
+                                MaterialParameterValue{{3}, std::span<const float>{previousValues}},
+                                MaterialParameterValue{{4}, std::span<const std::uint32_t>{history}}};
+        return PackMaterialParameterBinding(layout, {1}, values, destination);
     }
 
     Render::ShaderManifest EditorVulkanShadowShaderManifest() {
