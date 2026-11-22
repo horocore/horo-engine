@@ -290,11 +290,18 @@ namespace {
             return observations_->inspectionTick;
         }
 
+        bool IsAgentInspectionCurrent(Runtime::EntityRef owner, AI::AgentHandle agent) const override {
+            return agent == InspectionAgent(owner);
+        }
+
+        AI::AgentHandle InspectionAgent(Runtime::EntityRef owner) const {
+            return {AI::AiRuntimeIncarnation::Create(owner.runtime.value).Value(),
+                    {owner.entity.index, observations_->inspectionGeneration}};
+        }
+
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override {
             ++observations_->inspectionReads;
-            const AI::AgentHandle handle{AI::AiRuntimeIncarnation::Create(owner.runtime.value).Value(),
-                                         {owner.entity.index, observations_->inspectionGeneration}};
-            return Editor::EditorPlayAgentInspection{owner, handle, observations_->inspectionTick,
+            return Editor::EditorPlayAgentInspection{owner, InspectionAgent(owner), observations_->inspectionTick,
                                                      std::make_shared<const AI::AiAgentInspectionSnapshot>()};
         }
 
@@ -650,8 +657,12 @@ TEST_CASE("Play keeps bounded immutable agent inspection history for one live ge
     CHECK(observations->inspectionReads == limit + 1);
 
     REQUIRE(play.Pause().HasValue());
-    observations->inspectionTick = 1 + (limit + 1) * spacing;
     ++observations->inspectionGeneration;
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 1);
+
+    observations->inspectionTick = 1 + (limit + 1) * spacing;
     play.RefreshAgentInspection(owner);
     REQUIRE(play.AgentInspectionHistory().size() == 1);
     CHECK(play.AgentInspectionHistory().front().agent.slot.generation == 2);
@@ -663,6 +674,14 @@ TEST_CASE("Play keeps bounded immutable agent inspection history for one live ge
     play.RefreshAgentInspection(owner);
     CHECK(play.AgentInspectionHistory().empty());
     CHECK(observations->inspectionReads == limit + 2);
+
+    observations->inspectionTick += spacing;
+    play.RefreshAgentInspection(owner);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    observations->inspectionTick = 0;
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 3);
     play.Stop();
     CHECK(play.AgentInspectionHistory().empty());
 }

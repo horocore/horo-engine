@@ -203,6 +203,11 @@ namespace Horo::Editor {
             return 0;
         }
 
+        /** @brief Checks a displayed snapshot's owner and active agent generation without capturing another sample. */
+        [[nodiscard]] virtual bool IsAgentInspectionCurrent(Runtime::EntityRef, AI::AgentHandle) const {
+            return false;
+        }
+
         /** @brief Copies the exact selected live agent at the host's current committed tick. */
         [[nodiscard]] virtual std::optional<EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef) const {
             return std::nullopt;

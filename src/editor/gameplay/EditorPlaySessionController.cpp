@@ -771,9 +771,15 @@ namespace Horo::Editor {
             sceneHost_->SelectDecisionTraceOwner(selection);
         }
         const auto tick = sceneHost_->AgentInspectionTick();
-        if (tick == 0 ||
-            (lastInspectionTick_ != 0 && tick >= lastInspectionTick_ && tick - lastInspectionTick_ < AgentInspectionTickSpacing))
+        if (tick == 0) {
+            ClearAgentInspection();
             return;
+        }
+        if (lastInspectionTick_ != 0 && tick >= lastInspectionTick_ && tick - lastInspectionTick_ < AgentInspectionTickSpacing) {
+            if (inspectionCount_ != 0 && !sceneHost_->IsAgentInspectionCurrent(*selection, inspectionHistory_.front().agent))
+                ClearAgentInspection();
+            return;
+        }
         if (tick < lastInspectionTick_)
             ClearAgentInspection();
         lastInspectionTick_ = tick;

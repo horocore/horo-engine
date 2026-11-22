@@ -226,6 +226,30 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ai_->DiscardDecisionReplayAtSafePoint(agent, tick);
     }
 
+    std::optional<AI::AgentHandle> ProjectPlaySceneHost::ResolveInspectionAgent(const Runtime::RuntimeEntityView &entity) const {
+        if (!entity.components || !entity.components->aiAgent || !entity.components->aiController)
+            return std::nullopt;
+        const auto runtime = ai_->CapabilityAtSafePoint();
+        const auto handle = runtime.ResolveAgent(entity.components->aiAgent->agent);
+        if (handle.HasError())
+            return std::nullopt;
+        const auto owner = runtime.ResolveAgentOwner(handle.Value());
+        return owner.HasValue() && owner.Value() == entity.entity ? std::optional{handle.Value()} : std::nullopt;
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::IsAgentInspectionCurrent */
+    bool ProjectPlaySceneHost::IsAgentInspectionCurrent(const Runtime::EntityRef owner, const AI::AgentHandle agent) const {
+        const auto scene = AgentInspectionTick() != 0 && scenes_ ? scenes_->ActiveScene() : std::nullopt;
+        if (!scene || !agent.IsValid() || owner.runtime != scene->RuntimeId())
+            return false;
+        const auto entity = scene->Get(owner);
+        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent ||
+            !entity.Value().components->aiController)
+            return false;
+        const auto liveOwner = ai_->CapabilityAtSafePoint().ResolveAgentOwner(agent);
+        return liveOwner.HasValue() && liveOwner.Value() == owner;
+    }
+
     /** @copydoc Editor::EditorPlaySceneHost::ReadAgentInspection */
     std::optional<Editor::EditorPlayAgentInspection> ProjectPlaySceneHost::ReadAgentInspection(const Runtime::EntityRef owner) const {
         const auto tick = AgentInspectionTick();
@@ -233,29 +257,26 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!scene || owner.runtime != scene->RuntimeId())
             return std::nullopt;
         const auto entity = scene->Get(owner);
-        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent ||
-            !entity.Value().components->aiController)
+        const auto handle = entity.HasValue() ? ResolveInspectionAgent(entity.Value()) : std::nullopt;
+        if (!handle)
             return std::nullopt;
         const auto &components = *entity.Value().components;
-        const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(components.aiAgent->agent);
-        if (handle.HasError())
-            return std::nullopt;
         try {
             std::array<AI::BlackboardKeyId, AI::MaximumBlackboardKeys> keys{};
             std::size_t count{};
             for (const auto &disclosed : inspectionKeys_)
                 if (disclosed.schema == components.aiController->blackboardSchema)
                     keys[count++] = disclosed.key;
-            auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, handle.Value(), std::span{keys}.first(count));
+            auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, *handle, std::span{keys}.first(count));
             if (snapshot.HasError() || snapshot.Value().owner != owner || snapshot.Value().decisionTick != tick)
                 return std::nullopt;
             return Editor::EditorPlayAgentInspection{owner,
-                                                     handle.Value(),
+                                                     *handle,
                                                      tick,
                                                      std::make_shared<const AI::AiAgentInspectionSnapshot>(std::move(snapshot).Value()),
                                                      ReadAgentNavigation(owner),
                                                      committedDecisionTrace_ && decisionTraceOwner_ == owner &&
-                                                             committedDecisionTrace_->Header().blackboard.agent == handle.Value()
+                                                             committedDecisionTrace_->Header().blackboard.agent == *handle
                                                          ? committedDecisionTrace_
                                                          : nullptr};
         } catch (const std::bad_alloc &) {
