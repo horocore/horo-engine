@@ -601,6 +601,91 @@ namespace Horo::Tests::OpenXR {
             }
         }
 
+        TEST_CASE("Native OpenXR submits only complete valid quad projections", "[unit][xr][compositor][quad]") {
+            enum class Submission {
+                Valid,
+                WrongOrder,
+                OversizedInset,
+                DisplacedInset
+            };
+            const auto submission =
+                GENERATE(Submission::Valid, Submission::WrongOrder, Submission::OversizedInset, Submission::DisplacedInset);
+            CompositorFixture f{XRFeatureProfile::FoveatedInsetProjection};
+            REQUIRE(f.swapScript.created.arraySize == 4);
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto image = f.Acquire(frame);
+            const auto prediction = f.frames.Snapshot().predictedDisplayTime;
+            constexpr std::array roles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
+                                       XRViewRole::FoveatedInsetRight};
+            constexpr std::array layers{1U, 0U, 3U, 2U};
+            std::array<XRViewDescriptor, roles.size()> views{};
+            std::array<XRExternalRenderTargetDescriptor, roles.size()> targets{};
+            for (std::uint32_t index = 0; index < views.size(); ++index) {
+                const bool inset = index >= 2;
+                views[index] = f.View(index, prediction);
+                views[index].role = roles[index];
+                if (inset)
+                    views[index].projection = {-.3F, .3F, -.3F, .3F};
+                targets[index] = {.view = views[index].id,
+                                  .target = image.target,
+                                  .image = image,
+                                  .format = f.allocation.texture.format,
+                                  .usage = f.allocation.texture.usage,
+                                  .allocationExtent = f.allocation.texture.extent,
+                                  .renderRectangle = inset ? XRRenderRectangle{20, 30, 400, 300} : XRRenderRectangle{0, 0, 800, 600},
+                                  .arrayLayer = layers[index],
+                                  .arrayLayerCount = f.allocation.texture.layerCount};
+            }
+            if (submission == Submission::WrongOrder)
+                std::swap(views[0].role, views[2].role);
+            if (submission == Submission::OversizedInset)
+                views[2].projection = {-1.2F, .3F, -.3F, .3F};
+            if (submission == Submission::DisplacedInset)
+                views[3].pose.components.positionMeters.value = Math::Vec3{.1F, 1, 0};
+            const std::array images{image};
+            const auto revision = IdentityValue<XRViewConfigurationRevision>(1);
+            const auto plan = XRViewRenderPlan::Create({.configuration = {.session = f.session,
+                                                                          .id = frame.configuration,
+                                                                          .revision = revision,
+                                                                          .type = XRViewConfigurationType::QuadView,
+                                                                          .viewCount = 4},
+                                                        .predictedDisplayTime = prediction,
+                                                        .views = views,
+                                                        .targets = targets,
+                                                        .acquiredImages = images},
+                                                       f.session, f.configuration, revision, f.local.worldOriginRevision, 4,
+                                                       {XRViewAdmissionMode::BoundedNView, 4});
+            REQUIRE(plan.HasValue());
+            const std::array owners{NativeProjectionTarget{&f.color, image}};
+            CHECK(f.compositor.EndProjection(frame, plan.Value(), owners).HasError());
+            CHECK(f.script.ends == 0);
+            f.images.complete = true;
+            REQUIRE(f.frames.Submit(frame, images) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, image) == XRFrameStatus::Ok);
+            const auto ended = f.compositor.EndProjection(frame, plan.Value(), owners);
+            if (submission != Submission::Valid) {
+                REQUIRE(ended.HasError());
+                CHECK(ended.ErrorValue().code.Value() == MakeError(XRErrors::ViewPlanInvalid).code.Value());
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+                return;
+            }
+            REQUIRE(ended.HasValue());
+            CHECK(f.script.ends == 1);
+            CHECK(f.script.layers == 1);
+            REQUIRE(f.script.views == views.size());
+            for (std::size_t index = 0; index < views.size(); ++index) {
+                const auto &subImage = f.script.encoded[index].subImage;
+                CHECK(subImage.imageArrayIndex == layers[index]);
+                CHECK(subImage.imageRect.offset.x == targets[index].renderRectangle.x);
+                CHECK(subImage.imageRect.offset.y == targets[index].renderRectangle.y);
+                CHECK(subImage.imageRect.extent.width == targets[index].renderRectangle.width);
+                CHECK(subImage.imageRect.extent.height == targets[index].renderRectangle.height);
+            }
+        }
+
         TEST_CASE("Missed XR deadlines preserve pending image debt before zero-layer end and the next frame",
                   "[unit][xr][compositor][pacing]") {
             CompositorFixture f;

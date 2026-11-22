@@ -111,12 +111,26 @@ namespace Horo::Tests::OpenXR {
                 return XR_SUCCESS;
             }
 
+            explicit CompositorFixture(XRFeatureProfile profile)
+                : CompositorFixture(false, false, false, NativeReprojectionRoute::None, false, 1, XRReprojectionCadenceMode::FixedInterval,
+                                    {}, profile) {}
+
             explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false,
                                        NativeReprojectionRoute route = NativeReprojectionRoute::SpaceWarpFb, bool enablePassthrough = false,
                                        std::uint32_t maximumLayers = 1,
                                        XRReprojectionCadenceMode cadence = XRReprojectionCadenceMode::FixedInterval,
-                                       const NativeSwapchainMetricHandles &swapchainMetrics = {})
+                                       const NativeSwapchainMetricHandles &swapchainMetrics = {},
+                                       XRFeatureProfile profile = XRFeatureProfile::Projection1_0)
                 : color(native.owner, images, swapchainMetrics), synthesisRoute(route) {
+                if (profile == XRFeatureProfile::FoveatedInsetProjection) {
+                    native.capabilities = Capabilities(16, false, true);
+                    const auto &evidence = native.capabilities;
+                    const auto quad = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(),
+                                                          {.profile = profile, .requestedLimits = {4, 2, 8, 1}});
+                    REQUIRE(quad.plan);
+                    native.plan = *quad.plan;
+                }
+                script.expectedViews = native.plan.Limits().maximumViews;
                 if (enableSynthesis) {
                     native.capabilities = Capabilities(16, true);
                     native.script.resolveExtra = &ResolveSynthesisProperties;
@@ -186,12 +200,13 @@ namespace Horo::Tests::OpenXR {
                     policy.cadence = cadence;
                     REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) == XRFrameStatus::Ok);
                 } else {
-                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, maximumLayers}) == XRFrameStatus::Ok);
+                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {script.expectedViews, 2, maximumLayers}) ==
+                            XRFrameStatus::Ok);
                 }
                 allocation = {.target = {session, {4, 1}},
                               .texture = {.extent = {800, 600},
                                           .format = Render::RenderTextureFormat::Rgba8Unorm,
-                                          .layerCount = 2,
+                                          .layerCount = script.expectedViews,
                                           .usage = Render::RenderTextureUsage::RenderAttachment}};
                 REQUIRE(color.Create(allocation, &SwapchainScript::GetProc).HasValue());
                 if (enableDepth) {
@@ -252,7 +267,7 @@ namespace Horo::Tests::OpenXR {
 
             /** @brief Acquires one actual fixture image and records it in the same canonical frame gate. */
             XRSwapchainImageId Acquire(const XRFrameId &frame) {
-                REQUIRE(frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
+                REQUIRE(frames.LocateViews(frame, allocation.texture.layerCount) == XRFrameStatus::Ok);
                 REQUIRE(color.Acquire().HasValue());
                 REQUIRE(color.Wait(0).Value());
                 const auto imported = color.Import();

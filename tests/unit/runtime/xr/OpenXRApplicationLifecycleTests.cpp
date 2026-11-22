@@ -3586,7 +3586,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.swapchain.releases == 4);
         CHECK(fixture.script.frames.ends == 2);
         CHECK(fixture.script.frames.layers == 1);
-        CHECK(std::ranges::all_of(fixture.script.frames.encoded, [](const auto &view) {
+        CHECK(std::ranges::all_of(std::span{fixture.script.frames.encoded}.first(fixture.script.frames.views), [](const auto &view) {
             return view.next == nullptr;
         }));
         REQUIRE(fixture.play->PrepareRenderFrame(3).Value());

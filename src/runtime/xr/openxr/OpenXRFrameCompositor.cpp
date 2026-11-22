@@ -25,6 +25,23 @@ namespace Horo::XR::OpenXRInternal {
             return Result<T>::Success(std::bit_cast<T>(raw));
         }
 
+        /** @brief Preserves the view ordinals required by the OpenXR quad presentation ABI. */
+        [[nodiscard]] bool HasNativeQuadOrder(std::span<const XRViewDescriptor> views) noexcept {
+            constexpr std::array roles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
+                                       XRViewRole::FoveatedInsetRight};
+            return std::ranges::equal(views, roles, {}, &XRViewDescriptor::role);
+        }
+
+        /** @brief Checks the two encoded inset projections against their peripheral counterparts. */
+        [[nodiscard]] bool ValidNativeInsets(std::span<const XrCompositionLayerProjectionView> views) noexcept {
+            const auto nativeView = [](const XrCompositionLayerProjectionView &view) {
+                return XrView{XR_TYPE_VIEW, nullptr, view.pose, view.fov};
+            };
+            constexpr XrViewStateFlags valid = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+            return ContainsNativeInset(nativeView(views[0]), nativeView(views[2]), valid) &&
+                   ContainsNativeInset(nativeView(views[1]), nativeView(views[3]), valid);
+        }
+
         /** @brief Validates finite metric depth conventions, including explicitly reversed normalized depth. */
         [[nodiscard]] bool ValidDepth(const NativeProjectionDepth &depth) noexcept {
             return std::isfinite(depth.minimumDepth) && std::isfinite(depth.maximumDepth) && std::isfinite(depth.nearMeters) &&
@@ -319,10 +336,16 @@ namespace Horo::XR::OpenXRInternal {
         if (!begun_ || frames_->ValidateProjectionEnd(frame, plan) != XRFrameStatus::Ok || targets.empty() ||
             targets.size() > XRFrameHardLimits::MaximumImages)
             return Result<void>::Failure(MakeError(XRErrors::ViewPlanInvalid));
-        // First production profile admits complete primary opaque stereo; no silent truncation or blend fallback.
-        if (plan.Configuration().type != XRViewConfigurationType::PrimaryStereo || plan.Views().size() != 2 ||
+        const auto native = session_->ProjectionConfiguration(frame.session);
+        if (native.HasError())
+            return Result<void>::Failure(native.ErrorValue());
+        const bool quad = native.Value().type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+        const auto layout = quad ? XRViewConfigurationType::QuadView : XRViewConfigurationType::PrimaryStereo;
+        if (plan.Configuration().type != layout || plan.Views().size() != native.Value().viewCount ||
             plan.Configuration().blendMode != XREnvironmentBlendMode::Opaque)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (quad && !HasNativeQuadOrder(plan.Views()))
+            return Result<void>::Failure(MakeError(XRErrors::ViewPlanInvalid));
         for (std::size_t index = 0; index < targets.size(); ++index) {
             const auto &target = targets[index];
             const bool known = std::ranges::any_of(plan.Targets(), [&](const auto &item) {
@@ -495,6 +518,8 @@ namespace Horo::XR::OpenXRInternal {
         const ProjectionEncoding encoding{plan, targets, nullptr};
         if (const auto baseline = ValidateProjection(frame, encoding); baseline.HasError())
             return Outcome::Failure(baseline.ErrorValue());
+        if (plan.Configuration().type != XRViewConfigurationType::PrimaryStereo)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
         const auto status = frames_->ValidateReprojection(frame, plan, synthesis.inputs);
         const bool ready = status == XRReprojectionStatus::Ready;
         const auto ended = EndEncodedProjection(frame, encoding, ready ? &synthesis : nullptr);
@@ -541,6 +566,8 @@ namespace Horo::XR::OpenXRInternal {
         const ProjectionEncoding encoding{plan, targets, depth};
         if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
             return valid;
+        if (plan.Configuration().type != XRViewConfigurationType::PrimaryStereo)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         const auto &scope = passthrough.scope;
         if (passthrough.frame != frame || scope.session != frame.session)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
@@ -585,6 +612,8 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<bool>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
             reference = space.Value();
         }
+        if (plan.Configuration().type == XRViewConfigurationType::QuadView && !ValidNativeInsets(views))
+            return Result<bool>::Failure(MakeError(XRErrors::ViewPlanInvalid));
         const auto optional = synthesis ? EncodeReprojection(*synthesis) : std::nullopt;
         XrSession session{XR_NULL_HANDLE};
         if (optional) {

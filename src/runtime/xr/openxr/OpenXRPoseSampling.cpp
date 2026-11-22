@@ -117,14 +117,6 @@ namespace Horo::XR::OpenXRInternal {
             return std::array{a.x, a.y, a.z, a.w} == std::array{b.x, b.y, b.z, b.w};
         }
 
-        /** @brief OpenXR blends overlaps and requires the inset projection to stay inside its peripheral view. */
-        bool ContainsInset(const XrView &peripheral, const XrView &inset, const XrViewStateFlags flags) noexcept {
-            const auto &outer = peripheral.fov;
-            const auto &inner = inset.fov;
-            return SameEyePose(peripheral.pose, inset.pose, flags) && inner.angleLeft >= outer.angleLeft &&
-                   inner.angleRight <= outer.angleRight && inner.angleDown >= outer.angleDown && inner.angleUp <= outer.angleUp;
-        }
-
         /** @brief Validates the complete native ABI, independent component flags and asymmetric view ranges. */
         Result<void> ValidatePresentationViews(const NativePresentationViews &output, const XrViewState &state,
                                                std::uint32_t expectedViews) {
@@ -465,6 +457,13 @@ namespace Horo::XR::OpenXRInternal {
         return pose.HasError() ? Outcome::Failure(pose.ErrorValue()) : Outcome::Success({reference, world, now, pose.Value()});
     }
 
+    bool ContainsNativeInset(const XrView &peripheral, const XrView &inset, const XrViewStateFlags flags) noexcept {
+        const auto &outer = peripheral.fov;
+        const auto &inner = inset.fov;
+        return SameEyePose(peripheral.pose, inset.pose, flags) && inner.angleLeft >= outer.angleLeft &&
+               inner.angleRight <= outer.angleRight && inner.angleDown >= outer.angleDown && inner.angleUp <= outer.angleUp;
+    }
+
     /** @copydoc OpenXRActionBindings::LocatePresentation */
     Result<NativePresentationViews> OpenXRActionBindings::LocatePresentation(const XRSessionId &session, const XRTimeEvidence &time,
                                                                              const std::uint32_t expectedViews) const {
@@ -498,8 +497,8 @@ namespace Horo::XR::OpenXRInternal {
         if (auto valid = ValidatePresentationViews(output, state, expectedViews); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         if (configuration.Value().type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET &&
-            (!ContainsInset(output.views[0], output.views[2], state.viewStateFlags) ||
-             !ContainsInset(output.views[1], output.views[3], state.viewStateFlags)))
+            (!ContainsNativeInset(output.views[0], output.views[2], state.viewStateFlags) ||
+             !ContainsNativeInset(output.views[1], output.views[3], state.viewStateFlags)))
             return Outcome::Failure(MakeError(XRErrors::ViewPlanInvalid));
         if (auto fenced = Current(session); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());
