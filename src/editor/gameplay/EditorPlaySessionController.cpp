@@ -813,6 +813,13 @@ namespace Horo::Editor {
         return sceneHost_ ? sceneHost_->ReadDecisionDebugState() : std::nullopt;
     }
 
+    /** @copydoc EditorPlaySessionController::ResolveQueryInspectionSource */
+    std::optional<Sha256Digest> EditorPlaySessionController::ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &source) const {
+        if (!sceneHost_ || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused))
+            return std::nullopt;
+        return sceneHost_->ResolveQueryInspectionSource(source);
+    }
+
     /** @copydoc EditorPlaySessionController::InspectQuery */
     EditorPlayQueryInspection EditorPlaySessionController::InspectQuery(std::optional<EditorPlayQueryInspectionSelection> selection) {
         if (fixedAttempt_ || !sceneHost_)

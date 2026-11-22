@@ -978,7 +978,8 @@ namespace Horo::Editor {
 
         std::optional<EnvironmentQueryPreviewWork> m_environmentQueryPreviewWork;
         EnvironmentQueryDocumentFence m_playQueryDigestFence;
-        Sha256Digest m_playQueryDigest;
+        Runtime::SceneRuntimeId m_playQueryDigestRuntime;
+        std::optional<Sha256Digest> m_playQueryDigest;
         void RefreshLiveEnvironmentQueryPreview(std::optional<Runtime::EntityRef> owner);
 
         /** @brief Immutable semantic root retained by both history and the active Query draft. */

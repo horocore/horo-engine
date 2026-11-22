@@ -187,6 +187,8 @@ namespace Horo::Editor {
 
         /** @brief Borrows chronological detached snapshots until the next refresh or Play transition. */
         [[nodiscard]] std::span<const EditorPlayAgentInspection> AgentInspectionHistory() const noexcept;
+        /** @brief Resolves a saved source through the current Play schema and committed query inventory. */
+        [[nodiscard]] std::optional<Sha256Digest> ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &source) const;
         /** @brief Routes the exact active EQS document's selection through the current Play owner. */
         [[nodiscard]] EditorPlayQueryInspection InspectQuery(std::optional<EditorPlayQueryInspectionSelection> selection);
         /** @brief Indicates whether legacy viewport extraction is outside the selected Play composition. */

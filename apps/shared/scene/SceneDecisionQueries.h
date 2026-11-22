@@ -83,12 +83,16 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Sha256Digest ReplayProfile() const noexcept;
         /** @brief Reports whether the frozen query inventory needs a Navigation caller. */
         [[nodiscard]] bool UsesNavigation() const noexcept;
+        /** @brief Authenticates an open source against this world's exact inspectable cooked query. */
+        [[nodiscard]] std::optional<Sha256Digest> ResolveInspectionSource(const AI::EnvironmentQueryAsset &source) const;
         /** @brief Enables bounded evidence collection for one authenticated query selection. */
         [[nodiscard]] bool SelectInspection(std::optional<SceneQueryInspectionSelection> selection) noexcept;
         /** @brief Transfers the bounded sample from the just-evaluated tick to the host's fixed commit. */
         [[nodiscard]] std::shared_ptr<const AI::QueryDebugSnapshot> TakeInspection() noexcept;
 
     private:
+        [[nodiscard]] const CookedSceneQueryPlan *InspectablePlan(AI::QueryId query) const noexcept;
+
         struct TickScope final {
             AI::AiSceneRuntime &runtime;
             const Runtime::RuntimeSceneView &scene;

@@ -95,6 +95,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         pendingDecisionTrace_.reset();
     }
 
+    std::optional<Sha256Digest> ProjectPlaySceneHost::ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &source) const {
+        if (!decisionQueries_ || !queryInspectionGranted_ || sceneClosed_ || std::this_thread::get_id() != ownerLane_)
+            return std::nullopt;
+        const auto scene = scenes_->ActiveScene();
+        return scene && scene->IsCurrent() ? decisionQueries_->ResolveInspectionSource(source) : std::nullopt;
+    }
+
     Editor::EditorPlayQueryInspection ProjectPlaySceneHost::InspectQuery(
         std::optional<Editor::EditorPlayQueryInspectionSelection> selection) {
         if (!decisionQueries_ || std::this_thread::get_id() != ownerLane_)

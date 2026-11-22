@@ -230,6 +230,11 @@ namespace Horo::Editor {
         /** @brief Selects the entity generation eligible for read-only trace sampling. */
         virtual void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef>) noexcept {}
 
+        /** @brief Authenticates a saved source against this host's active cooked query inventory. */
+        [[nodiscard]] virtual std::optional<Sha256Digest> ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &) const {
+            return std::nullopt;
+        }
+
         /** @brief Samples one authorized live query while the selection stays current. */
         [[nodiscard]] virtual EditorPlayQueryInspection InspectQuery(std::optional<EditorPlayQueryInspectionSelection>) {
             return {};

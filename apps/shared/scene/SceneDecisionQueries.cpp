@@ -3,6 +3,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "ProjectScenePerception.h"
 #include "ScenePhysicsHost.h"
@@ -358,11 +359,30 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    const CookedSceneQueryPlan *SceneDecisionQueries::InspectablePlan(const AI::QueryId query) const noexcept {
+        const auto plan = plans_.find(query);
+        if (plan == plans_.end())
+            return nullptr;
+        const auto &compiled = *plan->second.plan;
+        if (gameplayTests_ && gameplayTests_->UsesTests(compiled))
+            return gameplayTests_->CanEvaluate() ? &plan->second : nullptr;
+        return HasLiveProvider(compiled) ? &plan->second : nullptr;
+    }
+
+    std::optional<Sha256Digest> SceneDecisionQueries::ResolveInspectionSource(const AI::EnvironmentQueryAsset &source) const {
+        const auto *plan = InspectablePlan(source.Id());
+        if (!plan)
+            return std::nullopt;
+        const auto encoded = AI::EnvironmentQueryCookedCodec::Encode(source, *registry_);
+        if (encoded.HasError() || ComputeSha256(std::as_bytes(std::span{encoded.Value()})) != plan->digest)
+            return std::nullopt;
+        return plan->digest;
+    }
+
     bool SceneDecisionQueries::SelectInspection(std::optional<SceneQueryInspectionSelection> selection) noexcept {
         if (selection) {
-            const auto plan = plans_.find(selection->query);
-            if (!selection->agent.IsValid() || plan == plans_.end() || plan->second.digest != selection->cooked ||
-                !(HasLiveProvider(*plan->second.plan) || (gameplayTests_ && gameplayTests_->UsesTests(*plan->second.plan))))
+            const auto *plan = InspectablePlan(selection->query);
+            if (!selection->agent.IsValid() || !plan || plan->digest != selection->cooked)
                 selection.reset();
         }
         if (inspection_ != selection)

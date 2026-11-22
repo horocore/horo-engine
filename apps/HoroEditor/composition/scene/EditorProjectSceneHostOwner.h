@@ -499,6 +499,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
         [[nodiscard]] std::optional<AI::AgentHandle> ResolveInspectionAgent(const Runtime::RuntimeEntityView &entity) const;
         void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef> owner) noexcept override;
+        [[nodiscard]] std::optional<Sha256Digest> ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &source) const override;
         [[nodiscard]] Editor::EditorPlayQueryInspection InspectQuery(
             std::optional<Editor::EditorPlayQueryInspectionSelection> selection) override;
         void SetDecisionDebugView(std::optional<AI::AgentHandle> agent) override;

@@ -790,7 +790,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshLiveEnvironmentQueryPreview(const std::optional<Runtime::EntityRef> owner) {
         m_viewModel.playQueryDocument = {};
         std::optional<EditorPlayQueryInspectionSelection> selection;
-        if (owner && m_querySchema && m_playSession.AuthoringRevision() == m_document.Revision() &&
+        if (owner && m_playSession.AuthoringRevision() == m_document.Revision() &&
             m_viewModel.playViewSource != EditorPlayViewSource::MountedWorld &&
             (m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused)) {
             const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
@@ -798,21 +798,20 @@ namespace Horo::Editor {
             const auto found = std::ranges::find_if(documents, [active](const auto &document) {
                 return document.identity.instance == active;
             });
-            if (found != documents.end() && HasLiveQueryProvider(*found) && !found->dirty && !found->conflict &&
-                found->descriptors == QueryDescriptorAvailability::Validated) {
+            if (found != documents.end() && found->query && !found->dirty && !found->conflict) {
                 const EnvironmentQueryDocumentFence fence{found->identity.instance, found->revision};
-                if (m_playQueryDigestFence != fence) {
+                if (m_playQueryDigestFence != fence || m_playQueryDigestRuntime != owner->runtime) {
                     m_playQueryDigestFence = fence;
-                    m_playQueryDigest = {};
-                    const auto bytes = AI::EnvironmentQueryCookedCodec::Encode(*found->query, *m_querySchema);
-                    if (bytes.HasValue())
-                        m_playQueryDigest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+                    m_playQueryDigestRuntime = owner->runtime;
+                    m_playQueryDigest = m_playSession.ResolveQueryInspectionSource(*found->query);
                 }
-                if (m_playQueryDigest != Sha256Digest{}) {
+                if (m_playQueryDigest) {
                     m_viewModel.playQueryDocument = found->identity.instance;
-                    selection.emplace(*owner, found->query->Id(), m_playQueryDigest);
+                    selection.emplace(*owner, found->query->Id(), *m_playQueryDigest);
                 }
             }
+        } else {
+            m_playQueryDigestRuntime = {};
         }
         m_viewModel.playQueryInspection = m_playSession.InspectQuery(selection);
     }
@@ -1354,13 +1353,14 @@ namespace Horo::Editor {
                 action("workspace.decision_graph.keep_local", KeepLocal, opened->dirty))
                 return true;
         }
-        label(text(DescriptorLabel(opened->descriptors)), Theme::Muted());
+        const bool liveSource = viewModel.playQueryDocument == opened->identity.instance && !opened->dirty && !opened->conflict;
+        label(text(DescriptorLabel(liveSource ? QueryDescriptorAvailability::Validated : opened->descriptors)), Theme::Muted());
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
             label(std::format("{} / {} ({})", stageType, stage.displayName, stage.id.Value()), Theme::Text());
         }
 
-        if (HasLiveQueryProvider(*opened) &&
+        if ((liveSource || HasLiveQueryProvider(*opened)) &&
             (viewModel.playState == EditorPlayState::Playing || viewModel.playState == EditorPlayState::Paused)) {
             DrawLiveQueryPreview(viewModel, *opened, m_context.localization, m_context.theme.fonts);
             return true;

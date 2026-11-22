@@ -1882,7 +1882,19 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     REQUIRE(play.SceneView());
     const auto owner = play.SceneView()->Find({3});
     REQUIRE(owner);
-    const Editor::EditorPlayQueryInspectionSelection inspection{*owner, query.Value().Id(), cookedDigest};
+    const auto resolved = play.ResolveQueryInspectionSource(query.Value());
+    CHECK(resolved == (allowInspection ? std::optional{cookedDigest} : std::nullopt));
+    if (nativeQuery) {
+        QueryAssetSource edited{.id = query.Value().Id(),
+                                .displayName = query.Value().DisplayName(),
+                                .result = query.Value().ResultSchema(),
+                                .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+        edited.stages.back().properties.front().value = std::uint64_t{1000};
+        const auto draft = EnvironmentQueryAsset::Capture(edited);
+        REQUIRE(draft.HasValue());
+        CHECK_FALSE(play.ResolveQueryInspectionSource(draft.Value()));
+    }
+    const Editor::EditorPlayQueryInspectionSelection inspection{*owner, query.Value().Id(), resolved.value_or(cookedDigest)};
     auto mismatch = inspection;
     mismatch.cooked.bytes.front() ^= 1;
     CHECK_FALSE(play.InspectQuery(mismatch).admitted);
@@ -1975,6 +1987,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     CHECK_FALSE(play.InspectQuery(mismatch).snapshot);
     CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     play.Stop();
+    CHECK_FALSE(play.ResolveQueryInspectionSource(query.Value()));
     CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     lifecycle.Shutdown();
 }
