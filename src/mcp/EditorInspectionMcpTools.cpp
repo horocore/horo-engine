@@ -71,6 +71,35 @@ namespace Horo::Editor {
                  {"additionalProperties", false}});
         }
 
+        /** @brief Enumerates the closed, payload-free set of authored component counts. */
+        Json ComponentSchema() {
+            Json fields = Json::object();
+            Json required = Json::array();
+            for (const auto name : InspectedComponents::Names) {
+                fields[std::string{name}] = {{"type", "integer"}, {"minimum", 0}};
+                required.push_back(name);
+            }
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                                 {"counts",
+                                  {{"type", "object"},
+                                   {"properties", std::move(fields)},
+                                   {"required", std::move(required)},
+                                   {"additionalProperties", false}}}}},
+                               {"required", {"object", "counts"}},
+                               {"additionalProperties", false}});
+        }
+
+        /** @brief Describes committed geometry counters without renderer-native identities. */
+        Json GeometrySchema() {
+            const Json count{{"type", "integer"}, {"minimum", 1}};
+            return PageSchema({{"type", "object"},
+                               {"properties", {{"object", count}, {"instances", count}, {"vertices", count}, {"triangles", count}}},
+                               {"required", {"object", "instances", "vertices", "triangles"}},
+                               {"additionalProperties", false}});
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -89,6 +118,19 @@ namespace Horo::Editor {
         /** @brief Serializes numeric world-space limits. */
         Json WriteRecord(const InspectedBounds &entry) {
             return {{"object", entry.object}, {"minimum", entry.minimum}, {"maximum", entry.maximum}};
+        }
+
+        /** @brief Serializes count values using the same closed names as schema admission. */
+        Json WriteRecord(const InspectedComponents &entry) {
+            Json counts = Json::object();
+            for (std::size_t index = 0; index < entry.counts.size(); ++index)
+                counts[std::string{InspectedComponents::Names[index]}] = entry.counts[index];
+            return {{"object", entry.object}, {"counts", std::move(counts)}};
+        }
+
+        /** @brief Serializes per-object committed viewport submission counts. */
+        Json WriteRecord(const InspectedGeometry &entry) {
+            return {{"object", entry.object}, {"instances", entry.instances}, {"vertices", entry.vertices}, {"triangles", entry.triangles}};
         }
 
         /** @brief Exports an owner-produced page with an optional continuation offset. */
@@ -143,6 +185,15 @@ namespace Horo::Editor {
                     .adapter = std::make_shared<InspectionTool<Read>>(workspace),
                     .owner = Mcp::McpOwnerContext::Editor};
         }
+
+        /** @brief Omits tools for owners that do not supply the typed query. */
+        template <auto Read>
+        void AppendInspection(std::vector<Mcp::McpToolRegistration> &tools,
+                              const std::shared_ptr<const EditorInspectionCommandEndpoint> &endpoint, std::string id,
+                              std::string description, Json (*schema)()) {
+            if (endpoint.get()->*Read)
+                tools.push_back(Registration<Read>(endpoint, std::move(id), std::move(description), schema()));
+        }
     }  // namespace
 
     /** @copydoc MakeEditorInspectionMcpTools */
@@ -150,22 +201,27 @@ namespace Horo::Editor {
         std::weak_ptr<const EditorInspectionCommandEndpoint> workspace) {
         using Output = Result<std::vector<Mcp::McpToolRegistration>>;
         const auto endpoint = workspace.lock();
-        if (!endpoint || endpoint->owner != std::this_thread::get_id() || (!endpoint->readTransforms && !endpoint->readBounds) ||
-            endpoint->project.empty() || endpoint->project.size() > 256 || !IsValidUtf8ScalarSequence(endpoint->project) ||
-            !endpoint->authorizationRevision)
+        if (!endpoint || endpoint->owner != std::this_thread::get_id() || endpoint->project.empty() || endpoint->project.size() > 256 ||
+            !IsValidUtf8ScalarSequence(endpoint->project) || !endpoint->authorizationRevision)
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         std::vector<Mcp::McpToolRegistration> tools;
-        if (endpoint->readTransforms)
-            tools.push_back(Registration<&EditorInspectionCommandEndpoint::
-                                             readTransforms>(workspace, "inspect.transforms",
-                                                             "Read a page of visible authored local transforms by exact Scene object ID.",
-                                                             TransformSchema()));
-        if (endpoint->readBounds)
-            tools.push_back(
-                Registration<&EditorInspectionCommandEndpoint::
-                                 readBounds>(workspace, "inspect.bounds",
-                                             "Read a page of visible authored world-space axis-aligned bounds by exact Scene object ID.",
-                                             BoundsSchema()));
+        AppendInspection<
+            &EditorInspectionCommandEndpoint::readTransforms>(tools, endpoint, "inspect.transforms",
+                                                              "Read visible authored local transforms by exact Scene object ID.",
+                                                              TransformSchema);
+        AppendInspection<
+            &EditorInspectionCommandEndpoint::readBounds>(tools, endpoint, "inspect.bounds",
+                                                          "Read visible authored world-space axis-aligned bounds by exact Scene object ID.",
+                                                          BoundsSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::readComponents>(tools, endpoint, "inspect.components",
+                                                                           "Read counts of authored components by visible Scene object ID.",
+                                                                           ComponentSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::readGeometry>(tools, endpoint, "inspect.rendering",
+                                                                         "Read matching committed viewport instance, vertex and triangle "
+                                                                         "counts by visible Scene object ID.",
+                                                                         GeometrySchema);
+        if (tools.empty())
+            return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));
     }
 }  // namespace Horo::Editor

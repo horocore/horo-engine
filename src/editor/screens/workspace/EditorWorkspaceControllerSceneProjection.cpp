@@ -32,6 +32,13 @@ namespace Horo::Editor {
                                         .defaultSeverity = ErrorSeverity::Warning,
                                         .summary = "Matching authored viewport geometry is unavailable for the requested object."};
 
+        const ErrorCodeDescriptor
+            InspectionGeometryUnavailable{.domain = ErrorDomainId{"editor.inspection"},
+                                          .code = ErrorCode{"geometry_unavailable"},
+                                          .defaultSeverity = ErrorSeverity::Warning,
+                                          .summary =
+                                              "Matching committed viewport geometry counts are unavailable for the requested object."};
+
         /** @brief Projects authored numeric data without names or runtime handles. */
         AgentViewportTransform LocalTransform(const SceneObject &object) {
             const auto &value = object.localTransform;
@@ -39,6 +46,53 @@ namespace Horo::Editor {
                     {value.translation.x, value.translation.y, value.translation.z},
                     {value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w},
                     {value.scale.x, value.scale.y, value.scale.z}};
+        }
+
+        /** @brief Projects numeric presence and collection sizes from the authored component set. */
+        InspectedComponents ComponentCounts(const SceneObject &object) {
+            const auto &c = object.components;
+            return {object.id.value,
+                    {c.camera.has_value(),
+                     c.animation.has_value(),
+                     c.light.has_value(),
+                     c.triggerVolume.has_value(),
+                     c.audioSource.has_value(),
+                     c.audioListener.has_value(),
+                     c.uiCanvas.has_value(),
+                     c.navigationSurface.has_value(),
+                     c.navigationRegion.has_value(),
+                     c.navigationModifier.has_value(),
+                     c.navigationLink.has_value(),
+                     c.navigationAgent.has_value(),
+                     c.aiAgent.has_value(),
+                     c.aiController.has_value(),
+                     c.characterController.has_value(),
+                     c.rigidBody.has_value(),
+                     c.colliders.size(),
+                     c.physicsConstraints.size(),
+                     c.behaviors.size(),
+                     c.gameplayComponents.size(),
+                     c.navigationSources.size()}};
+        }
+
+        /** @brief Counts per-instance submissions using retained CPU spans without reading their contents. */
+        Result<InspectedGeometry> GeometryCounts(const EditorViewportSceneSnapshot &geometry, const SceneObjectId id) {
+            using Output = Result<InspectedGeometry>;
+            InspectedGeometry result{.object = id.value};
+            for (std::size_t i = 0; i < geometry.instanceObjects.size(); ++i) {
+                if (geometry.instanceObjects[i] != id)
+                    continue;
+                const auto mesh =
+                    std::ranges::find(geometry.meshResources, geometry.instances[i].mesh, &EditorViewportMeshResourceView::handle);
+                if (mesh == geometry.meshResources.end() || mesh->vertices.empty() || mesh->indices.empty() || mesh->indices.size() % 3)
+                    return Output::Failure(MakeError(InspectionGeometryUnavailable));
+                ++result.instances;
+                result.vertices += mesh->vertices.size();
+                result.triangles += mesh->indices.size() / 3;
+            }
+            if (!result.instances)
+                return Output::Failure(MakeError(InspectionGeometryUnavailable));
+            return Output::Success(result);
         }
 
         /** @brief Validates typed page boundaries independently of transport schema admission. */
@@ -231,6 +285,10 @@ namespace Horo::Editor {
             return InspectLocalTransforms(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectWorldBounds(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectComponents(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectGeometry(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -245,16 +303,40 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::InspectWorldBounds */
     Result<BoundsInspectionPage> EditorWorkspaceController::InspectWorldBounds(const ObjectInspectionRequest &request) const {
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && HasCurrentInspectionGeometry(*active);
         return ReadInspectionPage<BoundsInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
-                                                        [this](const SceneObject &object) {
-            const auto active = m_runtimeScene.ActiveScene();
-            if (!active || active->RuntimeId() != m_viewportScene.runtimeSceneId ||
-                active->DefinitionRevision().value != m_document.State().value ||
-                m_viewportScene.documentRevision != m_document.Revision() ||
-                m_viewportScene.instances.size() != m_viewportScene.instanceObjects.size())
+                                                        [this, &active, current](const SceneObject &object) {
+            if (!current)
                 return Result<InspectedBounds>::Failure(MakeError(InspectionBoundsUnavailable));
             return WorldBounds(m_viewportScene, *active, object);
         });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectComponents */
+    Result<ComponentInspectionPage> EditorWorkspaceController::InspectComponents(const ObjectInspectionRequest &request) const {
+        return ReadInspectionPage<ComponentInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                           [](const SceneObject &object) {
+            return Result<InspectedComponents>::Success(ComponentCounts(object));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectGeometry */
+    Result<GeometryInspectionPage> EditorWorkspaceController::InspectGeometry(const ObjectInspectionRequest &request) const {
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && HasCurrentInspectionGeometry(*active);
+        return ReadInspectionPage<GeometryInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                          [this, current](const SceneObject &object) {
+            return current ? GeometryCounts(m_viewportScene, object.id)
+                           : Result<InspectedGeometry>::Failure(MakeError(InspectionGeometryUnavailable));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::HasCurrentInspectionGeometry */
+    bool EditorWorkspaceController::HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept {
+        return active.RuntimeId() == m_viewportScene.runtimeSceneId && active.DefinitionRevision().value == m_document.State().value &&
+               m_viewportScene.documentRevision == m_document.Revision() &&
+               m_viewportScene.instances.size() == m_viewportScene.instanceObjects.size();
     }
 
     /** @copydoc EditorWorkspaceController::InspectSceneRevision */

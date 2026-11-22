@@ -82,6 +82,8 @@ namespace Horo::Editor {
     struct ObjectInspectionRequest;
     struct TransformInspectionPage;
     struct BoundsInspectionPage;
+    struct ComponentInspectionPage;
+    struct GeometryInspectionPage;
     struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
@@ -822,6 +824,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const ObjectInspectionRequest &request) const;
         /** @brief Reads the world bounds of exact authored objects, using only a matching published geometry snapshot. */
         [[nodiscard]] Result<BoundsInspectionPage> InspectWorldBounds(const ObjectInspectionRequest &request) const;
+        /** @brief Reads authored component counts without exposing component payloads. */
+        [[nodiscard]] Result<ComponentInspectionPage> InspectComponents(const ObjectInspectionRequest &request) const;
+        /** @brief Reads committed viewport geometry counts without contacting the renderer. */
+        [[nodiscard]] Result<GeometryInspectionPage> InspectGeometry(const ObjectInspectionRequest &request) const;
+        /** @brief Checks that the current extraction belongs to the committed authored Scene. */
+        [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
         /** @brief Fences inspection against the authored Scene and its current editor projection. */
         [[nodiscard]] Result<InspectionSceneRevision> InspectSceneRevision() const;
         std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;

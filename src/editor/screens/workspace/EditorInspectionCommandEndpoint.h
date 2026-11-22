@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -51,6 +52,55 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Numeric inventory of authored components. No component payload or asset identity crosses this port. */
+    struct InspectedComponents {
+        static constexpr std::array<std::string_view, 21> Names{"camera",
+                                                                "animation",
+                                                                "light",
+                                                                "triggerVolume",
+                                                                "audioSource",
+                                                                "audioListener",
+                                                                "uiCanvas",
+                                                                "navigationSurface",
+                                                                "navigationRegion",
+                                                                "navigationModifier",
+                                                                "navigationLink",
+                                                                "navigationAgent",
+                                                                "aiAgent",
+                                                                "aiController",
+                                                                "characterController",
+                                                                "rigidBody",
+                                                                "colliders",
+                                                                "physicsConstraints",
+                                                                "behaviors",
+                                                                "gameplayComponents",
+                                                                "navigationSources"};
+        std::uint64_t object{};
+        std::array<std::size_t, Names.size()> counts{};
+    };
+
+    /** @brief Exact count of authored geometry submitted per object by the current committed viewport extraction. */
+    struct InspectedGeometry {
+        std::uint64_t object{};
+        std::size_t instances{};
+        std::size_t vertices{};
+        std::size_t triangles{};
+    };
+
+    /** @brief One page of authored component counts. */
+    struct ComponentInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedComponents> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
+    /** @brief One page of published viewport geometry counts. */
+    struct GeometryInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedGeometry> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -58,5 +108,7 @@ namespace Horo::Editor {
         std::thread::id owner;
         std::function<Result<TransformInspectionPage>(const ObjectInspectionRequest &)> readTransforms;
         std::function<Result<BoundsInspectionPage>(const ObjectInspectionRequest &)> readBounds;
+        std::function<Result<ComponentInspectionPage>(const ObjectInspectionRequest &)> readComponents;
+        std::function<Result<GeometryInspectionPage>(const ObjectInspectionRequest &)> readGeometry;
     };
 }  // namespace Horo::Editor

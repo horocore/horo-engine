@@ -164,6 +164,43 @@ namespace {
         }
     }
 
+    TEST_CASE("Component counts and committed viewport counts are separately discovered and read-only", "[unit][editor][mcp][inspection]") {
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readComponents =
+                                                [](const ObjectInspectionRequest &request) {
+            InspectedComponents record{.object = request.objects.front()};
+            record.counts.front() = 1;
+            record.counts.back() = 3;
+            return Result<ComponentInspectionPage>::Success({.scene = {7, 19}, .records = {record}});
+        },
+                                            .readGeometry = [](const ObjectInspectionRequest &request) {
+            return Result<GeometryInspectionPage>::Success(
+                {.scene = {7, 19}, .records = {{.object = request.objects.front(), .instances = 2, .vertices = 30, .triangles = 14}}});
+        }});
+        const EditorCommandMcpAdmission admission{"numeric-reader", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        REQUIRE(session.ToolEffect("inspect.components").HasValue());
+        REQUIRE(session.ToolEffect("inspect.rendering").HasValue());
+        CHECK(session.ToolEffect("inspect.components").Value() == McpToolEffect::Query);
+        CHECK(session.ToolEffect("inspect.rendering").Value() == McpToolEffect::Query);
+        CHECK(session.ToolEffect("inspect.bounds").HasError());
+        const auto components = Execute(session, Command("components", "inspect.components", {{"objects", {42}}}));
+        REQUIRE(components["status"] == "succeeded");
+        const auto &counts = components["result"]["records"][0]["counts"];
+        CHECK(counts.size() == InspectedComponents::Names.size());
+        CHECK(counts["camera"] == 1);
+        CHECK(counts["colliders"] == 0);
+        CHECK(counts["navigationSources"] == 3);
+        const auto rendering = Execute(session, Command("geometry", "inspect.rendering", {{"objects", {42}}}));
+        REQUIRE(rendering["status"] == "succeeded");
+        CHECK(rendering["result"]["records"][0] == Json({{"object", 42}, {"instances", 2}, {"vertices", 30}, {"triangles", 14}}));
+    }
+
     TEST_CASE("Configured test commands run through an approved embedded editor session", "[unit][editor][mcp][gameplay-test]") {
         Horo::Tests::OwnedTestDirectory project{"horo-test-mcp"};
         const auto configured = Application::GameplayLocalBuildDirectory(project.Path());

@@ -467,6 +467,11 @@ missing or hidden objects fail closed.
 The same grant exposes `inspect.bounds`, which applies committed authored
 world transforms to matching published mesh bounds. Missing or stale geometry
 produces an explicit unavailable result. Gizmo previews are excluded.
+The same object and page contract applies to `inspect.components` and
+`inspect.rendering`. Component inspection reports authored presence and counts
+without component payloads. Rendering inspection reports per-object committed
+instance, vertex and triangle counts from retained geometry, with an explicit
+unavailable result when no matching geometry is published.
 
 ## MCP History Retention And Redaction
 
