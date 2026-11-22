@@ -101,18 +101,18 @@ namespace Horo::Application::CharacterSceneProductTest {
                                               .geometry = geometry,
                                               .borderSizeCells = 4,
                                               .dependencyKey = digest};
-            auto topology = NavigationTileBuildResult{
-                .state = NavigationTileBuildState::Built,
-                .bounds = tile.tile.bounds,
-                .vertices = {{0, 0, 0}, {10, 0, 0}, {0, 0, 10}},
-                .polygons = {{{0, 3}, {0, 3}, area}},
-                .polygonVertexIndices = {0, 1, 2},
-                .polygonAdjacencies = {NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency},
-                .provenance = {{.producer = NavigationSourceProducerId::Create(1).Value(),
-                                .contribution = NavigationSourceContributionId::Create(1).Value(),
-                                .revision = NavigationSourceRevision::Create(1).Value(),
-                                .sourceDigest = digest,
-                                .polygons = {0, 1}}}};
+            auto topology = NavigationTileBuildResult{.state = NavigationTileBuildState::Built,
+                                                      .bounds = tile.tile.bounds,
+                                                      .vertices = {{0, 0, 0}, {10, 0, 0}, {0, 0, 10}},
+                                                      .polygons = {{{0, 3}, {0, 3}, area}},
+                                                      .polygonVertexIndices = {0, 1, 2},
+                                                      .polygonAdjacencies = {NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency,
+                                                                             NavMeshBoundaryAdjacency},
+                                                      .provenance = {{.producer = NavigationSourceProducerId::Create(1).Value(),
+                                                                      .contribution = NavigationSourceContributionId::Create(1).Value(),
+                                                                      .revision = NavigationSourceRevision::Create(1).Value(),
+                                                                      .sourceDigest = digest,
+                                                                      .polygons = {0, 1}}}};
             if (tileBuilder)
                 topology = BakeGroundTile(*tileBuilder, tile, area);
             const auto cookedTile = NavigationCookedTile::Create(tile, std::move(topology));
@@ -168,8 +168,8 @@ namespace Horo::Application::CharacterSceneProductTest {
 
     private:
         static Navigation::NavigationTileBuildResult BakeGroundTile(const Navigation::INavigationMeshBuilder &builder,
-                                                                  const Navigation::NavigationPreparedTile &tile,
-                                                                  const Navigation::NavigationAreaId area) {
+                                                                    const Navigation::NavigationPreparedTile &tile,
+                                                                    const Navigation::NavigationAreaId area) {
             using namespace Navigation;
             const NavigationTriangleProvenance first{.kind = NavigationSourceProducerKind::StaticCollider,
                                                      .producer = NavigationSourceProducerId::Create(1).Value(),
@@ -179,23 +179,23 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                      .sourceTriangleIndex = 0};
             auto second = first;
             second.sourceTriangleIndex = 1;
-            const std::array triangles{
-                NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {10, 0, 10}, {10, 0, 0}}},
-                                            .area = area,
-                                            .traversalCost = 1,
-                                            .materialSlot = {.value = 1},
-                                            .provenance = first},
-                NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {0, 0, 10}, {10, 0, 10}}},
-                                            .area = area,
-                                            .traversalCost = 1,
-                                            .materialSlot = {.value = 1},
-                                            .provenance = second}};
+            const std::array triangles{NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {10, 0, 10}, {10, 0, 0}}},
+                                                                   .area = area,
+                                                                   .traversalCost = 1,
+                                                                   .materialSlot = {.value = 1},
+                                                                   .provenance = first},
+                                       NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {0, 0, 10}, {10, 0, 10}}},
+                                                                   .area = area,
+                                                                   .traversalCost = 1,
+                                                                   .materialSlot = {.value = 1},
+                                                                   .provenance = second}};
             auto baked = builder.BuildTile({.key = tile.tile.key.tile,
                                             .bounds = tile.tile.bounds,
                                             .tileSizeMeters = tile.tile.tileSizeMeters,
                                             .buildGeometry = tile.geometry,
                                             .triangles = triangles,
-                                            .borderSizeCells = tile.borderSizeCells}, {});
+                                            .borderSizeCells = tile.borderSizeCells},
+                                           {});
             if (baked.HasError())
                 UNSCOPED_INFO(baked.ErrorValue().code.Value() << ": " << baked.ErrorValue().message);
             REQUIRE(baked.HasValue());
