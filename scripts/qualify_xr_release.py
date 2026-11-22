@@ -8,8 +8,9 @@ from pathlib import Path
 import re
 
 from qualify_xr_device import (
-    CATEGORIES, LEVELS, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES, check_physical_gate, decode_record,
-    fields, in_set, is_digest, is_token, load_record, require, validate_identity, validate_record,
+    CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
+    check_desktop_preflight, check_physical_gate, decode_record, fields, in_set, is_digest, is_token,
+    load_record, require, validate_identity, validate_record,
 )
 
 
@@ -45,6 +46,10 @@ class Evidence:
         require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
         self.verified.add(digest)
 
+    def desktop_preflight(self, digest: str, identity: dict) -> None:
+        with self.path(digest).open("rb") as source:
+            check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest)
+
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:
             data = source.read(MAX_RECORD_BYTES + 1)
@@ -53,8 +58,10 @@ class Evidence:
 
 
 def validate_row(value: object) -> dict:
-    row = fields(value, {"id", "category", "owner", "releaseClaim", "declaration",
-                         "requiredOptionalChecks", "recordSha256"}, "matrix row")
+    required = {"id", "category", "owner", "releaseClaim", "declaration", "requiredOptionalChecks", "recordSha256"}
+    if isinstance(value, dict) and "desktopPreflightSha256" in value:
+        required.add("desktopPreflightSha256")
+    row = fields(value, required, "matrix row")
     require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
     require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
     require(type(row["releaseClaim"]) is bool, "Release claim must be explicit")
@@ -70,6 +77,8 @@ def validate_row(value: object) -> dict:
             "Invalid optional physical checks")
     require(len(optional) == len(set(optional)), "Duplicate optional physical checks")
     require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
+    preflight = row.get("desktopPreflightSha256")
+    require(preflight is None or is_digest(preflight), "Invalid Desktop preflight digest")
     return row
 
 
@@ -83,12 +92,25 @@ def verify_review(value: object, evidence: Evidence, revision: str) -> None:
     evidence.verify(review["artifactSha256"])
 
 
+def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
+    if identity["connectionMode"] == "Standalone":
+        require(row.get("desktopPreflightSha256") is None, "Desktop preflight is unavailable for this tuple")
+        return
+    require(identity["hostPlatform"].lower() in DESKTOP_HOSTS and identity["renderer"].lower() == DESKTOP_RENDERER,
+            "Unsupported PCVR host or renderer for the packaged OpenXR route")
+    digest = row.get("desktopPreflightSha256", identity["packageReceiptSha256"])
+    require(digest is not None, "Required Desktop preflight was not run")
+    evidence.desktop_preflight(digest, identity)
+
+
 def verify_claim(row: dict, evidence: Evidence) -> str:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
     check_physical_gate(record, row["declaration"], set(row["requiredOptionalChecks"]))
-    evidence.verify(record["tuple"]["buildSha256"])
-    evidence.verify(record["tuple"]["packageReceiptSha256"])
+    identity = record["tuple"]
+    evidence.verify(identity["buildSha256"])
+    evidence.verify(identity["packageReceiptSha256"])
+    verify_desktop_route(row, evidence, identity)
     for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None}:
         evidence.verify(digest)
     return record["status"]

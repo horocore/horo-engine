@@ -31,6 +31,25 @@ tracking stops, verify neutral input before recovering or replacing the session.
 Keep exported evidence redacted and scoped to the permission and consent that
 were active during the run.
 
+## Reproduce OpenXR backend checks
+
+On Linux, configure the build with testing, Editor, Vulkan, and the OpenXR
+backend enabled. Build the native application fixture and terminal launcher.
+
+```sh
+cmake --build build --target HoroRenderVulkanTests horo-engine
+build/tests/HoroRenderVulkanTests "[xr][application]"
+ctest --test-dir build -R '^HoroXRPackageLaunchContract$' --output-on-failure
+```
+
+Use the configured build directory in all three commands. The installed
+application fixture exercises the native dispatch path with a scripted
+runtime. It covers session creation, frame admission, event backlog, loss,
+replacement, and teardown. The terminal test covers package ownership,
+receipt validation, and process retirement. Retain these results as
+deterministic fixture evidence. Record unavailable runtime or headset
+combinations as `NotRun` in the device matrix.
+
 ## Assemble the matrix
 
 Prepare a version 1 JSON matrix with these fields.
@@ -48,6 +67,21 @@ Each claimed row has a complete smoke `declaration` with `tuple` and
 `recordSha256` and blocks the gate. A Conditional or Future planning row
 uses `releaseClaim: false`. Its declaration and record may be null while
 the device owner investigates.
+
+The packaged PCVR route requires Windows or Linux with Vulkan and a
+successful Desktop OpenXR preflight receipt. Use Windows or Linux for
+`hostPlatform` and keep the operating system version in `hostVersion`.
+Keep other PCVR combinations in planning rows until the package supports
+their host and renderer. Store the exact product stdout from
+`horo-engine --probe-xr-package ... --connection desktop-local` and set the
+matrix row's `desktopPreflightSha256` to its SHA-256 when the package receipt
+is a separate file. If the tuple already refers to the preflight receipt as
+its `packageReceiptSha256`, omit the redundant field. Set
+`desktopPreflightSha256` to null to record an unrun preflight. The gate
+reports such claims under their assigned owner. The receipt must match the
+same executable, runtime and HMD, runtime version, host, and renderer as
+the physical evidence. The release claim still requires the underlying
+physical qualification checks for the declared connection mode.
 
 Store the exact tested executable, package receipt, physical smoke record,
 every referenced check observation, and each subsystem review as files in a

@@ -14,6 +14,8 @@ MAX_DESKTOP_PREFLIGHT_BYTES = 512
 DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v1"
 DESKTOP_PREFLIGHT_MAXIMA = (65535, 65535, 4294967295, 4294967295, 4294967295, 4294967295, 16, 128, 15)
 DESKTOP_REQUIRED_ROUTES = 0b0011
+DESKTOP_HOSTS = {"windows", "linux"}
+DESKTOP_RENDERER = "vulkan"
 CATEGORIES = {"Reference", "Compatibility", "Enterprise", "Conditional", "Future"}
 LEVELS = {"StaticContract", "DeterministicFake", "SimulatorReplay",
           "RuntimeCompatibility", "PhysicalDeviceQualification"}
@@ -183,11 +185,11 @@ def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
     return facts
 
 
-def check_desktop_preflight(data: bytes, identity: dict) -> None:
+def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str) -> None:
     """Match a retired Desktop package probe to the physical tuple it can inform."""
     require(0 < len(data) <= MAX_DESKTOP_PREFLIGHT_BYTES, "Desktop preflight exceeds the size limit")
-    require(hashlib.sha256(data).hexdigest() == identity["packageReceiptSha256"],
-            "Desktop preflight does not match the declared package receipt digest")
+    require(hashlib.sha256(data).hexdigest() == receipt_digest,
+            "Desktop preflight does not match the declared receipt digest")
     require(data.endswith(b"\n"), "Invalid Desktop preflight line ending")
     columns = data[:-1].removesuffix(b"\r").decode("ascii").split(" ")
     require(len(columns) == 18, "Invalid Desktop preflight receipt")
@@ -195,8 +197,8 @@ def check_desktop_preflight(data: bytes, identity: dict) -> None:
     require(record == DESKTOP_PREFLIGHT_RECORD and outcome == "preflight", "Expected a successful Desktop preflight")
     require(install.startswith("sha256:") and is_digest(install[7:]), "Invalid Desktop preflight installation digest")
     require(executable == f"sha256:{identity['buildSha256']}", "Desktop preflight uses a different executable")
-    require(host in {"windows", "linux"} and host == identity["hostPlatform"].lower(), "Desktop preflight uses a different host")
-    require(route == "system-default" and renderer == "vulkan" and renderer == identity["renderer"].lower(),
+    require(host in DESKTOP_HOSTS and host == identity["hostPlatform"].lower(), "Desktop preflight uses a different host")
+    require(route == "system-default" and renderer == DESKTOP_RENDERER and renderer == identity["renderer"].lower(),
             "Desktop preflight uses a different runtime route or renderer")
     require(connection == "desktop-local" and identity["connectionMode"] in {"Tethered", "WirelessStreaming"},
             "Desktop preflight requires a PCVR declaration")
@@ -224,7 +226,8 @@ def main() -> int:
             check_physical_gate(record, load_record(options.expect), set(options.require))
         if options.desktop_preflight is not None:
             with options.desktop_preflight.open("rb") as receipt:
-                check_desktop_preflight(receipt.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), record["tuple"])
+                identity = record["tuple"]
+                check_desktop_preflight(receipt.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, identity["packageReceiptSha256"])
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")

@@ -32,6 +32,8 @@ def make_claim(root, mode, category="Reference"):
     identity.update(buildSha256=store(root, f"{mode} executable".encode()),
                     packageReceiptSha256=store(root, f"{mode} package receipt".encode()),
                     connectionMode=mode, admittedExtensions=["XR_EXT_fixture"])
+    if mode != "Standalone":
+        identity.update(hostPlatform="Linux", renderer="Vulkan", runtimeVersion="1.2.3")
     observation = store(root, f"{mode} observation".encode())
     plan = "xr-smoke-v1"
     record = {
@@ -42,11 +44,14 @@ def make_claim(root, mode, category="Reference"):
         "display": {"evidenceSha256": observation, "refreshMilliHertz": [90000],
                     "viewExtents": [{"width": 1024, "height": 800}, {"width": 1032, "height": 808}]},
     }
-    return {
+    row = {
         "id": mode, "category": category, "owner": "xr-platform", "releaseClaim": True,
         "declaration": {"tuple": identity, "testPlan": plan}, "requiredOptionalChecks": ["haptics"],
         "recordSha256": store(root, json.dumps(record).encode()),
     }
+    if mode != "Standalone":
+        row["desktopPreflightSha256"] = store(root, desktop_receipt(row))
+    return row
 
 
 @pytest.fixture
@@ -76,7 +81,7 @@ def run_matrix(release):
 def test_reference_pair_and_optional_planning_owner(release):
     matrix, evidence = release
     planned = make_claim(evidence, "WirelessStreaming", "Compatibility")
-    planned.update(category="Future", releaseClaim=False, declaration=None, recordSha256=None)
+    planned.update(category="Future", releaseClaim=False, declaration=None, recordSha256=None, desktopPreflightSha256=None)
     matrix["tuples"].append(planned)
     result = run_matrix(release)
     assert result.returncode == 0, result.stderr
@@ -122,3 +127,87 @@ def test_hashed_simulator_smoke_record_never_fulfills_physical_claim(release):
     result = run_matrix(release)
     assert result.returncode == 1
     assert "Standalone (xr-platform): Physical headset evidence is required" in result.stderr
+
+
+def update_claim_identity(row, evidence, **changes):
+    identity = row["declaration"]["tuple"]
+    identity.update(changes)
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    record["tuple"] = identity
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+
+def desktop_receipt(row, *, host=None):
+    identity = row["declaration"]["tuple"]
+    system = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
+    target = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + system).hexdigest()
+    host = host or identity["hostPlatform"].lower()
+    return (f"horo-xr-desktop-qualification-v1 sha256:{'1' * 64} sha256:{identity['buildSha256']} "
+            f"{host} system-default vulkan sha256:{target} desktop-local preflight 1 2 3 1 3 0 2 2 3\n").encode()
+
+
+@pytest.mark.parametrize(("host", "mode"), [("Windows", "Tethered"), ("Linux", "WirelessStreaming")])
+def test_desktop_claim_requires_and_consumes_packaged_preflight(release, host, mode):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    update_claim_identity(row, evidence, hostPlatform=host, renderer="Vulkan", runtimeVersion="1.2.3", connectionMode=mode)
+    row["desktopPreflightSha256"] = None
+    missing = run_matrix(release)
+    assert missing.returncode == 1
+    assert "Tethered (xr-platform): Required Desktop preflight was not run" in missing.stderr
+
+    row["desktopPreflightSha256"] = store(evidence, desktop_receipt(row))
+    passed = run_matrix(release)
+    assert passed.returncode == 0, passed.stderr
+
+
+def test_legacy_desktop_claim_uses_the_package_receipt_when_it_is_the_preflight(release):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    del row["desktopPreflightSha256"]
+    failed = run_matrix(release)
+    assert failed.returncode == 1
+    assert "Invalid Desktop preflight" in failed.stderr
+
+    receipt = store(evidence, desktop_receipt(row))
+    update_claim_identity(row, evidence, packageReceiptSha256=receipt)
+    passed = run_matrix(release)
+    assert passed.returncode == 0, passed.stderr
+
+
+def test_every_claim_requires_its_own_runtime_evidence(release):
+    matrix, evidence = release
+    windows = matrix["tuples"][1]
+    linux = make_claim(evidence, "WirelessStreaming", "Compatibility")
+    matrix["tuples"].append(linux)
+    for row, host in ((windows, "Windows"), (linux, "Linux")):
+        update_claim_identity(row, evidence, hostPlatform=host, renderer="Vulkan", runtimeVersion="1.2.3")
+    windows["desktopPreflightSha256"] = store(evidence, desktop_receipt(windows))
+    linux["desktopPreflightSha256"] = store(evidence, desktop_receipt(linux, host="windows"))
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Tethered (xr-platform): Passed" in result.stdout
+    assert "WirelessStreaming (xr-platform): Desktop preflight uses a different host" in result.stderr
+
+
+def test_digest_matching_desktop_receipt_cannot_cover_a_standalone_claim(release):
+    matrix, evidence = release
+    desktop = matrix["tuples"][1]
+    update_claim_identity(desktop, evidence, hostPlatform="Windows", renderer="Vulkan", runtimeVersion="1.2.3")
+    receipt = store(evidence, desktop_receipt(desktop))
+    desktop["desktopPreflightSha256"] = receipt
+    matrix["tuples"][0]["desktopPreflightSha256"] = receipt
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Desktop preflight is unavailable for this tuple" in result.stderr
+
+
+@pytest.mark.parametrize(("host", "renderer"), [("macOS", "Vulkan"), ("Windows", "D3D12"), ("Windows 11", "Vulkan")])
+def test_unsupported_pcvr_route_cannot_pass_without_desktop_evidence(release, host, renderer):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    update_claim_identity(row, evidence, hostPlatform=host, renderer=renderer)
+    del row["desktopPreflightSha256"]
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Tethered (xr-platform): Unsupported PCVR host or renderer" in result.stderr

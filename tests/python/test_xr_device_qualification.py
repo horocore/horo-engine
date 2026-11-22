@@ -148,14 +148,14 @@ def test_desktop_preflight_cli_checks_exact_receipt_and_physical_gate(tmp_path, 
     ("hostPlatform", "Windows", "different host"),
     ("renderer", "Metal", "different runtime route or renderer"),
     ("connectionMode", "Standalone", "PCVR declaration"),
-    ("packageReceiptSha256", "b" * 64, "declared package receipt digest"),
+    ("packageReceiptSha256", "b" * 64, "declared receipt digest"),
 ])
 def test_desktop_preflight_rejects_foreign_tuple(desktop_identity, field, different, message):
     receipt = desktop_preflight_receipt(desktop_identity)
     desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt).hexdigest()
     desktop_identity[field] = different
     with pytest.raises(ValueError, match=message):
-        xr.check_desktop_preflight(receipt, desktop_identity)
+        xr.check_desktop_preflight(receipt, desktop_identity, desktop_identity["packageReceiptSha256"])
 
 
 @pytest.mark.parametrize(("index", "value", "message"), [
@@ -172,4 +172,4 @@ def test_desktop_preflight_rejects_incompatible_receipt(desktop_identity, index,
     receipt = b" ".join(fields) + b"\r\n"
     desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt).hexdigest()
     with pytest.raises(ValueError, match=message):
-        xr.check_desktop_preflight(receipt, desktop_identity)
+        xr.check_desktop_preflight(receipt, desktop_identity, desktop_identity["packageReceiptSha256"])
