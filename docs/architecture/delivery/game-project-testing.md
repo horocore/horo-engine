@@ -254,6 +254,13 @@ cancellation, and terminal status through the shared native operation and
 Build Output stores. An unavailable inventory or an empty CTest suite produces
 a failed operation.
 
+A build-correlated validation request carries the approved build request and
+its successful input hash. Under the same build lock, the test service checks
+the published hash and recomputes the current native input hash before and
+after CTest. A changed or replaced input identity reports
+`gameplay.test/build_inputs_stale`; it cannot publish a successful result for
+the approved build.
+
 ## Data Flow
 
 ```mermaid

@@ -81,6 +81,41 @@ namespace {
         std::atomic_bool entered{};
     };
 
+    /** @brief Runs one configured test while optionally simulating a concurrent source change. */
+    class ValidationTestRunner final : public IExternalProcessRunner {
+    public:
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &request, const CancellationToken &stop) override {
+            ++calls;
+            if (!change.empty())
+                std::ofstream{change, std::ios::binary} << "// changed during tests\n";
+            return native_.Run(request, stop);
+        }
+
+        std::filesystem::path change;
+        std::atomic_uint calls{};
+
+    private:
+        NativeExternalProcessRunner native_;
+    };
+
+    /** @brief Uses the build service's real input fingerprint and supplies the isolated test's successful publication fixture. */
+    GameplayTestBuildInput PublishedBuild(Fixture &fixture) {
+        BlockingTestRunner process;
+        GameplayBuildService builds{process, fixture.jobs, fixture.files};
+        GameplayBuildRequest request{.projectRoot = fixture.directory.Path()};
+        const auto started = builds.StartIsolated(request, {});
+        REQUIRE(started.HasValue());
+        const auto snapshot = builds.Query(started.Value());
+        REQUIRE(snapshot);
+        REQUIRE_FALSE(snapshot->activeInputHash.empty());
+        builds.Shutdown();
+        std::ofstream state{fixture.directory.Path() / ".horo/local/gameplay_build_state.json", std::ios::binary};
+        state << R"({"schemaVersion":1,"successfulInputHash":")" << snapshot->activeInputHash << R"("})";
+        state.close();
+        REQUIRE(state.good());
+        return {std::move(request), snapshot->activeInputHash};
+    }
+
     TEST_CASE("Gameplay tests execute the configured inventory and correlate output with native status", "[gameplay][test-service]") {
         NativeExternalProcessRunner processes;
         Fixture fixture{processes};
@@ -127,5 +162,46 @@ namespace {
         CHECK(fixture.Await(id).state == OperationState::Cancelled);
         fixture.CheckOutput(id, BuildOutputResult::Cancelled, OperationState::Cancelled);
         CHECK_FALSE(fixture.tests.RequestCancel(id));
+    }
+
+    TEST_CASE("Approved gameplay tests reject stale native build evidence before and during execution", "[gameplay][test-service]") {
+        ValidationTestRunner process;
+        Fixture fixture{process};
+        const auto sources = fixture.directory.Path() / "source";
+        std::filesystem::create_directory(sources);
+        const auto source = sources / "game.cpp";
+        std::ofstream{source, std::ios::binary} << "int revision = 1;\n";
+        const auto cmake = std::filesystem::path{HORO_GAMEPLAY_TEST_CMAKE}.generic_string();
+        fixture.WriteInventory("add_test(sample \"" + cmake + "\" -E echo validated-build)\n");
+        auto approved = PublishedBuild(fixture);
+        bool staleBefore = false;
+        bool staleDuring = false;
+        SECTION("Current publication") {
+            // The matching input remains current across the child run.
+        }
+        SECTION("Sources change before CTest starts") {
+            staleBefore = true;
+            std::ofstream{source, std::ios::binary} << "int revision = 2;\n";
+        }
+        SECTION("Sources change while CTest runs") {
+            staleDuring = true;
+            process.change = source;
+        }
+        SECTION("A different build publication replaced the approved receipt") {
+            staleBefore = true;
+            approved.successfulInputHash.assign(64, '0');
+        }
+
+        const auto operation = fixture.tests.StartForBuild(std::move(approved), fixture.environment);
+        REQUIRE(operation.HasValue());
+        const auto terminal = fixture.Await(operation.Value());
+        CHECK(process.calls == (staleBefore ? 0U : 1U));
+        if (staleBefore || staleDuring) {
+            REQUIRE(terminal.state == OperationState::Failed);
+            REQUIRE(terminal.error);
+            CHECK(terminal.error->code.Value() == "build_inputs_stale");
+        } else {
+            CHECK(terminal.state == OperationState::Succeeded);
+        }
     }
 }  // namespace

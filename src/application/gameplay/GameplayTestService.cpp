@@ -1,5 +1,6 @@
 #include "Horo/Application/GameplayTestService.h"
 
+#include "GameplayBuildInputs.h"
 #include "GameplayBuildInvocation.h"
 #include "Horo/Foundation/Platform.h"
 
@@ -23,6 +24,8 @@ namespace Horo::Application {
                                            "Gameplay tests timed out."};
         const ErrorCodeDescriptor Failed{ErrorDomainId{"gameplay.test"}, ErrorCode{"failed"}, ErrorSeverity::Error,
                                          "Gameplay tests failed."};
+        const ErrorCodeDescriptor StaleBuild{ErrorDomainId{"gameplay.test"}, ErrorCode{"build_inputs_stale"}, ErrorSeverity::Warning,
+                                             "Gameplay build inputs changed. Build the current sources before validating them."};
 
         /** @brief Hosts choose a single CMake configuration token without argument syntax. */
         bool ValidConfiguration(const std::string_view value) {
@@ -70,9 +73,17 @@ namespace Horo::Application {
                                                                                              : Result<void>::Failure(MakeError(Failed));
         }
 
+        /** @brief Checks the saved build receipt and current inputs under the existing build lock. */
+        bool MatchesBuild(const GameplayTestBuildInput &build) {
+            if (Detail::ReadSuccessfulHash(build.request.projectRoot) != build.successfulInputHash)
+                return false;
+            const auto current = Detail::ComputeInputHash(build.request);
+            return current.HasValue() && current.Value() == build.successfulInputHash;
+        }
+
         /** @brief Holds the existing build lock while resolving and executing CTest. */
         Result<void> RunTests(IExternalProcessRunner &processes, DurableFileSystem &files, ExternalProcessRequest request,
-                              const CancellationToken &stop) {
+                              const std::optional<GameplayTestBuildInput> &expectedBuild, const CancellationToken &stop) {
             if (stop.IsCancellationRequested())
                 return JobCancelled(MakeError(Cancelled));
             const auto lockPath = Detail::GameplayBuildLockPath(request.workingDirectory);
@@ -81,6 +92,8 @@ namespace Horo::Application {
             const auto lock = files.TryAcquireExclusive(lockPath, "gameplay tests");
             if (lock.HasError())
                 return Result<void>::Failure(lock.ErrorValue());
+            if (expectedBuild && !MatchesBuild(*expectedBuild))
+                return Result<void>::Failure(MakeError(StaleBuild));
             const auto build = GameplayLocalBuildDirectory(request.workingDirectory);
             const auto inventory = build / "CTestTestfile.cmake";
             std::error_code error;
@@ -88,7 +101,12 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(Unavailable));
             request.workingDirectory = build;
             auto result = processes.Run(request, stop);
-            return result.HasValue() ? TestOutcome(result.Value()) : Result<void>::Failure(std::move(result).ErrorValue());
+            if (result.HasError())
+                return Result<void>::Failure(std::move(result).ErrorValue());
+            auto outcome = TestOutcome(result.Value());
+            if (!stop.IsCancellationRequested() && expectedBuild && !MatchesBuild(*expectedBuild))
+                return Result<void>::Failure(MakeError(StaleBuild));
+            return outcome;
         }
 
         /** @brief Preserves timeout as a distinct terminal Build Output result. */
@@ -115,6 +133,21 @@ namespace Horo::Application {
     /** @copydoc GameplayTestService::Start */
     Result<OperationId> GameplayTestService::Start(const std::filesystem::path &projectRoot, const GameplayTestEnvironment &environment,
                                                    const std::function<bool()> &stop) {
+        return StartImpl(projectRoot, environment, stop, std::nullopt);
+    }
+
+    /** @copydoc GameplayTestService::StartForBuild */
+    Result<OperationId> GameplayTestService::StartForBuild(GameplayTestBuildInput build, const GameplayTestEnvironment &environment,
+                                                           const std::function<bool()> &stop) {
+        if (build.request.environment.configuration != environment.configuration || build.successfulInputHash.empty())
+            return Result<OperationId>::Failure(MakeError(StaleBuild));
+        const auto root = build.request.projectRoot;
+        return StartImpl(root, environment, stop, std::move(build));
+    }
+
+    /** @copydoc GameplayTestService::StartImpl */
+    Result<OperationId> GameplayTestService::StartImpl(const std::filesystem::path &projectRoot, const GameplayTestEnvironment &environment,
+                                                       const std::function<bool()> &stop, std::optional<GameplayTestBuildInput> build) {
         using Output = Result<OperationId>;
         if (closed_ || owner_ != std::this_thread::get_id())
             return Output::Failure(MakeError(Unavailable));
@@ -126,11 +159,13 @@ namespace Horo::Application {
             return Output::Failure(std::move(request).ErrorValue());
         if (stop && stop())
             return Output::Failure(MakeError(Cancelled));
-        return Submit(std::move(request).Value());
+        if (build)
+            build->request.projectRoot = request.Value().workingDirectory;
+        return Submit(std::move(request).Value(), std::move(build));
     }
 
     /** @copydoc GameplayTestService::Submit */
-    Result<OperationId> GameplayTestService::Submit(ExternalProcessRequest request) {
+    Result<OperationId> GameplayTestService::Submit(ExternalProcessRequest request, std::optional<GameplayTestBuildInput> build) {
         using Output = Result<OperationId>;
         const auto output = output_.BeginSession();
         if (!output)
@@ -161,9 +196,9 @@ namespace Horo::Application {
         };
         auto submitted =
             jobs_.SubmitResult({.parentCancellation = attempt->cancellation.Token(), .operationId = *id, .resource = JobResource::Io},
-                               [processes = &processes_, files = &files_,
+                               [processes = &processes_, files = &files_, build = std::move(build),
                                 run = std::move(request)](const CancellationToken &cancellation) mutable {
-            return RunTests(*processes, *files, std::move(run), cancellation);
+            return RunTests(*processes, *files, std::move(run), build, cancellation);
         });
         if (submitted.HasError()) {
             auto error = std::move(submitted).ErrorValue();
