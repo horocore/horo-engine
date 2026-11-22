@@ -25,9 +25,9 @@ namespace Horo::Editor {
         OpenGLViewportImageCapture(const OpenGLViewportImageCapture &) = delete;
         OpenGLViewportImageCapture &operator=(const OpenGLViewportImageCapture &) = delete;
 
-        /** @brief Admits one bounded rectangle and remembers its exact texture generation. */
+        /** @brief Admits one authorized rectangle and remembers its exact texture generation. */
         [[nodiscard]] Result<std::uint64_t> Request(EditorViewportImageRegion region, Render::RenderTargetHandle target,
-                                                    std::uint32_t width, std::uint32_t height, std::function<bool()> authorized = {});
+                                                    std::uint32_t width, std::uint32_t height, std::function<bool()> authorized);
         /** @brief Copies ready artifact ownership without touching native state. */
         [[nodiscard]] std::optional<EditorViewportImageSnapshot> Read(std::uint64_t id);
         /** @brief Withdraws a pending or ready capture without reusing native staging prematurely. */

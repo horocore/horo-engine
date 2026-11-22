@@ -287,7 +287,15 @@ TEST_CASE("Graph viewport observes a copy without a timeline only after frame ac
     SettleResources(resources, *frontend, {}, {64, 32});
     const EditorGraphViewportImageCapture::Source source{resources.Target(), resources.PresentationTexture(), {64, 32}};
     EditorGraphViewportImageCapture capture;
-    const auto requested = capture.Request(source, {4, 3, 2, 1}, {});
+    constexpr EditorViewportImageRegion region{4, 3, 2, 1};
+    CHECK(capture.Request(source, region, {}).HasError());
+    CHECK(capture
+              .Request(source, region, [] {
+        return false;
+    }).HasError());
+    const auto requested = capture.Request(source, region, [] {
+        return true;
+    });
     REQUIRE(requested.HasValue());
     unsigned polls{};
     const EditorGraphViewportImageCapture::Readback reader{&polls, [](void *context, std::uint64_t instance, RenderTimelinePoint signal,

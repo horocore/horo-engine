@@ -39,7 +39,7 @@ namespace Horo::Editor {
         ~EditorViewportRendererVulkan() override;
         /** @copydoc IEditorViewportRenderer::RequestImageCapture */
         [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
-                                                                std::function<bool()> authorized = {}) override;
+                                                                std::function<bool()> authorized) override;
         /** @copydoc IEditorViewportRenderer::ReadImageCapture */
         [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
         /** @copydoc IEditorViewportRenderer::CancelImageCapture */

@@ -961,12 +961,18 @@ namespace Horo::Tests::VulkanEditor {
         Host host;
         host.CreateViewport();
         constexpr EditorViewportImageRegion region{7, 5, 2, 2};
-        CHECK(host.viewport->RequestImageCapture({0, 0, 257, 1}).HasError());
+        CHECK(host.viewport
+                  ->RequestImageCapture({0, 0, 257, 1}, [] {
+            return true;
+        }).HasError());
         const auto requested = host.viewport->RequestImageCapture(region, [&] {
             return authorized;
         });
         Check(requested, "request an exact viewport rectangle");
-        CHECK(host.viewport->RequestImageCapture(region).HasError());
+        CHECK(host.viewport
+                  ->RequestImageCapture(region, [] {
+            return true;
+        }).HasError());
         CHECK_FALSE(host.viewport->ReadImageCapture(requested.Value() + 1));
         CHECK_FALSE(host.viewport->CancelImageCapture(requested.Value() + 1));
         REQUIRE(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Pending);

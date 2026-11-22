@@ -22,7 +22,8 @@ namespace Horo::Editor {
         using Output = Result<std::uint64_t>;
         const auto now = Clock::now();
         Expire(now);
-        if (!source.target.IsValid() || !source.image.IsValid() || !region.Fits(source.extent.width, source.extent.height))
+        if (!source.target.IsValid() || !source.image.IsValid() || !region.Fits(source.extent.width, source.extent.height) || !authorized ||
+            !authorized())
             return Output::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
         if (phase_ == EditorViewportImagePhase::Pending || staging_.IsValid() || (started_ && now - *started_ < StartSpacing) ||
             serial_ == std::numeric_limits<std::uint64_t>::max())

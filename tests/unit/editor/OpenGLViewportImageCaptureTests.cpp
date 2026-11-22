@@ -152,8 +152,18 @@ namespace {
         gl.fake.pixels[0] = std::byte{1};
         gl.fake.pixels[8] = std::byte{2};
         OpenGLViewportImageCapture capture;
-        CHECK(capture.Request({9, 0, 2, 1}, Target, 10, 10).HasError());
-        const auto id = capture.Request({2, 3, 2, 2}, Target, 10, 10);
+        const auto approved = [] {
+            return true;
+        };
+        constexpr EditorViewportImageRegion region{2, 3, 2, 2};
+        CHECK(capture.Request({9, 0, 2, 1}, Target, 10, 10, approved).HasError());
+        CHECK(capture.Request(region, Target, 10, 10, {}).HasError());
+        CHECK(capture
+                  .Request(region, Target, 10, 10, [] {
+            return false;
+        }).HasError());
+        CHECK_FALSE(capture.NeedsFramebuffer());
+        const auto id = capture.Request(region, Target, 10, 10, approved);
         REQUIRE(id.HasValue());
         capture.Advance(Target, 10, 10, false, 20);
         CHECK(gl.fake.copies == 1);
@@ -210,7 +220,9 @@ namespace {
     TEST_CASE("OpenGL viewport cancels or resizes an already prepared image", "[editor][opengl][image-capture]") {
         ScopedCaptureDispatch gl;
         OpenGLViewportImageCapture capture;
-        const auto id = capture.Request({0, 0, 2, 2}, Target, 10, 10);
+        const auto id = capture.Request({0, 0, 2, 2}, Target, 10, 10, [] {
+            return true;
+        });
         REQUIRE(id.HasValue());
         capture.Advance(Target, 10, 10, false, 20);
         gl.fake.waitStatus = GL_CONDITION_SATISFIED;
@@ -239,7 +251,10 @@ namespace {
     TEST_CASE("OpenGL viewport capture suppresses copied pixels after retirement", "[editor][opengl][image-capture]") {
         ScopedCaptureDispatch gl;
         OpenGLViewportImageCapture capture;
-        const auto id = capture.Request({0, 0, 2, 2}, Target, 10, 10).Value();
+        const auto id = capture
+                            .Request({0, 0, 2, 2}, Target, 10, 10, [] {
+            return true;
+        }).Value();
         capture.Advance(Target, 10, 10, false, 20);
         SECTION("resize") {
             capture.Advance(Target, 11, 10, false, std::nullopt);

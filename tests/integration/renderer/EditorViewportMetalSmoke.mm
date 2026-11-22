@@ -272,7 +272,9 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
     constexpr EditorViewportImageRegion region{63, 63, 3, 2};
-    const auto requested = viewport.RequestImageCapture(region);
+    const auto requested = viewport.RequestImageCapture(region, [] {
+        return true;
+    });
     REQUIRE(requested.HasValue());
     REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
     Check(frontend->Resize(FramebufferExtent{256, 256}).HasValue());

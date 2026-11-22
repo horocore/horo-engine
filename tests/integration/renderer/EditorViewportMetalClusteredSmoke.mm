@@ -311,7 +311,9 @@ TEST_CASE("Configured cooked Metal viewport consumes real clustered storage thro
         fixture.Render(scene.View(), frame);
     CHECK(fixture.viewport->LightingDiagnostics().completedLightRevision == scene.View().lightSnapshotRevision);
     constexpr EditorViewportImageRegion region{64, 64, 1, 1};
-    const auto requested = fixture.viewport->RequestImageCapture(region);
+    const auto requested = fixture.viewport->RequestImageCapture(region, [] {
+        return true;
+    });
     RequireResultInfo(requested);
     fixture.Prepare(scene.View());
     fixture.Render(scene.View(), 9);

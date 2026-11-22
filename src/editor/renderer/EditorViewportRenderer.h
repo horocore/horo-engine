@@ -60,8 +60,8 @@ namespace Horo::Editor {
     public:
         virtual ~IEditorViewportRenderer() = default;
 
-        /** @brief Requests a bounded copy from the exact currently allocated offscreen viewport. */
-        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion, std::function<bool()> = {}) {
+        /** @brief Requests a bounded copy from the exact offscreen viewport while the supplied authority remains current. */
+        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion, std::function<bool()>) {
             return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
         }
 
