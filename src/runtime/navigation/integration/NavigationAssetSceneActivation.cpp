@@ -260,8 +260,6 @@ namespace Horo::Navigation {
                                                                                     std::span<const NavigationStreamedSurface> selections) {
             using Surfaces = Result<std::vector<NavigationLoadedSurface>>;
             const auto &limits = state.limits.assets;
-            if (selections.empty())
-                return Surfaces::Failure(MakeError(NavigationErrors::NoNavigationData));
             if (selections.size() > limits.maximumPartitions)
                 return Surfaces::Failure(MakeError(NavigationErrors::CapacityExceeded));
             std::vector<NavigationLoadedSurface> surfaces;
@@ -463,7 +461,7 @@ namespace Horo::Navigation {
                                                                                   NavigationGeneration next,
                                                                                   std::span<const NavigationStreamedSurface> selections) {
         const auto world = ActiveWorld();
-        if (!world || !state_->provenance || !state_->factory)
+        if (!world || !state_->provenance)
             return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
         const auto current = world->ActiveDescriptor();
         if (current.HasError() || current.Value() != expected || next <= expected.topology)
@@ -471,6 +469,10 @@ namespace Horo::Navigation {
         if (world->HasStagedCandidate())
             return Result<void>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         static_cast<void>(world->CollectRetired());
+        if (selections.empty())
+            return world->StageEmptyTopology(expected, next);
+        if (!state_->factory)
+            return Result<void>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         try {
             const auto surfaces = StreamedSurfaces(*state_, selections);
             if (surfaces.HasError())

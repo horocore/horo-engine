@@ -141,10 +141,22 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<void> StageTopology(const NavigationWorldActivationDescriptor &expectedActive,
                                                  NavigationGeneration nextTopology, std::unique_ptr<INavigationQueryBackend> backend);
 
+        /** @brief Stages explicit loss of tile coverage while retaining the logical world identity.
+         * @param expectedActive Exact currently published descriptor. @param nextTopology New unique generation.
+         * @return Success or typed refusal. After commit, Acquire reports NoNavigationData until coverage returns.
+         */
+        [[nodiscard]] Result<void> StageEmptyTopology(const NavigationWorldActivationDescriptor &expectedActive,
+                                                      NavigationGeneration nextTopology);
+
         /** @brief Discards only the named unpublished same-world replacement during aggregate rollback.
          * @param candidate Exact candidate identity. @return Success or a typed stale failure.
          */
         [[nodiscard]] Result<void> DiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate);
+
+        /** @brief Publishes only the named candidate during a streamed cell's lifecycle commit.
+         * @param candidate Exact staged topology identity. @return Success or typed refusal, preserving the active topology.
+         */
+        [[nodiscard]] Result<void> CommitStagedTopology(const NavigationWorldActivationDescriptor &candidate);
 
         /**
          * @brief Publish the staged candidate at CommitDeferredLifecycleChanges.
@@ -185,6 +197,13 @@ namespace Horo::Navigation {
         /** @brief Construct storage after bounded retirement allocation succeeds. */
         NavigationWorldLifecycle(std::uint32_t maximumRetiredWorlds,
                                  std::vector<std::shared_ptr<Detail::NavigationWorldRecord>> retired) noexcept;
+        /** @brief Stages a validated provider or explicitly empty topology on the owner lane. */
+        [[nodiscard]] Result<void> StageCandidate(const NavigationWorldActivationDescriptor &descriptor,
+                                                  std::unique_ptr<INavigationQueryBackend> backend, bool emptyAllowed);
+        /** @brief Checks the exact predecessor shared by both streamed staging variants. */
+        [[nodiscard]] bool IsCurrentTopology(const NavigationWorldActivationDescriptor &expected) const noexcept;
+        /** @brief Checks that the named candidate replaces topology within the live world. */
+        [[nodiscard]] bool IsStagedTopology(const NavigationWorldActivationDescriptor &candidate) const noexcept;
         /** @brief Check whether replacing the active record preserves the configured retirement bound. */
         [[nodiscard]] bool CanRetireActive() const noexcept;
         /** @brief Permanently close admission and request cooperative cancellation for one record. */

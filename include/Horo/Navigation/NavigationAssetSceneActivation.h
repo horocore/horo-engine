@@ -113,7 +113,7 @@ namespace Horo::Navigation {
          * @param surfaces Verified authored asset selections, borrowed only during preparation.
          * @return Success or a typed failure. The active world is preserved until its owner commits the candidate.
          * @details The backend retains selected tile bytes and its reservation through worker retirement. An empty
-         * desired set is handled by the owner's explicit world unload.
+         * desired set publishes NoNavigationData under a new topology generation of the same world.
          */
         [[nodiscard]] Result<void> StageStreamedTopology(const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
                                                          std::span<const NavigationStreamedSurface> surfaces);

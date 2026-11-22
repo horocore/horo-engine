@@ -546,6 +546,14 @@ generation is invisible to new queries until publication. Removed tile bytes and
 native provider reservations remain charged until the last older reader releases
 them.
 
+Evicting the final tile publishes an explicit empty topology in the same
+logical Navigation world. Fresh reads receive `NoNavigationData`. Older leases
+are revoked and retain their allocation charge until they drain. A subsequent
+cell may publish another generation without reusing the removed topology or
+reconstructing the Scene's world identity. Streamed commit names the exact
+staged topology, so a stale cell receipt cannot publish a different generation
+prepared for the same Scene.
+
 The shared world budget accounts for cell-backed navigation resources and their retired but
 still-pinned storage until actually freed. Navigation caches/scratch use explicit host-assigned
 sub-budgets and do not independently charge the same allocation again. `wst.*` residency and

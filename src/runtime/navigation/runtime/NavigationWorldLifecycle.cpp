@@ -133,10 +133,16 @@ namespace Horo::Navigation {
     /** @copydoc NavigationWorldLifecycle::Stage */
     Result<void> NavigationWorldLifecycle::Stage(const NavigationWorldActivationDescriptor &descriptor,
                                                  std::unique_ptr<INavigationQueryBackend> backend) {
+        return StageCandidate(descriptor, std::move(backend), false);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::StageCandidate */
+    Result<void> NavigationWorldLifecycle::StageCandidate(const NavigationWorldActivationDescriptor &descriptor,
+                                                          std::unique_ptr<INavigationQueryBackend> backend, bool emptyAllowed) {
         using enum NavigationWorldLifecycleState;
         if (state_ == ShuttingDown || state_ == Closed || staged_)
             return Failure<void>(NavigationErrors::CapabilityUnavailable);
-        if (!descriptor.IsValid() || !backend || !ValidateNavigationProviderCapabilities(backend->Capabilities()))
+        if (!descriptor.IsValid() || (backend ? !ValidateNavigationProviderCapabilities(backend->Capabilities()) : !emptyAllowed))
             return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
         const bool replacesTopology = active_ && active_->descriptor.world == descriptor.world;
         if (replacesTopology) {
@@ -161,20 +167,47 @@ namespace Horo::Navigation {
     Result<void> NavigationWorldLifecycle::StageTopology(const NavigationWorldActivationDescriptor &expectedActive,
                                                          NavigationGeneration nextTopology,
                                                          std::unique_ptr<INavigationQueryBackend> backend) {
-        if (!active_ || active_->descriptor != expectedActive || active_->revocation.load() != NavigationWorldRevocation::None)
+        if (!IsCurrentTopology(expectedActive))
             return Failure<void>(NavigationErrors::StaleSnapshot);
         auto candidate = expectedActive;
         candidate.topology = nextTopology;
         return Stage(candidate, std::move(backend));
     }
 
+    /** @copydoc NavigationWorldLifecycle::StageEmptyTopology */
+    Result<void> NavigationWorldLifecycle::StageEmptyTopology(const NavigationWorldActivationDescriptor &expectedActive,
+                                                              NavigationGeneration nextTopology) {
+        if (!IsCurrentTopology(expectedActive))
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        auto candidate = expectedActive;
+        candidate.topology = nextTopology;
+        return StageCandidate(candidate, {}, true);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::IsCurrentTopology */
+    bool NavigationWorldLifecycle::IsCurrentTopology(const NavigationWorldActivationDescriptor &expected) const noexcept {
+        return active_ && active_->descriptor == expected && active_->revocation.load() == NavigationWorldRevocation::None;
+    }
+
+    /** @copydoc NavigationWorldLifecycle::IsStagedTopology */
+    bool NavigationWorldLifecycle::IsStagedTopology(const NavigationWorldActivationDescriptor &candidate) const noexcept {
+        return active_ && staged_ && staged_->descriptor == candidate && candidate.world == active_->descriptor.world;
+    }
+
     /** @copydoc NavigationWorldLifecycle::DiscardStagedTopology */
     Result<void> NavigationWorldLifecycle::DiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
-        if (!active_ || !staged_ || staged_->descriptor != candidate || candidate.world != active_->descriptor.world)
+        if (!IsStagedTopology(candidate))
             return Failure<void>(NavigationErrors::StaleSnapshot);
         Revoke(staged_, NavigationWorldRevocation::WorldRetired);
         staged_.reset();
         return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::CommitStagedTopology */
+    Result<void> NavigationWorldLifecycle::CommitStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
+        if (!IsStagedTopology(candidate))
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        return CommitAtSafePoint(candidate.scene, candidate.sceneGeneration);
     }
 
     /** @copydoc NavigationWorldLifecycle::CommitAtSafePoint */
@@ -276,6 +309,8 @@ namespace Horo::Navigation {
             return Failure<NavigationWorldReadLease>(NavigationErrors::InvalidWorld);
         if (state_ != NavigationWorldLifecycleState::Active || active_->revocation.load() != NavigationWorldRevocation::None)
             return Failure<NavigationWorldReadLease>(NavigationErrors::CapabilityUnavailable);
+        if (!active_->backend)
+            return Failure<NavigationWorldReadLease>(NavigationErrors::NoNavigationData);
         return Result<NavigationWorldReadLease>::Success(NavigationWorldReadLease{active_});
     }
 

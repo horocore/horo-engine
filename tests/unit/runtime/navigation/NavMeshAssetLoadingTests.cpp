@@ -507,6 +507,49 @@ namespace Horo::Navigation {
         CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
     }
 
+    TEST_CASE("Evicting the last NavMesh tile publishes an empty topology and allows later reactivation",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        Harness host{{.maximumLiveWorlds = 1, .maximumReservedProviderBytes = ProviderReservation}};
+        REQUIRE_FALSE(host.Activate(Definition()));
+        auto old = host.participant->Acquire().Value();
+        const auto original = old.Descriptor();
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        const auto empty = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(host.participant->StageStreamedTopology(original, empty, {}).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor() == original);
+        auto removal = original;
+        removal.topology = empty;
+        TestSupport::RequireError(world->CommitStagedTopology(original), NavigationErrors::StaleSnapshot);
+        REQUIRE(world->CommitStagedTopology(removal).HasValue());
+        const auto uncovered = world->ActiveDescriptor().Value();
+        CHECK(uncovered.world == original.world);
+        CHECK(uncovered.topology == empty);
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+        CHECK(old.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
+
+        const auto revision = host.registry.Snapshot().Revision();
+        const auto prefetched = LoadNavMeshAsset({Asset(), Type()}, revision, Cooked(), Target(), *host.cache);
+        REQUIRE(prefetched.HasValue());
+        const std::array selection{NavigationStreamedSurface{prefetched.Value(), 0, 1}};
+        const auto next = NavigationGeneration::Create(empty.Value() + 1).Value();
+        TestSupport::RequireError(host.participant->StageStreamedTopology(original, next, selection), NavigationErrors::StaleSnapshot);
+        TestSupport::RequireError(host.participant->StageStreamedTopology(uncovered, next, selection), NavigationErrors::CapacityExceeded);
+        old = {};
+        REQUIRE(host.participant->StageStreamedTopology(uncovered, next, selection).HasValue());
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+        auto reactivation = uncovered;
+        reactivation.topology = next;
+        TestSupport::RequireError(world->CommitStagedTopology(removal), NavigationErrors::StaleSnapshot);
+        REQUIRE(world->CommitStagedTopology(reactivation).HasValue());
+        const auto restored = host.participant->Acquire();
+        REQUIRE(restored.HasValue());
+        CHECK(restored.Value().Descriptor().world == original.world);
+        CHECK(restored.Value().Descriptor().topology == next);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
+    }
+
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
               "[unit][navigation][navmesh_asset][canonical][budget]") {
         auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
