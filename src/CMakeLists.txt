@@ -4807,7 +4807,7 @@ target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry H
 
 add_library(HoroMcpEditorCommandsInternal STATIC
     mcp/EditorCommandMcpSession.cpp mcp/EditorMcpWorkspaceHost.cpp mcp/EditorSourceMcpTools.cpp mcp/EditorOperationMcpTools.cpp
-    mcp/EditorInspectionMcpTools.cpp mcp/EditorDebugCaptureMcpTools.cpp)
+    mcp/EditorInspectionMcpTools.cpp mcp/EditorDebugCaptureMcpTools.cpp mcp/EditorViewportMcpTools.cpp)
 target_compile_features(HoroMcpEditorCommandsInternal PUBLIC cxx_std_20)
 set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_command_headers")
 foreach(command IN ITEMS Source Build Test Inspection)

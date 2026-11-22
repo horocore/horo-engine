@@ -110,6 +110,7 @@ namespace {
                                                       Test::Authorization());
         REQUIRE(opened.HasValue());
         auto &session = *opened.Value();
+        CHECK(session.ToolEffect("viewport.propose_light_state").HasError());
         const auto effect = session.ToolEffect("scene.propose_transforms");
         REQUIRE(effect.HasValue());
         CHECK(effect.Value() == McpToolEffect::PresentationSideEffect);
@@ -148,6 +149,86 @@ namespace {
         CHECK_FALSE(lights.front().enabled);
         REQUIRE(session.Close().HasValue());
         CHECK_FALSE(retained());
+    }
+
+    TEST_CASE("Viewport light tools guard their exact brush members and retire with their owner", "[unit][editor][mcp][magic-tool]") {
+        const InspectionSceneRevision revision{6, 19};
+        std::function<bool()> live;
+        std::vector<AgentSceneLightUpdate> updates;
+        auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readTransforms =
+                                                [&](const ObjectInspectionRequest &request) {
+            CHECK(request.expected == revision);
+            TransformInspectionPage page{.scene = revision};
+            for (const auto object : request.objects)
+                page.records.push_back({.local = {.object = object}, .worldPivot = {object == 42 ? 1.0F : 3.0F, 0, 0}});
+            return Result<TransformInspectionPage>::Success(std::move(page));
+        },
+                                            .proposeEdits =
+                                                [&](InspectionSceneRevision scene, std::span<const AgentViewportTransform> transforms,
+                                                    std::span<const AgentSceneObjectRename> renames,
+                                                    std::span<const AgentSceneLightUpdate> lights, std::function<bool()> authorized) {
+            CHECK(scene == revision);
+            CHECK(transforms.empty());
+            CHECK(renames.empty());
+            updates.assign(lights.begin(), lights.end());
+            live = std::move(authorized);
+            return Result<std::uint64_t>::Success(71);
+        }});
+        const std::vector<std::string> grants{std::string{EditorSceneProposalGrant}, std::string{EditorSceneInspectionGrant}};
+        auto authorized =
+            EditorCommandMcpSession::Create({.inspection = endpoint}, {"viewport-client", "project-one", 3, grants}, Test::Authorization());
+        REQUIRE(authorized.HasValue());
+        auto &session = *authorized.Value();
+        const auto effect = session.ToolEffect("viewport.propose_light_state");
+        REQUIRE(effect.HasValue());
+        CHECK(effect.Value() == McpToolEffect::PresentationSideEffect);
+        auto inspectionOnly =
+            EditorCommandMcpSession::Create({.inspection = endpoint},
+                                            {"reader", "project-one", 3, {std::string{EditorSceneInspectionGrant}}}, Test::Authorization());
+        REQUIRE(inspectionOnly.HasValue());
+        CHECK(inspectionOnly.Value()->ToolEffect("viewport.propose_light_state").HasError());
+
+        Json arguments{{"scene", {{"epoch", 6}, {"revision", 19}}},
+                       {"objects", {42, 43}},
+                       {"enabled", false},
+                       {"brush", {{"pointsMeters", {{0, -1, 0}, {0, 1, 0}}}, {"radiusMeters", 1}}}};
+        const auto outside = Command("outside-brush", "viewport.propose_light_state", arguments);
+        CHECK(session.Client()->Call(outside).HasError());
+        Approve(session, outside);
+        CHECK(Execute(session, outside).at("status") == "failed");
+        CHECK(updates.empty());
+        CHECK_FALSE(live);
+
+        auto tooLong = arguments;
+        tooLong["objects"] = {42};
+        tooLong["brush"]["pointsMeters"] = {{0, -200, 0}, {0, 200, 0}};
+        const auto exceedLength = Command("overlong-stroke", "viewport.propose_light_state", tooLong);
+        Approve(session, exceedLength);
+        CHECK(Execute(session, exceedLength).at("status") == "failed");
+        CHECK_FALSE(live);
+
+        SECTION("a pivot on the brush boundary is included") {
+            arguments["objects"] = {42};
+        }
+        SECTION("an explicit selection does not need a brush") {
+            arguments.erase("brush");
+        }
+        const auto inside = Command("light-review", "viewport.propose_light_state", arguments);
+        Approve(session, inside);
+        const auto result = Execute(session, inside);
+        REQUIRE(result.at("status") == "succeeded");
+        CHECK(result.at("result") == Json{{"reviewId", "71"}});
+        REQUIRE(updates.size() == arguments.at("objects").size());
+        CHECK(updates.front().object == 42);
+        CHECK_FALSE(updates.front().enabled);
+        REQUIRE(live);
+        CHECK(live());
+        endpoint.reset();
+        CHECK_FALSE(live());
     }
 
     TEST_CASE("Debug capture requires exact approval and returns only numeric evidence", "[unit][editor][mcp][debug-capture]") {

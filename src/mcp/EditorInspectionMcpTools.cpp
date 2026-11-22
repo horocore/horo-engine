@@ -726,6 +726,7 @@ namespace Horo::Editor {
             tools.push_back(ProposalRegistration(endpoint, SceneProposalKind::Transforms));
             tools.push_back(ProposalRegistration(endpoint, SceneProposalKind::Edits));
         }
+        AppendEditorViewportTools(endpoint, tools);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

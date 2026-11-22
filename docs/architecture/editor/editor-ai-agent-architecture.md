@@ -1372,6 +1372,15 @@ The agent may choose how to modify candidates inside the region, but it may not
 expand scope silently. If it needs more objects, it must ask or present a larger
 preview scope.
 
+The command host registers `viewport.propose_light_state` in the same immutable
+tool catalog as the inspection and Scene review tools. The tool requires both
+inspection and proposal grants, the exact Scene revision, and a bounded list of
+visible object identities. An optional world-space stroke restricts that list to
+committed pivots inside its swept radius. It accepts at most 16 points, a 100 m
+radius and a 256 m total stroke length. An out-of-scope target rejects the whole
+request. The review uses typed light edits and the same local Apply, discard,
+history and authority checks as other Scene proposals.
+
 ### Auto Alignment
 
 Auto alignment should use explicit constraints rather than vague transforms:
