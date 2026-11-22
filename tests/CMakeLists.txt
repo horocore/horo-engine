@@ -3123,7 +3123,7 @@ target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
     HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
 target_compile_definitions(HoroGameplayPhysicsTests PRIVATE HORO_TEST_HEADLESS_ENGINE_PATH="$<TARGET_FILE:horo-engine>")
 target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayModuleHost HoroEngine::Platform
-    HoroNetworkProductHost nlohmann_json::nlohmann_json)
+    HoroNetworkProductHost HoroEngine::ProjectSettings nlohmann_json::nlohmann_json)
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule HoroTestAiGameModule horo-engine)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
 add_test(NAME HoroGameplayProductLaunchContract
