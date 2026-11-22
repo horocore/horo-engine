@@ -154,22 +154,31 @@ namespace Horo::Diagnostics {
             });
         }
 
-        void RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
+        /** @brief Redacts a record and reports whether its enclosing causal record also needs to be dropped. */
+        bool RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
             if (!key.empty() && Detail::IsSensitiveKey(key)) {
                 value = "[REDACTED]";
-                return;
+                return false;
             }
             if (SummaryOnlyRecord(value, namespaces)) {
                 value = nullptr;
-            } else if (value.is_object()) {
-                for (auto &[childKey, child] : value.items())
-                    RedactJson(child, namespaces, childKey);
+                return true;
+            }
+            if (value.is_object()) {
+                for (auto &[childKey, child] : value.items()) {
+                    if (RedactJson(child, namespaces, childKey) && childKey == "cause") {
+                        // Wrappers can quote private messages or copy their diagnostic fields.
+                        value = nullptr;
+                        return true;
+                    }
+                }
             } else if (value.is_array()) {
                 for (Json &child : value)
                     RedactJson(child, namespaces);
             } else if (value.is_string()) {
                 value = RedactAbsolutePaths(value.get_ref<const std::string &>());
             }
+            return false;
         }
 
         [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text, const std::span<const std::string> namespaces) {
@@ -187,9 +196,8 @@ namespace Horo::Diagnostics {
                         break;
                     return std::nullopt;
                 }
-                if (SummaryOnlyRecord(*record, namespaces))
+                if (RedactJson(*record, namespaces))
                     continue;
-                RedactJson(*record, namespaces);
                 sanitized += record->dump();
                 sanitized += '\n';
             }

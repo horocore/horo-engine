@@ -327,14 +327,21 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
     write(session.directory / "operations/save.jsonl.1",
           R"({"subsystem":"runtime.save","name":"private-history-name","fields":{"note":"private-history-field"}})"
           "\n"
+          R"({"subsystem":"runtime.scene","name":"private-history-wrapper-copy",)"
+          R"("cause":{"domain":"horo.save","message":"private-history-cause"}})"
+          "\n"
           R"({"subsystem":"runtime.scene","name":"control-unrelated-history"})"
           "\n");
     const auto crash = session.directory / "crash.json";
     write(crash, R"({"breadcrumbs":[{"category":"runtime.save.restore","message":"private-crash-breadcrumb"},)"
                  R"({"category":"editor.scene","message":"control-unrelated-crash"}],)"
-                 R"("error":{"domain":"horo.scene","code":"scene.restore.failed","message":"control-outer-error",)"
+                 R"("error":{"domain":"horo.scene","code":"scene.restore.failed","message":"private-outer-copy",)"
+                 R"("fields":{"display":"private-outer-display"},)"
+                 R"("cause":{"domain":"horo.scene","message":"private-inner-copy",)"
                  R"("cause":{"domain":"horo.save","code":"save.restore.failed","message":"private-save-cause",)"
-                 R"("cause":{"domain":"horo.platform","code":"platform.storage.failed","message":"private-provider-cause"}}},)"
+                 R"("cause":{"domain":"horo.platform","code":"platform.storage.failed","message":"private-provider-cause"}}}},)"
+                 R"("unrelated_error":{"domain":"horo.scene","message":"control-outer-error",)"
+                 R"("cause":{"domain":"horo.platform","message":"control-unrelated-cause"}},)"
                  R"("other":{"domain":"horo.saver","message":"control-domain-prefix"}})");
     const auto bundled = session.host->GenerateDiagnosticBundle(
         {.outputPath = session.directory / "bundle.zip",
@@ -342,15 +349,17 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
     REQUIRE(bundled.HasValue());
     const auto archive = Read(bundled.Value().outputPath);
     // Diagnostic bundles use ZIP32 stored entries, so the payload sentinels remain literal archive bytes.
-    for (const auto control : {"logs/save.1.jsonl", "history/save.1.operations.jsonl", "control-unrelated-log",
-                               "control-unrelated-rolled-log", "control-unrelated-history", "control-unrelated-crash",
-                               "control-outer-error", "control-domain-prefix", "data_categories", "save.summary", R"("observations\":1)"}) {
+    for (const auto control :
+         {"logs/save.1.jsonl", "history/save.1.operations.jsonl", "control-unrelated-log", "control-unrelated-rolled-log",
+          "control-unrelated-history", "control-unrelated-crash", "control-outer-error", "control-unrelated-cause", "control-domain-prefix",
+          "data_categories", "save.summary", R"("observations\":1)"}) {
         CAPTURE(control);
         CHECK(archive.find(control) != std::string::npos);
     }
     for (const auto secret :
          {"private-current-row-payload", "private-rolled-row-display", "private-unknown-field", "private-slot", "private-history-name",
-          "private-history-field", "private-crash-breadcrumb", "private-save-cause", "private-provider-cause"}) {
+          "private-history-field", "private-history-wrapper-copy", "private-history-cause", "private-crash-breadcrumb",
+          "private-outer-copy", "private-outer-display", "private-inner-copy", "private-save-cause", "private-provider-cause"}) {
         CAPTURE(secret);
         CHECK(archive.find(secret) == std::string::npos);
     }
