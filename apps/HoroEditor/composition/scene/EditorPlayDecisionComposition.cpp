@@ -379,12 +379,16 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (!reactive && mode == AI::AiSchedulingMode::BestEffort)
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortQueries;
         }
-        const auto inspection = Editor::EditorPlayAiPolicy{
-            .scheduler = execution.scheduler,
-            .perceptionLimit = configured.perceptionWorkUnitsLimit,
-            .scenePerceptionWork = playPerception_ ? std::optional<std::size_t>{playPerception_->execution.workUnitsPerTick} : std::nullopt,
-            .queryLimit = configured.queryWorkUnitsLimit,
-            .queryCache = decisionQueries_ && mode == AI::AiSchedulingMode::BestEffort ? configured.queryCacheLimits : std::nullopt};
+        const auto inspection =
+            Editor::EditorPlayAiPolicy{.scheduler = execution.scheduler,
+                                       .perceptionLimit = configured.perceptionWorkUnitsLimit,
+                                       .scenePerceptionWork = playPerception_
+                                                                  ? std::optional<std::size_t>{playPerception_->execution.workUnitsPerTick}
+                                                                  : std::nullopt,
+                                       .queryLimit = configured.queryWorkUnitsLimit,
+                                       .queryCache = decisionQueries_ && mode == AI::AiSchedulingMode::BestEffort
+                                                         ? configured.queryCacheLimits
+                                                         : std::nullopt};
         auto admitted = RegisterPresentationParticipants(policy, std::move(execution));
         if (admitted.HasValue()) {
             inspectionPolicy_ = inspection;
