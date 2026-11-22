@@ -2623,6 +2623,13 @@ Advanced planning and learning models are explicitly classified as **Post-1.0 Ex
 
 These paradigms will integrate via dedicated provider extension seams without breaking or modifying the 1.0 decision core.
 
+The opt-in symbolic planning contract compiles Boolean facts and positive-cost
+transitions against frozen task declarations. Search owns only copied values
+and produces an ordered sequence of stable action and task identities. Unsolved,
+cancelled and budget-limited searches expose no task sequence. A host can submit
+the same detached computation through the existing AI task job service.
+The decision owner admits the returned tasks at its normal safe point.
+
 ### Runtime Task & Lifecycle Alignment
 
 Implementation status on 2 October 2026: `HoroEngine::AI` provides the
