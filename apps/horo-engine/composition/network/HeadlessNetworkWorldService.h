@@ -517,7 +517,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     auto driver =
                         SceneDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
                                                      ConfiguredDecisionExecution().scheduler, input.cookedDecisions->queryWorkUnitsLimit,
-                                                     input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
+                                                     input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits,
+                                                     input.cookedDecisions->gameplayQueryTests);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();

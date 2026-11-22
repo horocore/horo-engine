@@ -2,6 +2,7 @@
 
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
 
 #include <algorithm>
@@ -509,6 +510,49 @@ namespace Horo::AI {
                                      {stage.id, descriptor->id, descriptor->origin.provider, contexts.Revision()}});
         }
 
+        class GameplayPointTestSource final : public IOwnerQueryExecutionSource {
+        public:
+            GameplayPointTestSource(const Runtime::RuntimeSceneView &scene, BuiltinPointQueryCandidates candidates,
+                                    std::shared_ptr<const GameplayQueryTestRegistry> registry, const GameplayQueryPointBinding &binding,
+                                    const QueryPlanStage &stage, QueryOwnerWorkLimits limits)
+                : IOwnerQueryExecutionSource(limits), scene_(scene), candidates_(std::move(candidates)), registry_(std::move(registry)),
+                  binding_(&binding), stage_(stage.id), properties_(stage.properties) {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return inputs.contexts->MatchesScene(scene_) && registry_->IsCurrent() && candidates_.IsCurrent(scene_);
+            }
+
+        private:
+            Result<QueryGenerationResult> GenerateAtOwner(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output,
+                                                          AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume(WorkLimits().generationUnits))
+                    return OwnerFailure<QueryGenerationResult>(AIErrors::SchedulerBudgetExhausted);
+                try {
+                    return candidates_.Generate(scene_, inputs, output);
+                } catch (...) {
+                    return OwnerFailure<QueryGenerationResult>(AIErrors::EnvironmentQueryProviderFailed);
+                }
+            }
+
+            Result<QueryTestSample> TestAtOwner(const QueryExecutionInputs &inputs, QueryStageId stage, const QueryGeneratedItem &item,
+                                                AiWorkBudget &budget) noexcept override {
+                const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
+                if (stage != stage_ || !point)
+                    return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQuerySchemaInvalid);
+                if (!IsCurrent(inputs))
+                    return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQueryContextStale);
+                return Result<QueryTestSample>::Success(
+                    binding_->evaluate(binding_->state, {*inputs.contexts, stage, *point, properties_}, budget));
+            }
+
+            Runtime::RuntimeSceneView scene_;
+            BuiltinPointQueryCandidates candidates_;
+            std::shared_ptr<const GameplayQueryTestRegistry> registry_;
+            const GameplayQueryPointBinding *binding_;
+            QueryStageId stage_;
+            std::vector<QueryPropertyValue> properties_;
+        };
+
         /** @brief Validated native distance kernels and their scoring rules before admission. */
         struct PointOwnerTests final {
             std::vector<PointOwnerTest> kernels;
@@ -584,7 +628,14 @@ namespace Horo::AI {
 
     /** @copydoc CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor>) */
     Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts) {
+        return CaptureBuiltinQuerySchema(locationContexts, {});
+    }
+
+    Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts,
+                                                          std::span<const QueryTestDescriptor> gameplayTests) {
         using enum QueryPropertyKind;
+        if (gameplayTests.size() > EnvironmentQuerySchemaLimits::Tests)
+            return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         if (locationContexts.size() > EnvironmentQuerySchemaLimits::DescriptorContexts - NativePointCenters.size())
             return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         const auto origin = BuiltinOrigin();
@@ -648,7 +699,11 @@ namespace Horo::AI {
                                                   {QueryPropertyId::Create(NavigationScoreWeight).Value(), Unsigned64, false}},
                                },
                                std::move(perception.test)};
-        return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
+        if (gameplayTests.empty())
+            return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
+        std::vector<QueryTestDescriptor> allTests(tests.begin(), tests.end());
+        allTests.insert(allTests.end(), gameplayTests.begin(), gameplayTests.end());
+        return QuerySchemaRegistry::Capture({items, contexts, generators, allTests});
     }
 
     /** @copydoc CreateBuiltinLatticeQuery */
@@ -1124,6 +1179,77 @@ namespace Horo::AI {
         if (!lattice)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         return GenerateQueryLattice(contexts, lattice->center, *lattice, output);
+    }
+
+    Result<GameplayQueryTestRegistry> GameplayQueryTestRegistry::Capture(const QuerySchemaRegistry &schema,
+                                                                         const std::span<const GameplayQueryPointBinding> bindings,
+                                                                         std::shared_ptr<const void> generation,
+                                                                         CancellationToken retirement) {
+        using Registry = Result<GameplayQueryTestRegistry>;
+        if (bindings.size() > EnvironmentQuerySchemaLimits::Tests)
+            return Registry::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        if (!generation || retirement.IsCancellationRequested())
+            return Registry::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        GameplayQueryTestRegistry captured;
+        captured.generation_ = std::move(generation);
+        captured.retirement_ = std::move(retirement);
+        captured.bindings_.reserve(bindings.size());
+        for (const auto &binding : bindings) {
+            const auto *descriptor = schema.Find(binding.test);
+            if (!descriptor || descriptor->origin == BuiltinOrigin() || descriptor->origin != binding.origin ||
+                descriptor->inputItemType.Value() != PointItem || !binding.evaluate)
+                return Registry::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if ((!binding.requiredFilter && !binding.score) || binding.workUnits == 0 ||
+                binding.workUnits > EnvironmentQuerySchemaLimits::MaximumResults * 16U)
+                return Registry::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            captured.bindings_.push_back(binding);
+        }
+        std::ranges::sort(captured.bindings_, {}, &GameplayQueryPointBinding::test);
+        if (std::ranges::adjacent_find(captured.bindings_, {}, &GameplayQueryPointBinding::test) != captured.bindings_.end())
+            return Registry::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+        return Registry::Success(std::move(captured));
+    }
+
+    bool GameplayQueryTestRegistry::IsCurrent() const noexcept {
+        return generation_ && !retirement_.IsCancellationRequested();
+    }
+
+    const GameplayQueryPointBinding *GameplayQueryTestRegistry::Find(const QueryTestId test) const noexcept {
+        const auto found = std::ranges::lower_bound(bindings_, test, {}, &GameplayQueryPointBinding::test);
+        return found != bindings_.end() && found->test == test ? &*found : nullptr;
+    }
+
+    bool GameplayQueryTestRegistry::UsesTests(const EnvironmentQueryPlan &plan) const noexcept {
+        return std::ranges::any_of(plan.Stages(), [this](const auto &stage) {
+            return Find(stage.test) != nullptr;
+        });
+    }
+
+    Result<PreparedPointQueryTest> PrepareGameplayPointTest(const EnvironmentQueryPlan &plan, const QueryStageId stageId,
+                                                            const QuerySchemaRegistry &schema, const Runtime::RuntimeSceneView &scene,
+                                                            const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
+                                                            const std::shared_ptr<const GameplayQueryTestRegistry> &gameplay,
+                                                            const LivePointQueryGenerator *live) {
+        using Prepared = Result<PreparedPointQueryTest>;
+        if (!gameplay || !gameplay->IsCurrent() || !inputs.contexts || !inputs.contexts->MatchesScene(scene) ||
+            inputs.contexts->Query() != plan.Id())
+            return Prepared::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto stage = std::ranges::find(plan.Stages(), stageId, &QueryPlanStage::id);
+        if (stage == plan.Stages().end() || stage->kind != QueryStageKind::Test)
+            return Prepared::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto *binding = gameplay->Find(stage->test);
+        const auto *descriptor = schema.Find(stage->test);
+        if (!binding || !descriptor || descriptor->origin != binding->origin)
+            return Prepared::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        auto candidates = CapturePointCandidates(plan.Stages().front(), plan.ResultSchema().itemType, *inputs.contexts, schema, live);
+        if (candidates.HasError())
+            return Prepared::Failure(candidates.ErrorValue());
+        auto captured = std::move(candidates).Value();
+        const QueryOwnerWorkLimits limits{captured.values.WorkUnits(), binding->workUnits};
+        const QueryScoreRule rule{stageId, binding->requiredFilter, binding->score};
+        auto source = std::make_unique<GameplayPointTestSource>(scene, std::move(captured.values), gameplay, *binding, *stage, limits);
+        return Prepared::Success({captured.provenance, rule, limits.generationUnits,
+                                  live ? live->maximumCandidates : settings.maximumCandidates, limits.testUnits, std::move(source)});
     }
 
     /** @copydoc AdmitBuiltinPointProviderQuery */

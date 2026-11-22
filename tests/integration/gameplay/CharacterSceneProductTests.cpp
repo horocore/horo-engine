@@ -7,6 +7,7 @@
 #include "HeadlessReplayArtifact.h"
 #include "Horo/AI/AITaskContinuation.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Foundation/Platform.h"
@@ -517,16 +518,18 @@ namespace Horo::Application::CharacterSceneProductTest {
             SurfaceVisibility,
             SurfaceNavigation,
             SurfaceMixed,
-            AuthoredMixed
+            AuthoredMixed,
+            GameplayMixed
         };
         const auto scenario =
             GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
                      Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface, Scenario::SurfaceVisibility,
-                     Scenario::SurfaceNavigation, Scenario::SurfaceMixed, Scenario::AuthoredMixed);
+                     Scenario::SurfaceNavigation, Scenario::SurfaceMixed, Scenario::AuthoredMixed, Scenario::GameplayMixed);
         const bool surfaceVisibility = scenario == Scenario::SurfaceVisibility || scenario == Scenario::SurfaceMixed;
         const bool surfaceNavigation = scenario == Scenario::SurfaceNavigation || scenario == Scenario::SurfaceMixed;
         const bool surface = surfaceVisibility || surfaceNavigation || scenario == Scenario::NavigationSurface;
-        const bool authored = scenario == Scenario::AuthoredMixed;
+        const bool gameplayTest = scenario == Scenario::GameplayMixed;
+        const bool authored = gameplayTest || scenario == Scenario::AuthoredMixed;
         const bool scoreCost = scenario != Scenario::Reachability;
         const bool usesDistance =
             authored || scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority || scenario == Scenario::SurfaceMixed;
@@ -559,7 +562,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             const std::array points{
                 Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500),
                 Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
-                Math::WorldCoordinate64::FromMillimeters(16000, 0, 1000),
+                gameplayTest ? Math::WorldCoordinate64::FromMillimeters(1500, 0, 500)
+                             : Math::WorldCoordinate64::FromMillimeters(16000, 0, 1000),
             };
             generator = CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(1), MakeIdentity<QueryStageId>(1),
                                                         MakeIdentity<QueryResultSchemaId>(1), "Authored tactical positions", points, 1);
@@ -582,6 +586,49 @@ namespace Horo::Application::CharacterSceneProductTest {
         if (visibility && scenario != Scenario::VisibilityFirst)
             query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
         REQUIRE(query.HasValue());
+        std::shared_ptr<const GameplayQueryTestRegistry> gameplayTests;
+        if (gameplayTest) {
+            const auto allowed = std::make_shared<const Math::WorldCoordinate64>(Math::WorldCoordinate64::FromMillimeters(1500, 0, 500));
+            const auto cutoff = MakeIdentity<QueryPropertyId>(93);
+            const QueryTestDescriptor descriptor{.id = MakeIdentity<QueryTestId>(90),
+                                                 .origin = {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(91), 1},
+                                                 .inputItemType = query.Value().ResultSchema().itemType,
+                                                 .inputItemVersion = {1, 1},
+                                                 .properties = {{cutoff, QueryPropertyKind::Unsigned64, true}}};
+            registry = CaptureBuiltinQuerySchema({}, std::span{&descriptor, 1});
+            REQUIRE(registry.HasValue());
+            const GameplayQueryPointBinding binding{.test = descriptor.id,
+                                                    .origin = descriptor.origin,
+                                                    .requiredFilter = true,
+                                                    .workUnits = 1,
+                                                    .state = allowed.get(),
+                                                    .evaluate = [](const void *state, const GameplayQueryPointInput &input,
+                                                                   AiWorkBudget &budget) noexcept {
+                if (!budget.Consume(1) || input.properties.size() != 1)
+                    return QueryTestSample{.stage = input.stage, .availability = QueryTestAvailability::Failed};
+                const auto limit = std::get_if<std::uint64_t>(&input.properties.front().value);
+                const auto point = input.point.Millimeters();
+                const auto allowed = static_cast<const Math::WorldCoordinate64 *>(state)->Millimeters();
+                return QueryTestSample{.stage = input.stage,
+                                       .filter = limit && point[0] == allowed[0] && point[2] >= 0 &&
+                                                 static_cast<std::uint64_t>(point[2]) <= *limit};
+            }};
+            auto captured = GameplayQueryTestRegistry::Capture(registry.Value(), std::span{&binding, 1}, allowed);
+            REQUIRE(captured.HasValue());
+            gameplayTests = std::make_shared<const GameplayQueryTestRegistry>(std::move(captured).Value());
+            QueryAssetSource source{.id = query.Value().Id(),
+                                    .displayName = query.Value().DisplayName(),
+                                    .result = query.Value().ResultSchema(),
+                                    .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+            source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
+                                     .kind = QueryStageKind::Test,
+                                     .executionOrder = 20,
+                                     .test = descriptor.id,
+                                     .descriptorVersion = {1, 1},
+                                     .properties = {{cutoff, std::uint64_t{500}}}});
+            query = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(query.HasValue());
+        }
         auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
         REQUIRE(queryBytes.HasValue());
 
@@ -672,7 +719,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                                                   {}},
                                                       .provider = Internal::HeadlessDecisionProvider::SelectedNativeGameplay,
                                                       .querySchema =
-                                                          std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value())});
+                                                          std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value()),
+                                                      .gameplayQueryTests = gameplayTests});
         });
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
@@ -706,6 +754,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             expected = Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000);
         if (surface || scenario == Scenario::DistancePriority)
             expected = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
+        if (gameplayTest)
+            expected = Math::WorldCoordinate64::FromMillimeters(1500, 0, 500);
         CAPTURE(static_cast<int>(scenario), actual.Millimeters(), expected.Millimeters());
         CHECK(actual == expected);
     }

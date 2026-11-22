@@ -5,6 +5,10 @@
 #include "CookedDecisionSceneAdmission.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
+namespace Horo::AI {
+    class GameplayQueryTestRegistry;
+}
+
 namespace Horo::Application::Internal {
     using HeadlessQueryPlanCatalog = CookedSceneQueryPlanCatalog;
     using HeadlessCookedDecisionBinding = CookedDecisionSceneBinding;
@@ -26,6 +30,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit host descriptors for committed query artifacts. */
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::optional<AI::QueryResultCacheLimits> queryCacheLimits{};
+        std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayQueryTests;
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

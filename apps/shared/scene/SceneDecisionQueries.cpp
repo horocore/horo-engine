@@ -98,7 +98,7 @@ namespace Horo::Application::Internal {
     Result<std::shared_ptr<SceneDecisionQueries>> SceneDecisionQueries::Create(
         CookedSceneQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
         const AI::AiTaskSchedulerSettings &settings, const std::size_t workUnitsLimit,
-        const std::optional<AI::QueryResultCacheLimits> cacheLimits) {
+        const std::optional<AI::QueryResultCacheLimits> cacheLimits, std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayTests) {
         using Created = Result<std::shared_ptr<SceneDecisionQueries>>;
         if (!registry || plans.empty() || settings.evaluationsPerTick == 0 ||
             settings.evaluationsPerTick > AI::AiTaskSchedulerSettings::HardAgents || workUnitsLimit == 0 ||
@@ -111,6 +111,7 @@ namespace Horo::Application::Internal {
             auto owner = std::make_shared<SceneDecisionQueries>();
             owner->plans_ = std::move(plans);
             owner->registry_ = std::move(registry);
+            owner->gameplayTests_ = std::move(gameplayTests);
             owner->contexts_.emplace(std::move(contexts).Value());
             owner->maximumActive_ = settings.evaluationsPerTick;
             owner->workUnitsLimit_ = workUnitsLimit;
@@ -138,7 +139,9 @@ namespace Horo::Application::Internal {
         const auto plan = plans_.find(output->query);
         if (plan == plans_.end())
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        if (!bestEffort_ && (AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
+        const bool usesGameplay = gameplayTests_ && gameplayTests_->UsesTests(*plan->second.plan);
+        if (!bestEffort_ &&
+            (usesGameplay || AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
             PruneExpiredTasks();
@@ -195,7 +198,8 @@ namespace Horo::Application::Internal {
                                             .bestCount = 1};
         if (inspection_ && inspection_->agent == operation.agent && inspection_->query == plan.plan->Id())
             settings.debugCapture = {.maximumSamples = 16, .includeWorldPoints = true};
-        if (AI::UsesBuiltinPointVisibility(*plan.plan) || AI::UsesBuiltinPointNavigation(*plan.plan))
+        const bool usesGameplay = gameplayTests_ && gameplayTests_->UsesTests(*plan.plan);
+        if (usesGameplay || AI::UsesBuiltinPointVisibility(*plan.plan) || AI::UsesBuiltinPointNavigation(*plan.plan))
             return AdmitPointProviderPlan(*plan.plan, owner.Value(), std::move(inputs), settings);
         if (AI::UsesBuiltinNavigationSurface(*plan.plan))
             return AI::AdmitBuiltinNavigationSurfaceQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
@@ -221,7 +225,7 @@ namespace Horo::Application::Internal {
         }
         const auto *generator = live ? &*live : nullptr;
 
-        std::array<AI::PreparedPointQueryTest, 2> tests;
+        std::array<AI::PreparedPointQueryTest, AI::EnvironmentQuerySchemaLimits::Stages - 1> tests;
         std::size_t count{};
         // Visibility leads generation so it can retain the exact ordered batch for its Physics request.
         if (AI::UsesBuiltinPointVisibility(plan)) {
@@ -237,6 +241,17 @@ namespace Horo::Application::Internal {
             if (navigation.HasError())
                 return Execution::Failure(navigation.ErrorValue());
             tests[count++] = std::move(navigation).Value();
+        }
+        if (gameplayTests_) {
+            for (const auto &stage : plan.Stages().subspan(1)) {
+                if (!gameplayTests_->Find(stage.test))
+                    continue;
+                auto gameplay =
+                    AI::PrepareGameplayPointTest(plan, stage.id, *registry_, scope_->scene, inputs, settings, gameplayTests_, generator);
+                if (gameplay.HasError())
+                    return Execution::Failure(gameplay.ErrorValue());
+                tests[count++] = std::move(gameplay).Value();
+            }
         }
         return AI::AdmitBuiltinPointProviderQuery(plan, *registry_, scope_->scene, std::move(inputs), settings,
                                                   std::span{tests}.first(count), generator);
@@ -347,7 +362,7 @@ namespace Horo::Application::Internal {
         if (selection) {
             const auto plan = plans_.find(selection->query);
             if (!selection->agent.IsValid() || plan == plans_.end() || plan->second.digest != selection->cooked ||
-                !HasLiveProvider(*plan->second.plan))
+                !(HasLiveProvider(*plan->second.plan) || (gameplayTests_ && gameplayTests_->UsesTests(*plan->second.plan))))
                 selection.reset();
         }
         if (inspection_ != selection)

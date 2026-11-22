@@ -4,6 +4,7 @@
 #include "CookedDecisionSceneAdmission.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionQueryTask.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/AI/EnvironmentQueryPhysics.h"
 
@@ -62,7 +63,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] static Result<std::shared_ptr<SceneDecisionQueries>> Create(
             CookedSceneQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
             const AI::AiTaskSchedulerSettings &settings, std::size_t workUnitsLimit,
-            std::optional<AI::QueryResultCacheLimits> cacheLimits = std::nullopt);
+            std::optional<AI::QueryResultCacheLimits> cacheLimits = std::nullopt,
+            std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayTests = {});
 
         /** @copydoc AI::IDecisionQueryTaskBinder::BindQueryTask */
         [[nodiscard]] Result<std::unique_ptr<AI::IBehaviorTreeExecutor>> BindQueryTask(
@@ -138,6 +140,7 @@ namespace Horo::Application::Internal {
 
         CookedSceneQueryPlanCatalog plans_;
         std::shared_ptr<const AI::QuerySchemaRegistry> registry_;
+        std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayTests_;
         std::optional<AI::QueryContextProviderRegistry> contexts_;
         std::vector<std::weak_ptr<AI::DecisionQueryTask>> tasks_;
         std::vector<AgentBudget> budgets_;

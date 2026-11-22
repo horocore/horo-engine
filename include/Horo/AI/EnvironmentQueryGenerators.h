@@ -79,6 +79,10 @@ namespace Horo::AI {
      */
     [[nodiscard]] Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts);
 
+    /** @brief Composes explicit gameplay test descriptors with the built-in inventory during cold admission. */
+    [[nodiscard]] Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts,
+                                                                        std::span<const QueryTestDescriptor> gameplayTests);
+
     /**
      * @brief Constructs one initial source through the installed point-lattice provider's typed wire contract.
      * @param query Stable authoring-issued query identity. @param stage Stable stage identity.
