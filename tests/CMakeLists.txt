@@ -333,7 +333,7 @@ add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_include_directories(HoroModelProviderTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support ${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters HoroMcpEditorAgentToolsInternal
-    HoroEngine::McpController Catch2::Catch2WithMain)
+    HoroEngine::McpController HoroEngine::Security Catch2::Catch2WithMain)
 add_test(NAME HoroModelProviderContractTests
     COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
             "$<TARGET_FILE:HoroModelProviderTests>" "$<TARGET_FILE_DIR:HoroModelProviderTests>")

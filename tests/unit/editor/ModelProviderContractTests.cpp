@@ -3,6 +3,8 @@
 #include "AllocationProbe.h"
 #include "Horo/Agent/ModelProvider.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
+#include "Horo/Security/CredentialStore.h"
+#include "Horo/Security/SecurityErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -43,6 +45,20 @@ namespace {
             static_cast<std::uint32_t>(ModelFeature::Streaming) | static_cast<std::uint32_t>(ModelFeature::Usage);
         return request;
     }
+
+    /** @brief Records only non-secret lookup metadata and simulates a vault rejecting a reference. */
+    class UnavailableCredentialProvider final : public Horo::Security::CredentialProvider {
+    public:
+        Horo::Result<Horo::Security::SecureBytes> Resolve(const Horo::CredentialReference &reference, std::uint64_t nowMillis) override {
+            references.emplace_back(reference.Value());
+            times.push_back(nowMillis);
+            return Horo::Result<Horo::Security::SecureBytes>::Failure(
+                Horo::MakeError(Horo::SecurityErrors::CredentialRevoked, "private vault detail"));
+        }
+
+        std::vector<std::string> references;
+        std::vector<std::uint64_t> times;
+    };
 }  // namespace
 
 TEST_CASE("Model provider registry is inert and feature admission is explicit", "[agent][model]") {
@@ -386,6 +402,46 @@ TEST_CASE("Cloud credential lookup respects cancellation and sanitizes backend e
     CHECK(generation.error->message.find(sensitive) == std::string::npos);
     CHECK_FALSE(delivered);
     CHECK(lookups == (operation.stop_requested() ? 0U : 2U));
+}
+
+TEST_CASE("Typed cloud credential lookup requires HTTPS and an opaque reference", "[agent][model][credentials]") {
+    const std::string reference = "cred:v1:" + std::string(48, 'a');
+    auto credentials = std::make_shared<UnavailableCredentialProvider>();
+    const auto sink = [](const ModelEvent &) {
+        FAIL("A rejected credential cannot deliver model events");
+        return false;
+    };
+    SECTION("plain HTTP is rejected before accessing the secure provider") {
+        auto provider = CreateOpenAIModelProviderWithCredentials({Endpoint(), reference}, credentials);
+        const auto discovery = provider->Discover({});
+        const auto stream = provider->Stream(Request("normal"), sink, {});
+        REQUIRE(discovery.outcome.error);
+        REQUIRE(stream.error);
+        CHECK(discovery.outcome.error->code == ModelErrorCode::InvalidRequest);
+        CHECK(stream.error->code == ModelErrorCode::InvalidRequest);
+        CHECK(credentials->references.empty());
+    }
+    SECTION("malformed references never reach the secure provider") {
+        auto provider = CreateOpenAIModelProviderWithCredentials({"https://provider.invalid", "malformed"}, credentials);
+        const auto discovery = provider->Discover({});
+        REQUIRE(discovery.outcome.error);
+        CHECK(discovery.outcome.error->code == ModelErrorCode::CredentialUnavailable);
+        CHECK(credentials->references.empty());
+    }
+    SECTION("a typed rejection is redacted and resolved once for each operation") {
+        auto provider = CreateOpenAIModelProviderWithCredentials({"https://provider.invalid", reference}, credentials);
+        const auto discovery = provider->Discover({});
+        const auto generation = provider->Stream(Request("normal"), sink, {});
+        REQUIRE(discovery.outcome.error);
+        REQUIRE(generation.error);
+        CHECK(discovery.outcome.error->code == ModelErrorCode::CredentialUnavailable);
+        CHECK(generation.error->code == ModelErrorCode::CredentialUnavailable);
+        CHECK(discovery.outcome.error->message.find("private vault detail") == std::string::npos);
+        CHECK(generation.error->message.find("private vault detail") == std::string::npos);
+        CHECK(credentials->references == std::vector{reference, reference});
+        REQUIRE(credentials->times.size() == 2);
+        CHECK(credentials->times[1] >= credentials->times[0]);
+    }
 }
 
 TEST_CASE("Real adapters reject unconfirmed tool support before network dispatch", "[agent][model]") {

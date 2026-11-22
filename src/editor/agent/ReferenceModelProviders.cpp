@@ -1,5 +1,6 @@
 #include "Horo/Agent/ReferenceModelProviders.h"
 
+#include "Horo/Security/CredentialStore.h"
 #include "ReferenceModelStream.h"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -26,28 +28,60 @@ namespace Horo::Agent {
         using Detail::StreamParser;
         constexpr std::size_t kMaximumDiscoveryBytes = 1U << 20U;
 
-        /** @brief Destroy the ephemeral credential bytes after each discovery or inference dispatch. */
-        struct SensitiveCredential final {
-            std::optional<std::string> value;
+        using CredentialBytesResolver = std::function<Security::SecureBytes(std::string_view)>;
 
-            explicit SensitiveCredential(std::optional<std::string> secret) : value(std::move(secret)) {}
+        /** @brief Reject empty or control-byte-bearing credentials before constructing an HTTP header. */
+        bool ValidBearer(const Security::SecureBytes &credential) {
+            return !credential.Empty() && std::ranges::none_of(credential.View(), [](const std::byte byte) {
+                const auto code = std::to_integer<unsigned char>(byte);
+                return code < 0x20 || code == 0x7f;
+            });
+        }
 
-            SensitiveCredential(const SensitiveCredential &) = delete;
-            SensitiveCredential &operator=(const SensitiveCredential &) = delete;
-            SensitiveCredential(SensitiveCredential &&) = delete;
-            SensitiveCredential &operator=(SensitiveCredential &&) = delete;
+        /** @brief Clears application-owned temporary HTTP text on every exit. */
+        struct SensitiveHttpText final {
+            std::string value;
 
-            ~SensitiveCredential() {
-                if (value)
-                    std::ranges::fill(*value, '\0');
-            }
-
-            [[nodiscard]] bool Invalid() const {
-                return value && (value->empty() || std::ranges::any_of(*value, [](unsigned char c) {
-                    return c < 0x20 || c == 0x7f;
-                }));
+            ~SensitiveHttpText() {
+                Security::SecureZero(std::as_writable_bytes(std::span{value}));
             }
         };
+
+        /** @brief Retains the libcurl list on allocation failure and releases it after the transfer handle. */
+        class HttpHeaders final {
+        public:
+            HttpHeaders() = default;
+            HttpHeaders(const HttpHeaders &) = delete;
+            HttpHeaders &operator=(const HttpHeaders &) = delete;
+
+            ~HttpHeaders() {
+                curl_slist_free_all(list_);
+            }
+
+            bool Add(const char *value) {
+                if (auto *next = curl_slist_append(list_, value)) {
+                    list_ = next;
+                    return true;
+                }
+                return false;
+            }
+
+            curl_slist *Get() const noexcept {
+                return list_;
+            }
+
+        private:
+            curl_slist *list_{};
+        };
+
+        /** @brief Supplies the origin bearer header through a temporary zeroized text copy. */
+        bool AddBearer(HttpHeaders &headers, const std::span<const std::byte> bearer) {
+            if (bearer.empty())
+                return true;
+            SensitiveHttpText authorization{"Authorization: Bearer "};
+            authorization.value.append(reinterpret_cast<const char *>(bearer.data()), bearer.size());
+            return headers.Add(authorization.value.c_str());
+        }
 
         /** @brief Recognizes a loopback authority with an explicit numeric port before any optional base path. */
         bool IsLoopbackEndpoint(const std::string_view endpoint) {
@@ -70,6 +104,12 @@ namespace Horo::Agent {
             const bool secure = endpoint.starts_with("https://");
             return endpoint.size() >= 9 && (secure || local) && (protocol != Protocol::Ollama || local) &&
                    endpoint.find_first_of("@?#\\") == std::string_view::npos;
+        }
+
+        /** @brief Validates the endpoint and timeout before accessing credential material. */
+        bool ValidHttpConfig(const ModelProviderConfig &config, Protocol protocol, const bool allowLoopback) {
+            return ValidEndpoint(config.endpoint, protocol, allowLoopback && IsLoopbackEndpoint(config.endpoint)) &&
+                   config.timeout.count() > 0 && config.timeout.count() <= (std::numeric_limits<long>::max)();
         }
 
         /** @brief Map an HTTP status without retaining remote response text. */
@@ -161,8 +201,7 @@ namespace Horo::Agent {
 
         /** @brief Apply transport bounds and callbacks; URL and TLS policy are set before this call. */
         void ConfigureCurl(CURL *curl,  // NOSONAR: libcurl declares CURL as an opaque C handle (void).
-                           HttpContext &context, const ModelProviderConfig &config, const std::string *body, curl_slist *headers) {
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+                           HttpContext &context, const ModelProviderConfig &config, const std::string *body) {
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteResponse);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
             curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportProgress);
@@ -205,10 +244,10 @@ namespace Horo::Agent {
 
         /** @brief Perform one real bounded HTTP request with a per-line or buffered response consumer. */
         ModelOutcome HttpRequest(const ModelProviderConfig &config, Protocol protocol, std::string_view path, const std::string *body,
-                                 const std::string *bearer, std::stop_token stop, const std::function<bool(std::string_view)> &consume) {
+                                 std::span<const std::byte> bearer, std::stop_token stop,
+                                 const std::function<bool(std::string_view)> &consume) {
             const bool local = IsLoopbackEndpoint(config.endpoint);
-            if (!ValidEndpoint(config.endpoint, protocol, local) || config.timeout.count() <= 0 ||
-                config.timeout.count() > (std::numeric_limits<long>::max)() || !consume) {
+            if (!ValidHttpConfig(config, protocol, true) || !consume) {
                 return {ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
             }
             if (stop.stop_requested())
@@ -221,34 +260,26 @@ namespace Horo::Agent {
 
             if (static const CURLcode curlInit = curl_global_init(CURL_GLOBAL_DEFAULT); curlInit != CURLE_OK)
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP runtime", std::nullopt}};
-            auto *curl = curl_easy_init();
+            HttpHeaders headers;
+            const std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle{curl_easy_init(), &curl_easy_cleanup};
+            auto *curl = handle.get();
             if (curl == nullptr)
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP client", std::nullopt}};
             // URL and TLS policy are configured together before callbacks or any transfer.
             if (curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) != CURLE_OK ||
                 curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK ||
-                (local && curl_easy_setopt(curl, CURLOPT_PROXY, "") != CURLE_OK)) {
-                curl_easy_cleanup(curl);
+                curl_easy_setopt(curl, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE) != CURLE_OK ||
+                (local && curl_easy_setopt(curl, CURLOPT_PROXY, "") != CURLE_OK) || !headers.Add("Accept: application/json") ||
+                (body != nullptr && !headers.Add("Content-Type: application/json")) || !AddBearer(headers, bearer) ||
+                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.Get()) != CURLE_OK) {
                 return {ModelError{ModelErrorCode::Transport, "Cannot configure model HTTP transport", std::nullopt}};
-            }
-            curl_slist *headers = nullptr;
-            headers = curl_slist_append(headers, "Accept: application/json");
-            if (body != nullptr)
-                headers = curl_slist_append(headers, "Content-Type: application/json");
-            std::string authorization;
-            if (bearer != nullptr) {
-                authorization = "Authorization: Bearer " + *bearer;
-                headers = curl_slist_append(headers, authorization.c_str());
             }
 
             HttpContext context{{}, consume, stop, curl};
-            ConfigureCurl(curl, context, config, body, headers);
+            ConfigureCurl(curl, context, config, body);
             const CURLcode result = curl_easy_perform(curl);
             long status = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            std::ranges::fill(authorization, '\0');
             return FinishHttpResponse(context, protocol, result, status);
         }
 
@@ -346,8 +377,8 @@ namespace Horo::Agent {
         /** @brief One concrete HTTP adapter instance; protocol wire types stay target-private. */
         class ReferenceProvider final : public IModelProvider {
         public:
-            ReferenceProvider(Protocol protocol, ModelProviderConfig config, ModelCredentialResolver resolver)
-                : m_protocol(protocol), m_config(std::move(config)), m_resolver(std::move(resolver)) {
+            ReferenceProvider(Protocol protocol, ModelProviderConfig config, CredentialBytesResolver resolver, bool allowLoopback = true)
+                : m_protocol(protocol), m_config(std::move(config)), m_resolver(std::move(resolver)), m_allowLoopback(allowLoopback) {
                 m_config.enabledFeatures.bits &= kProtocolFeatures.bits;
             }
 
@@ -363,15 +394,19 @@ namespace Horo::Agent {
                     discovery.outcome = {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
                     return discovery;
                 }
+                if (!ValidHttpConfig(m_config, m_protocol, m_allowLoopback)) {
+                    discovery.outcome = {
+                        ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
+                    return discovery;
+                }
                 std::string body;
-                SensitiveCredential credential{ResolveCredential()};
-                if (credential.Invalid()) {
+                const auto credential = ResolveCredential();
+                if (m_protocol == Protocol::OpenAI && !ValidBearer(credential)) {
                     discovery.outcome = {ModelError{ModelErrorCode::CredentialUnavailable, "Model credential unavailable", std::nullopt}};
                     return discovery;
                 }
-                discovery.outcome =
-                    HttpRequest(m_config, m_protocol, m_protocol == Protocol::Ollama ? "/api/tags" : "/v1/models", nullptr,
-                                credential.value ? &*credential.value : nullptr, cancellation, [&body](std::string_view line) {
+                discovery.outcome = HttpRequest(m_config, m_protocol, m_protocol == Protocol::Ollama ? "/api/tags" : "/v1/models", nullptr,
+                                                credential.View(), cancellation, [&body](std::string_view line) {
                     body.append(line);
                     return body.size() <= kMaximumDiscoveryBytes;
                 });
@@ -402,17 +437,19 @@ namespace Horo::Agent {
                     return {ModelError{ModelErrorCode::InvalidRequest, "Model event sink is required", std::nullopt}};
                 if (cancellation.stop_requested())
                     return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
+                if (!ValidHttpConfig(m_config, m_protocol, m_allowLoopback))
+                    return {ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
                 const Json payload = RequestJson(request, m_protocol);
                 if (payload.is_null())
                     return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool schema or conversation history", std::nullopt}};
-                SensitiveCredential credential{ResolveCredential()};
-                if (credential.Invalid())
+                const auto credential = ResolveCredential();
+                if (m_protocol == Protocol::OpenAI && !ValidBearer(credential))
                     return {ModelError{ModelErrorCode::CredentialUnavailable, "Model credential unavailable", std::nullopt}};
                 const std::string body = payload.dump();
                 StreamParser parser(m_protocol, sink, cancellation, m_nextInvocation.fetch_add(1));
                 const auto outcome =
                     HttpRequest(m_config, m_protocol, m_protocol == Protocol::Ollama ? "/api/chat" : "/v1/chat/completions", &body,
-                                credential.value ? &*credential.value : nullptr, cancellation, [&parser](std::string_view line) {
+                                credential.View(), cancellation, [&parser](std::string_view line) {
                     return parser.Line(line);
                 });
                 if (parser.Cancelled())
@@ -427,23 +464,21 @@ namespace Horo::Agent {
             }
 
         private:
-            /** @brief Treat a failed cloud lookup as unavailable without carrying provider diagnostics or copying the secret. */
-            std::optional<std::string> ResolveCredential() const {
-                if (m_protocol == Protocol::Ollama)
-                    return std::nullopt;
-                if (m_config.credentialReference.empty() || !m_resolver)
-                    return std::string{};
+            /** @brief Treat a failed cloud lookup as unavailable without carrying provider diagnostics. */
+            Security::SecureBytes ResolveCredential() const {
+                if (m_protocol == Protocol::Ollama || m_config.credentialReference.empty() || !m_resolver)
+                    return {};
                 try {
-                    auto credential = m_resolver(m_config.credentialReference);
-                    return std::move(credential).value_or(std::string{});
+                    return m_resolver(m_config.credentialReference);
                 } catch (...) {  // Credential backends can throw diagnostics containing sensitive material.
-                    return std::string{};
+                    return {};
                 }
             }
 
             Protocol m_protocol;
             ModelProviderConfig m_config;
-            ModelCredentialResolver m_resolver;
+            CredentialBytesResolver m_resolver;
+            bool m_allowLoopback;
             // The adapter owns call-ID uniqueness across concurrent synchronous Stream calls; hosts join calls before destruction.
             std::atomic<std::uint64_t> m_nextInvocation{1};
         };
@@ -451,7 +486,7 @@ namespace Horo::Agent {
 
     /** @copydoc CreateOllamaModelProvider */
     std::unique_ptr<IModelProvider> CreateOllamaModelProvider(ModelProviderConfig config) {
-        return std::make_unique<ReferenceProvider>(Protocol::Ollama, std::move(config), ModelCredentialResolver{});
+        return std::make_unique<ReferenceProvider>(Protocol::Ollama, std::move(config), CredentialBytesResolver{});
     }
 
     /** @copydoc ConfirmOllamaModelTools */
@@ -468,7 +503,7 @@ namespace Horo::Agent {
             return {ModelError{InvalidRequest, "Invalid installed model identifier", std::nullopt}};
 
         std::string body;
-        auto outcome = HttpRequest(config, Protocol::Ollama, "/api/show", &request, nullptr, cancellation, [&body](std::string_view line) {
+        auto outcome = HttpRequest(config, Protocol::Ollama, "/api/show", &request, {}, cancellation, [&body](std::string_view line) {
             if (line.size() > kMaximumDiscoveryBytes - body.size())
                 return false;
             body.append(line);
@@ -488,6 +523,32 @@ namespace Horo::Agent {
 
     /** @copydoc CreateOpenAIModelProvider */
     std::unique_ptr<IModelProvider> CreateOpenAIModelProvider(ModelProviderConfig config, ModelCredentialResolver resolver) {
-        return std::make_unique<ReferenceProvider>(Protocol::OpenAI, std::move(config), std::move(resolver));
+        auto compatible = [resolver = std::move(resolver)](std::string_view reference) -> Security::SecureBytes {
+            struct LegacyText {
+                std::optional<std::string> value;
+                ~LegacyText() {
+                    if (value)
+                        Security::SecureZero(std::as_writable_bytes(std::span{*value}));
+                }
+            };
+            LegacyText credential{resolver ? resolver(reference) : std::nullopt};
+            return credential.value ? Security::SecureBytes{std::as_bytes(std::span{*credential.value})} : Security::SecureBytes{};
+        };
+        return std::make_unique<ReferenceProvider>(Protocol::OpenAI, std::move(config), std::move(compatible));
+    }
+
+    /** @copydoc CreateOpenAIModelProviderWithCredentials */
+    std::unique_ptr<IModelProvider> CreateOpenAIModelProviderWithCredentials(ModelProviderConfig config,
+                                                                             std::shared_ptr<Security::CredentialProvider> credentials) {
+        auto resolve = [credentials = std::move(credentials)](std::string_view text) -> Security::SecureBytes {
+            const auto reference = CredentialReference::Parse(text);
+            if (!credentials || reference.HasError())
+                return {};
+            const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
+            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+            auto result = credentials->Resolve(reference.Value(), now > 0 ? static_cast<std::uint64_t>(now) : 0);
+            return result.HasValue() ? std::move(result).Value() : Security::SecureBytes{};
+        };
+        return std::make_unique<ReferenceProvider>(Protocol::OpenAI, std::move(config), std::move(resolve), false);
     }
 }  // namespace Horo::Agent

@@ -256,7 +256,7 @@ add_library(HoroEngine::ModelProviderAdapters ALIAS HoroModelProviderAdapters)
 target_compile_features(HoroModelProviderAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroModelProviderAdapters
         PUBLIC HoroEngine::ModelProvider
-        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
+        PRIVATE HoroEngine::Security nlohmann_json::nlohmann_json CURL::libcurl)
 
 set(HORO_PLATFORM_FILE_API_PATH_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/platform_file_api_path_headers")
 file(MAKE_DIRECTORY "${HORO_PLATFORM_FILE_API_PATH_HEADERS}")

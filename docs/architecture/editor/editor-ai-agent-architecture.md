@@ -959,6 +959,11 @@ support returns `UnsupportedCapability` before transport work. HTTP and provider
 JSON types remain private to the adapter target. This seam belongs only to the
 editor agent, never `HoroAI` gameplay or packaged runtime composition.
 
+`HoroModelProviderAdapters` privately consumes the security credential contract
+and zeroizing byte owner. The model contract remains independent of security.
+The editor host owns credential provider selection and lifetime. The adapter
+receives only the injected provider and opaque reference for dispatch.
+
 ```cpp
 enum class AgentProvider {
     Local,
@@ -993,6 +998,11 @@ approved count, and releases the snapshot when the turn ends.
   project settings
 - Receives only the context admitted and disclosed for the current request
 - Declares retry, quota, streaming, tool-call, and data-residency capabilities
+
+The host-bound OpenAI-compatible adapter resolves typed credential references
+through the shared security provider for each HTTPS operation. The adapter
+checks the endpoint before lookup and keeps resolved bytes in zeroizing
+application-owned storage. Endpoint and model consent remain host-owned.
 
 ### Provider Selection
 
