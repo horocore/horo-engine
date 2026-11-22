@@ -48,6 +48,7 @@ namespace Horo::Editor {
         };
 
         void Expire(Clock::time_point now) noexcept;
+        void ReconcileSource(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height, bool frameFailed) noexcept;
         bool Submit(GLuint framebuffer);
         CopyCompletion Poll();
         bool CopyPixels();

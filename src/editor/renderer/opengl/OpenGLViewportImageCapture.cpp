@@ -114,12 +114,7 @@ namespace Horo::Editor {
         if (phase_ != EditorViewportImagePhase::Pending && !fence_)
             return;
         Expire(Clock::now());
-        if (phase_ == EditorViewportImagePhase::Pending) {
-            if (target != target_ || width != width_ || height != height_)
-                phase_ = EditorViewportImagePhase::Resized;
-            else if (frameFailed)
-                phase_ = EditorViewportImagePhase::Failed;
-        }
+        ReconcileSource(target, width, height, frameFailed);
         if (fence_) {
             const auto result = Poll();
             if (phase_ == EditorViewportImagePhase::Pending && result != CopyCompletion::Pending)
@@ -127,6 +122,17 @@ namespace Horo::Editor {
             return;
         }
         if (NeedsFramebuffer() && renderedFramebuffer && !Submit(*renderedFramebuffer))
+            phase_ = EditorViewportImagePhase::Failed;
+    }
+
+    /** @brief Withdraws pending publication when the exact render target changes or fails. */
+    void OpenGLViewportImageCapture::ReconcileSource(Render::RenderTargetHandle target, std::uint32_t width, std::uint32_t height,
+                                                     bool frameFailed) noexcept {
+        if (phase_ != EditorViewportImagePhase::Pending)
+            return;
+        if (target != target_ || width != width_ || height != height_)
+            phase_ = EditorViewportImagePhase::Resized;
+        else if (frameFailed)
             phase_ = EditorViewportImagePhase::Failed;
     }
 
@@ -141,7 +147,7 @@ namespace Horo::Editor {
     /** @brief Queues one bounded color rectangle into an OpenGL pixel pack buffer. */
     bool OpenGLViewportImageCapture::Submit(GLuint framebuffer) {
         const PixelPackState pack;
-        const ReadFramebufferState read(framebuffer);
+        const ReadFramebufferState framebufferState(framebuffer);
         if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
             return false;
         glGenBuffers(1, &buffer_);
