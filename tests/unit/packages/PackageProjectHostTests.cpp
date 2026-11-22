@@ -30,6 +30,75 @@ namespace {
         }
     };
 
+    class MetadataFiles final : public DurableFileSystem {
+    public:
+        enum class LockWrite {
+            Normal,
+            FailBeforeReplace,
+            FailAfterReplace
+        };
+        LockWrite write{LockWrite::Normal};
+
+        Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
+            return native_.InspectEntry(path);
+        }
+
+        Result<bool> CreateDirectoryPath(const std::filesystem::path &path, DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
+        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
+            return native_.TryAcquireExclusive(path, owner);
+        }
+
+        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
+            return native_.AvailableBytes(path);
+        }
+
+        Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                         std::filesystem::perms permissions) override {
+            return native_.WritePrivateDurable(path, bytes, created, permissions);
+        }
+
+        Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
+            return native_.WriteDurable(path, bytes);
+        }
+
+        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
+            return native_.CopyDurable(source, destination);
+        }
+
+        Result<void> AtomicReplace(const std::filesystem::path &source, const std::filesystem::path &destination) override {
+            return native_.AtomicReplace(source, destination);
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &source, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
+            const bool lock = destination.filename() == "packages.lock";
+            if (lock && write == LockWrite::FailBeforeReplace)
+                return Result<void>::Failure(Failure());
+            auto replaced = native_.AtomicReplaceTracked(source, destination, receipt);
+            if (replaced.HasValue() && lock && write == LockWrite::FailAfterReplace)
+                return Result<void>::Failure(Failure());
+            return replaced;
+        }
+
+        Result<void> RemoveDurable(const std::filesystem::path &path) override {
+            return native_.RemoveDurable(path);
+        }
+
+        Result<void> SyncDirectory(const std::filesystem::path &path) override {
+            return native_.SyncDirectory(path);
+        }
+
+    private:
+        static Error Failure() {
+            return Error{ErrorCode{"test.package.metadata_write_failed"}, ErrorDomainId{"test"}};
+        }
+
+        NativeDurableFileSystem native_;
+    };
+
     struct HostFixture final {
         Horo::Tests::Packages::TemporaryDirectory project{"package host ü"}, content{"package host content"};
         NativeDurableFileSystem files;
@@ -90,6 +159,12 @@ namespace {
             REQUIRE(output.good());
         }
 
+        std::string Read(const char *name) const {
+            std::ifstream input{project.Path() / ".horo" / name, std::ios::binary};
+            REQUIRE(input.good());
+            return {std::istreambuf_iterator<char>{input}, {}};
+        }
+
         std::shared_ptr<PackageApplication> Acquire() {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (std::chrono::steady_clock::now() < deadline) {
@@ -103,6 +178,73 @@ namespace {
             return {};
         }
     };
+
+    TEST_CASE("Package metadata removal recovers both sides of the lock commit point", "[packages][application][host]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto journal = policy.projectRoot / ".horo/local/package-metadata.pending";
+        const auto oldRequest = fixture.Read("packages.json") + "\n";
+        fixture.Write("packages.json", oldRequest);
+        const auto initial = PreparePackageProject(policy, files, {});
+        REQUIRE(initial.HasValue());
+        CHECK_FALSE(std::filesystem::exists(journal.parent_path()));
+        const auto oldLock = fixture.Read("packages.lock");
+
+        SECTION("Failed replacement restores the exact previous request and allows retry") {
+            files.write = MetadataFiles::LockWrite::FailBeforeReplace;
+            CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasError());
+            REQUIRE(std::filesystem::exists(journal));
+            CHECK(fixture.Read("packages.json") != oldRequest);
+            REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
+            CHECK(fixture.Read("packages.json") == oldRequest);
+            CHECK(fixture.Read("packages.lock") == oldLock);
+            CHECK_FALSE(std::filesystem::exists(journal));
+            files.write = MetadataFiles::LockWrite::Normal;
+            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasValue());
+        }
+
+        SECTION("Committed lock with an uncertain flush keeps the new pair") {
+            files.write = MetadataFiles::LockWrite::FailAfterReplace;
+            const auto committed = PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files);
+            REQUIRE(committed.HasValue());
+            CHECK(committed.Value().recoveryDiagnostic.has_value());
+            CHECK(std::filesystem::exists(journal));
+        }
+
+        const auto current = PreparePackageProject(policy, files, {});
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().application.portableRequest->Dependencies().empty());
+        CHECK(current.Value().application.lockedPlan->Packages().empty());
+        CHECK_FALSE(std::filesystem::exists(journal));
+    }
+
+    TEST_CASE("Package metadata recovery leaves an independently edited request intact", "[packages][application][host]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto before = PreparePackageProject(policy, files, {});
+        REQUIRE(before.HasValue());
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto oldRequest = fixture.Read("packages.json");
+        fixture.Write("packages.json", oldRequest + "\n");
+        REQUIRE(PublishPackageProjectRemoval(policy, before.Value(), fixture.graph.package, files).HasError());
+        CHECK(fixture.Read("packages.json") == oldRequest + "\n");
+        const auto approved = PreparePackageProject(policy, files, {});
+        REQUIRE(approved.HasValue());
+        files.write = MetadataFiles::LockWrite::FailBeforeReplace;
+        REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files).HasError());
+        const auto edited = fixture.Read("packages.json") + "\n";
+        fixture.Write("packages.json", edited);
+        const auto conflicted = PreparePackageProject(policy, files, {});
+        REQUIRE(conflicted.HasError());
+        CHECK(conflicted.ErrorValue().code.Value() == "packages.host.metadata_conflict");
+        CHECK(fixture.Read("packages.json") == edited);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+    }
 
     TEST_CASE("Package project root rejects stale screen boundaries and retains closed capabilities safely",
               "[packages][application][host]") {

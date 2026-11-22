@@ -21,8 +21,9 @@ namespace Horo::Application::Internal {
         auto captured = policy;
         const auto sampleTime = services.clock.MonotonicNow();
         auto submitted = services.jobs.SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
-                                                    [destination, captured = std::move(captured)](const CancellationToken &cancellation) {
-            auto result = PreparePackageProject(captured, cancellation);
+                                                    [destination, captured = std::move(captured),
+                                                     &files = services.files](const CancellationToken &cancellation) {
+            auto result = PreparePackageProject(captured, files, cancellation);
             std::lock_guard guard(destination->mutex);
             destination->result.emplace(std::move(result));
             return Result<void>::Success();

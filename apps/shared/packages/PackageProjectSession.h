@@ -40,13 +40,30 @@ namespace Horo::Application::Internal {
     struct PreparedPackageProject final {
         PackageApplicationConfiguration application;
         Sha256Digest lockDigest;
+        Sha256Digest requestDocumentDigest;
     };
 
     /** @brief Reads exact portable metadata, validating request/lock freshness without resolving, fetching or executing code.
-     * @param policy Host project/platform policy. @param cancellation Parent I/O cancellation.
+     * @param policy Host project/platform policy. @param files Filesystem for interrupted publication recovery.
+     * @param cancellation Parent I/O cancellation.
      * @return Complete validated snapshot or typed source diagnostic. */
-    [[nodiscard]] Result<PreparedPackageProject> PreparePackageProject(const PackageProjectPolicy &policy,
+    [[nodiscard]] Result<PreparedPackageProject> PreparePackageProject(const PackageProjectPolicy &policy, DurableFileSystem &files,
                                                                        const CancellationToken &cancellation);
+
+    /** @brief Publication reached the lock replacement commit point. */
+    struct PackageMetadataPublication final {
+        std::optional<Error> recoveryDiagnostic; /**< Durability or journal cleanup needs another recovery pass. */
+    };
+
+    /** @brief Publishes the pair for an approved removal and keeps an undo journal until the pair is durable.
+     * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
+     * @param package Direct request to withdraw. @param files Host filesystem authority.
+     * @pre The caller has checked references and executable ownership for this snapshot and approved this removal.
+     * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
+    [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
+                                                                                  const PreparedPackageProject &expected,
+                                                                                  const Packages::HoroPackageId &package,
+                                                                                  DurableFileSystem &files);
 
     /** @brief Owns all project package authorities; aliasing application leases pin this entire owner.
      * @details Create/Pump/Close and final destruction belong to one host lane. The host retains its explicit session until
