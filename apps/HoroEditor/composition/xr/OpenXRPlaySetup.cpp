@@ -743,8 +743,8 @@ namespace Horo::Application::Internal {
             if (busy_ || !std::exchange(setupRefreshRequested_, false) || instanceLost_ || !setupPreflight_)
                 return;
             const Operation operation{*this};
-            const auto current = composition_.session.ValidateDeviceQualification(
-                *setupPreflight_, composition_.frontend.Capabilities().support);
+            const auto current =
+                composition_.session.ValidateDeviceQualification(*setupPreflight_, composition_.frontend.Capabilities().support);
             if (current.HasError()) {
                 setup_.test = Editor::EditorXrSetupTestState::Failed;
                 setup_.issue = SetupIssue(current.ErrorValue());

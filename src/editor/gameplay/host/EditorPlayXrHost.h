@@ -374,6 +374,7 @@ namespace Horo::Editor {
         [[nodiscard]] virtual Result<EditorXrSetupTestId> RequestSetupTest() = 0;
         /** @brief Cancel only the specified queued request. Committed observations cannot be revoked by a stale ID. */
         virtual void CancelSetupTest(EditorXrSetupTestId request) noexcept = 0;
+
         /** @brief Queues one cold freshness check of previously accepted setup evidence. */
         virtual void RequestSetupRefresh() noexcept {}
     };

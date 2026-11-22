@@ -796,7 +796,9 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.admission = false;
             CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
             unsigned admissionChecks = 0;
-            fixture.onCheckAdmission = [&] { ++admissionChecks; };
+            fixture.onCheckAdmission = [&] {
+                ++admissionChecks;
+            };
             fixture.play->RequestSetupRefresh();
             fixture.play->RequestSetupRefresh();
             CHECK(fixture.play->ReadSetup().test == Passed);
