@@ -336,7 +336,8 @@ namespace Horo::XR {
         if (runtime.HasError())
             return Result<XRProjectSettings>::Failure(runtime.ErrorValue());
         settings.runtimeSelection_ = static_cast<XRRuntimeSelectionPolicy>(runtime.Value());
-        const auto profile = Integer(source, "xr.capability_profile", 0, static_cast<std::int64_t>(XRFeatureProfile::TrackedInteraction1_0));
+        const auto profile =
+            Integer(source, "xr.capability_profile", 0, static_cast<std::int64_t>(XRFeatureProfile::TrackedInteraction1_0));
         if (profile.HasError())
             return Result<XRProjectSettings>::Failure(profile.ErrorValue());
         settings.profile_ = static_cast<XRFeatureProfile>(profile.Value());

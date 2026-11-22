@@ -305,10 +305,13 @@ namespace Horo::Tests::OpenXR {
     }
 
     inline XRCapabilitySnapshot Capabilities(std::uint32_t maximumActions = 16, const bool synthesis = false, const bool quad = false) {
-        XRCapabilityDescriptor
-            descriptor{.system = {.runtime = IdentityValue<XRRuntimeGeneration>(1), .slot = {.index = 1, .generation = 1}},
-                       .revision = IdentityValue<XRCapabilityRevision>(1),
-                       .limits = {.maximumViews = quad ? 4U : 2U, .maximumSpaces = 8, .maximumActions = maximumActions, .maximumDevices = 4}};
+        XRCapabilityDescriptor descriptor{.system = {.runtime = IdentityValue<XRRuntimeGeneration>(1),
+                                                     .slot = {.index = 1, .generation = 1}},
+                                          .revision = IdentityValue<XRCapabilityRevision>(1),
+                                          .limits = {.maximumViews = quad ? 4U : 2U,
+                                                     .maximumSpaces = 8,
+                                                     .maximumActions = maximumActions,
+                                                     .maximumDevices = 4}};
         descriptor.states.fill(XRCapabilityState::Available);
         descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] =
             synthesis ? XRCapabilityState::Available : XRCapabilityState::Unsupported;

@@ -174,10 +174,18 @@ namespace Horo::Tests::OpenXRAction {
         const auto session = fixture.actions.session.Request().candidate;
         const XRTimeEvidence time{IdentityValue<XRRuntimeTime>(100), {}, IdentityValue<XRRenderPredictionTime>(120)};
         bool valid = false;
-        SECTION("Four matching projections publish together") { valid = true; }
-        SECTION("A runtime cannot return only its outer pair") { script.count = 2; }
-        SECTION("An inset cannot change its eye position") { script.displacedInset = true; }
-        SECTION("An inset cannot extend beyond its peripheral projection") { script.oversizedInset = true; }
+        SECTION("Four matching projections publish together") {
+            valid = true;
+        }
+        SECTION("A runtime cannot return only its outer pair") {
+            script.count = 2;
+        }
+        SECTION("An inset cannot change its eye position") {
+            script.displacedInset = true;
+        }
+        SECTION("An inset cannot extend beyond its peripheral projection") {
+            script.oversizedInset = true;
+        }
         const auto result = fixture.actions.owner.LocatePresentation(session, time, 4);
         if (valid) {
             REQUIRE(result.HasValue());

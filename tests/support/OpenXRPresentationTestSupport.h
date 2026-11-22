@@ -33,8 +33,8 @@ namespace Horo::Tests::OpenXRAction {
                                                      std::uint32_t capacity, std::uint32_t *count, XrView *views) {
             REQUIRE(session != XR_NULL_HANDLE);
             REQUIRE(info->type == XR_TYPE_VIEW_LOCATE_INFO);
-            const auto expected = active->quad ? XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET
-                                               : XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            const auto expected =
+                active->quad ? XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET : XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
             REQUIRE(info->viewConfigurationType == expected);
             REQUIRE(info->space != XR_NULL_HANDLE);
             REQUIRE(capacity == (active->quad ? 4U : 2U));

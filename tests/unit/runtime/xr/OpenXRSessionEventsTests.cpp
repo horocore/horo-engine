@@ -43,9 +43,9 @@ namespace Horo::Tests::OpenXR {
                 if (quad) {
                     native.capabilities = Capabilities(16, false, true);
                     const auto &evidence = native.capabilities;
-                    const auto plan = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(),
-                                                          {.profile = XRFeatureProfile::FoveatedInsetProjection,
-                                                           .requestedLimits = {4, 2, 8, 1}});
+                    const auto plan =
+                        NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(),
+                                            {.profile = XRFeatureProfile::FoveatedInsetProjection, .requestedLimits = {4, 2, 8, 1}});
                     REQUIRE(plan.plan);
                     native.plan = *plan.plan;
                     script.expectedViewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;

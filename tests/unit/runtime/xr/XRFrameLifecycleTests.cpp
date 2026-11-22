@@ -347,8 +347,7 @@ namespace Horo::XR {
             XRFrameLifecycle frames{sessions};
             const auto capabilities = Capabilities(1, 0, false, true);
             const auto plan = NegotiateXRFeatures(capabilities, capabilities.System(), capabilities.Revision(),
-                                                  {.profile = XRFeatureProfile::FoveatedInsetProjection,
-                                                   .requestedLimits = {4, 2, 4, 1}});
+                                                  {.profile = XRFeatureProfile::FoveatedInsetProjection, .requestedLimits = {4, 2, 4, 1}});
             REQUIRE(plan.plan);
             const auto active = sessions.Activate(capabilities, capabilities.System(), capabilities.Revision(), *plan.plan);
             REQUIRE(active.HasValue());

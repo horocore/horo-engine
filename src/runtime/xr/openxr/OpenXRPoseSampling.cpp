@@ -488,8 +488,8 @@ namespace Horo::XR::OpenXRInternal {
         NativePresentationViews output;
         for (auto &view : output.views)
             view.type = XR_TYPE_VIEW;
-        const XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO, nullptr, configuration.Value().type,
-                                    time.renderPrediction->Nanoseconds(), tracking_.base};
+        const XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO, nullptr, configuration.Value().type, time.renderPrediction->Nanoseconds(),
+                                    tracking_.base};
         XrViewState state{XR_TYPE_VIEW_STATE};
         if (const auto located =
                 dispatch_.locateViews(current.Value().session, &info, &state, expectedViews, &output.count, output.views.data());
