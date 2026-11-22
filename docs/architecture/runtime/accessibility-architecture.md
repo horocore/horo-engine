@@ -501,6 +501,9 @@ cross-domain notification rather than state storage.
   callbacks run. Native behavior callbacks can copy desired settings via
   `BehaviorContext::AssistPreferences()` during fixed dispatch. Presentation
   callbacks and hosts without the configuration authority receive an empty value.
+  Lua exposes the same values as a detached third argument to
+  `on_fixed_update(ctx, delta, assists)` when the host supplies them and the
+  behavior declares `uses_assist_preferences = true`.
 - Desired preferences persist in user settings. Applying an assist still respects
   game/server authority and supported capabilities; accessibility labeling cannot
   bypass configuration or ADR-018 command authorization.

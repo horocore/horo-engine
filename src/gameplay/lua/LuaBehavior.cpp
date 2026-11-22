@@ -121,7 +121,7 @@ namespace Horo::Gameplay {
         }
 
         void OnFixedUpdate(BehaviorContext &context, const FixedDeltaTime delta) override {
-            Call("on_fixed_update", context, delta.seconds);
+            Call("on_fixed_update", context, delta.seconds, nullptr, nullptr, context.AssistPreferences());
         }
 
         void OnPresentationUpdate(BehaviorContext &context, const FrameDeltaTime delta) override {
@@ -392,9 +392,13 @@ namespace Horo::Gameplay {
 
         /** @brief Marshals only borrowed callback arguments inside the protected Lua boundary. */
         static int PushCallbackArguments(lua_State *state, const std::optional<double> &delta, const GameplayInputAction *action,
-                                         const GameplayEvent *event) {
+                                         const GameplayEvent *event, const GameplayAssistPreferences *assists) {
             if (delta.has_value()) {
                 lua_pushnumber(state, *delta);
+                if (assists) {
+                    PushAssistPreferences(state, *assists);
+                    return 3;
+                }
                 return 2;
             }
             if (action != nullptr) {
@@ -408,8 +412,40 @@ namespace Horo::Gameplay {
             return 1;
         }
 
+        /** @brief Reads the opt-in from the loaded behavior table, underneath its callback on the stack. */
+        static const GameplayAssistPreferences *SelectAssistArgument(lua_State *state,
+                                                                     const std::optional<GameplayAssistPreferences> &assists) {
+            if (!assists)
+                return nullptr;
+            lua_pushliteral(state, "uses_assist_preferences");
+            lua_rawget(state, -3);
+            const bool requested = lua_isboolean(state, -1) && lua_toboolean(state, -1);
+            lua_pop(state, 1);
+            return requested ? &*assists : nullptr;
+        }
+
+        /** @brief Creates a detached value table with no reference to the host or its authority. */
+        static void PushAssistPreferences(lua_State *state, const GameplayAssistPreferences &assists) {
+            lua_createtable(state, 0, 7);
+            lua_pushnumber(state, assists.aimAssist);
+            lua_setfield(state, -2, "aim_assist");
+            lua_pushboolean(state, assists.autoAimSnap);
+            lua_setfield(state, -2, "auto_aim_snap");
+            lua_pushnumber(state, assists.aggressionReduction);
+            lua_setfield(state, -2, "aggression_reduction");
+            lua_pushnumber(state, assists.reactionTimeMultiplier);
+            lua_setfield(state, -2, "reaction_time_multiplier");
+            lua_pushboolean(state, assists.skipQuickTimeEvents);
+            lua_setfield(state, -2, "skip_quick_time_events");
+            lua_pushnumber(state, assists.postHitInvulnerabilitySeconds);
+            lua_setfield(state, -2, "post_hit_invulnerability_seconds");
+            lua_pushnumber(state, assists.damageMultiplier);
+            lua_setfield(state, -2, "damage_multiplier");
+        }
+
         void Call(const char *name, BehaviorContext &context, const std::optional<double> delta = std::nullopt,
-                  const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr) {
+                  const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr,
+                  const std::optional<GameplayAssistPreferences> assists = std::nullopt) {
             if (!EnsureLoaded())
                 return;
             if (!vm_.uiBound) {
@@ -430,14 +466,15 @@ namespace Horo::Gameplay {
             const Detail::LuaAnimationCallback animationCallback(vm_.animationCallback);
             try {
                 BindCharacter(context);
-                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, &vfx, &animation, name, delta, action,
-                                                    event](lua_State *inner) {
+                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, &vfx, &animation, name, delta, action, event,
+                                                    &assists](lua_State *inner) {
                     lua_rawgeti(inner, LUA_REGISTRYINDEX, vm_.behaviorRef);
                     lua_getfield(inner, -1, name);
                     if (lua_isnil(inner, -1))
                         return 0;
+                    const auto *assistArgument = SelectAssistArgument(inner, assists);
                     PushContext(inner, context, physics, navigation, vfx, animation);
-                    const int argumentCount = PushCallbackArguments(inner, delta, action, event);
+                    const int argumentCount = PushCallbackArguments(inner, delta, action, event, assistArgument);
                     lua_call(inner, argumentCount, 0);
                     return 0;
                 });

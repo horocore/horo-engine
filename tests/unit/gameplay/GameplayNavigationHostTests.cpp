@@ -10,6 +10,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #endif
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -130,8 +131,10 @@ namespace {
     /** @brief Places the shipped beacon and pursuit behavior on two root entities. */
     Runtime::RuntimeSceneDefinition GuardPursuitScene(const BehaviorTypeId &pursuit, const BehaviorTypeId &beacon) {
         const std::vector<BehaviorField> channel{{"channel", std::string{"test guard"}}};
+        auto pursuitFields = channel;
+        pursuitFields.push_back({"assist_reaction_seconds", 0.125});
         Runtime::RuntimeComponentSet guardComponents, beaconComponents;
-        guardComponents.behaviors.emplace_back(BehaviorInstanceId{1}, pursuit, 1, true, channel);
+        guardComponents.behaviors.emplace_back(BehaviorInstanceId{1}, pursuit, 1, true, std::move(pursuitFields));
         beaconComponents.behaviors.emplace_back(BehaviorInstanceId{2}, beacon, 1, true, channel);
         Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
         builder.Add({Runtime::SceneObjectId{2}, std::nullopt, {}, std::nullopt, std::move(guardComponents)});
@@ -349,7 +352,55 @@ TEST_CASE("Lua move-to and follow expose canonical replacement and explicit canc
     CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 5);
 }
 
-TEST_CASE("guard pursuit follows the shipped beacon generation and cancels after the signal expires") {
+TEST_CASE("Lua assist preferences are detached fixed-step values and remain absent when withheld") {
+    const bool optsIn = GENERATE(false, true);
+    std::string source = R"lua(
+        return horo.behavior {
+            type_id = "game.tests.navigation", display_name = "Assist probe",
+    )lua";
+    if (optsIn)
+        source += "uses_assist_preferences = true,";
+    source += R"lua(
+            on_fixed_update = function(ctx, dt, assists)
+                if not assists then
+                    ctx.transform.set_position(2, 0, 0)
+                    return
+                end
+                assert(assists.aim_assist == 0.5 and assists.auto_aim_snap)
+                assert(assists.aggression_reduction == 0.75 and assists.reaction_time_multiplier == 2)
+                assert(assists.skip_quick_time_events and assists.post_hit_invulnerability_seconds == 0.25)
+                assert(assists.damage_multiplier == 0.5)
+                assists.damage_multiplier = 9
+                ctx.transform.set_position(1, 0, 0)
+            end,
+            on_presentation_update = function(ctx, dt, assists)
+                assert(assists == nil)
+            end
+        }
+    )lua";
+    auto program = LuaBehaviorProgram::Compile(source, Type(), "assist-probe.horo_script");
+    REQUIRE(program.HasValue());
+    BehaviorRegistry registry;
+    auto active = ActivateScript(*program.Value(), registry, {});
+    const GameplayAssistPreferences assists{0.5F, true, 0.75F, 2.0F, true, 0.25F, 0.5F};
+    const auto actor = active.scene->View().Find(Runtime::SceneObjectId{2});
+    REQUIRE(actor);
+    REQUIRE(active.runtime->FixedUpdate({}, FixedDeltaTime{0.1}, nullptr, &assists).HasValue());
+    CHECK(active.scene->View().Get(*actor).Value().localTransform->translation.x == (optsIn ? 1.0F : 2.0F));
+    CHECK(assists.damageMultiplier == 0.5F);
+    active.runtime->PresentationUpdate(FrameDeltaTime{0.1});
+    CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 2.0F);
+}
+
+TEST_CASE("guard pursuit respects fixed-step reaction assists and its existing Navigation grant") {
+    enum class Mode {
+        NoPreferences,
+        Delayed,
+        NavigationWithheld
+    };
+    const auto mode = GENERATE(Mode::NoPreferences, Mode::Delayed, Mode::NavigationWithheld);
+    const GameplayAssistPreferences assists{.reactionTimeMultiplier = 3.0F};
+    constexpr FixedDeltaTime delta{0.125};
     Fixture fixture("game.example.guard");
     const auto script = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets/Scripts/GuardPursuit.horo_script";
     std::ifstream input{script, std::ios::binary};
@@ -366,7 +417,8 @@ TEST_CASE("guard pursuit follows the shipped beacon generation and cancels after
     REQUIRE(registry.Freeze().HasValue());
     auto scene = Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{fixture.binding.scene.Value()});
     REQUIRE(scene.HasValue());
-    auto runtime = BehaviorRuntime::Create(*scene.Value(), registry, {}, {.navigation = fixture.context});
+    auto runtime =
+        BehaviorRuntime::Create(*scene.Value(), registry, {}, {.navigation = mode == Mode::NavigationWithheld ? nullptr : fixture.context});
     REQUIRE(runtime.HasValue());
     const auto target = scene.Value()->View().Find(Runtime::SceneObjectId{3});
     REQUIRE(target);
@@ -374,9 +426,22 @@ TEST_CASE("guard pursuit follows the shipped beacon generation and cancels after
     now.target = NavigationMovementTarget{{fixture.binding.scene, target->entity.index, target->entity.generation}, {9, 0, 9}, 1};
     REQUIRE(fixture.context->Refresh(now).HasValue());
 
-    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    const auto tick = [&runtime, &assists, mode, delta] {
+        REQUIRE(runtime.Value()->FixedUpdate({}, delta, nullptr, mode == Mode::NoPreferences ? nullptr : &assists).HasValue());
+    };
+    tick();
     CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
-    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    if (mode != Mode::NoPreferences) {
+        tick();
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+        tick();
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+    }
+    tick();
+    if (mode == Mode::NavigationWithheld) {
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+        return;
+    }
     REQUIRE(fixture.movement->Status().state == NavigationMovementState::Querying);
     const auto operation = fixture.movement->Status().id;
 #ifdef HORO_TEST_NAVIGATION_DETOUR
@@ -386,10 +451,10 @@ TEST_CASE("guard pursuit follows the shipped beacon generation and cancels after
     Runtime::SceneCommandBuffer commands;
     commands.Destroy(*target);
     REQUIRE(scene.Value()->Commit(std::move(commands)).HasValue());
-    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    tick();
     CHECK(fixture.movement->Status().state == retainedState);
     CHECK(fixture.movement->Status().id == operation);
-    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    tick();
     CHECK(fixture.movement->Status().state == NavigationMovementState::Cancelled);
 }
 

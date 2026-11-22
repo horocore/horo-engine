@@ -1,6 +1,7 @@
 local observed
 local target
 local follow
+local reaction_elapsed
 
 local function stop_following()
     if follow then
@@ -8,6 +9,7 @@ local function stop_following()
         follow = nil
     end
     target = nil
+    reaction_elapsed = nil
 end
 
 local function on_event(ctx, event)
@@ -22,7 +24,27 @@ local function on_event(ctx, event)
     end
 end
 
-local function on_fixed_update(ctx)
+local function wait_for_reaction(ctx, delta, assists)
+    local delay = 0
+    if assists then
+        local base = ctx.fields.get("assist_reaction_seconds")
+        if type(base) == "number" and base >= 0 and base < math.huge then
+            delay = base * (assists.reaction_time_multiplier - 1)
+        end
+    end
+    if delay < math.huge and reaction_elapsed < delay then
+        reaction_elapsed = reaction_elapsed + delta
+        return
+    end
+    reaction_elapsed = nil
+    local err
+    follow, err = ctx.navigation.follow(target.x, target.y, target.z, target.index, target.generation)
+    if err then
+        ctx.log.info("Guard pursuit: " .. err.code)
+    end
+end
+
+local function on_fixed_update(ctx, delta, assists)
     local next_target = observed
     observed = nil
     if not next_target then
@@ -31,12 +53,11 @@ local function on_fixed_update(ctx)
     end
     if not target or target.index ~= next_target.index or target.generation ~= next_target.generation then
         stop_following()
+        reaction_elapsed = 0
+    end
+    if reaction_elapsed then
         target = next_target
-        local err
-        follow, err = ctx.navigation.follow(target.x, target.y, target.z, target.index, target.generation)
-        if err then
-            ctx.log.info("Guard pursuit: " .. err.code)
-        end
+        wait_for_reaction(ctx, delta, assists)
         return
     end
     if follow then
@@ -56,7 +77,8 @@ return horo.behavior {
     display_name = "Guard pursuit",
     category = "Guard example",
     schema_version = 1,
-    fields = {{name = "channel", default = "guard"}},
+    uses_assist_preferences = true,
+    fields = {{name = "channel", default = "guard"}, {name = "assist_reaction_seconds", default = 0.1}},
     on_event = on_event,
     on_fixed_update = on_fixed_update,
     on_destroy = stop_following,

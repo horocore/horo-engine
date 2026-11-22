@@ -86,6 +86,12 @@ observation. The beacon publishes
 the target's live entity generation and position after each fixed update.
 The Lua behavior submits one follow request, retains its opaque handle, and
 cancels when the signal stops or its target generation changes.
+In Editor Play, the guard uses the player's reaction time multiplier to delay
+acquiring a newly observed target. The authored `assist_reaction_seconds`
+field sets the added delay per unit above the neutral multiplier of 1.
+The timer advances in fixed simulation steps and resets when the target signal
+expires. The behavior still needs Navigation permission to start pursuit.
+Hosts that withhold player preferences use the original timing.
 The Navigation host test loads the shipped behavior on a real runtime Scene
 and exercises request admission and cancellation.
 
