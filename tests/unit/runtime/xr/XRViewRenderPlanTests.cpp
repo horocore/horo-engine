@@ -520,7 +520,37 @@ namespace Horo::XR {
             REQUIRE(unreadable.HasValue());
             CHECK_FALSE(unreadable.Value().drawable);
 
+            canvas.minimumSpanPixels = 24;
+            canvas.worldFromCanvas.values[12] = 5.45F;
+            const auto beforeClip = Tests::AllocationProbe::Count();
+            const auto sliver = scene.Value().ProjectWorldCanvas(canvas, active);
+            const auto afterClip = Tests::AllocationProbe::Count();
+            REQUIRE(sliver.HasValue());
+            CHECK(afterClip == beforeClip);
+            CHECK_FALSE(sliver.Value().drawable);
+            for (const auto &eye : sliver.Value().views) {
+                CHECK(eye.projectedSpanPixels > 10);
+                CHECK(eye.projectedSpanPixels < 24);
+            }
+            canvas.minimumSpanPixels = 10;
+            const auto partiallyVisible = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(partiallyVisible.HasValue());
+            CHECK(partiallyVisible.Value().drawable);
+
+            const auto overfill = Math::Transform{.translation = {3, 1.7F, -2},
+                                                  .rotation = Math::Quaternion::FromEulerRadians({0, 0, Math::Pi / 4}),
+                                                  .scale = {4, 4, 1}}
+                                      .TryToMatrix();
+            REQUIRE(overfill.HasValue());
+            canvas.worldFromCanvas = overfill.Value();
+            const auto clippedCorners = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(clippedCorners.HasValue());
+            CHECK(clippedCorners.Value().drawable);
+            for (const auto &eye : clippedCorners.Value().views)
+                CHECK(eye.projectedSpanPixels <= static_cast<float>(std::min(eye.renderRectangle.width, eye.renderRectangle.height)));
+
             canvas.minimumSpanPixels = 1;
+            canvas.worldFromCanvas = stereo.worldFromCanvas;
             canvas.worldFromCanvas.values[14] = -0.05F;
             const auto tooClose = scene.Value().ProjectWorldCanvas(canvas, active);
             REQUIRE(tooClose.HasValue());

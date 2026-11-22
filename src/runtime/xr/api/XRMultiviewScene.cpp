@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace Horo::XR {
     namespace {
@@ -111,7 +112,96 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
 
-        /** @brief Measures the fixed quad in the exact eye rectangle. A depth crossing suppresses the eye before perspective division. */
+        struct CanvasPoint final {
+            double x, y;
+        };
+
+        struct CanvasClipEdge final {
+            bool xAxis;
+            double sign;
+            double limit;
+
+            [[nodiscard]] double Distance(const CanvasPoint point) const noexcept {
+                return limit - sign * (xAxis ? point.x : point.y);
+            }
+        };
+
+        /** @brief Clips a convex polygon against one viewport edge without duplicating boundary points. */
+        std::optional<std::size_t> ClipCanvasEdge(const std::span<const CanvasPoint> input, const std::span<CanvasPoint> output,
+                                                  const CanvasClipEdge edge) noexcept {
+            if (input.empty())
+                return 0;
+            std::size_t count = 0;
+            auto previous = input.back();
+            auto priorDistance = edge.Distance(previous);
+            for (const auto point : input) {
+                const auto distance = edge.Distance(point);
+                const bool crossing = (priorDistance < 0 && distance > 0) || (priorDistance > 0 && distance < 0);
+                const bool inside = distance >= 0;
+                const auto emitted = static_cast<std::size_t>(crossing) + static_cast<std::size_t>(inside);
+                if (emitted > output.size() - count)
+                    return std::nullopt;
+                if (crossing) {
+                    const auto fraction = priorDistance / (priorDistance - distance);
+                    const auto boundary = edge.sign * edge.limit;
+                    output[count++] = edge.xAxis ? CanvasPoint{boundary, std::lerp(previous.y, point.y, fraction)}
+                                                 : CanvasPoint{std::lerp(previous.x, point.x, fraction), boundary};
+                }
+                if (inside)
+                    output[count++] = point;
+                previous = point;
+                priorDistance = distance;
+            }
+            return count;
+        }
+
+        /** @brief Measures the narrowest width and, for an unclipped quad, its shortest perspective edge. */
+        double CanvasSpan(const std::span<const CanvasPoint> polygon, const bool includeEdgeLength) noexcept {
+            if (polygon.size() < 3)
+                return 0;
+            auto width = std::numeric_limits<double>::infinity();
+            for (std::size_t index = 0; index < polygon.size(); ++index) {
+                const auto a = polygon[index];
+                const auto b = polygon[(index + 1) % polygon.size()];
+                const auto dx = b.x - a.x;
+                const auto dy = b.y - a.y;
+                const auto length = std::hypot(dx, dy);
+                if (length == 0) {
+                    if (includeEdgeLength)
+                        return 0;
+                    continue;
+                }
+                const auto distance = [a, dx, dy](const CanvasPoint point) {
+                    return dx * (point.y - a.y) - dy * (point.x - a.x);
+                };
+                const auto [low, high] = std::ranges::minmax_element(polygon, {}, distance);
+                width = std::min(width, (distance(*high) - distance(*low)) / length);
+                if (includeEdgeLength)
+                    width = std::min(width, length);
+            }
+            return std::isfinite(width) ? width : 0;
+        }
+
+        /** @brief Clips a projected quad to the eye rectangle using at most eight vertices. */
+        std::optional<double> VisibleCanvasSpan(const std::array<CanvasPoint, 4> &quad, const double halfWidth,
+                                                const double halfHeight) noexcept {
+            constexpr std::size_t MaximumIntersectionVertices = 8;
+            std::array<CanvasPoint, MaximumIntersectionVertices> polygon, scratch;
+            std::ranges::copy(quad, polygon.begin());
+            auto count = quad.size();
+            const std::array edges{CanvasClipEdge{true, 1, halfWidth}, CanvasClipEdge{true, -1, halfWidth},
+                                   CanvasClipEdge{false, 1, halfHeight}, CanvasClipEdge{false, -1, halfHeight}};
+            for (const auto edge : edges) {
+                const auto clipped = ClipCanvasEdge(std::span{polygon}.first(count), scratch, edge);
+                if (!clipped)
+                    return std::nullopt;
+                count = *clipped;
+                std::ranges::copy(std::span{scratch}.first(count), polygon.begin());
+            }
+            return CanvasSpan(std::span{polygon}.first(count), false);
+        }
+
+        /** @brief Measures the visible quad in the exact eye rectangle. A depth crossing suppresses the eye before perspective division. */
         [[nodiscard]] Result<float> MeasureCanvasEye(const Math::Mat4 &clip, const XRRenderRectangle &rect,
                                                      const Math::ClipDepthRange depthRange) {
             using Measure = Result<float>;
@@ -130,61 +220,21 @@ namespace Horo::XR {
                 return point.w <= 0 || point.z < nearDepth || point.z > point.w;
             }))
                 return Measure::Success(0);
-            const auto outside = [&points](const auto project) {
-                return std::ranges::all_of(points, [project](const auto point) {
-                    return project(point) > point.w;
-                });
-            };
-            if (outside([](const auto p) {
-                return p.x;
-            }) ||
-                outside([](const auto p) {
-                return -p.x;
-            }) ||
-                outside([](const auto p) {
-                return p.y;
-            }) ||
-                outside([](const auto p) {
-                return -p.y;
-            }))
-                return Measure::Success(0);
-
-            struct Point final {
-                double x, y;
-            };
-
-            std::array<Point, points.size()> normalized;
-            std::ranges::transform(points, normalized.begin(), [](const auto p) {
-                return Point{static_cast<double>(p.x) / p.w, static_cast<double>(p.y) / p.w};
+            const auto halfWidth = rect.width * 0.5;
+            const auto halfHeight = rect.height * 0.5;
+            std::array<CanvasPoint, points.size()> projected;
+            std::ranges::transform(points, projected.begin(), [halfWidth, halfHeight](const auto point) {
+                return CanvasPoint{halfWidth * point.x / point.w, halfHeight * point.y / point.w};
             });
-            double shortest = std::numeric_limits<float>::max();
-            for (std::size_t index = 0; index < normalized.size(); ++index) {
-                const auto a = normalized[index];
-                const auto b = normalized[(index + 1) % normalized.size()];
-                const auto c = normalized[(index + 2) % normalized.size()];
-                const auto d = normalized[(index + 3) % normalized.size()];
-                const double normalX = b.y - a.y;
-                const double normalY = a.x - b.x;
-                const double side = normalX * a.x + normalY * a.y;
-                const double quad = normalX * c.x + normalY * c.y;
-                const double viewport = std::abs(normalX) + std::abs(normalY);
-                // The viewport axes are checked above. These quad-edge axes reject separation across a viewport corner.
-                if ((quad > side && side > viewport) || (quad < side && side < -viewport))
-                    return Measure::Success(0);
-                const double xScale = rect.width * 0.5;
-                const double yScale = rect.height * 0.5;
-                const auto dx = (b.x - a.x) * xScale;
-                const auto dy = (b.y - a.y) * yScale;
-                const auto length = std::hypot(dx, dy);
-                if (length == 0)
-                    return Measure::Success(0);
-                const auto altitude = [a, dx, dy, length, xScale, yScale](const Point p) {
-                    return std::abs(dx * (p.y - a.y) * yScale - dy * (p.x - a.x) * xScale) / length;
-                };
-                const auto thickness = std::max(altitude(c), altitude(d));
-                shortest = std::min({shortest, length, thickness});
-            }
-            return Measure::Success(static_cast<float>(shortest));
+            const auto span = CanvasSpan(projected, true);
+            if (std::ranges::all_of(projected, [halfWidth, halfHeight](const CanvasPoint point) {
+                return std::abs(point.x) <= halfWidth && std::abs(point.y) <= halfHeight;
+            }))
+                return Measure::Success(static_cast<float>(span));
+            const auto visible = VisibleCanvasSpan(projected, halfWidth, halfHeight);
+            if (!visible)
+                return Measure::Failure(MakeError(XRErrors::CapacityExceeded));
+            return Measure::Success(static_cast<float>(std::min(span, *visible)));
         }
     }  // namespace
 

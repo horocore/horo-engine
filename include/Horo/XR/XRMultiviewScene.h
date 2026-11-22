@@ -35,7 +35,7 @@ namespace Horo::XR {
     /** @brief A centered XY quad expressed in the same world basis as the selected stereo scene. */
     struct XRWorldCanvasDescriptor final {
         Math::Mat4 worldFromCanvas; /**< Local top left is (-0.5,+0.5,0); local bottom right is (+0.5,-0.5,0). */
-        float minimumSpanPixels{};  /**< Explicit minimum projected span that both eyes must meet. */
+        float minimumSpanPixels{};  /**< Minimum visible projected span that both eyes must meet. */
     };
 
     /** @brief One eye's projected canvas and exact color render rectangle. No native image authority is retained. */
@@ -44,7 +44,7 @@ namespace Horo::XR {
         Math::Mat4 canvasToClip;
         XRRenderRectangle renderRectangle;
         std::uint32_t arrayLayer{};
-        float projectedSpanPixels{};
+        float projectedSpanPixels{}; /**< Conservative span clipped to this eye's render rectangle. */
     };
 
     /** @brief One fixed-capacity stereo projection decision sharing the world plane with interaction. */
@@ -79,7 +79,7 @@ namespace Horo::XR {
          * @param canvas Centered scene-space geometry shared by rendering and interaction, and a positive pixel readability floor.
          * @param active Current XR and renderer owner facts.
          * @return Complete per-eye values, including an explicit non-drawable result, or the original typed admission failure.
-         * @details Near/far-plane crossings and unreadable or offscreen placements suppress both eyes. Scene depth occlusion
+         * @details Near/far-plane crossings and a visible span below the threshold in either eye suppress both eyes. Scene depth occlusion
          * remains the consuming renderer's responsibility. This method issues no native or interaction authority.
          * @post Successful projection is allocation-free with bounded work for two eyes. */
         [[nodiscard]] Result<XRWorldCanvasProjection> ProjectWorldCanvas(const XRWorldCanvasDescriptor &canvas,
