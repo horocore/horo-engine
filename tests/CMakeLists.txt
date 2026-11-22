@@ -2571,7 +2571,9 @@ add_executable(HoroWorldCookIntegrationTests
 )
 target_compile_features(HoroWorldCookIntegrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform
-    HoroEngine::NetworkTransportNull HoroNetworkModeHostInternal HoroNetworkProductHost HoroEditorSceneProductHost)
+    HoroEngine::NetworkTransportNull HoroNetworkModeHostInternal HoroNetworkProductHost HoroEditorSceneProductHost
+    HoroProjectSceneNavigationHostInternal)
+target_compile_definitions(HoroWorldCookIntegrationTests PRIVATE HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>)
 target_include_directories(HoroWorldCookIntegrationTests PRIVATE
     ${PROJECT_SOURCE_DIR}/tests/support
     ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking

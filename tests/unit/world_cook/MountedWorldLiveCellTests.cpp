@@ -5,14 +5,17 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Navigation/NavigationDefinition.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "MountedWorldHost.h"
+#include "ProjectSceneNavigationComposition.h"
 #include "ProjectScenePerception.h"
 #include "WorldCookPublicationTestSupport.h"
+#include "navigation/NavigationContentPolicyFixture.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -883,4 +886,153 @@ namespace Horo::WorldCook {
         CHECK_FALSE(scene.ActiveScene()->Find({11}));
         host->Shutdown();
     }
+#if HORO_TEST_NAVIGATION_NATIVE
+    TEST_CASE("Mounted Detour exposes coverage only while its verified cell is resident",
+              "[world_cook][mounted_world][navigation][native]") {
+        namespace N = Navigation;
+        Fixture fixture{true, false};
+        const auto profile = IdentityFrom<N::NavigationAgentProfileId>(7);
+        const auto surface = IdentityFrom<N::SurfaceId>(9);
+        const auto area = IdentityFrom<N::NavigationAreaId>(11);
+        const auto filter = IdentityFrom<N::NavigationFilterId>(13);
+        const auto scope = N::NavigationBakeScopeId::ForScene(Asset(42).Bytes()).Value();
+        const auto digest = W::CandidateTestSupport::Hash();
+        const N::NavigationAgentBuildGeometry geometry{.cellSizeMeters = 0.5F};
+        auto definition =
+            N::NavigationDefinition::Create({.profiles = {{profile, "Grounded", geometry}},
+                                             .areas = {{area, {.id = IdentityFrom<N::NavigationDescriptorSourceId>(1)}, 1.0F, {.bits = 1}}},
+                                             .filters = {{filter, {.id = IdentityFrom<N::NavigationDescriptorSourceId>(1)}, {.bits = 1}}}});
+        REQUIRE(definition.HasValue());
+        N::NavigationProjectProfileInput policyInput{.id = IdentityFrom<N::NavigationProjectProfileId>(5),
+                                                     .revision = IdentityFrom<N::NavigationProjectProfileRevision>(3),
+                                                     .capacities = {8, 1, 4, 2, 65536, 16U * 1024U * 1024U, 8192},
+                                                     .maximumQuery = {N::NavigationQueryKind::Path,
+                                                                      N::NavigationQualityLevel::Balanced,
+                                                                      {64, 16, 100}}};
+        policyInput.capabilities.fill(N::NavigationCapabilityRequirement::Optional);
+        policyInput.capabilities[static_cast<std::size_t>(N::NavigationCapability::GroundedQueries)] =
+            N::NavigationCapabilityRequirement::Required;
+        const auto policy = N::NavigationProjectProfile::Create(policyInput).Value();
+        const N::NavigationPreparedTile input{.tile = {.key = {profile, surface, {}, scope},
+                                                       .bounds = {{0, -1, 0}, {8, 1, 8}},
+                                                       .tileSizeMeters = 8},
+                                              .geometry = geometry,
+                                              .borderSizeCells = 4,
+                                              .dependencyKey = digest};
+        auto tile =
+            N::NavigationCookedTile::Create(input, {.state = N::NavigationTileBuildState::Built,
+                                                    .bounds = input.tile.bounds,
+                                                    .vertices = {{0, 0, 0}, {8, 0, 0}, {0, 0, 8}},
+                                                    .polygons = {{{0, 3}, {0, 3}, area}},
+                                                    .polygonVertexIndices = {0, 1, 2},
+                                                    .polygonAdjacencies = {N::NavMeshBoundaryAdjacency, N::NavMeshBoundaryAdjacency,
+                                                                           N::NavMeshBoundaryAdjacency},
+                                                    .provenance = {{.producer = IdentityFrom<N::NavigationSourceProducerId>(1),
+                                                                    .contribution = IdentityFrom<N::NavigationSourceContributionId>(1),
+                                                                    .revision = IdentityFrom<N::NavigationSourceRevision>(1),
+                                                                    .sourceDigest = digest,
+                                                                    .polygons = {0, 1}}}});
+        REQUIRE(tile.HasValue());
+        const N::NavigationCookedTileSet closure{digest,
+                                                 {tile.Value()},
+                                                 N::NavigationCookedContentProvenance{{digest, digest, digest}, policy}};
+        auto &base = fixture.baseArtifacts.front();
+        base = N::TestSupport::ContentEnvelope(closure, Asset(8), fixture.Release().target);
+        const auto rootDigest = T::DigestOf(base);
+        std::get<BaseObjectBinding>(fixture.objects.back()).artifactHash = rootDigest;
+        const auto identity = fixture.inputs.front().expected;
+        fixture.navigationCells.push_back({identity.cell, {Asset(8), rootDigest, {tile.Value()->Key()}}});
+        auto limits = Limits();
+        limits.cell.maximumPayloads = 2;
+        const auto published = fixture.Publish(limits);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+
+        JobSystem jobs{JobSystemConfig{1, 4}};
+        auto selected = std::make_shared<const ProjectSceneNavigationSelection>(
+            ProjectSceneNavigationSelection{{surface, scope},
+                                            Asset(8),
+                                            profile,
+                                            fixture.Release().target,
+                                            policy,
+                                            std::make_shared<const N::NavigationDefinition>(std::move(definition).Value()),
+                                            jobs,
+                                            1});
+        auto navigation = CreateProjectSceneNavigationWorld(*selected).Value();
+        A::MemoryAssetProvider provider;
+        provider.Insert(Asset(8), base);
+        A::AssetLoadService loads{jobs, provider};
+        A::AssetRegistry registry;
+        REQUIRE(registry.Publish({Physics::Record(Asset(8), T::Type("core.navmesh"))}).status == A::AssetRegistryBuildStatus::Complete);
+        S::RuntimeSceneService scene{registry, loads, {}, {101}};
+        const CommittedWorldSelection world{.targetRoot = fixture.directory.path,
+                                            .target = fixture.Release().target,
+                                            .manifest = published.Value().publication->manifestDigest,
+                                            .index = Asset(6),
+                                            .dependencies = Asset(7)};
+        auto mount = MountedWorld::Prepare(NativeDurableFileSystem{}, world, 5, scene).Value();
+        REQUIRE(mount->HasLiveNavigationContent());
+        REQUIRE(RegisterProjectSceneNavigation(scene, *navigation, selected, true).HasValue());
+        S::SceneDefinitionBuilder startup{{99}, {1}};
+        startup.Add(
+            {.object = {42},
+             .components = {
+                 .navigationSurface =
+                     S::NavigationSurfaceComponent{.id = surface, .definition = Asset(8), .generation = 1, .profiles = {profile}}}});
+        REQUIRE(startup.RequireAsset({Asset(8), T::Type("core.navmesh")}).HasValue());
+        const HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(scene, std::move(startup).Build().Value(), boundary).HasValue());
+        W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
+        CHECK(navigation->cache->Snapshot().retainedPayloadBytes == 0);
+
+        DeterministicClock clock;
+        auto host = S::RuntimeHost::Create(clock).Value();
+        auto driver = std::make_unique<MountedCellDriver>(*mount, scene);
+        const auto &progress = *driver;
+        REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
+        REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4}).HasValue());
+        REQUIRE(BindMountedWorldNavigation(*mount, *navigation, selected).HasValue());
+        REQUIRE(host->Startup().HasValue());
+        const auto until = [&](Stage expected) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            do {
+                clock.Advance(Duration::FromMilliseconds(17));
+                REQUIRE(host->RunFrame().HasValue());
+                REQUIRE(progress.last.HasValue());
+                if (progress.last.Value() == expected)
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (std::chrono::steady_clock::now() < deadline);
+            FAIL("Native navigation cell did not settle");
+        };
+        REQUIRE(mount->RequestLiveCell({identity.cell, {101}, identity.scene, identity.revision}).HasValue());
+        until(Stage::Active);
+        auto old = navigation->assets->Acquire();
+        REQUIRE(old.HasValue());
+        auto retained = std::move(old).Value();
+        const auto active = retained.Descriptor();
+        const auto path = retained.Backend().FindPath({.world = active.world,
+                                                       .topology = active.topology,
+                                                       .start = {1, 0, 1},
+                                                       .destination = {2, 0, 2},
+                                                       .filter = filter,
+                                                       .requirement = policy.MaximumQuery()},
+                                                      {});
+        REQUIRE(path.HasValue());
+        CHECK(path.Value().status == N::NavigationPathStatus::Reachable);
+        REQUIRE(mount->WithdrawLiveCell({101}).HasValue());
+        until(Stage::Retiring);
+        W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
+        CHECK(retained.Revocation() == N::NavigationWorldRevocation::TopologyReplaced);
+        CHECK(retained.Cancellation().IsCancellationRequested());
+        CHECK(navigation->assets->Snapshot().reservedProviderBytes > 0);
+        until(Stage::Retiring);
+        CHECK_FALSE(scene.ActiveScene()->Find({11}));
+        CHECK(navigation->assets->ActiveWorld()->ActiveDescriptor().Value().world == active.world);
+        retained = {};
+        until(Stage::Idle);
+        CHECK(navigation->assets->Snapshot().reservedProviderBytes == 0);
+        host->Shutdown();
+    }
+#endif
 }  // namespace Horo::WorldCook

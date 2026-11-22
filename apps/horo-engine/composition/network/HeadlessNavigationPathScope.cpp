@@ -101,13 +101,16 @@ namespace Horo::Application::Internal {
         if (active.Value().scene.Value() != scene.value)
             return Scope::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
         const auto lease = world->Acquire(active.Value().world);
-        if (lease.HasError())
+        if (lease.HasError() &&
+            (!owner.streamCoverage || lease.ErrorValue().code.Value() != Nav::NavigationErrors::NoNavigationData.code.Value()))
             return Scope::Failure(lease.ErrorValue());
         const auto requirement = selection.policy.MaximumQuery();
         const auto profileRevision = selection.policy.Revision().Value();
-        if (auto admitted = Nav::AdmitNavigationQuery(lease.Value().Backend().Capabilities(), profileRevision, requirement);
-            admitted.HasError())
-            return Scope::Failure(admitted.ErrorValue());
+        if (lease.HasValue()) {
+            if (auto admitted = Nav::AdmitNavigationQuery(lease.Value().Backend().Capabilities(), profileRevision, requirement);
+                admitted.HasError())
+                return Scope::Failure(admitted.ErrorValue());
+        }
 
         // The supported provider seals its filter table, static obstacle-free overlay, and baked coordinate frame in
         // the immutable topology. Any change to these requires a different world. The project query profile has its own revision.
@@ -358,12 +361,23 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc HeadlessNavigationPathScope::CommitAtFixedTick */
-    Result<void> HeadlessNavigationPathScope::CommitAtFixedTick(const std::uint64_t tick, HeadlessReplayNavigation *replay) const {
+    Result<void> HeadlessNavigationPathScope::CommitAtFixedTick(const std::uint64_t tick, HeadlessReplayNavigation *replay) {
         const auto current = lifecycle_->ActiveDescriptor();
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        if (current.Value() != activation_)
+        const auto &published = current.Value();
+        if (published.world != activation_.world || published.scene != activation_.scene ||
+            published.sceneGeneration != activation_.sceneGeneration || published.topology < activation_.topology)
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        if (published.topology != activation_.topology) {
+            activation_ = published;
+            const auto epoch = published.topology.Value();
+            source_.snapshot = Nav::NavigationSnapshotToken::Create(epoch).Value();
+            source_.topology = published.topology;
+            source_.obstacleRevision = epoch;
+            source_.filterRevision = epoch;
+            source_.originRevision = epoch;
+        }
         Nav::NavigationPathCommitObserver observer;
         if (replay) {
             *replay = {.profile = replayProfile_, .tick = tick, .topology = activation_.topology.Value()};

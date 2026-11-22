@@ -84,7 +84,7 @@ namespace Horo::Application::Internal {
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;
         /** @brief Commits terminal results and refreshes the native scope on the fixed owner lane. */
-        [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick, HeadlessReplayNavigation *replay = nullptr) const;
+        [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick, HeadlessReplayNavigation *replay = nullptr);
         /** @brief Grants tactical tests access to this exact world and its bounded path caller. */
         [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryAccess(std::uint64_t tick) const noexcept;
         /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane. */

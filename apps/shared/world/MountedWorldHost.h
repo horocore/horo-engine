@@ -43,6 +43,8 @@ namespace Horo::Application::Internal {
     using MountedWorldNavigationPublication =
         std::function<Result<std::shared_ptr<const Runtime::SceneGroupPublication>>(const Runtime::RuntimeSceneView &,
                                                                                     std::span<const MountedWorldNavigationCell>)>;
+    /** @brief Advances provider-affine retirement and reports whether old query and tile pins are drained. */
+    using MountedWorldNavigationRetirement = std::function<Result<bool>()>;
 
     /** @brief Explicit owner-lane cancellation and absolute deadline for one mounted cell activation. */
     struct MountedWorldStartup final {
@@ -211,7 +213,11 @@ namespace Horo::Application::Internal {
                                                 const MountedWorldLiveLimits &limits, Assets::AssetRegistrySnapshot assets = {});
 
         /** @brief Binds the host-selected navigation owner before the first live demand. */
-        [[nodiscard]] Result<void> BindLiveNavigation(MountedWorldNavigationPublication publication);
+        [[nodiscard]] Result<void> BindLiveNavigation(MountedWorldNavigationPublication publication,
+                                                      MountedWorldNavigationRetirement retirement = {});
+
+        /** @brief Reports whether the admitted World inventory contains cell-owned NavMesh coverage. */
+        [[nodiscard]] bool HasLiveNavigationContent() const noexcept;
 
         /** @brief Admit an exact selected cell as demand; the structural frame owns worker submission.
          * @param selected Exact validated mount cell, independent authored occurrence, definition and revision.

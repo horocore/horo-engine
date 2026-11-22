@@ -142,6 +142,8 @@ namespace Horo::Navigation {
                 return Result<LoadedNavMeshAsset>::Failure(selected.ErrorValue());
             if (const auto grouped = GroupTiles(selected.Value(), loaded, options); grouped.HasError())
                 return Result<LoadedNavMeshAsset>::Failure(grouped.ErrorValue());
+            if (!options.retainTileBytes)
+                return Result<LoadedNavMeshAsset>::Success(std::move(loaded));
             loaded.tileBytes.reserve(selected.Value().size());
             for (const auto &tile : selected.Value()) {
                 auto pin = cache.Admit(std::as_bytes(tile->Bytes()));

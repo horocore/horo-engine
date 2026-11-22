@@ -70,6 +70,7 @@ namespace Horo::Navigation {
         NavigationBakeScopeId scope; /**< Exact Scene UUID or explicit non-Scene domain; never inferred or used as a fallback. */
         std::optional<std::span<const NavigationBakeTileKey>> selectedTiles; /**< Sorted unique addresses for a streaming preparation. */
         std::optional<std::size_t> maximumSelectedBytes; /**< Additional decoded storage allowance for the selected tiles. */
+        bool retainTileBytes{true};                      /**< False for cold qualification without Cache residency. */
     };
 
     /** @brief Verify canonical record/envelope identity and complete canonical closure before admitting immutable tile allocations.

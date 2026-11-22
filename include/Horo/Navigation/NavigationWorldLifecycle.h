@@ -148,6 +148,9 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<void> StageEmptyTopology(const NavigationWorldActivationDescriptor &expectedActive,
                                                       NavigationGeneration nextTopology);
 
+        /** @brief Stages the first generation of a streamed world before any cell grants coverage. */
+        [[nodiscard]] Result<void> StageInitialEmptyTopology(const NavigationWorldActivationDescriptor &descriptor);
+
         /** @brief Discards only the named unpublished same-world replacement during aggregate rollback.
          * @param candidate Exact candidate identity. @return Success or a typed stale failure.
          */

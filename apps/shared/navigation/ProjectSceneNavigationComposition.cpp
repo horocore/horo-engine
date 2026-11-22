@@ -161,7 +161,8 @@ namespace Horo::Application::Internal {
                                             workspace.target,
                                             settings.Value().RuntimeProfile(),
                                             std::make_shared<const Nav::NavigationDefinition>(std::move(catalog).Value()),
-                                            workspace.jobs}));
+                                            workspace.jobs,
+                                            surface.Value()->generation}));
     }
 
     /** @copydoc PrepareProjectNavigationPreviewBackend */
@@ -218,7 +219,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RegisterProjectSceneNavigation */
     Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,
-                                                std::shared_ptr<const ProjectSceneNavigationSelection> selection) {
+                                                std::shared_ptr<const ProjectSceneNavigationSelection> selection, bool streamCoverage) {
         const auto &capacity = selection->policy.Capacities();
         const auto tileLimit = static_cast<std::size_t>(capacity.maximumBytesPerResidentTile);
         const Nav::NavigationAssetSceneLimits limits{.maximumReservedProviderBytes =
@@ -232,8 +233,9 @@ namespace Horo::Application::Internal {
         },
                                                                              limits, std::nullopt,
                                                                              Nav::NavigationAssetSceneSelection{selection->surface.scope,
-                                                                                                                selection->policy});
-        const auto *assetOwner = assets.get();
+                                                                                                                selection->policy,
+                                                                                                                streamCoverage});
+        auto *assetOwner = assets.get();
         const auto admission = [selection](const Nav::NavigationAgentDescriptor &agent) {
             return AdmitAgent(*selection, agent);
         };
@@ -248,6 +250,7 @@ namespace Horo::Application::Internal {
         if (auto added = scene.AddStructuralParticipant(std::move(groups)); added.HasError())
             return added;
         world.assets = assetOwner;
+        world.streamCoverage = streamCoverage;
         return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal

@@ -10,6 +10,8 @@ namespace Horo::Navigation {
 }
 
 namespace Horo::Application::Internal {
+    class MountedWorld;
+
     /** @brief Synchronous borrow of the admitted workspace, committed cook, and exact selected Scene identity. */
     struct ProjectSceneNavigationSource final {
         const Platform::IProjectReadFiles &files;
@@ -30,6 +32,7 @@ namespace Horo::Application::Internal {
         Navigation::NavigationProjectProfile policy;
         std::shared_ptr<const Navigation::NavigationDefinition> catalog;
         JobSystem &jobs;
+        std::uint64_t surfaceGeneration{};
     };
 
     /** @brief Explicit lifetime owners for one authoritative world, retained until its Scene participants shut down. */
@@ -37,8 +40,9 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Assets::AssetPayloadCache> cache;
         Navigation::NavigationAgentRegistry agents;
         Navigation::NavigationCoordinator coordinator;
-        std::uint32_t maximumPendingPathRequests{};                            /**< Exact coordinator caller reservation capacity. */
-        const Navigation::NavigationAssetSceneActivationParticipant *assets{}; /**< Borrowed until Scene service teardown. */
+        std::uint32_t maximumPendingPathRequests{};                      /**< Exact coordinator caller reservation capacity. */
+        Navigation::NavigationAssetSceneActivationParticipant *assets{}; /**< Borrowed until Scene service teardown. */
+        bool streamCoverage{};                                           /**< The bound Scene starts without queryable tile coverage. */
     };
 
     /** @brief Captures the registered definition, selected scoped surface and exact project runtime policy. */
@@ -56,5 +60,10 @@ namespace Horo::Application::Internal {
 
     /** @brief Registers the provider, initial catalog and atomic prefab agent participant on the actual Scene service. */
     [[nodiscard]] Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,
-                                                              std::shared_ptr<const ProjectSceneNavigationSelection> selection);
+                                                              std::shared_ptr<const ProjectSceneNavigationSelection> selection,
+                                                              bool streamCoverage = false);
+
+    /** @brief Binds the selected native provider to live committed World cells after the root is active. */
+    [[nodiscard]] Result<void> BindMountedWorldNavigation(MountedWorld &mount, ProjectSceneNavigationWorld &world,
+                                                          std::shared_ptr<const ProjectSceneNavigationSelection> selection);
 }  // namespace Horo::Application::Internal

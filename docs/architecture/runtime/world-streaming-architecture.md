@@ -1141,6 +1141,16 @@ The mount submits the complete proposed resident tile membership with the Scene
 attachment or removal. The host selects the provider and returns the owner for
 the same structural transaction. The mount never selects a backend.
 
+The standalone host admits the mounted inventory before activating the root
+Scene. When the inventory supplies live NavigationMesh membership, the root
+verifies its authored NavMesh but publishes a world with no tile coverage. The
+host-bound Detour adapter rebuilds only the exact resident union for each cell
+transaction. Fixed-tick path dispatch adopts the published topology generation
+under the same world and Scene identity.
+An unloaded cell's old provider can remain charged while a query retains its
+lease. The mount holds the cell in Retiring and acknowledges completion only
+after the provider reports that those leases have drained.
+
 [ADR-107](../../adr/107-navigation-query-consistency-and-snapshot-ownership.md)
 requires a navigation query snapshot to record the exact PartitionEpoch,
 StreamingGeneration and tile generations it observed. Cell activation/replacement

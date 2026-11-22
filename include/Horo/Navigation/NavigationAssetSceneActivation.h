@@ -65,6 +65,7 @@ namespace Horo::Navigation {
     struct NavigationAssetSceneSelection final {
         NavigationBakeScopeId scope;
         std::optional<NavigationProjectProfile> requiredProfile; /**< Requires a real world and exact cooked project policy. */
+        bool streamCoverage{}; /**< Start with a verified catalog and grant coverage only through streamed cell commits. */
     };
 
     namespace Detail {

@@ -127,8 +127,10 @@ target_link_libraries(HoroMountedWorldHostInternal
 set(HORO_PROJECT_NAVIGATION_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_navigation_scene_headers")
 file(GENERATE OUTPUT "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}/ProjectSceneNavigationComposition.h"
     CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/ProjectSceneNavigationComposition.h\"\n")
-add_library(HoroProjectSceneNavigationHostInternal STATIC shared/navigation/ProjectSceneNavigationComposition.cpp)
+add_library(HoroProjectSceneNavigationHostInternal STATIC shared/navigation/ProjectSceneNavigationComposition.cpp
+    shared/navigation/MountedNavigationComposition.cpp)
 target_compile_features(HoroProjectSceneNavigationHostInternal PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectSceneNavigationHostInternal PRIVATE HoroMountedWorldHostInternal)
 target_include_directories(HoroProjectSceneNavigationHostInternal PUBLIC "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}")
 target_link_libraries(HoroProjectSceneNavigationHostInternal
     PUBLIC HoroEngine::NavigationAssetSceneIntegration HoroEngine::PlatformProjectReadFiles

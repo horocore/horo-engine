@@ -205,7 +205,10 @@ namespace Horo::Navigation {
             }
             const Assets::AssetDependency metadata{id, *resolved->type};
             auto loaded = LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache,
-                                           {.limits = state.limits.assets, .expectation = expectation, .scope = state.selection.scope});
+                                           {.limits = state.limits.assets,
+                                            .expectation = expectation,
+                                            .scope = state.selection.scope,
+                                            .retainTileBytes = !state.selection.streamCoverage});
             if (loaded.HasError())
                 return Result<std::size_t>::Failure(loaded.ErrorValue());
             if (const auto &required = state.selection.requiredProfile; required) {
@@ -390,11 +393,29 @@ namespace Horo::Navigation {
             return admitted.HasValue() ? Result<void>::Success() : Result<void>::Failure(admitted.ErrorValue());
         }
 
+        /** @brief Creates an isolated lifecycle whose complete initial state is ready to publish. */
+        [[nodiscard]] Result<std::shared_ptr<NavigationWorldLifecycle>> FinalizeWorld(const NavigationWorldActivationDescriptor &descriptor,
+                                                                                      std::unique_ptr<INavigationQueryBackend> backend) {
+            using World = Result<std::shared_ptr<NavigationWorldLifecycle>>;
+            auto lifecycle = NavigationWorldLifecycle::Create(1);
+            if (lifecycle.HasError())
+                return World::Failure(lifecycle.ErrorValue());
+            auto world = std::make_shared<NavigationWorldLifecycle>(std::move(lifecycle).Value());
+            const auto staged = backend ? world->Stage(descriptor, std::move(backend)) : world->StageInitialEmptyTopology(descriptor);
+            if (staged.HasError())
+                return World::Failure(staged.ErrorValue());
+            if (const auto committed = world->CommitAtSafePoint(descriptor.scene, descriptor.sceneGeneration); committed.HasError())
+                return World::Failure(committed.ErrorValue());
+            return World::Success(std::move(world));
+        }
+
         /** @brief Finalize a detached lifecycle; aggregate publication then has no fallible Stage/Commit operation. */
         [[nodiscard]] Result<std::shared_ptr<NavigationWorldLifecycle>> PrepareWorld(
             const NavigationWorldActivationDescriptor &descriptor, const std::span<const NavigationLoadedSurface> surfaces,
             std::vector<LoadedNavMeshAsset> &assets, Detail::NavigationAssetSceneState &state,
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance) {
+            if (state.selection.streamCoverage)
+                return FinalizeWorld(descriptor, {});
             auto prepared = PrepareProvider(descriptor, surfaces, state);
             if (prepared.HasError())
                 return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(prepared.ErrorValue());
@@ -407,15 +428,7 @@ namespace Horo::Navigation {
             auto bytes = TakeTilePins(assets);
             auto backend = std::make_unique<PinnedAssetBackend>(std::move(prepared).Value(), std::move(bytes), state.accounting,
                                                                 std::move(provenance));
-            auto lifecycle = NavigationWorldLifecycle::Create(1);
-            if (lifecycle.HasError())
-                return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(lifecycle.ErrorValue());
-            auto world = std::make_shared<NavigationWorldLifecycle>(std::move(lifecycle).Value());
-            if (const auto staged = world->Stage(descriptor, std::move(backend)); staged.HasError())
-                return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(staged.ErrorValue());
-            if (const auto committed = world->CommitAtSafePoint(descriptor.scene, descriptor.sceneGeneration); committed.HasError())
-                return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(committed.ErrorValue());
-            return Result<std::shared_ptr<NavigationWorldLifecycle>>::Success(std::move(world));
+            return FinalizeWorld(descriptor, std::move(backend));
         }
     }  // namespace
 

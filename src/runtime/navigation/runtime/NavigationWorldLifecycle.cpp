@@ -185,6 +185,13 @@ namespace Horo::Navigation {
         return StageCandidate(candidate, {}, true);
     }
 
+    /** @copydoc NavigationWorldLifecycle::StageInitialEmptyTopology */
+    Result<void> NavigationWorldLifecycle::StageInitialEmptyTopology(const NavigationWorldActivationDescriptor &descriptor) {
+        if (state_ != NavigationWorldLifecycleState::Empty)
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        return StageCandidate(descriptor, {}, true);
+    }
+
     /** @copydoc NavigationWorldLifecycle::IsCurrentTopology */
     bool NavigationWorldLifecycle::IsCurrentTopology(const NavigationWorldActivationDescriptor &expected) const noexcept {
         return active_ && active_->descriptor == expected && active_->revocation.load() == NavigationWorldRevocation::None;

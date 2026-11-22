@@ -842,6 +842,7 @@ namespace Horo::Application::Internal {
             MountedWorldLiveLimits limits;
             Assets::AssetRegistrySnapshot assets;
             MountedWorldNavigationPublication navigation;
+            MountedWorldNavigationRetirement navigationRetired;
             std::uint64_t lastFrame{};
             std::uint64_t nextIdentity{4}; /**< Distinct from the three cold-start operations. */
             std::optional<LiveDemand> demand;
@@ -1565,6 +1566,13 @@ namespace Horo::Application::Internal {
             }
             if (receipt->ResultValue()->baselinesDetached != 1 || AttachedParent(cell))
                 return Result<Stage>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
+            if (NavigationCell(cell.fence.cell) && live->navigationRetired) {
+                const auto drained = live->navigationRetired();
+                if (drained.HasError())
+                    return Result<Stage>::Failure(drained.ErrorValue());
+                if (!drained.Value())
+                    return Result<Stage>::Success(Stage::Retiring);
+            }
             if (live->sharedAssets) {
                 const auto released = live->sharedAssets->Release(resident.claims);
                 if (released.HasError())
@@ -1674,12 +1682,19 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc MountedWorld::BindLiveNavigation */
-    Result<void> MountedWorld::BindLiveNavigation(MountedWorldNavigationPublication publication) {
+    Result<void> MountedWorld::BindLiveNavigation(MountedWorldNavigationPublication publication,
+                                                  MountedWorldNavigationRetirement retirement) {
         if (std::this_thread::get_id() != state_->ownerThread || !state_->live || !publication || state_->live->navigation ||
             state_->live->demand || !state_->live->residents.empty())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         state_->live->navigation = std::move(publication);
+        state_->live->navigationRetired = std::move(retirement);
         return Result<void>::Success();
+    }
+
+    /** @copydoc MountedWorld::HasLiveNavigationContent */
+    bool MountedWorld::HasLiveNavigationContent() const noexcept {
+        return !state_->navigationCells.empty();
     }
 
     /** @copydoc MountedWorld::RequestLiveCell */

@@ -414,6 +414,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return native;
             if (auto ai = PrepareConfiguredAi(); ai.HasError())
                 return ai;
+            if (input.mountedWorld && input.mountedWorld->liveCell) {
+                if (auto mounted = PrepareConfiguredWorldInventory(); mounted.HasError())
+                    return mounted;
+            }
             if (auto navigation = PrepareConfiguredNavigation(); navigation.HasError())
                 return navigation;
             if (auto animation = PrepareConfiguredAnimation(*owners_, *record_); animation.HasError())
@@ -433,8 +437,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return PrepareConfiguredWorldMount();
         }
 
-        /** @brief Attaches verified World authority only to the exact live standalone Scene candidate. */
-        Result<void> PrepareConfiguredWorldMount() const {
+        /** @brief Admits the exact World inventory before the root decides initial coverage. */
+        Result<void> PrepareConfiguredWorldInventory() const {
             const auto &input = *owners_->configured;
             if (!input.mountedWorld)
                 return Result<void>::Success();
@@ -449,25 +453,40 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(world.ErrorValue());
             if (std::chrono::steady_clock::now() >= input.load.deadline)
                 return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            record_->mountedWorld = std::move(world).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds live World operations to the activated standalone Scene owner. */
+        Result<void> PrepareConfiguredWorldMount() const {
+            const auto &input = *owners_->configured;
+            if (!input.mountedWorld)
+                return Result<void>::Success();
+            if (!record_->mountedWorld) {
+                if (auto admitted = PrepareConfiguredWorldInventory(); admitted.HasError())
+                    return admitted;
+            }
+            auto &world = *record_->mountedWorld;
             if (input.mountedWorld->initialCell) {
                 const auto activated =
-                    world.Value()->ActivateInitialCell(*input.mountedWorld->initialCell, {input.load.cancellation, input.load.deadline});
+                    world.ActivateInitialCell(*input.mountedWorld->initialCell, {input.load.cancellation, input.load.deadline});
                 if (activated.HasError())
                     return activated;
             }
             if (const auto &live = input.mountedWorld->liveCell) {
                 if (!owners_->fixed || !input.worldJobs)
                     return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Invalid));
-                if (auto bound =
-                        world.Value()->BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits, input.registry.Snapshot());
+                if (auto bound = world.BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits, input.registry.Snapshot());
                     bound.HasError())
                     return bound;
+                if (record_->navigation && world.HasLiveNavigationContent()) {
+                    if (auto bound = BindMountedWorldNavigation(world, *record_->navigation, input.navigation); bound.HasError())
+                        return bound;
+                }
                 if (live->firstDemand)
-                    if (auto requested = world.Value()->RequestLiveCell(*live->firstDemand, record_->sceneCancellation);
-                        requested.HasError())
+                    if (auto requested = world.RequestLiveCell(*live->firstDemand, record_->sceneCancellation); requested.HasError())
                         return requested;
             }
-            record_->mountedWorld = std::move(world).Value();
             return Result<void>::Success();
         }
 
@@ -686,7 +705,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (world.HasError())
                 return Result<void>::Failure(world.ErrorValue());
             record_->navigation = std::move(world).Value();
-            return RegisterProjectSceneNavigation(*record_->scenes, *record_->navigation, selection);
+            const bool streamCoverage = record_->mountedWorld && record_->mountedWorld->HasLiveNavigationContent();
+            return RegisterProjectSceneNavigation(*record_->scenes, *record_->navigation, selection, streamCoverage);
         }
 
         /** @brief Identifies the local world that owns authoritative simulation. */
