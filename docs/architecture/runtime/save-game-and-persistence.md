@@ -1875,6 +1875,12 @@ or fields. Independent sibling evidence remains available.
 Raw diagnostic JSON and JSONL records exceeding the parser's nesting limit
 fail bundle preparation before any archive is published.
 
+Auto, Checkpoint and Suspend operation snapshots publish canonical Save error
+descriptors and bounded causal classifications. Storage retry decisions still
+use the original provider evidence within the arbiter. The retry snapshot,
+terminal receipt and autosave scheduler expose the classified result without
+provider text.
+
 ## Qualification And Implementation Status
 
 The following are required implementation tests, not test suites delivered by this

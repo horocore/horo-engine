@@ -160,6 +160,9 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::CommandIncompatible, Validation},
             DiagnosticPolicy{&SaveErrors::CommandCooldown, Lifecycle},
             DiagnosticPolicy{&SaveErrors::LifecycleUnavailable, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleSuspended, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleCallbackFailed, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::GenerationStale, Lifecycle},
             DiagnosticPolicy{&SaveErrors::DiagnosticInvalid, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticUnsupported, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticCorrelationStale, Lifecycle},
@@ -445,10 +448,21 @@ namespace Horo::Runtime {
             const auto policy = PolicyFor(*node);
             descriptors[count++] = policy ? policy->descriptor : &SaveErrors::DiagnosticUnsupported;
         }
-        auto projected = MakeError(*descriptors[--count]);
-        while (count != 0)
-            projected = WithCause(MakeError(*descriptors[--count]), std::move(projected));
+        // Checked MSVC string default construction can terminate if its iterator proxy cannot allocate.
+        auto projected = MakeError(*descriptors[--count], std::string(std::size_t{0}, '\0'));
+        while (count != 0) {
+            auto outer = MakeError(*descriptors[--count], std::string(std::size_t{0}, '\0'));
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+            projected = WithCause(outer, projected);
+#else
+            projected = WithCause(std::move(outer), std::move(projected));
+#endif
+        }
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        return static_cast<const Error &>(projected);
+#else
         return projected;
+#endif
     }
 
     /** @copydoc SaveDiagnosticErrorDescriptors */

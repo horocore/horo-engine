@@ -175,11 +175,9 @@ namespace Horo::Runtime {
             const Error error = outcome.error.value_or(MakeError(SaveErrors::LifecycleSuspended));
             if (const auto failed = arbiter_->Fail(operation_.Id(), error); failed.HasError())
                 return Return::Failure(failed.ErrorValue());
-            operation_ = {};
-            snapshot_.pending = true;
-            snapshot_.blocked = true;
-            snapshot_.disposition = SaveAutosaveDisposition::Failed;
-            return Return::Failure(error);
+            if (const auto terminal = ObserveTerminal(); terminal.HasError())
+                return Return::Failure(terminal.ErrorValue());
+            return Return::Success({});
         }
         if (const auto advanced = arbiter_->Advance(operation_.Id(), SaveArbiterState::Encoding); advanced.HasError())
             return Return::Failure(advanced.ErrorValue());

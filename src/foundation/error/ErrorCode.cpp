@@ -35,8 +35,14 @@ namespace Horo {
 
     /** @copydoc WithCause */
     Error WithCause(Error outer, Error cause) {
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        // Checked string and vector moves can allocate inside noexcept.
+        outer.cause = ErrorCause{std::make_shared<const Error>(cause)};
+        return static_cast<const Error &>(outer);
+#else
         outer.cause = ErrorCause{std::make_shared<const Error>(std::move(cause))};
         return outer;
+#endif
     }
 
     /** @copydoc WrapError */

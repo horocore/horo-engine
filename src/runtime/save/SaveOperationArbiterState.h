@@ -21,6 +21,7 @@ namespace Horo::Runtime::SaveOperationArbiterDetail {
             std::uint64_t enqueueOrder{};
             std::uint64_t revision{1};
             SaveArbiterRetrySnapshot retry;
+            std::optional<Error> projectionFallback; /**< Prepares a terminal outcome before automated work is admitted. */
         };
 
         SaveOperationArbiterLimits limits;
@@ -32,6 +33,15 @@ namespace Horo::Runtime::SaveOperationArbiterDetail {
     };
 
     using RecordIterator = std::vector<State::Record>::iterator;
+
+    /** @brief Identifies operation modes that publish classified diagnostics. */
+    [[nodiscard]] constexpr bool UsesAutomatedDiagnosticPolicy(const SavePolicyMode mode) noexcept {
+        using enum SavePolicyMode;
+        return mode == Auto || mode == Checkpoint || mode == Suspend;
+    }
+
+    /** @brief Applies the privacy policy for operation snapshots published by automated Save modes. */
+    void ProjectArbiterFailure(SavePolicyMode mode, Error &error);
 
     /** @brief Looks up one retained operation in the sole owner state. */
     template <typename StateType> [[nodiscard]] inline auto Find(StateType &state, const OperationId operation) {
