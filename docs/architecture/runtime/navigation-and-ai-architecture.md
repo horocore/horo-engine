@@ -529,6 +529,14 @@ leases; eviction first removes tiles from the active topology and invalidates af
 then reclaims private bytes after readers retire. Results from logically evicted tiles cannot
 be committed merely because a lease still keeps their memory alive.
 
+Streamed topology candidates capture the exact active predecessor before provider
+preparation. Staging rejects a candidate whose predecessor changed. Rollback
+discards only the named staged generation and that generation remains spent.
+The active provider stays visible until a replacement commits. A queued path
+that already finished still rechecks its pinned provider when the caller takes
+it. Same-world replacement yields `StaleSnapshot`, while world retirement yields
+`InvalidWorld`. Both retain the original request and topology provenance.
+
 The shared world budget accounts for cell-backed navigation resources and their retired but
 still-pinned storage until actually freed. Navigation caches/scratch use explicit host-assigned
 sub-budgets and do not independently charge the same allocation again. `wst.*` residency and

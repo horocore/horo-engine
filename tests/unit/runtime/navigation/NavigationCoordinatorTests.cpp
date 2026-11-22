@@ -150,6 +150,53 @@ namespace Horo::Navigation {
         REQUIRE(world.RetiredCount() == 0);
     }
 
+    TEST_CASE("Taking a published path rechecks its pinned topology after logical removal", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        Activate(world, std::make_unique<ControlledBackend>(std::make_shared<Gate>()));
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        auto input = Input();
+        input.request.start.x = 2.0F;
+        const auto request = Admit(coordinator, world, input);
+        REQUIRE(coordinator.Dispatch(1) == 1);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const NavigationPathCaller callers[]{Caller()};
+        bool publishedSuccess{};
+        const NavigationPathCommitObserver observer{&publishedSuccess,
+                                                    [](void *context, const NavigationPathCompletion &completion) noexcept {
+            *static_cast<bool *>(context) = completion.result.HasValue();
+        }};
+        REQUIRE(coordinator.Commit(Current(callers), observer) == 1);
+        REQUIRE(publishedSuccess);
+
+        const ErrorCodeDescriptor *expected{};
+        SECTION("forcing world unload invalidates the queued result before the next commit") {
+            REQUIRE(world.Unload(World()).HasValue());
+            REQUIRE(world.Acquire(World()).HasError());
+            expected = &NavigationErrors::InvalidWorld;
+        }
+        SECTION("replacing topology preserves the original reason through later shutdown") {
+            auto replacement = Activation();
+            replacement.topology = NavigationGeneration::Create(Topology().Value() + 1U).Value();
+            REQUIRE(world.Stage(replacement, MakeObservedNavigationBackend()).HasValue());
+            REQUIRE(world.CommitAtSafePoint(replacement.scene, replacement.sceneGeneration).HasValue());
+            REQUIRE(world.Acquire(World()).Value().Descriptor() == replacement);
+            world.BeginShutdown();
+            expected = &NavigationErrors::StaleSnapshot;
+        }
+
+        REQUIRE(expected);
+        CHECK(world.RetiredCount() == 1);
+        const auto completion = coordinator.Take(request);
+        REQUIRE(completion);
+        CHECK(ErrorIs(*completion, *expected));
+        CHECK(completion->activation == Activation());
+        CHECK(completion->source.topology == Topology());
+        CHECK_FALSE(coordinator.Take(request));
+        static_cast<void>(world.CollectRetired());
+        CHECK(world.RetiredCount() == 0);
+    }
+
     TEST_CASE("Queued scheduler cancellation and exception publish each request terminally", "[unit][navigation][coordinator]") {
         for (bool fail : {false, true}) {
             JobSystem jobs{{.workerCount = 0}};

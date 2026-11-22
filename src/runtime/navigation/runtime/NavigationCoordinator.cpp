@@ -229,6 +229,8 @@ namespace Horo::Navigation {
         auto *entry = state->Find(handle);
         if (!entry || !entry->terminal || entry->taken)
             return std::nullopt;
+        if (const auto *revoked = State::RevocationError(entry->query.worldLease); revoked && entry->terminal->result.HasValue())
+            entry->terminal->result = Result<NavigationPath>::Failure(MakeError(*revoked));
         auto result = std::move(entry->terminal);
         entry->terminal.reset();
         entry->taken = true;

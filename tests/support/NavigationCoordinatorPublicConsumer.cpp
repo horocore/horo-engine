@@ -7,6 +7,8 @@
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationCoordinator>);
 static_assert(std::is_nothrow_move_constructible_v<Horo::Navigation::NavigationCoordinator>);
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationPathCompletion::result), Horo::Result<Horo::Navigation::NavigationPath>>);
+static_assert(
+    std::is_same_v<decltype(Horo::Navigation::NavigationWorldReadLease{}.Revocation()), Horo::Navigation::NavigationWorldRevocation>);
 
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationMovementController>);
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationVelocityPipeline>);

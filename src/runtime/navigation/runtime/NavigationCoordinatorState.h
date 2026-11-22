@@ -77,6 +77,8 @@ namespace Horo::Navigation {
         [[nodiscard]] bool ValidPublication(const NavigationPathPublication &current) const noexcept;
         /** @brief Validate cancellation and owner-phase authority before terminal publication. */
         [[nodiscard]] static std::optional<Error> PublicationFailure(const Entry &entry, const NavigationPathPublication &current);
+        /** @brief Maps the actual pinned provider's logical retirement to a terminal path diagnostic. */
+        [[nodiscard]] static const ErrorCodeDescriptor *RevocationError(const NavigationWorldReadLease &lease) noexcept;
         /** @brief Perform the sole exactly-once terminal transition after owner validation. */
         static void Publish(Entry &entry, std::optional<Error> failure, std::uint64_t tick);
         /** @brief Retire a consumed quiescent slot without generation wrap. */

@@ -42,6 +42,13 @@ namespace Horo::Navigation {
         Closed,
     };
 
+    /** @brief First logical reason a pinned provider stopped admitting results. */
+    enum class NavigationWorldRevocation : std::uint8_t {
+        None,
+        TopologyReplaced,
+        WorldRetired
+    };
+
     /**
      * @brief Immutable read lease that pins one provider record while its world may be logically revoked.
      * @details Copies are thread-safe lifetime pins. Backend calls must use Cancellation(), and IsRevoked()
@@ -78,6 +85,10 @@ namespace Horo::Navigation {
          * @return True after replacement, unload, or shutdown; pause alone does not invalidate admitted work.
          */
         [[nodiscard]] bool IsRevoked() const noexcept;
+        /** @brief Reads the first logical retirement reason without releasing the provider pin.
+         * @return Exact reason, or None for a current or inert lease.
+         */
+        [[nodiscard]] NavigationWorldRevocation Revocation() const noexcept;
 
     private:
         friend class NavigationWorldLifecycle;
@@ -114,12 +125,26 @@ namespace Horo::Navigation {
         /**
          * @brief Validate and retain one detached provider candidate without changing the active world.
          * @param descriptor Exact Scene/world/topology identities for later publication. A candidate for the active
-         *                   world must keep its Scene incarnation and generation and advance its topology generation.
+         *                   world must keep its Scene incarnation and generation and advance past every staged topology generation.
          * @param backend Unique fully initialized provider; consumed on success or failure.
          * @return Success or typed invalid/lifecycle/capacity failure with the active world unchanged.
          */
         [[nodiscard]] Result<void> Stage(const NavigationWorldActivationDescriptor &descriptor,
                                          std::unique_ptr<INavigationQueryBackend> backend);
+
+        /** @brief Stages a streamed topology from an exact active predecessor.
+         * @param expectedActive Descriptor captured before the detached provider was built.
+         * @param nextTopology Strictly newer, previously unused generation of the same world.
+         * @param backend Unique fully initialized provider. Consumed on success or failure.
+         * @return Success or typed refusal. A stale build leaves current and staged providers untouched.
+         */
+        [[nodiscard]] Result<void> StageTopology(const NavigationWorldActivationDescriptor &expectedActive,
+                                                 NavigationGeneration nextTopology, std::unique_ptr<INavigationQueryBackend> backend);
+
+        /** @brief Discards only the named unpublished same-world replacement during aggregate rollback.
+         * @param candidate Exact candidate identity. @return Success or a typed stale failure.
+         */
+        [[nodiscard]] Result<void> DiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate);
 
         /**
          * @brief Publish the staged candidate at CommitDeferredLifecycleChanges.
@@ -163,14 +188,15 @@ namespace Horo::Navigation {
         /** @brief Check whether replacing the active record preserves the configured retirement bound. */
         [[nodiscard]] bool CanRetireActive() const noexcept;
         /** @brief Permanently close admission and request cooperative cancellation for one record. */
-        static void Revoke(const std::shared_ptr<Detail::NavigationWorldRecord> &record) noexcept;
+        static void Revoke(const std::shared_ptr<Detail::NavigationWorldRecord> &record, NavigationWorldRevocation reason) noexcept;
         /** @brief Move the active owner pin into retirement when worker leases still exist. */
-        void RetireActive() noexcept;
+        void RetireActive(NavigationWorldRevocation reason) noexcept;
 
         std::uint32_t maximumRetiredWorlds_{};
         std::shared_ptr<Detail::NavigationWorldRecord> staged_;
         std::shared_ptr<Detail::NavigationWorldRecord> active_;
         std::vector<std::shared_ptr<Detail::NavigationWorldRecord>> retired_;
+        NavigationGeneration lastStagedTopology_; /**< Retains the active world's newest issued candidate across rollback. */
         NavigationWorldLifecycleState state_{NavigationWorldLifecycleState::Empty};
     };
 }  // namespace Horo::Navigation

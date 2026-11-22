@@ -101,7 +101,9 @@ namespace Horo::Navigation {
             /** @brief Admits a path through the current owner or reports stale access. */
             [[nodiscard]] Result<NavRequestHandle> Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission submission,
                                                           std::uint64_t tick) const;
-            /** @brief Reads a published result while the admitting coordinator is live and open. */
+            /** @brief Reads a published result while the admitting coordinator is live and open.
+             * @details A successful path queued before provider retirement becomes a typed failure at delivery.
+             */
             [[nodiscard]] Result<std::optional<NavigationPathCompletion>> Take(NavRequestHandle handle) const;
             /** @brief Releases a retained consumer reservation, including during owner shutdown. */
             void Abandon(NavRequestHandle handle) const noexcept;
@@ -170,7 +172,8 @@ namespace Horo::Navigation {
         [[nodiscard]] std::uint32_t Commit(const NavigationPathPublication &current, NavigationPathCommitObserver observer = {});
         /** @brief Transfer one published result once. @param handle Exact request identity.
          * @return Owned terminal result or empty for pending, stale or already consumed handles.
-         * @details A consumed slot is reclaimed only after its partition is quiescent; late workers cannot alias reuse.
+         * @details Provider retirement can replace queued success with typed stale evidence. A consumed slot is reclaimed
+         * only after its partition is quiescent; late workers cannot alias reuse.
          */
         [[nodiscard]] std::optional<NavigationPathCompletion> Take(NavRequestHandle handle);
         /** @brief Collect transport and exact terminal job fences without publishing or consuming active results.

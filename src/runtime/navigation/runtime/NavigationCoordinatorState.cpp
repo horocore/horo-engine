@@ -140,14 +140,14 @@ namespace Horo::Navigation {
     std::optional<Error> NavigationCoordinator::State::PublicationFailure(const Entry &entry, const NavigationPathPublication &current) {
         if (entry.cancellation.Token().IsCancellationRequested())
             return MakeError(NavigationErrors::QueryCancelled);
+        if (const auto *revoked = RevocationError(entry.query.worldLease))
+            return MakeError(*revoked);
         const auto &admitted = entry.query.worldLease.Descriptor();
         if (!current.activation.IsValid() || admitted.scene != current.activation.scene ||
             admitted.sceneGeneration != current.activation.sceneGeneration || entry.query.request.world != current.activation.world)
             return MakeError(NavigationErrors::InvalidWorld);
         if (admitted.topology != current.activation.topology)
             return MakeError(NavigationErrors::StaleSnapshot);
-        if (entry.query.worldLease.IsRevoked())
-            return MakeError(NavigationErrors::InvalidWorld);
         if (const auto caller = std::ranges::lower_bound(current.callers, entry.submission.caller.owner, {}, &NavigationPathCaller::owner);
             caller == current.callers.end() || *caller != entry.submission.caller)
             return MakeError(NavigationErrors::InvalidHandle);
@@ -156,6 +156,19 @@ namespace Horo::Navigation {
         if (current.tick > entry.submission.deadlineTick)
             return MakeError(NavigationErrors::CapacityExceeded);
         return std::nullopt;
+    }
+
+    /** @copydoc NavigationCoordinator::State::RevocationError */
+    const ErrorCodeDescriptor *NavigationCoordinator::State::RevocationError(const NavigationWorldReadLease &lease) noexcept {
+        switch (lease.Revocation()) {
+            case NavigationWorldRevocation::TopologyReplaced:
+                return &NavigationErrors::StaleSnapshot;
+            case NavigationWorldRevocation::WorldRetired:
+                return &NavigationErrors::InvalidWorld;
+            case NavigationWorldRevocation::None:
+                return nullptr;
+        }
+        return nullptr;
     }
 
     /** @copydoc NavigationCoordinator::State::Publish */
