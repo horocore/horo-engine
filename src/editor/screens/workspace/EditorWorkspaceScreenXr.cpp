@@ -4,6 +4,7 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::~EditorWorkspaceScreen */
     EditorWorkspaceScreen::~EditorWorkspaceScreen() {
+        DetachWorkspaceCommands();
         RevokeEditorDiagnostics();
         RevokeSimulatorArtifacts();
         if (xr_.attached)

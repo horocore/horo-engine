@@ -7,6 +7,7 @@
 #include "EditorImageProviderHost.h"
 #include "EditorLightingOptions.h"
 #include "EditorLocalAgentPanel.h"
+#include "EditorMcpWorkspaceHost.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Accessibility/VisualSafety.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -4369,6 +4370,7 @@ namespace Horo::Editor {
                           streamingPolicy.ErrorValue().message.c_str());
                 return std::nullopt;
             }
+            EditorMcpWorkspaceHost workspaceCommands{Platform::CreateNativeSecureRandomSource()};
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,
@@ -4463,6 +4465,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
+            screenHost.Services().Register<IEditorWorkspaceCommandHost>(workspaceCommands);
             screenHost.Services().Register<Application::GameplayTestService>(gameplayTestService);
             screenHost.Services().RegisterConst<Application::GameplayTestEnvironment>(gameplayTestEnvironment);
             screenHost.Services().Register<IExternalProcessRunner>(externalProcesses);

@@ -4783,7 +4783,7 @@ target_compile_features(HoroMcpNavigationAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::NavigationBakeAutomation)
 
 add_library(HoroMcpEditorCommandsInternal STATIC
-    mcp/EditorCommandMcpSession.cpp mcp/EditorSourceMcpTools.cpp mcp/EditorOperationMcpTools.cpp)
+    mcp/EditorCommandMcpSession.cpp mcp/EditorMcpWorkspaceHost.cpp mcp/EditorSourceMcpTools.cpp mcp/EditorOperationMcpTools.cpp)
 target_compile_features(HoroMcpEditorCommandsInternal PUBLIC cxx_std_20)
 set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_command_headers")
 foreach(command IN ITEMS Source Build Test)
@@ -4793,6 +4793,9 @@ foreach(command IN ITEMS Source Build Test)
         "${_horo_mcp_editor_command_headers}/Editor${command}CommandEndpoint.h" COPYONLY)
 endforeach ()
 configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers}/EditorCommandMcpSession.h" COPYONLY)
+configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
+configure_file(editor/screens/workspace/EditorWorkspaceCommandAccess.h
+    "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)
 target_include_directories(HoroMcpEditorCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_command_headers}>")
 target_link_libraries(HoroMcpEditorCommandsInternal
     PUBLIC HoroEngine::McpRegistry HoroEngine::EditorServices HoroEngine::GameplayBuild

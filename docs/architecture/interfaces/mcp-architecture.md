@@ -685,6 +685,13 @@ or decide a short-lived approval for an exact presentation or mutation call.
 The host pumps accepted calls on the editor lane and closes admission before
 releasing the borrowed workspace endpoints.
 
+The graphical host attaches the command owner only after the project route
+commits. Attachment prepares a revocable binding without granting a client
+access. Explicit local admission creates a new trust revision for the current
+project, and leaving the workspace retires the embedded session before
+withdrawing its application callbacks. A replacement workspace requires its
+own admission.
+
 ## Editor gameplay build commands
 
 The editor command pack offers `editor.build.start`, `editor.build.status`,

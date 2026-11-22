@@ -2,6 +2,7 @@
 
 /** @file EditorCommandMcpSession.h @brief Host-owned MCP session for one editor workspace. */
 
+#include "EditorWorkspaceCommandAccess.h"
 #include "Horo/Mcp/McpSession.h"
 
 namespace Horo::Mcp {
@@ -11,17 +12,6 @@ namespace Horo::Mcp {
 }  // namespace Horo::Mcp
 
 namespace Horo::Editor {
-    struct EditorBuildCommandEndpoint;
-    struct EditorSourceCommandEndpoint;
-    struct EditorTestCommandEndpoint;
-
-    /** @brief Borrowed application endpoints for the exact admitted workspace. Empty endpoints are omitted. */
-    struct EditorCommandMcpEndpoints {
-        std::weak_ptr<const EditorSourceCommandEndpoint> source;
-        std::weak_ptr<const EditorBuildCommandEndpoint> build;
-        std::weak_ptr<const EditorTestCommandEndpoint> test;
-    };
-
     /** @brief A local host's preapproved client and project binding. */
     struct EditorCommandMcpAdmission {
         std::string client;
@@ -44,7 +34,7 @@ namespace Horo::Editor {
          * @param policy Host authorization with the exact project revision already trusted.
          * @return Owning session or a typed configuration or authorization failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<EditorCommandMcpSession>> Create(EditorCommandMcpEndpoints endpoints,
+        [[nodiscard]] static Result<std::unique_ptr<EditorCommandMcpSession>> Create(EditorWorkspaceCommandEndpoints endpoints,
                                                                                      EditorCommandMcpAdmission admission,
                                                                                      std::shared_ptr<Mcp::McpAuthorization> policy);
 

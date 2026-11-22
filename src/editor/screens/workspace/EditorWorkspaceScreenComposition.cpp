@@ -1,3 +1,4 @@
+#include "EditorWorkspaceCommandAccess.h"
 #include "EditorWorkspaceScreen.h"
 #include "EnvironmentQueryPreviewNavigation.h"
 #include "EnvironmentQueryPreviewPhysics.h"
@@ -242,6 +243,57 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
         };
         contributions_.panels.AttachAll(panelContext);
+    }
+
+    /** @copydoc EditorWorkspaceScreen::AttachWorkspaceCommands */
+    void EditorWorkspaceScreen::AttachWorkspaceCommands(std::string projectIdentity) {
+        auto *commands = services_.TryGet<IEditorWorkspaceCommandHost>();
+        if (!commands || projectIdentity.empty())
+            return;
+        auto *const workspace = controller_.get();
+        const std::weak_ptr<const void> lifetime = workspaceControllerLifetime_;
+        EditorWorkspaceCommandAccess access{
+            .projectIdentity = projectIdentity,
+            .bind =
+                [workspace, lifetime, project = std::move(projectIdentity)](const std::uint64_t trustRevision) {
+            if (lifetime.expired())
+                return EditorWorkspaceCommandEndpoints{};
+            return EditorWorkspaceCommandEndpoints{
+                workspace->BindSourcePresentation(project, trustRevision),
+                workspace->BindGameplayBuildCommands(project, trustRevision),
+                workspace->BindGameplayTestCommands(project, trustRevision),
+            };
+        },
+            .revoke =
+                [workspace, lifetime] {
+            if (!lifetime.expired())
+                workspace->RevokeWorkspaceCommands();
+        },
+        };
+        if (const auto attached = commands->Attach(std::move(access)); attached.HasError()) {
+            LOG_WARN("editor.mcp", "Unable to attach workspace commands: %s", attached.ErrorValue().message.c_str());
+            return;
+        }
+        workspaceCommands_ = commands;
+    }
+
+    /** @copydoc EditorWorkspaceScreen::DetachWorkspaceCommands */
+    void EditorWorkspaceScreen::DetachWorkspaceCommands() {
+        auto *commands = std::exchange(workspaceCommands_, nullptr);
+        if (!commands)
+            return;
+        if (const auto detached = commands->Detach(); detached.HasError())
+            LOG_WARN("editor.mcp", "Workspace command retirement was incomplete: %s", detached.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceScreen::PumpWorkspaceCommands */
+    void EditorWorkspaceScreen::PumpWorkspaceCommands() {
+        if (!workspaceCommands_)
+            return;
+        if (const auto pumped = workspaceCommands_->PumpWorkspaceCommands(); pumped.HasError()) {
+            LOG_WARN("editor.mcp", "Cannot pump workspace commands: %s", pumped.ErrorValue().message.c_str());
+            DetachWorkspaceCommands();
+        }
     }
 
     /** @copydoc EditorWorkspaceScreen::CaptureEditorDiagnostics */

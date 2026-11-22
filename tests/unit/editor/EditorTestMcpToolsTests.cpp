@@ -1,6 +1,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorCommandMcpSession.h"
+#include "EditorMcpWorkspaceHost.h"
 #include "EditorSourceMcpTools.h"
 #include "EditorTestMcpTools.h"
 #include "Horo/Application/GameplayBuildService.h"
@@ -157,5 +158,59 @@ namespace {
         CHECK(session.RequestApproval(queued).HasError());
         CHECK(session.Close().HasValue());
         CHECK(client->Call(queued).HasError());
+    }
+
+    TEST_CASE("The editor MCP host retires command authority on a workspace switch", "[unit][editor][mcp]") {
+        int presentations{};
+        std::vector<std::uint64_t> revisions;
+        std::shared_ptr<const EditorSourceCommandEndpoint> endpoint;
+        const auto workspace = [&](const std::string &project) {
+            return EditorWorkspaceCommandAccess{
+                .projectIdentity = project,
+                .bind =
+                    [&, project](const std::uint64_t revision) {
+                revisions.push_back(revision);
+                endpoint = std::make_shared<EditorSourceCommandEndpoint>(
+                    EditorSourceCommandEndpoint{project, revision, std::this_thread::get_id(),
+                                                [&](const SourceDocumentId &, std::optional<EditorSourceCommandPosition>, const auto &) {
+                    ++presentations;
+                    return Result<void>::Success();
+                }});
+                return EditorWorkspaceCommandEndpoints{.source = endpoint};
+            },
+                .revoke =
+                    [&] {
+                endpoint.reset();
+            },
+            };
+        };
+        EditorMcpWorkspaceHost host{std::make_shared<Test::Entropy>()};
+        const std::vector<std::string> grants{std::string{EditorSourcePresentationGrant}};
+        CHECK(host.Open("operator", grants).HasError());
+        REQUIRE(host.Attach(workspace("first")).HasValue());
+        CHECK(revisions.empty());
+        auto old = host.Open("operator", grants);
+        REQUIRE(old.HasValue());
+        CHECK(host.Open("second-client", grants).HasError());
+        const auto command = Command("first-request", "editor.source.open", {{"path", "main.cpp"}});
+        Approve(*host.ActiveSession(), command);
+        REQUIRE(old.Value()->Call(command).HasValue());
+        REQUIRE(host.Detach().HasValue());
+        CHECK_FALSE(endpoint);
+        CHECK(old.Value()->Call(command).HasError());
+        CHECK(presentations == 0);
+
+        REQUIRE(host.Attach(workspace("replacement")).HasValue());
+        auto current = host.Open("operator", grants);
+        REQUIRE(current.HasValue());
+        REQUIRE(revisions.size() == 2);
+        CHECK(revisions[1] > revisions[0]);
+        CHECK(current.Value()->Call(command).HasError());
+        Approve(*host.ActiveSession(), command);
+        REQUIRE(current.Value()->Call(command).HasValue());
+        REQUIRE(host.PumpWorkspaceCommands().HasValue());
+        CHECK(presentations == 1);
+        REQUIRE(host.Detach().HasValue());
+        CHECK(current.Value()->Call(command).HasError());
     }
 }  // namespace

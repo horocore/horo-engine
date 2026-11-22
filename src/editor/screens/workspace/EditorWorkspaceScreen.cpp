@@ -93,6 +93,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         const auto &surfaces = activation.Candidate().surfaces;
         AttachWorkspacePanels(surfaces.settings ? std::string_view{surfaces.settings->Input().projectId} : std::string_view{});
+        const std::string projectIdentity = surfaces.settings ? surfaces.settings->Input().projectId : std::string{};
         UpdateStatusItems();
         const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
@@ -108,6 +109,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
         platformSources_ = platformSources;
         settings_.SetInputProfilePaths(input_.profilePaths);
+        AttachWorkspaceCommands(projectIdentity);
         return Result<void>::Success();
     }
 
@@ -123,6 +125,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
+        PumpWorkspaceCommands();
         if (panelServices_.gameplayTests)
             panelServices_.gameplayTests->Poll();
         if (controller_) {

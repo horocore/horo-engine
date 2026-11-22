@@ -36,6 +36,10 @@
 #include <string_view>
 #include <vector>
 
+namespace Horo::Editor {
+    class IEditorWorkspaceCommandHost;
+}
+
 namespace Horo::Editor::WorkspaceScreenDetail {
     class PlatformProjectSettingsOwner;
 
@@ -153,7 +157,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         /** @brief Binds borrowed application capabilities before any project activation. */
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
-        /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */
+        /** @brief Retires remaining workspace command and XR connections before destroying their owners. */
         ~EditorWorkspaceScreen() override;
         /** @brief Revoke the same admitted project artifact port before retiring its workspace owner. */
         void RevokeSimulatorArtifacts() noexcept;
@@ -205,6 +209,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> ValidateLeaveCapture() const;
         /** @brief Attaches built-in panels before session publication. */
         void AttachWorkspacePanels(std::string_view projectIdentity);
+        /** @brief Exposes borrowed command owners after project activation commits. */
+        void AttachWorkspaceCommands(std::string projectIdentity);
+        /** @brief Drains and revokes this workspace's published commands before owner retirement. */
+        void DetachWorkspaceCommands();
+        /** @brief Pumps authorized workspace commands before processing normal frame work. */
+        void PumpWorkspaceCommands();
         /** @brief Captures bounded Problems rows for the one active Decision Graph document. */
         [[nodiscard]] std::optional<AgentEditorDiagnosticsSnapshot> CaptureEditorDiagnostics();
         /** @brief Cancels a held preview when the active document, its revision or validation changes. */
@@ -294,6 +304,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
         std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles_;
         std::string agentProjectReadIdentity_;
+        IEditorWorkspaceCommandHost *workspaceCommands_{};
 
         struct EditorDiagnosticsReview final {
             DocumentInstanceId document;

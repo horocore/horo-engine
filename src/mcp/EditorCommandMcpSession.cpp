@@ -48,7 +48,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Validates the project-bound command packs and publishes their single immutable registry. */
-        Result<std::uint64_t> PublishCommands(Mcp::McpToolRegistry &registry, const EditorCommandMcpEndpoints &endpoints,
+        Result<std::uint64_t> PublishCommands(Mcp::McpToolRegistry &registry, const EditorWorkspaceCommandEndpoints &endpoints,
                                               const EditorCommandMcpAdmission &admission) {
             using Outcome = Result<std::uint64_t>;
             if (admission.project.empty() || admission.grants.empty())
@@ -88,7 +88,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorCommandMcpSession::Create */
-    SessionResult EditorCommandMcpSession::Create(EditorCommandMcpEndpoints endpoints, EditorCommandMcpAdmission admission,
+    SessionResult EditorCommandMcpSession::Create(EditorWorkspaceCommandEndpoints endpoints, EditorCommandMcpAdmission admission,
                                                   std::shared_ptr<Mcp::McpAuthorization> policy) {
         if (!policy)
             return SessionResult::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));

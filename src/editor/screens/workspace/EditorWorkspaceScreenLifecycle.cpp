@@ -142,6 +142,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        DetachWorkspaceCommands();
         RevokeEditorDiagnostics();
         if (platformSettings_)
             platformSettings_->Close();
