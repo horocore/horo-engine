@@ -8,8 +8,8 @@
 
 namespace Horo::Platform {
     /** @brief Create the native per-user, machine-local credential backend.
-     * @return A stateless Windows Credential Manager backend or an empty pointer on unsupported platforms.
-     * @details Creation performs no credential lookup. The host retains storage authority and supplies typed references.
+     * @return A native backend when one is configured for the build, or an empty pointer otherwise.
+     * @details Creation performs no credential lookup. Hosts supply typed references and call backend operations off the UI lane.
      */
     [[nodiscard]] std::shared_ptr<Security::CredentialBackend> CreateNativeCredentialBackend();
 }  // namespace Horo::Platform

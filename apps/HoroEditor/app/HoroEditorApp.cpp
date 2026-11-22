@@ -4350,7 +4350,7 @@ namespace Horo::Editor {
             if (p.options.localAgent) {
                 auto backend = Platform::CreateNativeCredentialBackend();
                 std::shared_ptr<EditorCloudModelProfileStore> profiles;
-                if (backend && backend->Available()) {
+                if (backend) {
                     auto credentials = std::make_shared<Security::PersistentCredentialStore>(std::move(backend),
                                                                                              Platform::CreateNativeSecureRandomSource());
                     profiles =

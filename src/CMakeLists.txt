@@ -294,9 +294,20 @@ else ()
             platform/file_storage/PublicationFileNativePosix.cpp
             platform/posix/DynamicLibrary_Posix.cpp
             platform/posix/ExternalProcess_Posix.cpp
-            platform/posix/NativeCredentialBackend_Posix.cpp
             platform/posix/SecureRandom_Posix.cpp)
     target_link_libraries(HoroPlatform PRIVATE dl)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(PkgConfig QUIET)
+        if (PkgConfig_FOUND)
+            pkg_check_modules(HORO_LIBSECRET QUIET IMPORTED_TARGET libsecret-1>=0.18)
+        endif ()
+    endif ()
+    if (TARGET PkgConfig::HORO_LIBSECRET)
+        target_sources(HoroPlatform PRIVATE platform/linux/NativeCredentialBackend_Linux.cpp)
+        target_link_libraries(HoroPlatform PRIVATE PkgConfig::HORO_LIBSECRET)
+    else ()
+        target_sources(HoroPlatform PRIVATE platform/posix/NativeCredentialBackend_Posix.cpp)
+    endif ()
     if (APPLE)
         target_link_libraries(HoroPlatform PRIVATE "-framework Security")
     endif ()

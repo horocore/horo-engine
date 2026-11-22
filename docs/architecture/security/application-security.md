@@ -294,6 +294,10 @@ On Windows the native platform backend stores generic credentials in Windows
 Credential Manager, under Horo's namespace and the current user on this machine.
 The host supplies opaque references and decides their lifetime. The backend
 rejects storage when the logon session disallows machine-local persistence.
+Linux builds with libsecret use the current desktop user's unlocked default
+Secret Service collection. They require a persistent collection and bound
+service calls on the worker lane. The desktop session owns keyring setup and
+unlock.
 Platforms without a native backend expose an unavailable result at host
 composition.
 

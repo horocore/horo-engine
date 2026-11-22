@@ -13,13 +13,16 @@ TEST_CASE("Native credential backend preserves and removes only the exact refere
     const auto backend = Platform::CreateNativeCredentialBackend();
 #if defined(_WIN32)
     REQUIRE(backend);
+#endif
+    if (!backend)
+        SKIP("This build does not include a native credential backend.");
     if (!backend->Available())
-        SKIP("This Windows logon does not permit machine-local user credentials.");
+        SKIP("No unlocked machine-local credential store is available.");
 
     const auto reader = Platform::CreateNativeCredentialBackend();
     REQUIRE(reader);
     Security::CredentialVault owner{backend, Platform::CreateNativeSecureRandomSource()};
-    constexpr std::array original{std::byte{1}, std::byte{0}, std::byte{3}};
+    constexpr std::array original{std::byte{1}, std::byte{0}, std::byte{3}, std::byte{0}};
     constexpr std::array replacement{std::byte{5}, std::byte{6}};
     const auto stored = owner.Put(Security::SecureBytes{original});
     REQUIRE(stored.HasValue());
@@ -46,18 +49,17 @@ TEST_CASE("Native credential backend preserves and removes only the exact refere
     REQUIRE(removed.HasError());
     CHECK(removed.ErrorValue().code.Value() == SecurityErrors::CredentialNotFound.code.Value());
     CHECK(reader->Remove(reference.Value()).HasValue());
-#else
-    CHECK_FALSE(backend);
-#endif
 }
 
-#if defined(_WIN32)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 TEST_CASE("Persistent credential reference can be reopened in a fresh process", "[platform][credentials]") {
     using namespace Horo;
     const auto backend = Platform::CreateNativeCredentialBackend();
+#if defined(_WIN32)
     REQUIRE(backend);
-    if (!backend->Available())
-        SKIP("This Windows logon does not permit machine-local user credentials.");
+#endif
+    if (!backend || !backend->Available())
+        SKIP("No unlocked machine-local credential store is available.");
 
     struct Cleanup {
         const std::shared_ptr<Security::CredentialBackend> backend;
