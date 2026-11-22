@@ -14,6 +14,13 @@ namespace Horo::Extensions {
 
     [[nodiscard]] std::vector<ExtensionCapabilityId> ScriptModuleRequestedCapabilities(const ScriptModuleProgram &);
 
+    /** @brief Immutable authoring metadata for an exact declared Lua or JavaScript import. */
+    struct ScriptModuleApiMetadata final {
+        std::string alias;                                /**< Local alias accepted by the runtime import function. */
+        std::optional<ScriptExportDescriptor> descriptor; /**< Current schema with callable functions filtered by admission. */
+        std::optional<Error> unavailable;                 /**< Reason this import has no active schema. */
+    };
+
     class ScriptModuleOperation final {
     public:
         ~ScriptModuleOperation();
@@ -50,6 +57,14 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<std::unique_ptr<ScriptModuleOperation>> Begin(std::shared_ptr<const ScriptModuleProgram>,
                                                                            ScriptModuleOperationPolicy,
                                                                            const CancellationToken &cancellation = {});
+        /** @brief Describes current declared imports for an admitted program without running its source.
+         * @param program Trusted program identifying the importing module and its declarations.
+         * @param policy Current project and script consent and capabilities.
+         * @return Owned declarative schemas or an authorization failure. Individual missing APIs retain their alias and error.
+         * @details Owner-lane query. Models stay inert after provider replacement. Requery to observe the new provider.
+         */
+        [[nodiscard]] Result<std::vector<ScriptModuleApiMetadata>> DescribeApis(const ScriptModuleProgram &program,
+                                                                                const ScriptModuleOperationPolicy &policy) const;
         /** Explicit builtin additive-provider request, prepared through the generic all-operation rebind path.
          * No native library replacement is attempted. One active and one draining predecessor are retained. */
         [[nodiscard]] Result<std::vector<ScriptModuleUpdateReport>> RefreshReference(ScriptExportVersion);

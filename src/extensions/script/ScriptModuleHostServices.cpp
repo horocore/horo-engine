@@ -5,10 +5,18 @@
 
 namespace Horo::Extensions {
     namespace {
+        constexpr auto ReferenceAlias = "horo.reference";
+
+        /** @brief Checks the project/context intersection used by a script operation. */
+        bool AllowsCapability(const ScriptModuleOperationPolicy &policy, const std::string_view capability) {
+            return std::ranges::find(policy.projectCapabilities, capability, &ExtensionCapabilityId::value) !=
+                       policy.projectCapabilities.end() &&
+                   std::ranges::find(policy.contextCapabilities, capability, &ExtensionCapabilityId::value) !=
+                       policy.contextCapabilities.end();
+        }
+
         bool ReferenceAllowed(const ScriptModuleOperationPolicy &policy) {
-            const ExtensionCapabilityId capability{"horo.script.reference"};
-            return std::ranges::find(policy.projectCapabilities, capability) != policy.projectCapabilities.end() &&
-                   std::ranges::find(policy.contextCapabilities, capability) != policy.contextCapabilities.end();
+            return AllowsCapability(policy, "horo.script.reference");
         }
 
         Result<void> Admit(const auto &state, const std::shared_ptr<const ScriptModuleProgram> &program,
@@ -36,7 +44,7 @@ namespace Horo::Extensions {
                 result.push_back(std::move(imported).Value());
             }
             if (program.RequestsReference()) {
-                auto reference = state.reference->Bind("horo.reference");
+                auto reference = state.reference->Bind(ReferenceAlias);
                 if (reference.HasError())
                     return Result<std::vector<ScriptModuleImport>>::Failure(reference.ErrorValue());
                 result.push_back(std::move(reference).Value());
@@ -66,6 +74,30 @@ namespace Horo::Extensions {
             if (kind == ScriptModuleRuntimeKind::Lua54)
                 return CreateLuaScriptModuleRuntime(std::move(context));
             return CreateJavaScriptModuleRuntime(std::move(context));
+        }
+
+        /** @brief Copies only declaration data from the current import and removes unadmitted functions. */
+        ScriptModuleApiMetadata DescribeImport(std::string alias, const Result<ScriptModuleImport> &imported) {
+            if (imported.HasError())
+                return {std::move(alias), std::nullopt, imported.ErrorValue()};
+            const auto &bound = imported.Value();
+            if (!bound.Backend())
+                return {std::move(alias), std::nullopt, bound.Unavailable()};
+            auto descriptor = bound.Backend()->Descriptor();
+            std::erase_if(descriptor.functions, [&](const ScriptExportFunctionDescriptor &function) {
+                return !bound.Backend()->AllowsFunction(function.id);
+            });
+            return {std::move(alias), std::move(descriptor), std::nullopt};
+        }
+
+        /** @brief Reads the builtin's installed descriptor without preparing or reloading a provider. */
+        ScriptModuleApiMetadata DescribeReference(const ScriptModuleReferenceInstallation *reference,
+                                                  const ScriptModuleOperationPolicy &policy) {
+            if (!ReferenceAllowed(policy))
+                return {ReferenceAlias, std::nullopt, MakeError(ExtensionErrors::CapabilityUnavailable)};
+            if (!reference)
+                return {ReferenceAlias, std::nullopt, MakeError(ExtensionErrors::ScriptInvocationUnavailable)};
+            return DescribeImport(ReferenceAlias, reference->Bind(ReferenceAlias));
         }
     }  // namespace
 
@@ -116,6 +148,34 @@ namespace Horo::Extensions {
 
     ScriptModuleBindingCacheStats ScriptModuleHostServices::CacheStats() const noexcept {
         return impl_->cache.Stats();
+    }
+
+    /** @copydoc ScriptModuleHostServices::DescribeApis */
+    Result<std::vector<ScriptModuleApiMetadata>> ScriptModuleHostServices::DescribeApis(const ScriptModuleProgram &program,
+                                                                                        const ScriptModuleOperationPolicy &policy) const {
+        using Output = Result<std::vector<ScriptModuleApiMetadata>>;
+        if (!policy.nativeConsent || !policy.scriptConsent)
+            return Output::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
+        if (std::ranges::none_of(policy.scopes, [](const ScriptCapabilityScopeLease &scope) {
+            return scope.Kind() == ScriptCapabilityScopeKind::Project && scope.IsUsable();
+        }))
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationContextRevoked));
+        if (auto current = ValidateScriptModuleActiveCapture(*impl_->authority, program); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        std::vector<ScriptModuleApiMetadata> result;
+        result.reserve(program.Module().imports.size() + 1);
+        for (const auto &declared : program.Module().imports) {
+            if (!AllowsCapability(policy, declared.service)) {
+                result.push_back({declared.id, std::nullopt, MakeError(ExtensionErrors::CapabilityUnavailable)});
+                continue;
+            }
+            const auto imported = BindModuleScriptHostImport(*impl_->authority, program.Manifest().id, program.Module().id, declared.id,
+                                                             declared.id, impl_->profile);
+            result.push_back(DescribeImport(declared.id, imported));
+        }
+        if (program.RequestsReference())
+            result.push_back(DescribeReference(impl_->reference.get(), policy));
+        return Output::Success(std::move(result));
     }
 
     Result<std::unique_ptr<ScriptModuleOperation>> ScriptModuleHostServices::Begin(std::shared_ptr<const ScriptModuleProgram> program,

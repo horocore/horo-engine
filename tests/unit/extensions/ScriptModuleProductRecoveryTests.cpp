@@ -1,7 +1,52 @@
 #include "ScriptModuleProductRecoverySupport.h"
 
+#include <algorithm>
+
 namespace Horo::Extensions::Tests {
     using namespace ProductRecoverySupport;
+
+    TEST_CASE("Script authoring metadata uses the actual provider generation and preserves denied imports as unavailable",
+              "[Extensions][ScriptModule][Authoring]") {
+        SignedPackage package{ScriptModuleRuntimeKind::Lua54, "error('metadata queries must never execute this script')"};
+        package.Capture();
+        Headless host{package};
+        const auto program = package.Program();
+        const auto policy = host.Policy();
+        const auto beforeInstall = Take(host.modules->DescribeApis(*program, policy));
+        REQUIRE(beforeInstall.size() == 2);
+        CHECK(beforeInstall[0].alias == "backend-import");
+        REQUIRE(beforeInstall[0].descriptor);
+        CHECK(beforeInstall[0].descriptor->nameSpace == "com.horo.concurrent.api");
+        CHECK(std::ranges::find(beforeInstall[0].descriptor->functions, "add", &ScriptExportFunctionDescriptor::id) !=
+              beforeInstall[0].descriptor->functions.end());
+        CHECK(beforeInstall[1].alias == "horo.reference");
+        CHECK_FALSE(beforeInstall[1].descriptor);
+        REQUIRE(beforeInstall[1].unavailable);
+        CHECK(beforeInstall[1].unavailable->code.Value() == ExtensionErrors::ScriptInvocationUnavailable.code.Value());
+
+        Accept(host.modules->PrepareReference(true));
+        const auto retained = Take(host.modules->DescribeApis(*program, policy));
+        REQUIRE(retained[1].descriptor);
+        CHECK(retained[1].descriptor->version == ScriptExportVersion{1, 0, 0});
+        CHECK(Take(host.modules->RefreshReference({1, 1, 0})).empty());
+        const auto current = Take(host.modules->DescribeApis(*program, policy));
+        REQUIRE(current[1].descriptor);
+        CHECK(current[1].descriptor->version == ScriptExportVersion{1, 1, 0});
+        CHECK(std::ranges::find(current[1].descriptor->functions, "apirevision", &ScriptExportFunctionDescriptor::id) !=
+              current[1].descriptor->functions.end());
+        CHECK(retained[1].descriptor->version == ScriptExportVersion{1, 0, 0});
+        CHECK(Take(host.modules->PollProviderRetirement()));
+
+        auto restricted = host.Policy();
+        restricted.contextCapabilities = {{"horo.script.reference"}};
+        const auto partial = Take(host.modules->DescribeApis(*program, restricted));
+        CHECK_FALSE(partial[0].descriptor);
+        REQUIRE(partial[0].unavailable);
+        CHECK(partial[0].unavailable->code.Value() == ExtensionErrors::CapabilityUnavailable.code.Value());
+        CHECK(partial[1].descriptor.has_value());
+        host.project.Revoke();
+        CHECK(host.modules->DescribeApis(*program, policy).HasError());
+    }
 
     TEST_CASE("Actual signed Headless operations retain the same two VM states across a real additive provider update",
               "[Extensions][ScriptModule][Recovery][Headless][TwoVm]") {

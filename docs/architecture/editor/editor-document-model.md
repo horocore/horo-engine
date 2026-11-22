@@ -275,6 +275,13 @@ libraries and returns only the exact source revision and typed diagnostics.
 The workspace retires a pending check when its source changes. Its marker
 range uses the original UTF-8 bytes, including any BOM and newline spelling.
 
+Module API descriptions come from the current registered providers for an
+authenticated importing module. A live project scope and the project and
+context capability intersection bound the query. The host returns copied
+declarations and an availability result for each declared alias. These
+values carry no invocation authority. A fresh request after provider
+replacement returns the current schema.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
