@@ -79,8 +79,10 @@ namespace Horo::Application {
 namespace Horo::Editor {
     struct EditorSourceCommandEndpoint;
     struct EditorInspectionCommandEndpoint;
-    struct TransformInspectionRequest;
+    struct ObjectInspectionRequest;
     struct TransformInspectionPage;
+    struct BoundsInspectionPage;
+    struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
     struct CapturedDecisionExternal;
@@ -817,7 +819,11 @@ namespace Horo::Editor {
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
         std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
         /** @brief Reads a numeric page without changing authored state, selection, or presentation. */
-        [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const TransformInspectionRequest &request) const;
+        [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const ObjectInspectionRequest &request) const;
+        /** @brief Reads the world bounds of exact authored objects, using only a matching published geometry snapshot. */
+        [[nodiscard]] Result<BoundsInspectionPage> InspectWorldBounds(const ObjectInspectionRequest &request) const;
+        /** @brief Fences inspection against the authored Scene and its current editor projection. */
+        [[nodiscard]] Result<InspectionSceneRevision> InspectSceneRevision() const;
         std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;
         std::shared_ptr<const EditorTestCommandEndpoint> m_testCommandEndpoint;
         std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;

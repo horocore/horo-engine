@@ -7,7 +7,9 @@
 #include "EditorTestMcpTools.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Mcp/McpController.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
+#include "Horo/Mcp/McpLocalTransport.h"
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <atomic>
@@ -54,9 +56,9 @@ namespace {
     }
 
     TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {
-        std::vector<TransformInspectionRequest> reads;
+        std::vector<ObjectInspectionRequest> reads;
         const InspectionSceneRevision scene{7, 19};
-        const auto reader = [&](const TransformInspectionRequest &request) {
+        const auto reader = [&](const ObjectInspectionRequest &request) {
             reads.push_back(request);
             TransformInspectionPage page{.scene = scene,
                                          .records = {{request.objects.at(request.offset), {1, 2, 3}, {0, 0, 0, 1}, {1, 1, 1}}}};
@@ -92,9 +94,74 @@ namespace {
         CHECK(reads.back().expected == scene);
         const auto oversize =
             Execute(session, Command("oversize", "inspect.transforms",
-                                     {{"objects", std::vector<std::uint64_t>(TransformInspectionRequest::MaximumObjects + 1, 42)}}));
+                                     {{"objects", std::vector<std::uint64_t>(ObjectInspectionRequest::MaximumObjects + 1, 42)}}));
         CHECK(oversize.at("status") == "failed");
         CHECK(reads.size() == 2);
+    }
+
+    TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readBounds = [](const ObjectInspectionRequest &request) {
+            using Output = Result<BoundsInspectionPage>;
+            if (request.objects.front() == 9)
+                return Output::Failure(MakeError(ErrorCodeDescriptor{.domain = ErrorDomainId{"editor.inspection"},
+                                                                     .code = ErrorCode{"bounds_unavailable"},
+                                                                     .defaultSeverity = ErrorSeverity::Warning}));
+            return Output::Success({.scene = {7, 19}, .records = {{42, {-1, 0, 2}, {1, 4, 6}}}});
+        }});
+        const auto policy = Test::Authorization();
+        auto registry = std::make_shared<McpToolRegistry>(policy);
+        const std::vector<std::string> grants{std::string{EditorSceneInspectionGrant}};
+        auto registrations = MakeEditorInspectionMcpTools(endpoint);
+        REQUIRE(registrations.HasValue());
+        const auto revision = registry->Publish(std::move(registrations).Value(), grants);
+        REQUIRE(revision.HasValue());
+        const auto controller = McpController::Create(registry, {}, policy);
+        REQUIRE(controller.HasValue());
+        REQUIRE(controller.Value()->BindOwner(McpOwnerContext::Editor).HasValue());
+        const auto manager = McpSessionManager::Create(controller.Value(), {}, policy);
+        REQUIRE(manager.HasValue());
+        const auto admission = Test::Authenticate({.clientIdentity = "inspect-fixture",
+                                                   .capabilities = grants,
+                                                   .projectIdentity = "project-one",
+                                                   .authorizationRevision = 3,
+                                                   .registryRevision = revision.Value()},
+                                                  policy);
+        const auto embedded = McpInProcessAdapter::Start(manager.Value(), admission);
+        const auto local = McpLocalTransport::Start(manager.Value(), admission);
+        REQUIRE(embedded.HasValue());
+        REQUIRE(local.HasValue());
+
+        const auto framed = [&](const McpRequest &request) {
+            const auto response = local.Value()->Feed(
+                Json{{"jsonrpc", "2.0"}, {"id", request.id}, {"method", request.method}, {"params", request.params}}.dump() + "\n");
+            REQUIRE(response.HasValue());
+            REQUIRE(response.Value().size() == 1);
+            return Json::parse(response.Value().front()).at("result");
+        };
+        for (const auto object : {42, 9}) {
+            const auto request = Command("bounds", "inspect.bounds", {{"objects", {object}}});
+            const auto first = embedded.Value()->Call(request);
+            REQUIRE(first.HasValue());
+            const auto second = framed(request);
+            REQUIRE(controller.Value()->Pump(McpOwnerContext::Editor).Value() == 2);
+            const auto result = embedded.Value()->Call(
+                {.id = "result", .method = "operations/get", .params = {{"operationId", first.Value().at("operationId")}}});
+            REQUIRE(result.HasValue());
+            const auto peer = framed({.id = "result", .method = "operations/get", .params = {{"operationId", second.at("operationId")}}});
+            CHECK(result.Value().at("result") == peer.at("result"));
+            CHECK(result.Value().at("error") == peer.at("error"));
+            if (object == 42) {
+                CHECK(peer["status"] == "succeeded");
+                CHECK(peer["result"]["records"][0]["maximum"] == Json::array({1, 4, 6}));
+            } else {
+                CHECK(peer["status"] == "failed");
+                CHECK(peer["error"]["code"] == "bounds_unavailable");
+            }
+        }
     }
 
     TEST_CASE("Configured test commands run through an approved embedded editor session", "[unit][editor][mcp][gameplay-test]") {

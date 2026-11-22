@@ -26,6 +26,11 @@ namespace Horo::Editor {
                                                         .code = ErrorCode{"invalid_page"},
                                                         .defaultSeverity = ErrorSeverity::Warning,
                                                         .summary = "Provide unique object IDs and a bounded range."};
+        const ErrorCodeDescriptor
+            InspectionBoundsUnavailable{.domain = ErrorDomainId{"editor.inspection"},
+                                        .code = ErrorCode{"bounds_unavailable"},
+                                        .defaultSeverity = ErrorSeverity::Warning,
+                                        .summary = "Matching authored viewport geometry is unavailable for the requested object."};
 
         /** @brief Projects authored numeric data without names or runtime handles. */
         AgentViewportTransform LocalTransform(const SceneObject &object) {
@@ -37,11 +42,90 @@ namespace Horo::Editor {
         }
 
         /** @brief Validates typed page boundaries independently of transport schema admission. */
-        bool ValidInspectionPage(const TransformInspectionRequest &request) {
+        bool ValidInspectionPage(const ObjectInspectionRequest &request) {
             const auto count = request.objects.size();
-            const auto maximum = TransformInspectionRequest::MaximumObjects;
+            const auto maximum = ObjectInspectionRequest::MaximumObjects;
             return count <= maximum && request.offset < count && request.limit > 0 && request.limit <= maximum &&
                    (request.offset == 0 || request.expected.has_value());
+        }
+
+        using InspectionObjects = std::array<const SceneObject *, ObjectInspectionRequest::MaximumObjects>;
+
+        /** @brief Resolves each requested visible ID once, including IDs outside the page. */
+        Result<InspectionObjects> ResolveInspectionObjects(const std::span<const SceneObject> objects,
+                                                           const std::span<const std::uint64_t> ids) {
+            using Output = Result<InspectionObjects>;
+            InspectionObjects resolved{};
+            for (std::size_t index = 0; index < ids.size(); ++index) {
+                const auto id = ids[index];
+                const auto earlier = ids.first(index);
+                if (!id || std::ranges::find(earlier, id) != earlier.end())
+                    return Output::Failure(MakeError(InspectionInvalidPage));
+                const auto object = std::ranges::find(objects, SceneObjectId{id}, &SceneObject::id);
+                if (object == objects.end() || !object->effectivelyVisible)
+                    return Output::Failure(MakeError(InspectionObjectUnavailable));
+                resolved[index] = &*object;
+            }
+            return Output::Success(resolved);
+        }
+
+        /** @brief Shares revision, ordering, visibility and pagination rules across numeric projections. */
+        template <typename Page, typename Project>
+        Result<Page> ReadInspectionPage(const Result<InspectionSceneRevision> &scene, const ObjectInspectionRequest &request,
+                                        const std::span<const SceneObject> objects, Project project) {
+            using Output = Result<Page>;
+            if (scene.HasError())
+                return Output::Failure(scene.ErrorValue());
+            if (request.expected && *request.expected != scene.Value())
+                return Output::Failure(MakeError(InspectionStale));
+            if (!ValidInspectionPage(request))
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            const auto resolved = ResolveInspectionObjects(objects, request.objects);
+            if (resolved.HasError())
+                return Output::Failure(resolved.ErrorValue());
+            Page page{.scene = scene.Value()};
+            const auto end = std::min(request.offset + request.limit, request.objects.size());
+            page.records.reserve(end - request.offset);
+            for (std::size_t index = request.offset; index < end; ++index) {
+                auto record = project(*resolved.Value()[index]);
+                if (record.HasError())
+                    return Output::Failure(record.ErrorValue());
+                page.records.push_back(std::move(record).Value());
+            }
+            if (end < request.objects.size())
+                page.nextOffset = end;
+            return Output::Success(std::move(page));
+        }
+
+        /** @brief Unions local mesh bounds transformed by the committed authored pose, ignoring gizmo preview transforms. */
+        Result<InspectedBounds> WorldBounds(const EditorViewportSceneSnapshot &geometry, const Runtime::RuntimeSceneView &active,
+                                            const SceneObject &object) {
+            using Output = Result<InspectedBounds>;
+            const auto world = ResolveSceneObjectWorldTransforms(active, object.id);
+            if (world.HasError())
+                return Output::Failure(MakeError(InspectionBoundsUnavailable));
+            std::optional<Math::Aabb> merged;
+            for (std::size_t i = 0; i < geometry.instanceObjects.size(); ++i) {
+                if (geometry.instanceObjects[i] != object.id)
+                    continue;
+                const auto bounds = Math::TransformAabb(geometry.instances[i].localBounds, world.Value().localToWorld);
+                if (bounds.HasError())
+                    return Output::Failure(MakeError(InspectionBoundsUnavailable));
+                const auto &part = bounds.Value();
+                if (!merged) {
+                    merged = part;
+                    continue;
+                }
+                merged->minimum = {std::min(merged->minimum.x, part.minimum.x), std::min(merged->minimum.y, part.minimum.y),
+                                   std::min(merged->minimum.z, part.minimum.z)};
+                merged->maximum = {std::max(merged->maximum.x, part.maximum.x), std::max(merged->maximum.y, part.maximum.y),
+                                   std::max(merged->maximum.z, part.maximum.z)};
+            }
+            if (!merged)
+                return Output::Failure(MakeError(InspectionBoundsUnavailable));
+            return Output::Success({object.id.value,
+                                    {merged->minimum.x, merged->minimum.y, merged->minimum.z},
+                                    {merged->maximum.x, merged->maximum.y, merged->maximum.z}});
         }
 
         /** @brief Keeps the public numeric context independent of internal editor interaction enums. */
@@ -143,41 +227,46 @@ namespace Horo::Editor {
         std::string project, const std::uint64_t authorizationRevision) {
         m_inspectionCommandEndpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{std::move(project), authorizationRevision, std::this_thread::get_id(),
-                                            [this](const TransformInspectionRequest &request) {
+                                            [this](const ObjectInspectionRequest &request) {
             return InspectLocalTransforms(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectWorldBounds(request);
         }});
         return m_inspectionCommandEndpoint;
     }
 
     /** @copydoc EditorWorkspaceController::InspectLocalTransforms */
-    Result<TransformInspectionPage> EditorWorkspaceController::InspectLocalTransforms(const TransformInspectionRequest &request) const {
-        using Output = Result<TransformInspectionPage>;
+    Result<TransformInspectionPage> EditorWorkspaceController::InspectLocalTransforms(const ObjectInspectionRequest &request) const {
+        return ReadInspectionPage<TransformInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                           [](const SceneObject &object) {
+            return Result<AgentViewportTransform>::Success(LocalTransform(object));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectWorldBounds */
+    Result<BoundsInspectionPage> EditorWorkspaceController::InspectWorldBounds(const ObjectInspectionRequest &request) const {
+        return ReadInspectionPage<BoundsInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                        [this](const SceneObject &object) {
+            const auto active = m_runtimeScene.ActiveScene();
+            if (!active || active->RuntimeId() != m_viewportScene.runtimeSceneId ||
+                active->DefinitionRevision().value != m_document.State().value ||
+                m_viewportScene.documentRevision != m_document.Revision() ||
+                m_viewportScene.instances.size() != m_viewportScene.instanceObjects.size())
+                return Result<InspectedBounds>::Failure(MakeError(InspectionBoundsUnavailable));
+            return WorldBounds(m_viewportScene, *active, object);
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectSceneRevision */
+    Result<InspectionSceneRevision> EditorWorkspaceController::InspectSceneRevision() const {
+        using Output = Result<InspectionSceneRevision>;
         if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() ||
             m_viewModel.playState != EditorPlayState::Idle)
             return Output::Failure(MakeError(InspectionUnavailable));
         const InspectionSceneRevision scene{m_document.ReplacementEpoch(), m_document.Revision().value};
         if (m_viewModel.assetDropFence.replacementEpoch != scene.epoch || m_viewModel.documentRevision.value != scene.revision)
             return Output::Failure(MakeError(InspectionUnavailable));
-        if (request.expected && *request.expected != scene)
-            return Output::Failure(MakeError(InspectionStale));
-        if (!ValidInspectionPage(request))
-            return Output::Failure(MakeError(InspectionInvalidPage));
-        TransformInspectionPage page{.scene = scene};
-        const auto end = std::min(request.offset + request.limit, request.objects.size());
-        for (std::size_t index = 0; index < request.objects.size(); ++index) {
-            const auto id = request.objects[index];
-            const auto earlier = std::span{request.objects}.first(index);
-            if (!id || std::ranges::find(earlier, id) != earlier.end())
-                return Output::Failure(MakeError(InspectionInvalidPage));
-            const auto object = std::ranges::find(m_viewModel.objects, SceneObjectId{id}, &SceneObject::id);
-            if (object == m_viewModel.objects.end() || !object->effectivelyVisible)
-                return Output::Failure(MakeError(InspectionObjectUnavailable));
-            if (index >= request.offset && index < end)
-                page.records.push_back(LocalTransform(*object));
-        }
-        if (end < request.objects.size())
-            page.nextOffset = end;
-        return Output::Success(std::move(page));
+        return Output::Success(scene);
     }
 
     /** @copydoc EditorWorkspaceController::CaptureAgentSelectionValues */

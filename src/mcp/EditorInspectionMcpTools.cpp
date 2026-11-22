@@ -7,7 +7,7 @@ namespace Horo::Editor {
     namespace {
         using Json = nlohmann::json;
         using JsonResult = Result<Json>;
-        constexpr auto MaximumObjects = TransformInspectionRequest::MaximumObjects;
+        constexpr auto MaximumObjects = ObjectInspectionRequest::MaximumObjects;
 
         /** @brief Describes the numeric Scene fence carried across pages. */
         Json SceneSchema() {
@@ -34,18 +34,12 @@ namespace Horo::Editor {
         }
 
         /** @brief Describes numeric records without names, free text, or runtime handles. */
-        Json OutputSchema() {
-            const auto vector = [](const std::size_t count) {
-                return Json{{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
-            };
-            const Json row{{"type", "object"},
-                           {"properties",
-                            {{"object", {{"type", "integer"}, {"minimum", 1}}},
-                             {"translation", vector(3)},
-                             {"rotationXYZW", vector(4)},
-                             {"scale", vector(3)}}},
-                           {"required", {"object", "translation", "rotationXYZW", "scale"}},
-                           {"additionalProperties", false}};
+        Json VectorSchema(const std::size_t count) {
+            return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
+        }
+
+        /** @brief Places a typed record in the shared revision-fenced page envelope. */
+        Json PageSchema(const Json &row) {
             return {{"type", "object"},
                     {"properties",
                      {{"scene", SceneSchema()},
@@ -55,24 +49,53 @@ namespace Horo::Editor {
                     {"additionalProperties", false}};
         }
 
+        /** @brief Describes authored transform values only. */
+        Json TransformSchema() {
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                                 {"translation", VectorSchema(3)},
+                                 {"rotationXYZW", VectorSchema(4)},
+                                 {"scale", VectorSchema(3)}}},
+                               {"required", {"object", "translation", "rotationXYZW", "scale"}},
+                               {"additionalProperties", false}});
+        }
+
+        /** @brief Describes world-space axis-aligned bounds. */
+        Json BoundsSchema() {
+            return PageSchema(
+                {{"type", "object"},
+                 {"properties",
+                  {{"object", {{"type", "integer"}, {"minimum", 1}}}, {"minimum", VectorSchema(3)}, {"maximum", VectorSchema(3)}}},
+                 {"required", {"object", "minimum", "maximum"}},
+                 {"additionalProperties", false}});
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
-        TransformInspectionRequest ReadRequest(const Json &arguments) {
-            TransformInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
-                                               arguments.value("offset", std::size_t{0}), arguments.value("limit", MaximumObjects)};
+        ObjectInspectionRequest ReadRequest(const Json &arguments) {
+            ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
+                                            arguments.value("offset", std::size_t{0}), arguments.value("limit", MaximumObjects)};
             if (const auto scene = arguments.find("scene"); scene != arguments.end())
                 request.expected =
                     InspectionSceneRevision{scene->at("epoch").get<std::uint64_t>(), scene->at("revision").get<std::uint64_t>()};
             return request;
         }
 
+        /** @brief Serializes local numeric TRS values. */
+        Json WriteRecord(const AgentViewportTransform &entry) {
+            return {{"object", entry.object}, {"translation", entry.translation}, {"rotationXYZW", entry.rotation}, {"scale", entry.scale}};
+        }
+
+        /** @brief Serializes numeric world-space limits. */
+        Json WriteRecord(const InspectedBounds &entry) {
+            return {{"object", entry.object}, {"minimum", entry.minimum}, {"maximum", entry.maximum}};
+        }
+
         /** @brief Exports an owner-produced page with an optional continuation offset. */
-        Json WritePage(const TransformInspectionPage &page) {
+        template <typename Page> Json WritePage(const Page &page) {
             Json rows = Json::array();
             for (const auto &entry : page.records)
-                rows.push_back({{"object", entry.object},
-                                {"translation", entry.translation},
-                                {"rotationXYZW", entry.rotation},
-                                {"scale", entry.scale}});
+                rows.push_back(WriteRecord(entry));
             Json result{{"scene", {{"epoch", page.scene.epoch}, {"revision", page.scene.revision}}}, {"records", std::move(rows)}};
             if (page.nextOffset)
                 result["nextOffset"] = *page.nextOffset;
@@ -80,9 +103,9 @@ namespace Horo::Editor {
         }
 
         /** @brief Uses only the current project and exact authorization generation on the editor lane. */
-        class TransformTool final : public Mcp::IMcpToolAdapter {
+        template <auto Read> class InspectionTool final : public Mcp::IMcpToolAdapter {
         public:
-            explicit TransformTool(std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint) : endpoint_(std::move(endpoint)) {}
+            explicit InspectionTool(std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint) : endpoint_(std::move(endpoint)) {}
 
             JsonResult Invoke(const Json &arguments, const Mcp::McpRequestContext &context) override {
                 const auto endpoint = endpoint_.lock();
@@ -95,7 +118,7 @@ namespace Horo::Editor {
                 const auto request = ReadRequest(arguments);
                 if (request.offset && !request.expected)
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
-                const auto page = endpoint->readTransforms(request);
+                const auto page = (endpoint.get()->*Read)(request);
                 if (page.HasError())
                     return JsonResult::Failure(page.ErrorValue());
                 return JsonResult::Success(WritePage(page.Value()));
@@ -104,6 +127,22 @@ namespace Horo::Editor {
         private:
             std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint_;
         };
+
+        /** @brief Publishes a read-only query under the shared inspection capability and bounds. */
+        template <auto Read>
+        Mcp::McpToolRegistration Registration(const std::weak_ptr<const EditorInspectionCommandEndpoint> &workspace, std::string id,
+                                              std::string description, Json schema) {
+            return {.descriptor =
+                        {.id = {std::move(id)},
+                         .description = std::move(description),
+                         .inputSchema = InputSchema(),
+                         .outputSchema = std::move(schema),
+                         .effect = Mcp::McpToolEffect::Query,
+                         .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
+                         .bounds = {.maximumInputBytes = 1024, .maximumResultBytes = 8192, .maximumDepth = 6, .maximumNodes = 512}},
+                    .adapter = std::make_shared<InspectionTool<Read>>(workspace),
+                    .owner = Mcp::McpOwnerContext::Editor};
+        }
     }  // namespace
 
     /** @copydoc MakeEditorInspectionMcpTools */
@@ -111,18 +150,22 @@ namespace Horo::Editor {
         std::weak_ptr<const EditorInspectionCommandEndpoint> workspace) {
         using Output = Result<std::vector<Mcp::McpToolRegistration>>;
         const auto endpoint = workspace.lock();
-        if (!endpoint || endpoint->owner != std::this_thread::get_id() || !endpoint->readTransforms || endpoint->project.empty() ||
-            endpoint->project.size() > 256 || !IsValidUtf8ScalarSequence(endpoint->project) || !endpoint->authorizationRevision)
+        if (!endpoint || endpoint->owner != std::this_thread::get_id() || (!endpoint->readTransforms && !endpoint->readBounds) ||
+            endpoint->project.empty() || endpoint->project.size() > 256 || !IsValidUtf8ScalarSequence(endpoint->project) ||
+            !endpoint->authorizationRevision)
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
-        return Output::Success(
-            {{.descriptor = {.id = {"inspect.transforms"},
-                             .description = "Read a page of visible authored local transforms by exact Scene object ID.",
-                             .inputSchema = InputSchema(),
-                             .outputSchema = OutputSchema(),
-                             .effect = Mcp::McpToolEffect::Query,
-                             .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
-                             .bounds = {.maximumInputBytes = 1024, .maximumResultBytes = 8192, .maximumDepth = 6, .maximumNodes = 512}},
-              .adapter = std::make_shared<TransformTool>(workspace),
-              .owner = Mcp::McpOwnerContext::Editor}});
+        std::vector<Mcp::McpToolRegistration> tools;
+        if (endpoint->readTransforms)
+            tools.push_back(Registration<&EditorInspectionCommandEndpoint::
+                                             readTransforms>(workspace, "inspect.transforms",
+                                                             "Read a page of visible authored local transforms by exact Scene object ID.",
+                                                             TransformSchema()));
+        if (endpoint->readBounds)
+            tools.push_back(
+                Registration<&EditorInspectionCommandEndpoint::
+                                 readBounds>(workspace, "inspect.bounds",
+                                             "Read a page of visible authored world-space axis-aligned bounds by exact Scene object ID.",
+                                             BoundsSchema()));
+        return Output::Success(std::move(tools));
     }
 }  // namespace Horo::Editor

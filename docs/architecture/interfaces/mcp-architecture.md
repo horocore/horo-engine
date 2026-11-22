@@ -464,6 +464,9 @@ quaternions and scales for explicitly supplied visible object IDs. The
 request is bounded to 16 IDs and continuations repeat the exact Scene epoch
 and revision from the previous result. Play copies, retired workspaces and
 missing or hidden objects fail closed.
+The same grant exposes `inspect.bounds`, which applies committed authored
+world transforms to matching published mesh bounds. Missing or stale geometry
+produces an explicit unavailable result. Gizmo previews are excluded.
 
 ## MCP History Retention And Redaction
 

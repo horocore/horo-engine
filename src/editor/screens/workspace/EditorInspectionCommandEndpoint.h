@@ -22,7 +22,7 @@ namespace Horo::Editor {
     };
 
     /** @brief Exact object set and optional continuation fence. */
-    struct TransformInspectionRequest {
+    struct ObjectInspectionRequest {
         static constexpr std::size_t MaximumObjects = 16;
         std::vector<std::uint64_t> objects;
         std::size_t offset{};
@@ -37,11 +37,26 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Axis-aligned bounds of an authored object's viewport geometry in world space. */
+    struct InspectedBounds {
+        std::uint64_t object{};
+        std::array<float, 3> minimum{};
+        std::array<float, 3> maximum{};
+    };
+
+    /** @brief One page from the ordered bounds request. */
+    struct BoundsInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedBounds> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
         std::uint64_t authorizationRevision{};
         std::thread::id owner;
-        std::function<Result<TransformInspectionPage>(const TransformInspectionRequest &)> readTransforms;
+        std::function<Result<TransformInspectionPage>(const ObjectInspectionRequest &)> readTransforms;
+        std::function<Result<BoundsInspectionPage>(const ObjectInspectionRequest &)> readBounds;
     };
 }  // namespace Horo::Editor
