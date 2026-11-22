@@ -1,4 +1,5 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
@@ -28,6 +29,8 @@ namespace Horo::AI {
             Gameplay::GameModuleHost host;
             auto loaded = shadow.empty() ? host.Load(HORO_TEST_AI_MODULE_PATH, NativeExpectation())
                                          : host.LoadShadowCopy(HORO_TEST_AI_MODULE_PATH, shadow, NativeExpectation());
+            if (loaded.HasError())
+                UNSCOPED_INFO(loaded.ErrorValue().message);
             REQUIRE(loaded.HasValue());
             REQUIRE_FALSE(loaded.Value().diagnostic);
             return std::move(loaded).Value().owner;
@@ -99,6 +102,68 @@ namespace Horo::AI {
             module->RequestRetirement();
             CHECK_FALSE(generation->CanUse());
             CHECK(fixture.Step(*created.Value(), 2) == AiTaskState::Cancelled);
+        }
+
+        TEST_CASE("Qualified native EQS publishes the same winner and work on repeat", "[ai][eqs][native]") {
+            auto module = NativeModule();
+            const auto acquired = module->AcquireGameplayQueryTests();
+            REQUIRE(acquired.HasValue());
+            const auto &capture = acquired.Value();
+            REQUIRE(capture.tests->CanEvaluate());
+            const auto &schema = *capture.schema;
+            const auto winner = Math::WorldCoordinate64::FromMillimeters(1500, 0, 500);
+            const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500), winner,
+                                    Math::WorldCoordinate64::FromMillimeters(1000, 0, 500)};
+            const auto generated =
+                CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(21), MakeIdentity<QueryStageId>(22),
+                                                MakeIdentity<QueryResultSchemaId>(23), "Qualified native EQS", points, 1);
+            REQUIRE(generated.HasValue());
+            const auto distance = AddBuiltinPointDistanceTest(generated.Value(), MakeIdentity<QueryStageId>(24), {5000, true});
+            REQUIRE(distance.HasValue());
+            const auto stage = MakeIdentity<QueryStageId>(25);
+            const std::array properties{QueryPropertyValue{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}};
+            const auto source =
+                EditGameplayPointTest(distance.Value(), schema, MakeIdentity<QueryTestId>(90), stage, std::span{properties});
+            REQUIRE(source.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(source.Value(), schema);
+            REQUIRE(plan.HasValue());
+            REQUIRE(capture.tests->SupportsDeterministic(plan.Value()));
+
+            const auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto contextProviders = QueryContextProviderRegistry::Capture({}, schema);
+            REQUIRE(contextProviders.HasValue());
+            QueryContextCapture contextCapture;
+            const auto context =
+                contextCapture.Capture(plan.Value(), schema, contextProviders.Value(), view, QueryTestSupport::Source(view));
+            REQUIRE(context.HasValue());
+            const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, context.Value()};
+            const QueryExecutionSettings settings{.submittedTick = 1, .deadlineTick = 20, .maximumCandidates = 8, .bestCount = 1};
+            const auto run = [&] {
+                auto prepared = PrepareGameplayPointTest(plan.Value(), stage, schema, view, inputs, settings, capture.tests, nullptr);
+                REQUIRE(prepared.HasValue());
+                std::array stages{std::move(prepared).Value()};
+                auto query = AdmitBuiltinPointProviderQuery(plan.Value(), schema, view, inputs, settings, stages, nullptr,
+                                                            QueryExecutionMode::DeterministicWorkUnits);
+                REQUIRE(query.HasValue());
+                std::vector<std::size_t> work;
+                for (std::uint64_t tick = 1; tick < settings.deadlineTick && !query.Value()->Sync(tick); ++tick) {
+                    AiWorkBudget budget{48};
+                    query.Value()->Advance(tick, {budget, budget, budget});
+                    work.push_back(budget.Remaining());
+                }
+                const auto *result = query.Value()->Published();
+                REQUIRE(result);
+                CHECK(result->status == QueryExecutionStatus::Completed);
+                CHECK(result->mode == QueryExecutionMode::DeterministicWorkUnits);
+                CHECK(result->publicationTick == 9);
+                REQUIRE(result->winners.size() == 1);
+                CHECK(std::get<Math::WorldCoordinate64>(result->winners.front().item) == winner);
+                return work;
+            };
+            const std::vector<std::size_t> expected{48, 3, 44, 44, 42, 44, 42, 44};
+            CHECK(run() == expected);
+            CHECK(run() == expected);
         }
 
         TEST_CASE("Native EQS leases revoke before replacement and never acquire the new generation", "[ai][eqs][native]") {
