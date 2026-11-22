@@ -346,16 +346,28 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     auto &project = fixture.project;
     auto &output = fixture.output;
     GameplayBuildRequest request = fixture.Request();
+    request.environment.cmakeExecutable = HORO_GAMEPLAY_CMAKE_COMMAND;
     request.environment.cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER};
     request.environment.generator = HORO_TEST_CMAKE_GENERATOR;
     request.timeouts = {.configure = std::chrono::minutes{1}, .build = std::chrono::minutes{2}};
 
-    const auto started = service.Start(request);
+    const auto observations = std::make_shared<std::atomic_uint>();
+    request.validateSources = [observations](const CancellationToken &) {
+        ++*observations;
+        return Result<void>::Success();
+    };
+    const auto started = service.StartIsolated(request, {});
     REQUIRE(started.HasValue());
     const GameplayBuildSnapshot success = AwaitTerminal(service, started.Value());
+    INFO((success.error ? success.error->message : ""));
     const std::optional<BuildOutputSnapshot> buildOutput = output.SnapshotIfChanged(0);
     REQUIRE(buildOutput.has_value());
+    if (success.error)
+        for (const auto &record : buildOutput->records)
+            UNSCOPED_INFO(record.message);
     const std::optional<BuildOutputSessionId> successfulOutputSession = AssertSuccessfulBuildOutput(*buildOutput, success);
+    CHECK(*observations == 3U);
+    request.validateSources = {};
     REQUIRE(service.IsUpToDate(request));
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
     const std::string_view generator{HORO_TEST_CMAKE_GENERATOR};
@@ -484,6 +496,25 @@ TEST_CASE("Isolated editor builds never take over or coalesce with a native buil
     const auto output = AwaitTerminalOutput(fixture.output, terminal);
     REQUIRE(output);
     AssertTerminalOutput(*output, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+}
+
+TEST_CASE("A stale approved source review prevents the isolated build from starting a native process", "[unit][gameplay][build]") {
+    TerminalProcessRunner processes{ProcessTerminationReason::Exited};
+    GameplayBuildFixture fixture{processes};
+    auto request = fixture.Request();
+    request.validateSources = [](const CancellationToken &) {
+        static const ErrorCodeDescriptor Stale{ErrorDomainId{"validation"}, ErrorCode{"stale_review"}, ErrorSeverity::Warning,
+                                               "The reviewed sources changed."};
+        return Result<void>::Failure(MakeError(Stale));
+    };
+    CHECK(fixture.service.Start(request).HasError());
+    const auto id = fixture.service.StartIsolated(request, {});
+    REQUIRE(id.HasValue());
+    const auto result = AwaitTerminal(fixture.service, id.Value());
+    CHECK(result.state == GameplayBuildState::Failed);
+    REQUIRE(result.error);
+    CHECK(result.error->code.Value() == "stale_review");
+    CHECK(processes.calls == 0U);
 }
 
 TEST_CASE("Gameplay build shutdown joins active work and publishes terminal output before returning", "[unit][gameplay][build][shutdown]") {

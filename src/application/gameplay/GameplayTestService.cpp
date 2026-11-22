@@ -74,11 +74,14 @@ namespace Horo::Application {
         }
 
         /** @brief Checks the saved build receipt and current inputs under the existing build lock. */
-        bool MatchesBuild(const GameplayTestBuildInput &build) {
+        Result<void> ValidateBuild(const GameplayTestBuildInput &build, const CancellationToken &stop) {
             if (Detail::ReadSuccessfulHash(build.request.projectRoot) != build.successfulInputHash)
-                return false;
+                return Result<void>::Failure(MakeError(StaleBuild));
             const auto current = Detail::ComputeInputHash(build.request);
-            return current.HasValue() && current.Value() == build.successfulInputHash;
+            if (current.HasError() || current.Value() != build.successfulInputHash)
+                return Result<void>::Failure(MakeError(StaleBuild));
+            const auto &validate = build.request.validateSources;
+            return validate ? validate(stop) : Result<void>::Success();
         }
 
         /** @brief Holds the existing build lock while resolving and executing CTest. */
@@ -92,8 +95,10 @@ namespace Horo::Application {
             const auto lock = files.TryAcquireExclusive(lockPath, "gameplay tests");
             if (lock.HasError())
                 return Result<void>::Failure(lock.ErrorValue());
-            if (expectedBuild && !MatchesBuild(*expectedBuild))
-                return Result<void>::Failure(MakeError(StaleBuild));
+            if (expectedBuild) {
+                if (auto valid = ValidateBuild(*expectedBuild, stop); valid.HasError())
+                    return valid;
+            }
             const auto build = GameplayLocalBuildDirectory(request.workingDirectory);
             const auto inventory = build / "CTestTestfile.cmake";
             std::error_code error;
@@ -104,8 +109,10 @@ namespace Horo::Application {
             if (result.HasError())
                 return Result<void>::Failure(std::move(result).ErrorValue());
             auto outcome = TestOutcome(result.Value());
-            if (!stop.IsCancellationRequested() && expectedBuild && !MatchesBuild(*expectedBuild))
-                return Result<void>::Failure(MakeError(StaleBuild));
+            if (!stop.IsCancellationRequested() && expectedBuild) {
+                if (auto valid = ValidateBuild(*expectedBuild, stop); valid.HasError())
+                    return valid;
+            }
             return outcome;
         }
 

@@ -261,6 +261,12 @@ after CTest. A changed or replaced input identity reports
 `gameplay.test/build_inputs_stale`; it cannot publish a successful result for
 the approved build.
 
+An isolated build and its correlated test run can retain an editor source
+validation check. The worker checks that evidence under the native build lock.
+It checks before a build starts, before loading the compiled module, and before
+publishing success. For CTest it checks before execution and before accepting
+the result. The check has read-only access and carries no save authority.
+
 ## Data Flow
 
 ```mermaid

@@ -191,6 +191,16 @@ namespace {
             staleBefore = true;
             approved.successfulInputHash.assign(64, '0');
         }
+        SECTION("The editor revision changes while the native inputs stay the same") {
+            staleDuring = true;
+            approved.request.validateSources = [checks = 0U](const CancellationToken &) mutable {
+                if (++checks == 1)
+                    return Result<void>::Success();
+                static const ErrorCodeDescriptor Stale{ErrorDomainId{"gameplay.test"}, ErrorCode{"build_inputs_stale"},
+                                                       ErrorSeverity::Warning, "The editor revision changed."};
+                return Result<void>::Failure(MakeError(Stale));
+            };
+        }
 
         const auto operation = fixture.tests.StartForBuild(std::move(approved), fixture.environment);
         REQUIRE(operation.HasValue());

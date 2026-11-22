@@ -75,6 +75,10 @@ namespace Horo::Application {
         GameplayBuildEnvironment environment;
         GameplayBuildTimeoutPolicy timeouts;
         std::shared_ptr<const Packages::GameplaySourceLibrarySet> sourceLibraries; /**< Optional owned immutable source selections. */
+        /** @brief Optional read-only validation for an isolated approved build and its correlated tests.
+         * @details Runs under the build lock on a worker. Capture immutable owned evidence; do not call editor owners from it.
+         */
+        std::function<Result<void>(const CancellationToken &)> validateSources;
     };
 
     /** @brief Owned thread-safe projection of one build session. */

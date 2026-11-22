@@ -88,6 +88,11 @@ namespace Horo::Application {
                                                      "The build will be retried with the latest inputs.",
                                                      true,
                                                      false};
+        const ErrorCodeDescriptor ValidationInputsChanged{Domain, ErrorCode{"validation_inputs_changed"}, ErrorSeverity::Warning,
+                                                          "The approved gameplay build inputs changed.",
+                                                          "Review the current sources before approving another build."};
+        const ErrorCodeDescriptor ValidationRequiresIsolation{Domain, ErrorCode{"validation_requires_isolation"}, ErrorSeverity::Error,
+                                                              "Source validation requires an isolated build."};
         const ErrorCodeDescriptor BuildAlreadyActive{Domain,
                                                      ErrorCode{"active_build"},
                                                      ErrorSeverity::Info,
@@ -500,6 +505,11 @@ namespace Horo::Application {
             Result<std::filesystem::path> artifact = ValidateCandidateManifest(manifest.Value());
             if (artifact.HasError())
                 return Result<void>::Failure(artifact.ErrorValue());
+            const auto &validate = session->request.validateSources;
+            if (validate) {
+                if (auto valid = validate(session->cancellation.Token()); valid.HasError())
+                    return valid;
+            }
             if (Result<void> loaded = ValidateArtifactLoad(artifact.Value(), manifest.Value()); loaded.HasError())
                 return loaded;
 
@@ -507,7 +517,8 @@ namespace Horo::Application {
             if (postHash.HasError())
                 return Result<void>::Failure(postHash.ErrorValue());
             if (postHash.Value() != inputHash)
-                return Result<void>::Failure(MakeError(BuildInputsChanged, "Gameplay sources changed during the build."));
+                return Result<void>::Failure(validate ? MakeError(ValidationInputsChanged)
+                                                      : MakeError(BuildInputsChanged, "Gameplay sources changed during the build."));
 
             const std::filesystem::path local = session->request.projectRoot / ".horo/local";
             Result<std::string> manifestHash = HashFile(candidate, 1024U * 1024U);
@@ -525,6 +536,10 @@ namespace Horo::Application {
             const nlohmann::json buildState =
                 BuildSuccessfulStateDocument({session->request, inputHash, std::move(compiler).Value(), resolvedInputManifestHash.Value(),
                                               artifact.Value(), artifactIdentity.Value(), manifestHash.Value(), manifest.Value()});
+            if (validate) {
+                if (auto valid = validate(session->cancellation.Token()); valid.HasError())
+                    return valid;
+            }
             return PublishValidatedState(state, candidate, local, std::format("{}\n", buildState.dump(2)));
         }
 
@@ -693,6 +708,11 @@ namespace Horo::Application {
                                       [[maybe_unused]] ExclusiveFileLock buildLock) {
             OutputBudget budget;
             OutputSummaryGuard outputSummary{*state, session, budget};
+            const auto &validate = session->request.validateSources;
+            if (validate) {
+                if (auto valid = validate(session->cancellation.Token()); valid.HasError())
+                    return valid;
+            }
             std::optional<std::string> retryHash;
             for (;;) {
                 Result<std::string> hash = PrepareActiveInput(session, std::move(retryHash));
@@ -703,7 +723,7 @@ namespace Horo::Application {
                 if (cached.HasError())
                     return Result<void>::Failure(cached.ErrorValue());
                 if (cached.Value())
-                    return Result<void>::Success();
+                    return validate ? validate(session->cancellation.Token()) : Result<void>::Success();
                 Result<bool> cycle = RunBuildCycle(*state, session, hash.Value(), budget, retryHash);
                 if (cycle.HasError())
                     return Result<void>::Failure(cycle.ErrorValue());
@@ -892,6 +912,7 @@ namespace Horo::Application {
                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                                  const std::string_view projectKey) {
             Result<void> result = RunBuild(state, session);
+            session->request.validateSources = {};
             std::lock_guard transitionLock(session->transitionMutex);
             const GameplayBuildState terminal = TerminalStateFor(result);
             bool cacheHit = false;
@@ -996,6 +1017,8 @@ namespace Horo::Application {
     /** @copydoc GameplayBuildService::StartImpl */
     Result<GameplayBuildSessionId> GameplayBuildService::StartImpl(GameplayBuildRequest request, const bool isolated,
                                                                    const std::function<bool()> &stop) const {
+        if (request.validateSources && !isolated)
+            return Result<GameplayBuildSessionId>::Failure(MakeError(ValidationRequiresIsolation));
         if (AdmissionStopped(stop))
             return Result<GameplayBuildSessionId>::Failure(MakeError(CancelledDescriptor));
         Result<std::string> hash = ComputeInputHash(request);
