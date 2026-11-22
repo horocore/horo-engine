@@ -3691,6 +3691,14 @@ do not hold the leading budget position. Replay comparison binds both the
 effective budget and the version of this ordering rule. Replays recorded
 with the previous occurrence order require a matching older build.
 
+The Scene owner may reuse successful blocking visibility batches during the
+same fixed tick. Reuse requires identical ordered local rays, effective Physics
+filters (including the excluded body), and the exact live Physics publication.
+The retained data contains only ordered visibility bits. Each caller applies
+them to its own candidates and keeps its own work charge, query result, and
+Blackboard authority. The owner discards the bounded batch storage at the end
+of the tick. Failed or deferred provider work is never retained.
+
 The Play agent inspector reports the stable IDs, capability requirements and
 current availability of the agent's admitted Perception providers. The
 inspector reads an owned snapshot and does not invoke those providers.

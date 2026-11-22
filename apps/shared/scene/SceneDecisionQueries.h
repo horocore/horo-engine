@@ -7,6 +7,7 @@
 #include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/AI/EnvironmentQueryPhysics.h"
+#include "SceneDecisionVisibilityBatch.h"
 
 namespace Horo::Physics {
     class PhysicsWorld;
@@ -101,6 +102,7 @@ namespace Horo::Application::Internal {
             ScenePhysicsHost *physics;
             SceneQueryNavigationSource navigation;
             std::size_t active{};
+            std::optional<SceneDecisionVisibilityBatch> visibilityBatches;
         };
 
         struct AgentBudget final {

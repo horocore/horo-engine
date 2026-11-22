@@ -78,6 +78,27 @@ namespace Horo::Application::Internal {
             return completed;
         }
 
+        /** @brief Reuses only successful provider evidence admitted for the same exact publication. */
+        Visibility ReadVisibilityBatch(SceneDecisionVisibilityBatch &batches, Physics::PhysicsWorld &world,
+                                       const Physics::PhysicsQueryEventCapability &capability, const SceneDecisionVisibilityKey &key,
+                                       AI::QueryStageId stage, std::span<const Physics::PhysicsRayQuery> rays) {
+            if (!stage.IsValid())
+                return Visibility::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextInvalid));
+            if (const auto clear = batches.Find(key, rays); !clear.empty()) {
+                const auto &p = key.publication;
+                if (const auto valid = capability.ValidateQueryPublication(p.sceneGeneration, p.completedTick, p.revision);
+                    valid.HasError())
+                    return Visibility::Failure(valid.ErrorValue());
+                AI::QueryPhysicsVisibilityResult retained{.publication = p, .stage = stage, .count = clear.size()};
+                std::ranges::copy(clear, retained.clear.begin());
+                return Visibility::Success(retained);
+            }
+            auto completed = RunVisibilityBatch(world, capability, key.publication, stage, rays, key.filter);
+            if (completed.HasValue() && completed.Value())
+                batches.Store(key, rays, std::span{completed.Value()->clear}.first(completed.Value()->count));
+            return completed;
+        }
+
         constexpr auto Candidates = EnvironmentQuerySchemaLimits::MaximumResults;
         constexpr auto AgentUnits = Candidates * (3U + std::bit_width(Candidates));
 
@@ -329,13 +350,16 @@ namespace Horo::Application::Internal {
                 visibility_.ValidateQueryPublication(publication.sceneGeneration, publication.completedTick, publication.revision);
             return valid.HasValue() ? Captured::Success(result) : Captured::Failure(valid.ErrorValue());
         }
-        Physics::PhysicsQueryFilter filter{.channel = request.channel};
+        Physics::PhysicsQueryFilter filter{.channel = request.channel, .blockingOnly = true};
         const auto body = std::ranges::find(binding.bodyBindings, querier.Value().authoredObject.value_or(Runtime::SceneObjectId{}),
                                             &Physics::PhysicsSceneBodyBinding::object);
         if (body != binding.bodyBindings.end())
             filter.excludedBody = body->handle;
-        const auto completed =
-            RunVisibilityBatch(binding.physics, visibility_, publication, request.stage, std::span{rays.rays}.first(rays.count), filter);
+        auto &batches = scope_->visibilityBatches;
+        if (!batches)
+            batches.emplace();
+        const auto completed = ReadVisibilityBatch(*batches, binding.physics, visibility_, {publication, filter}, request.stage,
+                                                   std::span{rays.rays}.first(rays.count));
         if (completed.HasError() || !completed.Value())
             return completed;
         for (std::size_t index = 0; index < rays.count; ++index)

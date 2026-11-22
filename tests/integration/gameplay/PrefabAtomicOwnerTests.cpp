@@ -951,6 +951,41 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(Internal::AdvanceSceneQueryBudgetOrder(0, cursor, noWork) == 0);
         }
 
+        TEST_CASE("Scene EQS batches only exact current Physics visibility evidence", "[integration][ai][query][visibility-batching]") {
+            const auto world = Physics::PhysicsWorldId::Create(1).Value();
+            const Internal::SceneDecisionVisibilityKey key{{{world, 2}, 3, 4, 5}, {.blockingOnly = true}};
+            const std::array rays{Physics::PhysicsRayQuery{.origin = {1, 0, 0}}, Physics::PhysicsRayQuery{.origin = {2, 0, 0}}};
+            Internal::SceneDecisionVisibilityBatch batches;
+            {
+                const std::array clear{false, true};
+                CHECK(batches.Find(key, rays).empty());
+                batches.Store(key, rays, clear);
+            }
+            const auto result = batches.Find(key, rays);
+            REQUIRE(result.size() == rays.size());
+            CHECK_FALSE(result[0]);
+            CHECK(result[1]);
+            CHECK(batches.Find(key, std::array{rays[1], rays[0]}).empty());
+            CHECK(batches.Find(key, std::span{rays}.first(1)).empty());
+            auto differentRays = rays;
+            differentRays[0].origin.z = -0.0F;
+            CHECK(batches.Find(key, differentRays).empty());
+
+            auto different = key;
+            different.filter.excludedBody = Physics::BodyHandle{world, {1, 1}};
+            CHECK(batches.Find(different, rays).empty());
+            different = key;
+            ++different.publication.identity.capabilityGeneration;
+            CHECK(batches.Find(different, rays).empty());
+            different = key;
+            ++different.publication.sceneGeneration;
+            CHECK(batches.Find(different, rays).empty());
+            different = key;
+            ++different.publication.revision;
+            CHECK(batches.Find(different, rays).empty());
+            CHECK(Internal::SceneDecisionVisibilityBatch{}.Find(key, rays).empty());
+        }
+
         /** @brief Drives the product query owner across real cooked prefab retirement and replacement. */
         void RunSelectedQueryPrefab(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
                                     const Prefab::PrefabTemplateLoadRequest &source, const CancellationToken &cancellation,
