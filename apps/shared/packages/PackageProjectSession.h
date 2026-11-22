@@ -80,6 +80,7 @@ namespace Horo::Application::Internal {
      * @pre The caller has checked remaining reference classes, completeness of registration evidence and executable ownership,
      * and approved this removal.
      * @details Acquires the shared project mutation lease before recovery or reference scans and retains it through publication.
+     * The project must still authorize removal before publishing the journal. Once published, the journal owns recovery.
      * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                                   const PreparedPackageProject &expected,

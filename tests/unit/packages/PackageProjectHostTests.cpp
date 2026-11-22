@@ -334,6 +334,41 @@ namespace {
         CHECK(mutations.TryAcquire(save).HasValue());
     }
 
+    TEST_CASE("Package removal cannot begin publication after project authority stops", "[packages][application][host]") {
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto assets = fixture.AssetSource();
+
+        bool captured = false;
+        const ObservedAssetSource observed{*assets, [&captured] {
+            captured = true;
+        }};
+        auto sources = fixture.RemovalSources(observed);
+        sources.context.authorityStopped = [&captured] {
+            return captured;
+        };
+        const auto stopped = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        REQUIRE(captured);
+        REQUIRE(stopped.HasError());
+        CHECK(stopped.ErrorValue().code.Value() == "project_read.cancelled");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+
+        const auto retry =
+            PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(*assets));
+        REQUIRE(retry.HasValue());
+        const auto current = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().application.portableRequest->Dependencies().empty());
+        CHECK(current.Value().application.lockedPlan->Packages().empty());
+    }
+
     TEST_CASE("Package metadata recovery leaves an independently edited request intact", "[packages][application][host]") {
         HostFixture fixture;
         MetadataFiles files;
@@ -499,7 +534,7 @@ namespace {
             registrations[1].artifact = retiredDigest;
         }
         SECTION("both packages leave the graph") {
-            removal.removed.push_back({retained, version});
+            removal.removed.emplace_back(retained, version);
         }
         const auto safe = InspectPackageServiceReferences(sources, lock.Value(), removal);
         REQUIRE(safe.HasValue());

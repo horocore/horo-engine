@@ -277,8 +277,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Detects external file edits made during the inventory even if the writer bypassed the project lease. */
         Result<void> RecheckRemovalBase(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
-                                        const MetadataDocuments &previous) {
-            const auto current = ReadDocuments(metadata, limits, {});
+                                        const MetadataDocuments &previous, const CancellationToken &cancellation) {
+            const auto current = ReadDocuments(metadata, limits, cancellation);
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
             if (current.Value() != previous)
@@ -304,11 +304,15 @@ namespace Horo::Application::Internal {
 
         /** @brief The durable request precedes the lock, whose native replacement is the commit point. */
         Result<PackageMetadataPublication> CommitDocuments(const std::filesystem::path &metadata, const MetadataDocuments &previous,
-                                                           const MetadataDocuments &next, DurableFileSystem &files) {
+                                                           const MetadataDocuments &next, DurableFileSystem &files,
+                                                           const Platform::ProjectReadContext &context) {
             using Publication = Result<PackageMetadataPublication>;
             const auto journalPath = JournalPath(metadata);
             AtomicFileReplacementReceipt journalReceipt;
             const auto journal = EncodeJournal({Digest(previous.lock), Digest(next.lock), Digest(next.request), previous.request});
+            if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
+                return Publication::Failure(authority.ErrorValue());
+            // Once the journal is admitted, finish it under the mutation lease even if the caller closes.
             if (auto recorded = ReplaceMetadata(journalPath, journal, files, journalReceipt); recorded.HasError())
                 return Publication::Failure(recorded.ErrorValue());
             AtomicFileReplacementReceipt requestReceipt;
@@ -421,6 +425,8 @@ namespace Horo::Application::Internal {
                                                                     const Packages::HoroPackageId &package, DurableFileSystem &files,
                                                                     const PackageRemovalSources &sources) {
         using Publication = Result<PackageMetadataPublication>;
+        if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
+            return Publication::Failure(authority.ErrorValue());
         const auto directory = MetadataPath(policy.projectRoot);
         if (directory.HasError())
             return Publication::Failure(directory.ErrorValue());
@@ -431,9 +437,10 @@ namespace Horo::Application::Internal {
         if (acquired.HasError())
             return Publication::Failure(acquired.ErrorValue());
         const auto lease = std::move(acquired).Value();
-        if (auto recovered = RecoverMetadata(metadata, policy.limits.lockfile, files, {}); recovered.HasError())
+        const auto &cancellation = sources.context.cancellation;
+        if (auto recovered = RecoverMetadata(metadata, policy.limits.lockfile, files, cancellation); recovered.HasError())
             return Publication::Failure(recovered.ErrorValue());
-        const auto previous = ReadDocuments(metadata, policy.limits.lockfile, {});
+        const auto previous = ReadDocuments(metadata, policy.limits.lockfile, cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
         if (!previous.Value().Matches(expected))
@@ -441,8 +448,8 @@ namespace Horo::Application::Internal {
         const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, sources);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
-        if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value()); stable.HasError())
+        if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
             return Publication::Failure(stable.ErrorValue());
-        return CommitDocuments(metadata, previous.Value(), next.Value(), files);
+        return CommitDocuments(metadata, previous.Value(), next.Value(), files, sources.context);
     }
 }  // namespace Horo::Application::Internal
