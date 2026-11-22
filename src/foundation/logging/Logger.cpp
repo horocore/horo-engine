@@ -507,6 +507,20 @@ namespace Horo::Log {
         };
 
         /** @brief Consumer-thread adapter for the optional bounded editor log store. */
+        /** @brief Retains only compact, already-redacted record metadata for presentation consumers. */
+        std::vector<Telemetry::Field> PresentationFields(const std::vector<Telemetry::Field> &fields) {
+            constexpr std::size_t maximumFields = 16;
+            constexpr std::size_t maximumKey = 64;
+            constexpr std::size_t maximumValue = 256;
+            std::vector<Telemetry::Field> retained;
+            for (const auto &field : std::span{fields}.first(std::min<std::size_t>(maximumFields, fields.size()))) {
+                const auto *text = std::get_if<std::string>(&field.value);
+                if (field.key.size() <= maximumKey && (!text || text->size() <= maximumValue))
+                    retained.push_back(field);
+            }
+            return retained;
+        }
+
         class StructuredLogStoreSink final : public Telemetry::ISink {
         public:
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *) override {
@@ -521,7 +535,8 @@ namespace Horo::Log {
                                                   .level = log->severity,
                                                   .category = log->category,
                                                   .message = log->message,
-                                                  .context = FormatPresentationContext(record.context)});
+                                                  .context = FormatPresentationContext(record.context),
+                                                  .fields = PresentationFields(log->fields)});
             }
 
             void Flush() override {

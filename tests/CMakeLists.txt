@@ -4250,6 +4250,11 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorMcpCommandPanelTests PRIVATE HoroEngine::Gui HoroThirdParty::ImGui HoroMcpEditorCommandsInternal)
     horo_register_catch_test(HoroEditorMcpCommandPanelTests LABELS "unit;editor;mcp;gui;headless")
 
+    add_executable(HoroMcpAuditPaneTests unit/editor/McpAuditPaneTests.cpp)
+    target_include_directories(HoroMcpAuditPaneTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroMcpAuditPaneTests PRIVATE HoroEngine::Gui HoroThirdParty::ImGui)
+    horo_register_catch_test(HoroMcpAuditPaneTests LABELS "unit;editor;mcp;gui;headless")
+
     add_executable(HoroGlobalDockPanelRenderTests
             unit/editor/GlobalDockBuildActiveRenderTests.cpp
             unit/editor/GlobalDockBuildOutputPaneTests.cpp

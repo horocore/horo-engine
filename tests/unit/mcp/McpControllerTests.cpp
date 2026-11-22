@@ -1,5 +1,6 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Mcp/McpController.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
@@ -42,6 +43,7 @@ namespace {
     struct AuditLog final {
         Horo::Tests::OwnedTestDirectory directory{"horo-mcp-audit"};
         std::shared_ptr<AuditDispatchGate> gate{std::make_shared<AuditDispatchGate>()};
+        std::shared_ptr<Log::StructuredLogStore> presentation{std::make_shared<Log::StructuredLogStore>(32)};
         bool held{};
 
         AuditLog() {
@@ -51,11 +53,13 @@ namespace {
                                                                .additionalSinks = {gate},
                                                                .writeSessionMarkers = false,
                                                                .echoToStderr = false}));
+            Log::Logger::SetStructuredLogStore(presentation);
         }
 
         ~AuditLog() {
             Release();
             Log::Logger::Shutdown();
+            Log::Logger::SetStructuredLogStore(nullptr);
         }
 
         void Hold() {
@@ -309,6 +313,17 @@ TEST_CASE("MCP audit persists only generated identities and registered operation
     CHECK(find("session.retired").at("status") == "closed");
     const nlohmann::json persisted = rows;
     CHECK(persisted.dump().find("private-") == std::string::npos);
+    const auto live = log.presentation->SnapshotIfChanged(0);
+    REQUIRE(live);
+    const auto finished = std::ranges::find_if(live->records, [](const auto &row) {
+        return row->category == "mcp.audit" && row->message == "operation.finished";
+    });
+    REQUIRE(finished != live->records.end());
+    CHECK((*finished)->context.empty());
+    const auto &fields = (*finished)->fields;
+    const auto tool = std::ranges::find(fields, "tool", &Telemetry::Field::key);
+    REQUIRE(tool != fields.end());
+    CHECK(std::get<std::string>(tool->value) == "test.call");
 }
 
 TEST_CASE("An overflowing MCP audit queue cannot stop command execution or shutdown", "[mcp][controller][audit]") {

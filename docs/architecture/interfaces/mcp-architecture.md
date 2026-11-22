@@ -483,6 +483,11 @@ registered tools and include status and elapsed time. Arguments, application
 results and messages, credentials, and ambient context stay outside the audit
 projection. A full or disabled log queue never gates command execution.
 
+The editor's bottom-dock MCP tab displays the most recent 256 matching typed
+records retained by the live process log. Its search, approval and error filters
+apply to both the displayed rows and the explicit CSV copy action. The export
+uses only the validated audit schema and host-generated correlations.
+
 ## Save Tool Boundary
 
 MCP save tools follow

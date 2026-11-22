@@ -1,302 +1,253 @@
 #include "editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.h"
 
 #include "Horo/Editor/EditorGuiContext.h"
-#include "Horo/Editor/EditorTheme.h"
-#include "Horo/Editor/EditorUiComponents.h"
-#include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 
 #include <algorithm>
-#include <array>
-#include <string>
-#include <string_view>
+#include <ctime>
+#include <format>
+#include <numeric>
 
 namespace Horo::Editor {
     namespace {
-        enum class Permission : unsigned char {
-            Read,
-            Mutation,
+        constexpr std::array<std::string_view, 9> Events{
+            "session.opened",     "session.retired",  "approval.requested", "approval.decided",   "approval.consumed",
+            "operation.rejected", "operation.queued", "operation.started",  "operation.finished",
         };
-
-        enum class Status : unsigned char {
-            Done,
-            Approval,
-            Denied,
+        constexpr std::array<std::string_view, 13> Statuses{
+            "",       "closed",  "project_changed", "shutdown", "approved",  "denied",    "authorization_denied",
+            "queued", "running", "succeeded",       "failed",   "cancelled", "timed_out",
         };
+        constexpr std::size_t MaximumRows = 256;
 
-        struct AuditRow {
-            std::string_view time;
-            std::string_view tool;
-            Permission permission;
-            std::string_view requestKey;
-            Status status;
-        };
-
-        constexpr std::array AuditRows{
-            AuditRow{"12:08:14", "scene.query", Permission::Read, "request.scene_query", Status::Done},
-            AuditRow{"12:08:08", "asset.list", Permission::Read, "request.asset_list", Status::Done},
-            AuditRow{"12:07:51", "scene.move", Permission::Mutation, "request.scene_move", Status::Approval},
-            AuditRow{"12:07:39", "build.trigger", Permission::Mutation, "request.build_trigger", Status::Denied},
-        };
-
-        [[nodiscard]] const char *PermissionKey(const Permission permission) noexcept {
-            return permission == Permission::Read ? "permission.read" : "permission.mutation";
+        /** @brief Borrows only a field with the expected telemetry type. */
+        template <typename T> const T *Field(const Log::StructuredLogRecord &record, const std::string_view key) {
+            const auto found = std::ranges::find(record.fields, key, &Telemetry::Field::key);
+            return found == record.fields.end() || found->privacy != Telemetry::FieldPrivacy::Public ? nullptr
+                                                                                                     : std::get_if<T>(&found->value);
         }
 
-        [[nodiscard]] const char *StatusKey(const Status status) noexcept {
-            using enum Status;
-            switch (status) {
-                case Done:
-                    return "status.done";
-                case Approval:
-                    return "status.approval";
-                case Denied:
-                    return "status.denied";
-            }
-            return "status.denied";
+        /** @brief Returns zero only for omitted or inapplicable correlations. */
+        std::uint64_t Number(const Log::StructuredLogRecord &record, const std::string_view key) {
+            const auto *value = Field<std::uint64_t>(record, key);
+            return value ? *value : 0U;
         }
 
-        [[nodiscard]] GlobalDockTone StatusTone(const Status status) noexcept {
-            using enum GlobalDockTone;
-            using enum Status;
-            switch (status) {
-                case Done:
-                    return Positive;
-                case Approval:
-                    return Warning;
-                case Denied:
-                    return Error;
-            }
-            return Neutral;
+        /** @brief Ensures a registry token contains no path, delimiter, or spreadsheet formula prefix. */
+        bool ToolToken(const std::string_view value) {
+            const auto alphanumeric = [](const unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            };
+            return value.empty() ||
+                   (value.size() <= 128 && alphanumeric(value.front()) && std::ranges::all_of(value, [&](const unsigned char c) {
+                return alphanumeric(c) || c == '.' || c == '_' || c == '-';
+            }));
         }
 
-        [[nodiscard]] bool MatchesAuditSearch(const AuditRow &row, const std::string_view permission, const std::string_view request,
-                                              const std::string_view status, const std::string_view search) {
-            return GlobalDockContainsCaseInsensitive(row.tool, search) || GlobalDockContainsCaseInsensitive(permission, search) ||
-                   GlobalDockContainsCaseInsensitive(request, search) || GlobalDockContainsCaseInsensitive(status, search);
+        /** @brief Formats the retained UTC timestamp independently of the host locale. */
+        std::string TimeOfDay(const std::chrono::system_clock::time_point timestamp) {
+            const std::time_t converted = std::chrono::system_clock::to_time_t(timestamp);
+            std::tm utc{};
+#if defined(_WIN32)
+            gmtime_s(&utc, &converted);
+#else
+            gmtime_r(&converted, &utc);
+#endif
+            return std::format("{:02d}:{:02d}:{:02d}", utc.tm_hour, utc.tm_min, utc.tm_sec);
         }
 
-        [[nodiscard]] bool MatchesAuditFilter(const AuditRow &row, const bool all, const bool mutations, const bool errors) noexcept {
-            return all || (mutations && row.permission == Permission::Mutation) || (errors && row.status == Status::Denied);
+        /** @brief Resolves only canonical metadata names through the editor catalog. */
+        const std::string &Text(const EditorGuiContext &context, const std::string_view key) {
+            return GlobalDockMcpPane::kTextScope.Text(context.localization, key);
         }
 
-        [[nodiscard]] float SessionControlWidth(const EditorGuiContext &context) {
-            const auto &localization = context.localization;
-            const auto &fonts = context.theme.fonts;
-            const float scale = Theme::GetActiveTokens().sizes.uiScale;
-            const float currentWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
-                                                                  GlobalDockMcpPane::kTextScope.Text(localization, "session.current"));
-            const float lastHourWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
-                                                                   GlobalDockMcpPane::kTextScope.Text(localization, "session.last_hour"));
-            return std::max(128.0F * scale, std::max(currentWidth, lastHourWidth) + 32.0F * scale);
+        /** @brief Classifies canonical terminal and admission failures for the error filter. */
+        bool IsError(const std::string_view status) noexcept {
+            return status == "failed" || status == "timed_out" || status.ends_with("denied");
         }
     }  // namespace
 
-    struct GlobalDockMcpPane::TableLayout {
-        float time;
-        float tool;
-        float permission;
-        float request;
-        float status;
-    };
+    /** @copydoc GlobalDockMcpPane::Attach */
+    void GlobalDockMcpPane::Attach(const Log::IStructuredLogQuery *query) noexcept {
+        Detach();
+        m_query = query;
+    }
 
-    void GlobalDockMcpPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
-        const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
-        const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
+    /** @copydoc GlobalDockMcpPane::Detach */
+    void GlobalDockMcpPane::Detach() noexcept {
+        m_query = nullptr;
+        m_revision = 0;
+        m_rows.clear();
+        m_paused = false;
+        m_search.fill('\0');
+        m_filter = Filter::All;
+    }
+
+    /** @copydoc GlobalDockMcpPane::Draw */
+    void GlobalDockMcpPane::Draw(const ImVec2 &origin, const float width, const EditorGuiContext &context) {
+        Refresh();
+        const float available = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - origin.y);
+        const auto regions = ResolveGlobalDockPaneRegions(origin, width, available, {.hasToolbar = true});
         DrawToolbar(regions.toolbarOrigin, regions.toolbarWidth, context);
         DrawTable(regions.contentOrigin, regions.contentWidth, regions.contentHeight, context);
     }
 
-    void GlobalDockMcpPane::DrawToolbar(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
-        const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
-        const auto localized = [&](const char *key) -> const std::string & {
-            return GlobalDockMcpPane::kTextScope.Text(context.localization, key);
-        };
-
-        DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
-        const float controlY = regions.toolbarOrigin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
-        const float fixedWidth = MeasureToolbarActions(context);
-        const float searchWidth = ResolveGlobalDockSearchWidth(regions.toolbarWidth, fixedWidth);
-        float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
-
-        const std::string &searchHint = localized("search");
-        x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##McpSearch", m_search, searchHint, fonts);
-        DrawFilterActions(x, controlY, context);
-        DrawGlobalDockToolbarSeparator(x, controlY);
-        x += metrics.toolbarGap + Theme::GetActiveTokens().sizes.uiScale;
-        DrawSessionActions(x, controlY, context);
+    /** @copydoc GlobalDockMcpPane::Refresh */
+    void GlobalDockMcpPane::Refresh() {
+        if (!m_query || m_paused)
+            return;
+        const auto snapshot = m_query->SnapshotIfChanged(m_revision);
+        if (!snapshot)
+            return;
+        m_revision = snapshot->revision;
+        m_rows.clear();
+        for (auto row = snapshot->records.rbegin(); row != snapshot->records.rend() && m_rows.size() < MaximumRows; ++row) {
+            if (*row)
+                AppendRow(**row);
+        }
     }
 
-    float GlobalDockMcpPane::MeasureToolbarActions(const EditorGuiContext &context) const {
+    /** @copydoc GlobalDockMcpPane::AppendRow */
+    void GlobalDockMcpPane::AppendRow(const Log::StructuredLogRecord &record) {
+        if (record.category != "mcp.audit" || Number(record, "schema_version") != 1)
+            return;
+        const auto event = std::ranges::find(Events, record.message);
+        const auto *tool = Field<std::string>(record, "tool");
+        const auto *text = Field<std::string>(record, "status");
+        if (event == Events.end() || !tool || !ToolToken(*tool) || !text)
+            return;
+        const auto status = std::ranges::find(Statuses, *text);
+        const auto principal = Number(record, "principal_id");
+        const auto session = Number(record, "session_id");
+        const auto generation = Number(record, "session_generation");
+        if (status == Statuses.end() || !principal || !session || !generation)
+            return;
+        const auto operation = Number(record, "operation_id");
+        const auto approval = Number(record, "approval_id");
+        const auto *elapsed = Field<std::int64_t>(record, "elapsed_ms");
+        m_rows.push_back({record.timestampUtc, principal, session, generation, operation, approval, elapsed ? *elapsed : 0, *event, *status,
+                          *tool, TimeOfDay(record.timestampUtc), std::format("{} / {}.{}", principal, session, generation)});
+    }
+
+    /** @copydoc GlobalDockMcpPane::DrawToolbar */
+    void GlobalDockMcpPane::DrawToolbar(const ImVec2 &origin, const float width, const EditorGuiContext &context) {
+        const auto metrics = ResolveGlobalDockPaneMetrics();
         const auto &fonts = context.theme.fonts;
-        const auto &localization = context.localization;
-        const GlobalDockToolbarChipProps all{.id = "McpAll",
-                                             .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.all"),
-                                             .count = 18U};
-        const GlobalDockToolbarChipProps mutations{.id = "McpMutations",
-                                                   .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.mutations"),
-                                                   .count = 3U};
-        const GlobalDockToolbarChipProps errors{.id = "McpErrors",
-                                                .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.errors"),
-                                                .count = 1U};
-        const GlobalDockToolbarChipProps pause{.id = "McpPause",
-                                               .label = GlobalDockMcpPane::kTextScope.Text(localization, m_paused ? "resume" : "pause"),
-                                               .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
-        const GlobalDockToolbarChipProps exportAudit{.id = "McpExport",
-                                                     .label = GlobalDockMcpPane::kTextScope.Text(localization, "export"),
-                                                     .icon = Ui::UiIcon::Download};
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        return SessionControlWidth(context) + MeasureGlobalDockToolbarChip(all, fonts) + MeasureGlobalDockToolbarChip(mutations, fonts) +
-               MeasureGlobalDockToolbarChip(errors, fonts) + MeasureGlobalDockToolbarChip(pause, fonts) +
-               MeasureGlobalDockToolbarChip(exportAudit, fonts) + metrics.toolbarGap * 7.0F + Theme::GetActiveTokens().sizes.uiScale;
-    }
-
-    void GlobalDockMcpPane::DrawFilterActions(float &x, const float y, const EditorGuiContext &context) {
-        using enum Filter;
-        const auto &fonts = context.theme.fonts;
-        const auto &localization = context.localization;
-        const GlobalDockToolbarChipProps all{.id = "McpAll",
-                                             .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.all"),
-                                             .count = 18U,
-                                             .active = m_filter == All};
-        const GlobalDockToolbarChipProps mutations{.id = "McpMutations",
-                                                   .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.mutations"),
-                                                   .count = 3U,
-                                                   .tone = GlobalDockTone::Warning,
-                                                   .active = m_filter == Mutations};
-        const GlobalDockToolbarChipProps errors{.id = "McpErrors",
-                                                .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.errors"),
-                                                .count = 1U,
-                                                .tone = GlobalDockTone::Error,
-                                                .active = m_filter == Errors};
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const float allWidth = MeasureGlobalDockToolbarChip(all, fonts);
-        const float mutationWidth = MeasureGlobalDockToolbarChip(mutations, fonts);
-        const float errorWidth = MeasureGlobalDockToolbarChip(errors, fonts);
-        if (DrawGlobalDockToolbarChip({x, y}, allWidth, all, fonts))
-            m_filter = All;
-        x += allWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, y}, mutationWidth, mutations, fonts))
-            m_filter = Mutations;
-        x += mutationWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, y}, errorWidth, errors, fonts))
-            m_filter = Errors;
-        x += errorWidth + metrics.toolbarGap;
-    }
-
-    void GlobalDockMcpPane::DrawSessionActions(float x, const float y, const EditorGuiContext &context) {
-        const auto &fonts = context.theme.fonts;
-        const auto &localization = context.localization;
-        const float sessionWidth = SessionControlWidth(context);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const GlobalDockToolbarChipProps pause{.id = "McpPause",
-                                               .label = GlobalDockMcpPane::kTextScope.Text(localization, m_paused ? "resume" : "pause"),
-                                               .active = m_paused,
-                                               .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
-        const GlobalDockToolbarChipProps exportAudit{.id = "McpExport",
-                                                     .label = GlobalDockMcpPane::kTextScope.Text(localization, "export"),
-                                                     .icon = Ui::UiIcon::Download};
-        const float pauseWidth = MeasureGlobalDockToolbarChip(pause, fonts);
-        const float exportWidth = MeasureGlobalDockToolbarChip(exportAudit, fonts);
-        const std::array<std::string, 2> sessionLabels{GlobalDockMcpPane::kTextScope.Text(localization, "session.current"),
-                                                       GlobalDockMcpPane::kTextScope.Text(localization, "session.last_hour")};
-        const std::array<const char *, 2> sessionItems{sessionLabels[0].c_str(), sessionLabels[1].c_str()};
-        ImGui::SetCursorScreenPos({x, y});
-        ImGui::SetNextItemWidth(sessionWidth);
-        static_cast<void>(Ui::ComboControl("McpSession", &m_sessionSelection, sessionItems.data(), static_cast<int>(sessionItems.size()),
-                                           fonts,
-                                           {.height = GlobalDockLayout::ControlHeight,
-                                            .componentSize = Ui::ComponentSize::Small,
-                                            .surface = Ui::ComboControlSurface::BottomDockToolbar}));
-        x += sessionWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, y}, pauseWidth, pause, fonts))
-            m_paused = !m_paused;
-        x += pauseWidth + metrics.toolbarGap;
-        static_cast<void>(DrawGlobalDockToolbarChip({x, y}, exportWidth, exportAudit, fonts));
-    }
-
-    void GlobalDockMcpPane::DrawTable(const ImVec2 &contentOrigin, const float contentWidth, const float contentHeight,
-                                      const EditorGuiContext &context) {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const auto localized = [&](const char *key) -> const std::string & {
-            return GlobalDockMcpPane::kTextScope.Text(context.localization, key);
+        DrawGlobalDockToolbarSurface(origin, width, metrics.toolbarHeight);
+        const std::array actions{
+            GlobalDockToolbarChipProps{.id = "McpAll", .label = Text(context, "filter.all"), .active = m_filter == Filter::All},
+            GlobalDockToolbarChipProps{.id = "McpApprovals",
+                                       .label = Text(context, "filter.approvals"),
+                                       .active = m_filter == Filter::Approvals},
+            GlobalDockToolbarChipProps{.id = "McpErrors", .label = Text(context, "filter.errors"), .active = m_filter == Filter::Errors},
+            GlobalDockToolbarChipProps{.id = "McpPause", .label = Text(context, m_paused ? "resume" : "pause"), .active = m_paused},
+            GlobalDockToolbarChipProps{.id = "McpExport", .label = Text(context, "copy"), .disabled = m_rows.empty()},
         };
-        const ImVec2 headerMin = contentOrigin;
-        DrawGlobalDockTableHeaderSurface(headerMin, contentWidth, metrics.tableHeaderHeight);
-        const TableLayout layout{.time = headerMin.x + metrics.contentPadding,
-                                 .tool = headerMin.x + metrics.contentPadding + 72.0F * scale + metrics.columnGap,
-                                 .permission = headerMin.x + metrics.contentPadding + 190.0F * scale + metrics.columnGap * 2.0F,
-                                 .request = headerMin.x + metrics.contentPadding + 290.0F * scale + metrics.columnGap * 3.0F,
-                                 .status = headerMin.x + contentWidth - metrics.contentPadding - 90.0F * scale};
-        const float headerY = headerMin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const auto headerText = [&](const float textX, const char *key) {
-            drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {textX, headerY}, Theme::U32(Theme::Muted()),
-                              localized(key).c_str());
-        };
-        headerText(layout.time, "column.time");
-        headerText(layout.tool, "column.tool");
-        headerText(layout.permission, "column.permission");
-        headerText(layout.request, "column.request");
-        headerText(layout.status, "column.status");
+        std::array<float, actions.size()> widths{};
+        std::ranges::transform(actions, widths.begin(), [&](const auto &action) {
+            return MeasureGlobalDockToolbarChip(action, fonts);
+        });
+        const float total = std::accumulate(widths.begin(), widths.end(), 0.0F);
+        const float gaps = metrics.toolbarGap * static_cast<float>(actions.size());
+        const float factor = std::clamp((width * 0.76F - gaps) / total, 0.05F, 1.0F);
+        const float searchWidth = ResolveGlobalDockSearchWidth(width, total * factor + gaps);
+        const float y = origin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
+        float x = DrawGlobalDockSearchControl({origin.x + metrics.toolbarPaddingX, y}, searchWidth, "##McpSearch", m_search,
+                                              Text(context, "search"), fonts);
+        constexpr std::array filters{Filter::All, Filter::Approvals, Filter::Errors};
+        for (std::size_t index = 0; index < actions.size(); ++index) {
+            const float actionWidth = widths[index] * factor;
+            if (DrawGlobalDockToolbarChip({x, y}, actionWidth, actions[index], fonts)) {
+                if (index < filters.size())
+                    m_filter = filters[index];
+                else if (index == filters.size())
+                    m_paused = !m_paused;
+                else
+                    CopyVisible(context);
+            }
+            x += actionWidth + metrics.toolbarGap;
+        }
+    }
 
-        const ImVec2 rowsOrigin{contentOrigin.x, contentOrigin.y + metrics.tableHeaderHeight};
-        const float rowsHeight = std::max(1.0F, contentHeight - metrics.tableHeaderHeight);
-        ImGui::SetCursorScreenPos(rowsOrigin);
+    /** @copydoc GlobalDockMcpPane::Matches */
+    bool GlobalDockMcpPane::Matches(const Row &row, const EditorGuiContext &context) const {
+        if (m_filter == Filter::Approvals && !row.event.starts_with("approval."))
+            return false;
+        if (m_filter == Filter::Errors && !IsError(row.status))
+            return false;
+        const std::string_view search{m_search.data()};
+        return search.empty() || GlobalDockContainsCaseInsensitive(row.tool, search) ||
+               GlobalDockContainsCaseInsensitive(row.scope, search) || GlobalDockContainsCaseInsensitive(Text(context, row.event), search);
+    }
+
+    /** @copydoc GlobalDockMcpPane::CopyVisible */
+    void GlobalDockMcpPane::CopyVisible(const EditorGuiContext &context) const {
+        std::string csv = "utc_ms,principal,session,generation,operation,approval,event,tool,status,elapsed_ms\n";
+        for (const auto &row : m_rows) {
+            if (Matches(row, context))
+                csv += std::format("{},{},{},{},{},{},{},{},{},{}\n",
+                                   std::chrono::duration_cast<std::chrono::milliseconds>(row.timestamp.time_since_epoch()).count(),
+                                   row.principal, row.session, row.generation, row.operation, row.approval, row.event, row.tool, row.status,
+                                   row.elapsed);
+        }
+        ImGui::SetClipboardText(csv.c_str());
+    }
+
+    /** @copydoc GlobalDockMcpPane::DrawTable */
+    void GlobalDockMcpPane::DrawTable(const ImVec2 &origin, const float width, const float height, const EditorGuiContext &context) {
+        constexpr std::array keys{"column.time", "column.tool", "column.event", "column.scope", "column.status"};
+        constexpr std::array fractions{0.0F, 0.13F, 0.38F, 0.63F, 0.81F, 1.0F};
+        const auto metrics = ResolveGlobalDockPaneMetrics();
+        const auto &fonts = context.theme.fonts;
+        const float content = std::max(1.0F, width - metrics.contentPadding * 2.0F);
+        std::array<float, fractions.size()> columns{};
+        std::ranges::transform(fractions, columns.begin(), [&](const float fraction) {
+            return origin.x + metrics.contentPadding + content * fraction;
+        });
+        DrawGlobalDockTableHeaderSurface(origin, width, metrics.tableHeaderHeight);
+        const float bottom = origin.y + metrics.tableHeaderHeight;
+        const float y = origin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
+        for (std::size_t index = 0; index < keys.size(); ++index)
+            DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), fonts.sansCompact, Theme::TextPx::Caption(), {columns[index], y},
+                                      {columns[index + 1], bottom}, Theme::Muted(), Text(context, keys[index]));
+        ImGui::SetCursorScreenPos({origin.x, bottom});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0F, 0.0F});
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
-        ImGui::BeginChild("##McpRows", {contentWidth, rowsHeight}, false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoSavedSettings);
-        for (std::size_t index = 0; index < AuditRows.size(); ++index)
-            DrawAuditRow(index, contentWidth, layout, context);
+        ImGui::BeginChild("##McpRows", {width, std::max(1.0F, height - metrics.tableHeaderHeight)}, false,
+                          ImGuiWindowFlags_NoSavedSettings);
+        if (m_rows.empty())
+            DrawGlobalDockWrappedText(width, Text(context, m_query ? "empty" : "unavailable"), GlobalDockTone::Neutral, fonts);
+        for (const auto &row : m_rows)
+            if (Matches(row, context))
+                DrawRow(row, width, columns, context);
         ImGui::EndChild();
-        ImGui::PopStyleColor();
         ImGui::PopStyleVar(2);
     }
 
-    void GlobalDockMcpPane::DrawAuditRow(const std::size_t index, const float width, const TableLayout &layout,
-                                         const EditorGuiContext &context) {
-        const AuditRow &row = AuditRows[index];
-        const std::string permission = GlobalDockMcpPane::kTextScope.Text(context.localization, PermissionKey(row.permission));
-        const std::string request = GlobalDockMcpPane::kTextScope.Text(context.localization, row.requestKey);
-        const std::string status = GlobalDockMcpPane::kTextScope.Text(context.localization, StatusKey(row.status));
-        const std::string_view search{m_search.data()};
-        const bool filterMatches =
-            MatchesAuditFilter(row, m_filter == Filter::All, m_filter == Filter::Mutations, m_filter == Filter::Errors);
-        if (const bool searchMatches = MatchesAuditSearch(row, permission, request, status, search); !filterMatches || !searchMatches)
+    /** @copydoc GlobalDockMcpPane::DrawRow */
+    void GlobalDockMcpPane::DrawRow(const Row &row, const float width, const std::array<float, 6> &columns,
+                                    const EditorGuiContext &context) const {
+        const auto metrics = ResolveGlobalDockPaneMetrics();
+        const auto origin = ImGui::GetCursorScreenPos();
+        const ImVec2 size{width, metrics.tableRowHeight};
+        if (!ImGui::IsRectVisible(size)) {
+            ImGui::Dummy(size);
             return;
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const float rowHeight = metrics.tableRowHeight;
-        ImGui::PushID(static_cast<int>(index));
-        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##audit-row", {width, rowHeight});
-        DrawGlobalDockTableRowSurface(rowMin, width, rowHeight, ImGui::IsItemHovered());
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const float textY = rowMin.y + (rowHeight - Theme::TextPx::Label()) * 0.5F;
-        const float bottom = rowMin.y + rowHeight;
-        DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.time, textY},
-                                  {layout.tool - metrics.columnGap, bottom}, Theme::Muted(), row.time);
-        DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.tool, textY},
-                                  {layout.permission - metrics.columnGap, bottom}, Theme::Accent(), row.tool);
-        const ImVec4 permissionColor =
-            row.permission == Permission::Mutation ? GlobalDockToneColor(GlobalDockTone::Warning) : Theme::Text();
-        DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.permission, textY},
-                                  {layout.request - metrics.columnGap, bottom}, permissionColor, permission);
-        DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.request, textY},
-                                  {layout.status - metrics.columnGap, bottom}, Theme::Text(), request);
-        static_cast<void>(DrawGlobalDockStatePill({layout.status, rowMin.y + (rowHeight - 22.0F * scale) * 0.5F}, status,
-                                                  StatusTone(row.status), context.theme.fonts));
-        ImGui::PopID();
+        }
+        DrawGlobalDockTableRowSurface(origin, width, metrics.tableRowHeight,
+                                      ImGui::IsMouseHoveringRect(origin, {origin.x + width, origin.y + metrics.tableRowHeight}));
+        const std::array<std::string_view, 5> values{row.time, row.tool, Text(context, row.event), row.scope,
+                                                     Text(context, "status." + std::string{row.status.empty() ? "none" : row.status})};
+        const float y = origin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const auto color =
+                index == values.size() - 1 && IsError(row.status) ? GlobalDockToneColor(GlobalDockTone::Error) : Theme::Text();
+            DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), context.theme.fonts.sansCompact, Theme::TextPx::Label(),
+                                      {columns[index], y}, {columns[index + 1] - metrics.columnGap, origin.y + metrics.tableRowHeight},
+                                      color, values[index]);
+        }
+        ImGui::Dummy(size);
     }
-
 }  // namespace Horo::Editor

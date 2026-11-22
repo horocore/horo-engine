@@ -3,42 +3,80 @@
 #include "Horo/Editor/Localization/LocalizedGui.h"
 
 #include <array>
+#include <chrono>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
 
 struct ImVec2;
+
+namespace Horo::Log {
+    class IStructuredLogQuery;
+    struct StructuredLogRecord;
+}  // namespace Horo::Log
 
 namespace Horo::Editor {
     struct EditorGuiContext;
 
-    /** @brief MCP status story hosted by the global dock. */
+    /** @brief Live, redacted MCP history hosted by the global dock. */
     class GlobalDockMcpPane : public LocalizedGui {
     public:
         /** @brief Catalog scope for this embedded dock surface. */
         static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.mcp"};
 
-        /** @brief Creates a pane with its required localization scope. */
         GlobalDockMcpPane() : LocalizedGui(kTextScope) {}
 
+        /** @brief Binds the host's bounded log source for this workspace. @param query Borrowed query, or null. */
+        void Attach(const Log::IStructuredLogQuery *query) noexcept;
+        /** @brief Drops the workspace query and all cached presentation state. */
+        void Detach() noexcept;
+        /** @brief Draws the filtered history and its local export action. */
         void Draw(const ImVec2 &contentOrigin, float contentWidth, const EditorGuiContext &context);
 
     private:
-        struct TableLayout;
-
-        void DrawToolbar(const ImVec2 &origin, float width, const EditorGuiContext &context);
-        [[nodiscard]] float MeasureToolbarActions(const EditorGuiContext &context) const;
-        void DrawFilterActions(float &x, float y, const EditorGuiContext &context);
-        void DrawSessionActions(float x, float y, const EditorGuiContext &context);
-        void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
-        void DrawAuditRow(std::size_t index, float width, const TableLayout &layout, const EditorGuiContext &context);
-
-        enum class Filter : unsigned char {
+        enum class Filter : std::uint8_t {
             All,
-            Mutations,
-            Errors,
+            Approvals,
+            Errors
         };
 
+        /** @brief Immutable, validated projection shared by display and export. */
+        struct Row {
+            std::chrono::system_clock::time_point timestamp;
+            std::uint64_t principal{};
+            std::uint64_t session{};
+            std::uint64_t generation{};
+            std::uint64_t operation{};
+            std::uint64_t approval{};
+            std::int64_t elapsed{};
+            std::string_view event;
+            std::string_view status;
+            std::string tool;
+            std::string time;
+            std::string scope;
+        };
+
+        /** @brief Refreshes at most the newest bounded set when the log revision changes. */
+        void Refresh();
+        /** @brief Admits only the known audit schema and ignores unrelated log content. */
+        void AppendRow(const Log::StructuredLogRecord &record);
+        /** @brief Measures translated controls against the available toolbar width. */
+        void DrawToolbar(const ImVec2 &origin, float width, const EditorGuiContext &context);
+        /** @brief Lays out the audit columns and presents the admitted rows. */
+        void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
+        /** @brief Draws a validated row using bounded column clipping. */
+        void DrawRow(const Row &row, float width, const std::array<float, 6> &columns, const EditorGuiContext &context) const;
+        /** @brief Applies the shared display and export filter. */
+        [[nodiscard]] bool Matches(const Row &row, const EditorGuiContext &context) const;
+        /** @brief Copies the current filtered snapshot using numeric IDs and canonical labels. */
+        void CopyVisible(const EditorGuiContext &context) const;
+
         std::array<char, 256> m_search{};
+        const Log::IStructuredLogQuery *m_query{};
+        std::uint64_t m_revision{};
+        std::vector<Row> m_rows;
         Filter m_filter{Filter::All};
-        int m_sessionSelection{};
         bool m_paused{};
     };
 }  // namespace Horo::Editor

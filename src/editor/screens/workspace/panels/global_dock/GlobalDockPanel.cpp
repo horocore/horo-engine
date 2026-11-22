@@ -128,6 +128,27 @@ namespace Horo::Editor {
             GlobalDockConsolePane pane_;
         };
 
+        class McpPaneAdapter final : public BuiltInPaneAdapter {
+        public:
+            using BuiltInPaneAdapter::BuiltInPaneAdapter;
+
+            void Attach(PanelContext &context) override {
+                pane_.Attach(context.logQuery);
+            }
+
+            void Detach() override {
+                pane_.Detach();
+            }
+
+            void Draw(const GlobalDockPaneDrawContext &context) override {
+                GuiLive::Invoke<&GlobalDockMcpPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin, context.contentWidth,
+                                                          context.gui);
+            }
+
+        private:
+            GlobalDockMcpPane pane_;
+        };
+
         class BuildOutputPaneAdapter final : public BuiltInPaneAdapter {
         public:
             using BuiltInPaneAdapter::BuiltInPaneAdapter;
@@ -230,7 +251,7 @@ namespace Horo::Editor {
         RegisterBuiltInPane<ConsolePaneAdapter>(Console);
         RegisterBuiltInPane<BuildOutputPaneAdapter>(BuildOutput);
         RegisterBuiltInPane<OperationsPaneAdapter>(Operations);
-        RegisterBuiltInPane<PaneAdapter<GlobalDockMcpPane>>(Mcp);
+        RegisterBuiltInPane<McpPaneAdapter>(Mcp);
         RegisterBuiltInPane<PaneAdapter<GlobalDockPerformancePane>>(Performance);
         RegisterBuiltInPane<PaneAdapter<GlobalDockPhysicsPane>>(Physics);
         RegisterBuiltInPane<PaneAdapter<GlobalDockAudioPane>>(Audio);
