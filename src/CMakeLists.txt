@@ -1844,6 +1844,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskJobService.cpp
         runtime/ai/api/AITaskScheduler.cpp
         runtime/ai/api/SymbolicPlanning.cpp
+        runtime/ai/api/LocalLearnedPolicy.cpp
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BehaviorTreeExecutionPlan.cpp
         runtime/ai/api/BehaviorTreeInstance.cpp

@@ -2638,6 +2638,17 @@ methods. It tries methods in stable ID order, preserves authored child order,
 and backtracks on copied facts. The work allowance and hard bound on pending
 tasks and decomposition depth terminate recursive methods with a typed result.
 
+The local learned-policy reference provider evaluates bounded signed 16-bit
+feature and weight tensors with signed 64-bit accumulators. Its cooker checks
+the target's explicit interpreter support, fixed storage, exact work allowance,
+feature identities and registered output tasks. The cooked model has a
+canonical digest covering its schema, selected target and tensor contents.
+Inference submits only a proposal. The decision owner's one-shot request slot
+checks the pinned Scene, agent, provider, request and input revisions, model
+digest, deadline and current task declarations before returning a task to the
+existing decision path. Typed inference failures leave fallback selection with
+the owner.
+
 ### Runtime Task & Lifecycle Alignment
 
 Implementation status on 2 October 2026: `HoroEngine::AI` provides the
