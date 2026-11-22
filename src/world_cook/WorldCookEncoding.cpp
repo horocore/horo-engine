@@ -4,6 +4,29 @@
 #include <array>
 
 namespace Horo::WorldCook::Detail {
+    /** @copydoc FindNavigationCell */
+    const CellNavigationBinding *FindNavigationCell(const SourceCapture &source, WorldStreaming::StreamingCellId cell) {
+        const auto found = std::ranges::lower_bound(source.navigationCells, cell, WorldStreaming::StreamingCellCanonicalLess{},
+                                                    &CellNavigationBinding::cell);
+        return found != source.navigationCells.end() && found->cell == cell ? std::to_address(found) : nullptr;
+    }
+
+    /** @copydoc ValidateNavigationCells */
+    Result<void> ValidateNavigationCells(const SourceCapture &source) {
+        using namespace WorldStreaming;
+        if (source.navigationCells.size() > source.partition.Cells().size())
+            return Result<void>::Failure(MakeError(Errors::Invalid));
+        const CellNavigationBinding *previous{};
+        for (const auto &binding : source.navigationCells) {
+            if ((previous && !StreamingCellCanonicalLess{}(previous->cell, binding.cell)) ||
+                std::ranges::find(source.partition.Cells(), binding.cell, &WorldPartitionCellDescriptor::id) ==
+                    source.partition.Cells().end())
+                return Result<void>::Failure(MakeError(Errors::Invalid));
+            previous = &binding;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc MakeManifest */
     Result<WorldStreaming::CookedWorldIndexManifest> MakeManifest(
         const WorldStreaming::WorldPartitionDescriptor &partition,
@@ -28,6 +51,8 @@ namespace Horo::WorldCook::Detail {
     Result<EncodedWorld> EncodeWorld(const SourceCapture &source, const Runtime::SceneCellCookReport &prepared,
                                      const PublicationLimits &limits, const CancellationToken &cancellation) {
         using namespace WorldStreaming;
+        if (const auto valid = ValidateNavigationCells(source); valid.HasError())
+            return Result<EncodedWorld>::Failure(valid.ErrorValue());
         EncodedWorld output;
         std::vector<CookedWorldCellManifestEntry> metadata;
         output.cells.reserve(prepared.cells.size());
@@ -39,9 +64,19 @@ namespace Horo::WorldCook::Detail {
             auto core = Runtime::EncodeSceneCellPayload(*entry.payload, limits.scene, cancellation);
             if (core.HasError())
                 return Result<EncodedWorld>::Failure(core.ErrorValue());
-            const std::array payloads{StreamingCellPayloadBytes{StreamingCellProvider::CoreEcs, StreamingCellPayloadRequirement::Required,
-                                                                Runtime::SceneCellPayloadWireVersion(*entry.payload), core.Value()}};
-            auto cell = EncodeStreamingCellArtifact(entry.payload->Identity().cell, payloads, limits.cell, cancellation);
+            std::array<StreamingCellPayloadBytes, 2> payloads{{{StreamingCellProvider::CoreEcs, StreamingCellPayloadRequirement::Required,
+                                                                Runtime::SceneCellPayloadWireVersion(*entry.payload), core.Value()}}};
+            std::vector<std::byte> navigation;
+            if (const auto *binding = FindNavigationCell(source, entry.payload->Identity().cell)) {
+                auto encoded = Navigation::EncodeNavigationCellTileSelection(binding->selection, limits.cell.maximumDecodedBytes);
+                if (encoded.HasError())
+                    return Result<EncodedWorld>::Failure(encoded.ErrorValue());
+                navigation = std::move(encoded).Value();
+                payloads.back() = {StreamingCellProvider::NavigationMesh, StreamingCellPayloadRequirement::Required,
+                                   Navigation::NavigationCellTileSelection::WireVersion, navigation};
+            }
+            auto cell = EncodeStreamingCellArtifact(entry.payload->Identity().cell, std::span{payloads}.first(navigation.empty() ? 1 : 2),
+                                                    limits.cell, cancellation);
             if (cell.HasError())
                 return Result<EncodedWorld>::Failure(cell.ErrorValue());
             if (cell.Value().bytes.size() > limits.maximumTotalArtifactBytes - bytes)

@@ -55,6 +55,7 @@ namespace Horo::WorldCook::PublicationTestSupport {
         T::TempDir directory;
         T::PublicationFiles files;
         std::vector<std::vector<std::uint8_t>> baseArtifacts;
+        std::vector<CellNavigationBinding> navigationCells;
         std::uint64_t attempt{};
 
         explicit Fixture(const bool nonspatial = false, const bool hardDependency = true,
@@ -142,7 +143,8 @@ namespace Horo::WorldCook::PublicationTestSupport {
                     cache.Revision(),
                     "Canonical world",
                     {},
-                    {}};
+                    {},
+                    navigationCells};
         }
 
         ReleaseCapture Release() const {

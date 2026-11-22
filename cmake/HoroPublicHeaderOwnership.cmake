@@ -1129,6 +1129,7 @@ horo_configure_target_header_boundary(HoroNavigationAssetSceneIntegration PUBLIC
     Horo/Navigation/NavMeshAssetLoading.h
     Horo/Navigation/NavigationAssetSceneActivation.h
 )
+horo_configure_target_header_boundary(HoroNavigationCellContent PUBLIC_HEADERS Horo/Navigation/NavigationCellTileSelection.h)
 horo_configure_target_header_boundary(HoroNavigationContentIntegration PUBLIC_HEADERS
     Horo/Application/NavigationContentIntegration.h
 )

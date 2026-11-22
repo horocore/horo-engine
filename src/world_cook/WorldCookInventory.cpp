@@ -1,4 +1,5 @@
 #include "Horo/Assets/AssetCookCache.h"
+#include "Horo/Assets/NavMeshAssetType.h"
 #include "WorldCookInternal.h"
 
 #include <algorithm>
@@ -47,6 +48,42 @@ namespace Horo::WorldCook::Detail {
             return std::ranges::any_of(inventory.entries, [&](const auto &entry) {
                 return entry.assetId == id;
             });
+        }
+
+        /** @brief Requires persistent source envelopes in the release base chunk. */
+        bool InBaseChunk(const ReleaseCapture &release, const Assets::AssetId id) {
+            return std::ranges::any_of(release.packages.Chunks(), [&](const auto &chunk) {
+                return chunk.kind == Assets::AssetChunkKind::Base && std::ranges::find(chunk.assets, id) != chunk.assets.end();
+            });
+        }
+
+        /** @brief Resolves every referenced key in the one decoded closure belonging to this base envelope. */
+        Result<void> ValidateNavigationEnvelope(const SourceCapture &source, const Assets::AssetCookArtifact &decoded,
+                                                const Sha256Digest &envelopeDigest, const PublicationLimits &limits) {
+            if (std::ranges::none_of(source.navigationCells, [&](const auto &binding) {
+                return binding.selection.definition == decoded.id;
+            }))
+                return Result<void>::Success();
+            if (decoded.type.Value() != Assets::NavMeshAssetTypeName)
+                return Result<void>::Failure(MakeError(Errors::Invalid));
+            const auto cooked = Navigation::DecodeNavigationCookedTileSet(decoded.payload, limits.maximumTotalArtifactBytes);
+            if (cooked.HasError())
+                return Result<void>::Failure(cooked.ErrorValue());
+            if (cooked.Value().inputFingerprint != decoded.sourceDigest)
+                return Result<void>::Failure(MakeError(Errors::Stale));
+            for (const auto &binding : source.navigationCells) {
+                if (binding.selection.definition != decoded.id)
+                    continue;
+                if (binding.selection.cookedEnvelope != envelopeDigest)
+                    return Result<void>::Failure(MakeError(Errors::Stale));
+                for (const auto &key : binding.selection.tiles) {
+                    if (!std::ranges::binary_search(cooked.Value().tiles, key, {}, [](const auto &tile) -> const auto & {
+                        return tile->Key();
+                    }))
+                        return Result<void>::Failure(MakeError(Errors::Stale));
+                }
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Requires exact retained Base envelope bytes after every candidate artifact has been admitted. */
@@ -131,13 +168,16 @@ namespace Horo::WorldCook::Detail {
         for (const auto &binding : source.objects) {
             if (const auto *base = std::get_if<BaseObjectBinding>(&binding)) {
                 const auto entry = std::ranges::find(inventory.entries, base->artifact, &Assets::AssetCookManifestEntry::assetId);
-                const bool inBase = std::ranges::any_of(release.packages.Chunks(), [&](const auto &chunk) {
-                    return chunk.kind == Assets::AssetChunkKind::Base &&
-                           std::ranges::find(chunk.assets, base->artifact) != chunk.assets.end();
-                });
-                if (entry == inventory.entries.end() || entry->artifactHash != base->artifactHash || !inBase)
+                if (entry == inventory.entries.end() || entry->artifactHash != base->artifactHash || !InBaseChunk(release, base->artifact))
                     return Result<void>::Failure(MakeError(Errors::Stale));
             }
+        }
+        for (const auto &binding : source.navigationCells) {
+            const auto &selection = binding.selection;
+            const auto entry = std::ranges::find(inventory.entries, selection.definition, &Assets::AssetCookManifestEntry::assetId);
+            if (entry == inventory.entries.end() || entry->assetType.Value() != Assets::NavMeshAssetTypeName ||
+                entry->artifactHash != selection.cookedEnvelope || !InBaseChunk(release, selection.definition))
+                return Result<void>::Failure(MakeError(Errors::Stale));
         }
         return Result<void>::Success();
     }
@@ -177,6 +217,9 @@ namespace Horo::WorldCook::Detail {
                 return Result<void>::Failure(MakeError(Errors::Stale));
             if (auto result = add(decoded.Value().id, decoded.Value().type, std::as_bytes(std::span{bytes})); result.HasError())
                 return result;
+            if (auto tiles = ValidateNavigationEnvelope(source, decoded.Value(), inventory.entries.back().artifactHash, limits);
+                tiles.HasError())
+                return tiles;
         }
         if (auto bindings = ValidateBaseBindings(source, release); bindings.HasError())
             return bindings;

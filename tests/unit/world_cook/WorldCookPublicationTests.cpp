@@ -50,6 +50,36 @@ namespace Horo::WorldCook {
 
         using namespace PublicationTestSupport;
 
+        /** @brief Publishes one actual portable empty tile, keeping the stable definition ID in the base chunk. */
+        Navigation::NavigationCellTileSelection CaptureNavigationCell(Fixture &fixture) {
+            namespace N = Navigation;
+            const auto source = W::CandidateTestSupport::Hash();
+            N::NavigationPreparedTile prepared{.tile = {.key = {IdentityFrom<N::NavigationAgentProfileId>(7),
+                                                                IdentityFrom<N::SurfaceId>(9),
+                                                                {-1, 0, 1}},
+                                                        .bounds = {{-8, -1, 0}, {0, 1, 8}},
+                                                        .tileSizeMeters = 8},
+                                               .geometry = {.radiusMeters = 0.5F,
+                                                            .heightMeters = 2,
+                                                            .maxSlopeDegrees = 45,
+                                                            .stepHeightMeters = 0.4F,
+                                                            .cellSizeMeters = 0.5F,
+                                                            .cellHeightMeters = 0.2F},
+                                               .borderSizeCells = 4,
+                                               .dependencyKey = source};
+            const auto tile = N::NavigationCookedTile::Create(prepared, {.key = prepared.tile.key.tile, .bounds = prepared.tile.bounds});
+            REQUIRE(tile.HasValue());
+            const auto payload = N::EncodeNavigationCookedTileSet({source, {tile.Value()}}, 4096);
+            REQUIRE(payload.HasValue());
+            auto encoded = A::EncodeCookedArtifact({Asset(8), T::Type("core.navmesh"), fixture.Release().target, source, source,
+                                                    ComputeSha256(std::as_bytes(std::span{payload.Value()})), payload.Value()});
+            REQUIRE(encoded.HasValue());
+            fixture.baseArtifacts.front() = std::move(encoded).Value();
+            const auto digest = T::DigestOf(fixture.baseArtifacts.front());
+            std::get<BaseObjectBinding>(fixture.objects.back()).artifactHash = digest;
+            return {Asset(8), digest, {tile.Value()->Key()}};
+        }
+
         /** @brief Reads exact committed owner artifacts rather than reconstructing expected bytes in the assertion. */
         A::AssetCookGenerationContents Contents(const PublicationReport &report) {
             REQUIRE(report.publication);
@@ -88,6 +118,55 @@ namespace Horo::WorldCook {
             }
         };
     }  // namespace
+
+    TEST_CASE("World cook binds cell NavigationMesh membership to the original release envelope", "[world_cook][native][navigation]") {
+        Fixture fixture{true};
+        const auto exact = CaptureNavigationCell(fixture);
+        fixture.navigationCells.push_back({fixture.inputs.front().expected.cell, exact});
+        auto limits = Limits();
+        limits.cell.maximumPayloads = 2;
+
+        auto published = fixture.Publish(limits);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const auto contents = Contents(published.Value());
+        const auto cellAsset = fixture.world.manifest.Descriptor().Cells().front().package.chunkAsset;
+        const auto entry = std::ranges::find(contents.entries, cellAsset, &A::AssetCookManifestEntry::assetId);
+        REQUIRE(entry != contents.entries.end());
+        const auto envelope = A::DecodeCookedArtifact(contents.artifacts[static_cast<std::size_t>(entry - contents.entries.begin())]);
+        REQUIRE(envelope.HasValue());
+        const auto bytes = std::as_bytes(std::span{envelope.Value().payload});
+        const Detached detached{contents};
+        const auto index = W::DecodeWorldIndexArtifact(detached.index, limits.index);
+        REQUIRE(index.HasValue());
+        const auto expected =
+            std::ranges::find(index.Value().cells, fixture.inputs.front().expected.cell, &W::CookedWorldCellManifestEntry::cell);
+        REQUIRE(expected != index.Value().cells.end());
+        const auto inspected = W::InspectStreamingCellArtifact(bytes, expected->artifactHash, {2, 65536, 65536});
+        REQUIRE(inspected.HasValue());
+        const auto header = inspected.Value().Header();
+        REQUIRE(header.payloads.size() == 2);
+        const auto &nav = header.payloads.back();
+        CHECK(nav.provider == W::StreamingCellProvider::NavigationMesh);
+        CHECK(nav.version == Navigation::NavigationCellTileSelection::WireVersion);
+        CHECK(nav.requirement == W::StreamingCellPayloadRequirement::Required);
+        const auto raw = bytes.subspan(static_cast<std::size_t>(nav.offset), static_cast<std::size_t>(nav.compressedSize));
+        const auto admitted = Navigation::DecodeNavigationCellTileSelection(raw, raw.size());
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().definition == exact.definition);
+        CHECK(admitted.Value().cookedEnvelope == exact.cookedEnvelope);
+        CHECK(admitted.Value().tiles == exact.tiles);
+        CHECK(Navigation::DecodeNavigationCellTileSelection(raw.first(raw.size() - 1), raw.size()).HasError());
+
+        const auto revision = fixture.cache.Revision();
+        fixture.navigationCells.front().selection.tiles.front().tile.z = 1;
+        auto stale = fixture.Publish(limits);
+        REQUIRE(stale.HasValue());
+        REQUIRE(stale.Value().validation);
+        CHECK_FALSE(stale.Value().validation->CanPublish());
+        CHECK_FALSE(stale.Value().publication);
+        CHECK(fixture.cache.Revision() == revision);
+    }
 
     TEST_CASE("Headless World mount pins a committed release and retires its origin with the Scene owner",
               "[world_cook][native][mounted_world]") {

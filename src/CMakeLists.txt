@@ -2557,6 +2557,13 @@ add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
 
+add_library(HoroNavigationCellContent STATIC
+        runtime/navigation/integration/NavigationCellTileSelection.cpp
+)
+add_library(HoroEngine::NavigationCellContent ALIAS HoroNavigationCellContent)
+target_compile_features(HoroNavigationCellContent PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCellContent PUBLIC HoroEngine::NavigationApi HoroEngine::Assets)
+
 add_library(HoroNavigationAssetSceneIntegration STATIC
         runtime/navigation/integration/NavMeshAssetLoading.cpp
         runtime/navigation/integration/NavigationAssetSceneActivation.cpp
@@ -2965,7 +2972,8 @@ add_library(HoroWorldCookIntegration STATIC
         world_cook/WorldCookPublication.cpp)
 add_library(HoroEngine::WorldCookIntegration ALIAS HoroWorldCookIntegration)
 target_compile_features(HoroWorldCookIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets)
+target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets
+    HoroEngine::NavigationCellContent)
 
 # Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
 add_library(HoroJsonEncodingInternal INTERFACE)

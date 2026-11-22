@@ -1126,6 +1126,14 @@ streaming/runtime state never writes back to the Scene, definition or cooked bas
 A missing required block prevents cell activation; temporary nonresidency may only
 produce the existing bounded residency request plus typed partial/no-data outcome.
 
+World cook accepts explicit cell membership in a previously cooked NavMesh
+definition. Its version-one NavigationMesh block records the definition UUID,
+the complete base envelope digest, and strictly ordered tile addresses including
+their Scene scope, surface, profile and grid layer. Release qualification verifies
+the exact captured block and resolves every selected address in the verified base
+artifact. The cell contains membership bytes and the base release retains the
+authoritative portable tile content and input provenance.
+
 [ADR-107](../../adr/107-navigation-query-consistency-and-snapshot-ownership.md)
 requires a navigation query snapshot to record the exact PartitionEpoch,
 StreamingGeneration and tile generations it observed. Cell activation/replacement
@@ -1623,10 +1631,12 @@ state or background job to drain.
 ## Complete Offline World Publication
 
 `HoroWorldCookIntegration` is the non-installed headless composition above
-`HoroSceneCellPayload`, `HoroWorldStreaming` and `HoroAssets`. Applications supply
+`HoroSceneCellPayload`, `HoroWorldStreaming`, `HoroAssets` and `HoroNavigationCellContent`. Applications supply
 immutable authored captures, validated plans, explicit registered artifact types,
 release package intent and the existing Assets durable writer policy. Lower
 owners do not depend on this composition or one another's private headers.
+`HoroNavigationCellContent` owns the portable membership codec and depends only on
+`HoroNavigationApi` and `HoroAssets`. It has no Scene or runtime provider dependency.
 
 Scene owns semantic CoreEcs encoding and its prepared cache receipt;
 WorldStreaming owns canonical index/cell bytes and the separately versioned

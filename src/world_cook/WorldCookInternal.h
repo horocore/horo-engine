@@ -3,6 +3,11 @@
 #include "Horo/WorldCook/WorldCookPublication.h"
 
 namespace Horo::WorldCook::Detail {
+    /** @brief Returns the exact optional Navigation membership in a validated source capture. */
+    [[nodiscard]] const CellNavigationBinding *FindNavigationCell(const SourceCapture &source, WorldStreaming::StreamingCellId cell);
+    /** @brief Rejects duplicate, out-of-order, or foreign cell memberships before writing or admitting artifacts. */
+    [[nodiscard]] Result<void> ValidateNavigationCells(const SourceCapture &source);
+
     /** @brief Detached complete provider outputs, with no filesystem or cache publication authority. */
     struct EncodedWorld final {
         WorldStreaming::EncodedWorldIndex index;
