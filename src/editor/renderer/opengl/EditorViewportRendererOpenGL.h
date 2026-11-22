@@ -2,14 +2,16 @@
 
 #include "EditorViewportForwardLighting.h"
 #include "EditorViewportShaderParameters.h"
-#include "OpenGLViewportImageCapture.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
 
+#include <memory>
 #include <optional>
 
 namespace Horo::Editor {
+    class OpenGLViewportImageCapture;
+
     /** @brief OpenGL editor adapter that renders backend-neutral editor scene instances into an offscreen target. */
     class EditorViewportRendererOpenGL final : public IEditorViewportRenderer, public Render::IShaderHotReloadTarget {
     public:
@@ -148,7 +150,7 @@ namespace Horo::Editor {
         Render::RenderBufferHandle gridVertexBufferHandle_;
         Render::RenderFrontend *frontend_{nullptr};
         EditorViewportResources resources_;
-        OpenGLViewportImageCapture imageCapture_;
+        std::unique_ptr<OpenGLViewportImageCapture> imageCapture_;
         UniformLocations uniforms_{};
         EditorViewportExtent requestedExtent_{};
         EditorViewportGridOptions gridOptions_{};

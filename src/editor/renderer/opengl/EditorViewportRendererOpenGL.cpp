@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "OpenGLProgramValidation.h"
 #include "OpenGLStateSnapshot.h"
+#include "OpenGLViewportImageCapture.h"
 #include "OpenGLViewportResourceBridge.h"
 #include "OpenGLViewportShaders.h"
 #include "RenderFrontendResourceAccess.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <glad/gl.h>
 #include <limits>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -188,6 +190,12 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportAlreadyInitialized, "Editor viewport renderer is already initialized."));
         }
+        if (!imageCapture_) {
+            imageCapture_.reset(new (std::nothrow) OpenGLViewportImageCapture{});
+            if (!imageCapture_)
+                return Result<void>::Failure(
+                    MakeViewportError(RendererErrors::ViewportCapabilityUnavailable, "Could not allocate viewport image capture state."));
+        }
         ProgramGeneration candidate;
         if (const Result<void> program = CreateProgram(candidate); program.HasError()) {
             Shutdown();
@@ -250,7 +258,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererOpenGL::Shutdown */
     void EditorViewportRendererOpenGL::Shutdown() noexcept {
-        imageCapture_.Shutdown();
+        if (imageCapture_)
+            imageCapture_->Shutdown();
         preparedCrossFade_.reset();
         if (crossFadeProgram_)
             glDeleteProgram(std::exchange(crossFadeProgram_, 0));
