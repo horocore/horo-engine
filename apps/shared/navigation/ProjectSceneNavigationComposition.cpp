@@ -80,8 +80,6 @@ namespace Horo::Application::Internal {
             if (partition.tiles.size() != 1 || !partition.tiles.front())
                 return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
                                                    "The selected Detour provider requires one tile for the admitted surface."));
-            if (partition.tiles.front()->StorageBytes() > selection.policy.Capacities().maximumBytesPerResidentTile)
-                return Prepared::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
             const auto &geometry = partition.descriptor.geometry;
             const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
             const auto reservation = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
@@ -177,7 +175,7 @@ namespace Horo::Application::Internal {
         if (cache.HasError())
             return Backend::Failure(cache.ErrorValue());
         const auto loaded = Nav::LoadNavMeshAsset(assets, selection.definition, selection.target, *cache.Value(), cancellation,
-                                                  {.scope = selection.surface.scope});
+                                                  {.limits = {.maximumBytesPerTile = tileLimit}, .scope = selection.surface.scope});
         if (loaded.HasError())
             return Backend::Failure(loaded.ErrorValue());
         const auto &provenance = loaded.Value().contentProvenance;
@@ -222,17 +220,17 @@ namespace Horo::Application::Internal {
     Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,
                                                 std::shared_ptr<const ProjectSceneNavigationSelection> selection) {
         const auto &capacity = selection->policy.Capacities();
+        const auto tileLimit = static_cast<std::size_t>(capacity.maximumBytesPerResidentTile);
+        const Nav::NavigationAssetSceneLimits limits{.maximumReservedProviderBytes =
+                                                         static_cast<std::size_t>(capacity.maximumResidentMemoryBytes) - tileLimit,
+                                                     .assets = {.maximumBytesPerTile = tileLimit}};
         auto assets =
             std::make_unique<Nav::NavigationAssetSceneActivationParticipant>(*world.cache, selection->target,
                                                                              [selection](const auto &descriptor, const auto surfaces,
                                                                                          const auto budget) {
             return PrepareBackend(*selection, descriptor, surfaces, budget);
         },
-                                                                             Nav::NavigationAssetSceneLimits{
-                                                                                 .maximumReservedProviderBytes = static_cast<std::size_t>(
-                                                                                     capacity.maximumResidentMemoryBytes -
-                                                                                     capacity.maximumBytesPerResidentTile)},
-                                                                             std::nullopt,
+                                                                             limits, std::nullopt,
                                                                              Nav::NavigationAssetSceneSelection{selection->surface.scope,
                                                                                                                 selection->policy});
         const auto *assetOwner = assets.get();

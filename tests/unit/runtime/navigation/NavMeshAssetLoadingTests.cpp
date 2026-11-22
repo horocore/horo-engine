@@ -383,6 +383,42 @@ namespace Horo::Navigation {
         REQUIRE(loaded.Value().partitions.front().tiles.front()->ContentIdentity() == built.ContentIdentity());
     }
 
+    TEST_CASE("NavMesh residency rejects an oversized decoded tile before pinning any tile",
+              "[unit][navigation][navmesh_asset][canonical][budget]") {
+        auto set = TileSet();
+        const auto &built = *set.tiles.front();
+        const auto descriptor = ProjectNavigationCookedTileDescriptor(built).Value();
+        const NavigationPreparedTile input{.tile = {.key = {built.Key().profile, built.Key().surface, {.x = -1}},
+                                                    .bounds = {{-32, -1, 0}, {0, 2, 32}},
+                                                    .tileSizeMeters = 32},
+                                           .geometry = descriptor.geometry,
+                                           .borderSizeCells = descriptor.borderSizeCells,
+                                           .dependencyKey = Digest(4)};
+        NavigationTileBuildResult empty{.state = NavigationTileBuildState::Empty, .key = input.tile.key.tile, .bounds = input.tile.bounds};
+        set.tiles.insert(set.tiles.begin(), NavigationCookedTile::Create(input, std::move(empty)).Value());
+        const auto payload = EncodeNavigationCookedTileSet(set, 4096).Value();
+        const auto encoded = Envelope(payload);
+        auto referenceCache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const auto reference = LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *referenceCache);
+        REQUIRE(reference.HasValue());
+        const auto &tiles = reference.Value().partitions.front().tiles;
+        REQUIRE(tiles.size() == 2);
+        REQUIRE(tiles.front()->Topology().IsEmpty());
+        const auto cap = tiles.back()->StorageBytes();
+        REQUIRE(tiles.front()->StorageBytes() < cap);
+
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const auto refused =
+            LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache, {.limits = {.maximumBytesPerTile = cap - 1}});
+        TestSupport::RequireError(refused, NavigationErrors::CapacityExceeded);
+        CHECK(cache->Snapshot().retainedPayloadBytes == 0);
+        CHECK(cache->Snapshot().residentEntries == 0);
+
+        const auto exact = LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache, {.limits = {.maximumBytesPerTile = cap}});
+        REQUIRE(exact.HasValue());
+        CHECK(exact.Value().tileBytes.size() == 2);
+    }
+
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
               "[unit][navigation][navmesh_asset][canonical][budget]") {
         auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();

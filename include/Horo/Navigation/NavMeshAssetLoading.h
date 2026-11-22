@@ -60,6 +60,7 @@ namespace Horo::Navigation {
         std::size_t maximumPartitions{64};
         Assets::AssetCookLimits cook;
         std::size_t maximumDecodedBytes{64U * 1024U * 1024U};
+        std::optional<std::size_t> maximumBytesPerTile; /**< Optional decoded storage limit for each tile in the selected scope. */
     };
 
     /** @brief Synchronous host-selected decode bounds, release evidence and exact coordinate-space selection. */
@@ -77,6 +78,7 @@ namespace Horo::Navigation {
      * @param cache AssetPipeline allocation owner, mutated only on its owner thread.
      * @param options Explicit decode ceilings, optional exact release evidence and requested coordinate space.
      * Presence of release evidence requires matching producer provenance before cache admission; no cross-scope fallback.
+     * A configured per-tile limit is checked for the entire selected scope before the first cache admission.
      * @return Fully prepared value or original envelope/typed navigation error; no world is published.
      * @note A failed capacity admission may warm the byte cache; it cannot mutate a navigation world. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,

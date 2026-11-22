@@ -11,7 +11,7 @@ namespace Horo::Navigation {
         [[nodiscard]] bool ValidLimits(const NavMeshAssetLimits &limits) noexcept {
             return limits.maximumPartitions > 0 && limits.maximumPartitions <= 64 && limits.maximumDecodedBytes > 0 &&
                    limits.maximumDecodedBytes <= 256U * 1024U * 1024U && limits.cook.maximumArtifactBytes > 0 &&
-                   limits.cook.maximumArtifactBytes <= 256U * 1024U * 1024U;
+                   limits.cook.maximumArtifactBytes <= 256U * 1024U * 1024U && limits.maximumBytesPerTile != 0;
         }
 
         /** @brief Validate captured canonical metadata independently of portable decoding. */
@@ -46,6 +46,8 @@ namespace Horo::Navigation {
             for (const auto &tile : set.tiles) {
                 if (tile->Key().scope != loaded.scope)
                     continue;
+                if (limits.maximumBytesPerTile && tile->StorageBytes() > *limits.maximumBytesPerTile)
+                    return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
                 const auto projected = ProjectNavigationCookedTileDescriptor(*tile);
                 if (projected.HasError())
                     return Result<void>::Failure(projected.ErrorValue());
