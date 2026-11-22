@@ -19,6 +19,7 @@ finally:
     sys.path.pop(0)
 
 REVISION = "a" * 40
+COMPONENT = "1" * 64
 
 
 def store(root, content):
@@ -51,6 +52,7 @@ def make_claim(root, mode, category="Reference"):
     }
     if mode != "Standalone":
         row["desktopPreflightSha256"] = store(root, desktop_receipt(row))
+        row["desktopComponentSha256"] = COMPONENT
     return row
 
 
@@ -142,7 +144,7 @@ def desktop_receipt(row, *, host=None):
     system = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
     target = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + system).hexdigest()
     host = host or identity["hostPlatform"].lower()
-    return (f"horo-xr-desktop-qualification-v1 sha256:{'1' * 64} sha256:{identity['buildSha256']} "
+    return (f"horo-xr-desktop-qualification-v1 sha256:{COMPONENT} sha256:{identity['buildSha256']} "
             f"{host} system-default vulkan sha256:{target} desktop-local preflight 1 2 3 1 3 0 2 2 3\n").encode()
 
 
@@ -165,6 +167,7 @@ def test_legacy_desktop_claim_uses_the_package_receipt_when_it_is_the_preflight(
     matrix, evidence = release
     row = matrix["tuples"][1]
     del row["desktopPreflightSha256"]
+    del row["desktopComponentSha256"]
     failed = run_matrix(release)
     assert failed.returncode == 1
     assert "Invalid Desktop preflight" in failed.stderr
@@ -173,6 +176,18 @@ def test_legacy_desktop_claim_uses_the_package_receipt_when_it_is_the_preflight(
     update_claim_identity(row, evidence, packageReceiptSha256=receipt)
     passed = run_matrix(release)
     assert passed.returncode == 0, passed.stderr
+
+
+@pytest.mark.parametrize(("component", "reason"), [
+    (None, "Separate Desktop preflight requires the package component digest"),
+    ("2" * 64, "Desktop preflight uses a different installed component"),
+])
+def test_separate_preflight_must_match_the_declared_package_component(release, component, reason):
+    matrix, _ = release
+    matrix["tuples"][1]["desktopComponentSha256"] = component
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Tethered (xr-platform): {reason}" in result.stderr
 
 
 def test_every_claim_requires_its_own_runtime_evidence(release):

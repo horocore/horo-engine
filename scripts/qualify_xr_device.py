@@ -185,7 +185,8 @@ def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
     return facts
 
 
-def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str) -> None:
+def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
+                            component_digest: str | None = None) -> None:
     """Match a retired Desktop package probe to the physical tuple it can inform."""
     require(0 < len(data) <= MAX_DESKTOP_PREFLIGHT_BYTES, "Desktop preflight exceeds the size limit")
     require(hashlib.sha256(data).hexdigest() == receipt_digest,
@@ -196,6 +197,8 @@ def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str) ->
     record, install, executable, host, route, renderer, target, connection, outcome, *facts = columns
     require(record == DESKTOP_PREFLIGHT_RECORD and outcome == "preflight", "Expected a successful Desktop preflight")
     require(install.startswith("sha256:") and is_digest(install[7:]), "Invalid Desktop preflight installation digest")
+    if component_digest is not None:
+        require(install == f"sha256:{component_digest}", "Desktop preflight uses a different installed component")
     require(executable == f"sha256:{identity['buildSha256']}", "Desktop preflight uses a different executable")
     require(host in DESKTOP_HOSTS and host == identity["hostPlatform"].lower(), "Desktop preflight uses a different host")
     require(route == "system-default" and renderer == DESKTOP_RENDERER and renderer == identity["renderer"].lower(),

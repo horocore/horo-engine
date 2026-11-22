@@ -46,9 +46,9 @@ class Evidence:
         require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
         self.verified.add(digest)
 
-    def desktop_preflight(self, digest: str, identity: dict) -> None:
+    def desktop_preflight(self, digest: str, identity: dict, component_digest: str | None) -> None:
         with self.path(digest).open("rb") as source:
-            check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest)
+            check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
 
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:
@@ -61,6 +61,8 @@ def validate_row(value: object) -> dict:
     required = {"id", "category", "owner", "releaseClaim", "declaration", "requiredOptionalChecks", "recordSha256"}
     if isinstance(value, dict) and "desktopPreflightSha256" in value:
         required.add("desktopPreflightSha256")
+    if isinstance(value, dict) and "desktopComponentSha256" in value:
+        required.add("desktopComponentSha256")
     row = fields(value, required, "matrix row")
     require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
     require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
@@ -79,6 +81,8 @@ def validate_row(value: object) -> dict:
     require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
     preflight = row.get("desktopPreflightSha256")
     require(preflight is None or is_digest(preflight), "Invalid Desktop preflight digest")
+    component = row.get("desktopComponentSha256")
+    require(component is None or is_digest(component), "Invalid Desktop component digest")
     return row
 
 
@@ -93,14 +97,18 @@ def verify_review(value: object, evidence: Evidence, revision: str) -> None:
 
 
 def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
+    component = row.get("desktopComponentSha256")
     if identity["connectionMode"] == "Standalone":
-        require(row.get("desktopPreflightSha256") is None, "Desktop preflight is unavailable for this tuple")
+        require(row.get("desktopPreflightSha256") is None and component is None,
+                "Desktop preflight is unavailable for this tuple")
         return
     require(identity["hostPlatform"].lower() in DESKTOP_HOSTS and identity["renderer"].lower() == DESKTOP_RENDERER,
             "Unsupported PCVR host or renderer for the packaged OpenXR route")
     digest = row.get("desktopPreflightSha256", identity["packageReceiptSha256"])
     require(digest is not None, "Required Desktop preflight was not run")
-    evidence.desktop_preflight(digest, identity)
+    if digest != identity["packageReceiptSha256"]:
+        require(component is not None, "Separate Desktop preflight requires the package component digest")
+    evidence.desktop_preflight(digest, identity, component)
 
 
 def verify_claim(row: dict, evidence: Evidence) -> str:

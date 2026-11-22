@@ -75,8 +75,11 @@ Keep other PCVR combinations in planning rows until the package supports
 their host and renderer. Store the exact product stdout from
 `horo-engine --probe-xr-package ... --connection desktop-local` and set the
 matrix row's `desktopPreflightSha256` to its SHA-256 when the package receipt
-is a separate file. If the tuple already refers to the preflight receipt as
-its `packageReceiptSha256`, omit the redundant field. Set
+is a separate file. In that case, set `desktopComponentSha256` to the verified
+installed OpenXR component digest from the package provenance. The gate compares
+this digest with the component reported by the preflight. If the tuple already
+refers to the preflight receipt as its `packageReceiptSha256`, both fields can
+be omitted. Set
 `desktopPreflightSha256` to null to record an unrun preflight. The gate
 reports such claims under their assigned owner. The receipt must match the
 same executable, runtime and HMD, runtime version, host, and renderer as
