@@ -1,6 +1,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.h"
 
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
@@ -90,14 +91,18 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc GlobalDockMcpPane::Attach */
-    void GlobalDockMcpPane::Attach(const Log::IStructuredLogQuery *query) noexcept {
+    void GlobalDockMcpPane::Attach(const Log::IStructuredLogQuery *query, IWorkspaceMcpControls *controls) noexcept {
         Detach();
         m_query = query;
+        m_controls = controls;
     }
 
     /** @copydoc GlobalDockMcpPane::Detach */
     void GlobalDockMcpPane::Detach() noexcept {
         m_query = nullptr;
+        m_controls = nullptr;
+        m_live = {};
+        m_controlError = false;
         m_revision = 0;
         m_rows.clear();
         m_paused = false;
@@ -108,6 +113,10 @@ namespace Horo::Editor {
     /** @copydoc GlobalDockMcpPane::Draw */
     void GlobalDockMcpPane::Draw(const ImVec2 &origin, const float width, const EditorGuiContext &context) {
         Refresh();
+        if (m_controls) {
+            if (auto live = m_controls->ReadMcpStatus(m_live.revision))
+                m_live = std::move(*live);
+        }
         const float available = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - origin.y);
         const auto regions = ResolveGlobalDockPaneRegions(origin, width, available, {.hasToolbar = true});
         DrawToolbar(regions.toolbarOrigin, regions.toolbarWidth, context);
@@ -211,28 +220,68 @@ namespace Horo::Editor {
         ImGui::SetClipboardText(csv.c_str());
     }
 
+    /** @copydoc GlobalDockMcpPane::DrawSession */
+    void GlobalDockMcpPane::DrawSession(const float width, const EditorGuiContext &context) {
+        const auto &fonts = context.theme.fonts;
+        if (m_controlError)
+            DrawGlobalDockWrappedText(width, Text(context, "control.failed"), GlobalDockTone::Error, fonts);
+        const auto key = m_live.revision.session;
+        if (!m_controls || !key.principal)
+            return;
+        DrawGlobalDockWrappedText(width, Text(context, "control.session"), GlobalDockTone::Accent, fonts);
+        DrawGlobalDockWrappedText(width, std::format("{} / {}.{}", key.principal, key.session, key.generation), GlobalDockTone::Neutral,
+                                  fonts);
+        if (!m_live.capabilities.empty()) {
+            DrawGlobalDockWrappedText(width, Text(context, "control.capabilities"), GlobalDockTone::Neutral, fonts);
+            for (const auto &capability : m_live.capabilities)
+                DrawGlobalDockWrappedText(width, capability, GlobalDockTone::Neutral, fonts);
+        }
+        const auto revoke = Text(context, "control.revoke") + "###McpRevokeSession";
+        if (Ui::Button({.label = revoke.c_str()})) {
+            m_controlError = m_controls->RevokeMcpSession(key).HasError();
+            if (!m_controlError)
+                m_live = {};
+            return;
+        }
+        for (const auto &request : m_live.requests)
+            DrawRequest(request, width, context);
+        ImGui::Spacing();
+    }
+
+    /** @copydoc GlobalDockMcpPane::DrawRequest */
+    void GlobalDockMcpPane::DrawRequest(const WorkspaceMcpRequest &request, const float width, const EditorGuiContext &context) {
+        const auto state = Text(context, request.running ? "status.running" : "status.queued");
+        DrawGlobalDockWrappedText(width, std::format("#{} {} · {}", request.id, request.tool, state), GlobalDockTone::Neutral,
+                                  context.theme.fonts);
+        const auto label = std::format("{}###McpCancel{}", Text(context, "control.cancel"), request.id);
+        if (Ui::Button({.label = label.c_str()}))
+            m_controlError = m_controls->CancelMcpRequest(m_live.revision.session, request.id).HasError();
+    }
+
     /** @copydoc GlobalDockMcpPane::DrawTable */
     void GlobalDockMcpPane::DrawTable(const ImVec2 &origin, const float width, const float height, const EditorGuiContext &context) {
         constexpr std::array keys{"column.time", "column.tool", "column.event", "column.scope", "column.status"};
         constexpr std::array fractions{0.0F, 0.13F, 0.38F, 0.63F, 0.81F, 1.0F};
         const auto metrics = ResolveGlobalDockPaneMetrics();
         const auto &fonts = context.theme.fonts;
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0F, 0.0F});
+        ImGui::BeginChild("##McpRows", {width, std::max(1.0F, height)}, false, ImGuiWindowFlags_NoSavedSettings);
+        DrawSession(ImGui::GetContentRegionAvail().x, context);
+        const auto header = ImGui::GetCursorScreenPos();
         const float content = std::max(1.0F, width - metrics.contentPadding * 2.0F);
         std::array<float, fractions.size()> columns{};
         std::ranges::transform(fractions, columns.begin(), [&](const float fraction) {
-            return origin.x + metrics.contentPadding + content * fraction;
+            return header.x + metrics.contentPadding + content * fraction;
         });
-        DrawGlobalDockTableHeaderSurface(origin, width, metrics.tableHeaderHeight);
-        const float bottom = origin.y + metrics.tableHeaderHeight;
-        const float y = origin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
+        DrawGlobalDockTableHeaderSurface(header, width, metrics.tableHeaderHeight);
+        const float bottom = header.y + metrics.tableHeaderHeight;
+        const float y = header.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
         for (std::size_t index = 0; index < keys.size(); ++index)
             DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), fonts.sansCompact, Theme::TextPx::Caption(), {columns[index], y},
                                       {columns[index + 1], bottom}, Theme::Muted(), Text(context, keys[index]));
-        ImGui::SetCursorScreenPos({origin.x, bottom});
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0F, 0.0F});
-        ImGui::BeginChild("##McpRows", {width, std::max(1.0F, height - metrics.tableHeaderHeight)}, false,
-                          ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Dummy({width, metrics.tableHeaderHeight});
         if (m_rows.empty())
             DrawGlobalDockWrappedText(width, Text(context, m_query ? "empty" : "unavailable"), GlobalDockTone::Neutral, fonts);
         for (const auto &row : m_rows)

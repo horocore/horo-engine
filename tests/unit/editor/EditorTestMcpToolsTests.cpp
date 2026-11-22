@@ -160,57 +160,106 @@ namespace {
         CHECK(client->Call(queued).HasError());
     }
 
-    TEST_CASE("The editor MCP host retires command authority on a workspace switch", "[unit][editor][mcp]") {
+    /** @brief Owns the source leases published and revoked by the test workspace host. */
+    struct SourceWorkspace {
         int presentations{};
         std::vector<std::uint64_t> revisions;
         std::shared_ptr<const EditorSourceCommandEndpoint> endpoint;
-        const auto workspace = [&](const std::string &project) {
+        const std::vector<std::string> grants{std::string{EditorSourcePresentationGrant}};
+        EditorMcpWorkspaceHost host{std::make_shared<Test::Entropy>()};
+
+        EditorWorkspaceCommandAccess Workspace(const std::string &project) {
             return EditorWorkspaceCommandAccess{
                 .projectIdentity = project,
                 .bind =
-                    [&, project](const std::uint64_t revision) {
+                    [this, project](const std::uint64_t revision) {
                 revisions.push_back(revision);
                 endpoint = std::make_shared<EditorSourceCommandEndpoint>(
                     EditorSourceCommandEndpoint{project, revision, std::this_thread::get_id(),
-                                                [&](const SourceDocumentId &, std::optional<EditorSourceCommandPosition>, const auto &) {
+                                                [this](const SourceDocumentId &, std::optional<EditorSourceCommandPosition>, const auto &) {
                     ++presentations;
                     return Result<void>::Success();
                 }});
                 return EditorWorkspaceCommandEndpoints{.source = endpoint};
             },
                 .revoke =
-                    [&] {
+                    [this] {
                 endpoint.reset();
             },
             };
-        };
-        EditorMcpWorkspaceHost host{std::make_shared<Test::Entropy>()};
-        const std::vector<std::string> grants{std::string{EditorSourcePresentationGrant}};
+        }
+    };
+
+    TEST_CASE_METHOD(SourceWorkspace, "The editor MCP host exposes and cancels the live request", "[unit][editor][mcp]") {
+        CHECK_FALSE(host.ReadMcpStatus({}));
         CHECK(host.Open("operator", grants).HasError());
-        REQUIRE(host.Attach(workspace("first")).HasValue());
+        REQUIRE(host.Attach(Workspace("first")).HasValue());
         CHECK(revisions.empty());
         auto old = host.Open("operator", grants);
         REQUIRE(old.HasValue());
+        const auto initial = host.ReadMcpStatus({});
+        REQUIRE(initial);
+        CHECK(initial->capabilities == grants);
+        CHECK(initial->requests.empty());
+        CHECK_FALSE(host.ReadMcpStatus(initial->revision));
         CHECK(host.Open("second-client", grants).HasError());
+        const auto command = Command("first-request", "editor.source.open", {{"path", "main.cpp"}});
+        Approve(*host.ActiveSession(), command);
+        const auto accepted = old.Value()->Call(command);
+        REQUIRE(accepted.HasValue());
+        const auto id = accepted.Value().at("operationId").get<std::uint64_t>();
+        const auto active = host.ReadMcpStatus(initial->revision);
+        REQUIRE(active);
+        REQUIRE(active->requests.size() == 1);
+        CHECK(active->requests.front().id == id);
+        CHECK(active->requests.front().tool == "editor.source.open");
+        CHECK_FALSE(active->requests.front().running);
+        REQUIRE(host.CancelMcpRequest(active->revision.session, id).HasValue());
+        const auto cancelled = old.Value()->Call({.id = "cancelled-status", .method = "operations/get", .params = {{"operationId", id}}});
+        REQUIRE(cancelled.HasValue());
+        CHECK(cancelled.Value().at("status") == "cancelled");
+        const auto afterCancel = host.ReadMcpStatus(active->revision);
+        REQUIRE(afterCancel);
+        CHECK(afterCancel->requests.empty());
+        REQUIRE(host.PumpWorkspaceCommands().HasValue());
+        CHECK(presentations == 0);
+    }
+
+    TEST_CASE_METHOD(SourceWorkspace, "The editor MCP host retires command authority on a workspace switch", "[unit][editor][mcp]") {
+        REQUIRE(host.Attach(Workspace("first")).HasValue());
+        auto old = host.Open("operator", grants);
+        REQUIRE(old.HasValue());
+        const auto initial = host.ReadMcpStatus({});
+        REQUIRE(initial);
         const auto command = Command("first-request", "editor.source.open", {{"path", "main.cpp"}});
         Approve(*host.ActiveSession(), command);
         REQUIRE(old.Value()->Call(command).HasValue());
         REQUIRE(host.Detach().HasValue());
+        const auto retired = host.ReadMcpStatus(initial->revision);
+        REQUIRE(retired);
+        CHECK(retired->revision.session.principal == 0);
         CHECK_FALSE(endpoint);
         CHECK(old.Value()->Call(command).HasError());
         CHECK(presentations == 0);
 
-        REQUIRE(host.Attach(workspace("replacement")).HasValue());
+        REQUIRE(host.Attach(Workspace("replacement")).HasValue());
         auto current = host.Open("operator", grants);
         REQUIRE(current.HasValue());
         REQUIRE(revisions.size() == 2);
         CHECK(revisions[1] > revisions[0]);
         CHECK(current.Value()->Call(command).HasError());
         Approve(*host.ActiveSession(), command);
-        REQUIRE(current.Value()->Call(command).HasValue());
+        const auto replacement = current.Value()->Call(command);
+        REQUIRE(replacement.HasValue());
+        const auto replacementId = replacement.Value().at("operationId").get<std::uint64_t>();
+        CHECK(host.CancelMcpRequest(initial->revision.session, replacementId).HasError());
+        CHECK(host.RevokeMcpSession(initial->revision.session).HasError());
         REQUIRE(host.PumpWorkspaceCommands().HasValue());
         CHECK(presentations == 1);
-        REQUIRE(host.Detach().HasValue());
+        const auto live = host.ReadMcpStatus({});
+        REQUIRE(live);
+        REQUIRE(host.RevokeMcpSession(live->revision.session).HasValue());
+        CHECK_FALSE(endpoint);
         CHECK(current.Value()->Call(command).HasError());
     }
 }  // namespace

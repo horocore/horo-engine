@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace Horo::Editor {
+    class IWorkspaceMcpControls;
     /** @brief Canonical tabs hosted by the embedded global dock surface. */
     enum class GlobalDockTab : std::uint8_t {
         Assets,
@@ -42,6 +43,8 @@ namespace Horo::Editor {
 
         /** @brief Creates the global dock with an optional restored active tab. */
         explicit GlobalDockPanel(GlobalDockTab activeTab = GlobalDockTab::Assets);
+        /** @brief Creates the dock with local-only MCP controls supplied by the application. */
+        GlobalDockPanel(GlobalDockTab activeTab, IWorkspaceMcpControls *mcpControls);
 
         [[nodiscard]] std::string GetId() const override {
             return "horo.global_dock";
@@ -96,7 +99,7 @@ namespace Horo::Editor {
         };
 
         template <typename Adapter> void RegisterBuiltInPane(GlobalDockTab tab);
-        void RegisterBuiltInPanes();
+        void RegisterBuiltInPanes(IWorkspaceMcpControls *mcpControls);
 
         GlobalDockTab activeTab_{GlobalDockTab::Assets};
         std::string activePaneId_;

@@ -25,6 +25,8 @@ namespace Horo::Editor {
     Result<void> EditorMcpWorkspaceHost::PumpWorkspaceCommands() {
         if (!session_)
             return Result<void>::Success();
+        if (!session_->SessionKey().principal)
+            return CloseSession();
         const auto pumped = session_->Pump();
         return pumped.HasValue() ? Result<void>::Success() : Result<void>::Failure(pumped.ErrorValue());
     }
@@ -62,6 +64,29 @@ namespace Horo::Editor {
     /** @copydoc EditorMcpWorkspaceHost::ActiveSession */
     EditorCommandMcpSession *EditorMcpWorkspaceHost::ActiveSession() const noexcept {
         return session_.get();
+    }
+
+    /** @copydoc EditorMcpWorkspaceHost::ReadMcpStatus */
+    std::optional<WorkspaceMcpStatus> EditorMcpWorkspaceHost::ReadMcpStatus(const WorkspaceMcpRevision known) const {
+        if (session_)
+            return session_->ReadMcpStatus(known);
+        return known.session.principal ? std::optional{WorkspaceMcpStatus{}} : std::nullopt;
+    }
+
+    /** @copydoc EditorMcpWorkspaceHost::OwnsSession */
+    bool EditorMcpWorkspaceHost::OwnsSession(const WorkspaceMcpSessionKey session) const noexcept {
+        return session.principal && session_ && session_->SessionKey() == session;
+    }
+
+    /** @copydoc EditorMcpWorkspaceHost::CancelMcpRequest */
+    Result<void> EditorMcpWorkspaceHost::CancelMcpRequest(const WorkspaceMcpSessionKey session, const std::uint64_t request) {
+        return OwnsSession(session) ? session_->CancelRequest(request)
+                                    : Result<void>::Failure(MakeError(Mcp::McpErrors::SessionUnavailable));
+    }
+
+    /** @copydoc EditorMcpWorkspaceHost::RevokeMcpSession */
+    Result<void> EditorMcpWorkspaceHost::RevokeMcpSession(const WorkspaceMcpSessionKey session) {
+        return OwnsSession(session) ? CloseSession() : Result<void>::Failure(MakeError(Mcp::McpErrors::SessionUnavailable));
     }
 
     /** @copydoc EditorMcpWorkspaceHost::CloseSession */

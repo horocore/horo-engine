@@ -8,6 +8,7 @@
 namespace Horo::Editor {
     class WorkspacePanelRegistry;
     class EditorModalHost;
+    class IWorkspaceMcpControls;
 
     /** @brief Registers the closed-by-default persistent navigation view with explicit host capabilities.
      * @param registry Workspace panel registry. @param access Project application capabilities. @param modals GUI modal owner. */
@@ -25,5 +26,12 @@ namespace Horo::Editor {
      * @param globalDockPaneFactories Composition-time factories for optional global-dock tabs.
      */
     void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry, std::span<const GlobalDockPaneFactory> globalDockPaneFactories);
+
+    /** @brief Registers workspace panels with locally owned MCP controls in the built-in dock.
+     * @param registry Target registry. @param globalDockPaneFactories Optional module-provided panes.
+     * @param mcpControls Host-owned local controls that outlive dock attachment.
+     */
+    void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry, std::span<const GlobalDockPaneFactory> globalDockPaneFactories,
+                                        IWorkspaceMcpControls *mcpControls);
 
 }  // namespace Horo::Editor

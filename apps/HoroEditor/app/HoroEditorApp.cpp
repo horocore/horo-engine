@@ -3565,13 +3565,14 @@ namespace Horo::Editor {
         }
 
         /** @brief Composes cached graph inspection at the application host boundary. */
-        void RegisterInspectionWorkspacePanels(WorkspacePanelRegistry &registry, const Render::RenderFrontend &frontend) {
+        void RegisterInspectionWorkspacePanels(WorkspacePanelRegistry &registry, const Render::RenderFrontend &frontend,
+                                               IWorkspaceMcpControls &mcpControls) {
             const std::array<GlobalDockPaneFactory, 1> graphInspectionPanes{[&frontend] {
                 return MakeRenderGraphInspectionPane([&frontend] {
                     return frontend.GraphInspectionSnapshot();
                 });
             }};
-            RegisterDefaultWorkspacePanels(registry, graphInspectionPanes);
+            RegisterDefaultWorkspacePanels(registry, graphInspectionPanes, &mcpControls);
         }
 
         /** @brief Shuts down the runtime and collects revoked UI owners before preserving the host's prior health. */
@@ -4341,7 +4342,7 @@ namespace Horo::Editor {
             EditorMcpWorkspaceHost workspaceCommands{Platform::CreateNativeSecureRandomSource()};
             WorkspacePanelRegistry workspacePanelRegistry;
             workspacePanelRegistry.RegisterPanel(MakeEditorMcpCommandPanel(workspaceCommands));
-            RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
+            RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend, workspaceCommands);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
             const auto localAgent =
                 p.options.localAgent ? MakeEditorLocalAgentPanel(p.background.jobs, durableFiles) : EditorLocalAgentPanelHost{};

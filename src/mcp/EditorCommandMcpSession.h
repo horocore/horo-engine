@@ -3,6 +3,7 @@
 /** @file EditorCommandMcpSession.h @brief Host-owned MCP session for one editor workspace. */
 
 #include "EditorWorkspaceCommandAccess.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Mcp/McpSession.h"
 
 #include <string_view>
@@ -52,6 +53,15 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<Mcp::McpToolEffect> ToolEffect(std::string_view tool) const;
 
+        /** @brief Identifies this exact live session for local controls. @return Opaque scope, or empty when retired. */
+        [[nodiscard]] WorkspaceMcpSessionKey SessionKey() const noexcept;
+        /** @copydoc IWorkspaceMcpControls::ReadMcpStatus */
+        [[nodiscard]] std::optional<WorkspaceMcpStatus> ReadMcpStatus(WorkspaceMcpRevision known) const;
+        /** @brief Cancels one request through this session's authenticated controller. @param request Controller identity.
+         * @return Result of the cancellation attempt.
+         */
+        [[nodiscard]] Result<void> CancelRequest(std::uint64_t request) const;
+
         /** @brief Creates a short-lived challenge for an exact visible presentation or mutation request.
          * @param request The original request to show to the local operator.
          * @return Challenge identity, or typed denial when authority or tool access is missing.
@@ -79,7 +89,7 @@ namespace Horo::Editor {
         std::shared_ptr<Mcp::McpSessionManager> manager_;
         std::shared_ptr<Mcp::McpInProcessAdapter> client_;
         std::shared_ptr<const Mcp::McpToolSnapshot> tools_;
-        Mcp::McpSessionAdmission admission_;
+        Mcp::McpRequestContext sessionContext_;
         std::optional<std::uint64_t> pendingApproval_;
     };
 }  // namespace Horo::Editor

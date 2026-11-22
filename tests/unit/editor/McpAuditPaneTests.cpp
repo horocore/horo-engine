@@ -27,13 +27,38 @@ namespace {
                            {"private_extra", std::string{"private-field-marker"}}}};
     }
 
+    class AuditControls final : public IWorkspaceMcpControls {
+    public:
+        std::optional<WorkspaceMcpStatus> ReadMcpStatus(const WorkspaceMcpRevision known) const override {
+            if (known.session == status.revision.session && known.requests == status.revision.requests)
+                return std::nullopt;
+            return status;
+        }
+
+        Result<void> CancelMcpRequest(const WorkspaceMcpSessionKey session, const std::uint64_t request) override {
+            CHECK(session == status.revision.session);
+            CHECK(request == 42);
+            status.requests.clear();
+            ++status.revision.requests;
+            return Result<void>::Success();
+        }
+
+        Result<void> RevokeMcpSession(const WorkspaceMcpSessionKey session) override {
+            CHECK(session == status.revision.session);
+            status = {};
+            return Result<void>::Success();
+        }
+
+        WorkspaceMcpStatus status{{{7, 3, 2}, 1}, {"editor.source.present"}, {{42, "editor.source.open", true}}};
+    };
+
     struct AuditPaneFixture {
         Editor::Tests::EditorGuiContextFixture gui;
         Log::StructuredLogStore log{16};
         GlobalDockMcpPane pane;
         std::string clipboard;
 
-        AuditPaneFixture() {
+        explicit AuditPaneFixture(IWorkspaceMcpControls *controls = nullptr) {
             auto &io = ImGui::GetIO();
             io.IniFilename = nullptr;
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -45,7 +70,7 @@ namespace {
             REQUIRE(gui.localization.LoadCatalogFile(catalog));
             REQUIRE(gui.localization.Prepare(LocaleTag{"en-US"}));
             REQUIRE(gui.localization.ActivatePrepared());
-            pane.Attach(&log);
+            pane.Attach(&log, controls);
         }
 
         void Draw() {
@@ -64,6 +89,20 @@ namespace {
             ImGui::FocusWindow(window);
             ImGui::ActivateItemByID(ImHashStr("##chip", 0, window->GetID(id)));
             Draw();
+        }
+
+        void PressSessionAction(const char *id) {
+            auto *dock = ImGui::FindWindowByName("MCP dock fixture");
+            REQUIRE(dock);
+            for (auto *window : ImGui::GetCurrentContext()->Windows) {
+                if (window->ParentWindow != dock || std::string_view{window->Name}.find("##McpRows") == std::string_view::npos)
+                    continue;
+                ImGui::FocusWindow(window);
+                ImGui::ActivateItemByID(window->GetID(id));
+                Draw();
+                return;
+            }
+            FAIL("MCP rows child is missing");
         }
     };
 
@@ -97,5 +136,16 @@ namespace {
         fixture.clipboard.clear();
         fixture.Press("McpExport");
         CHECK(fixture.clipboard.empty());
+    }
+
+    TEST_CASE("MCP dock controls the exact session while audit history is paused", "[mcp][editor][gui]") {
+        AuditControls controls;
+        AuditPaneFixture fixture{&controls};
+        fixture.Draw();
+        fixture.Press("McpPause");
+        fixture.PressSessionAction("###McpCancel42");
+        CHECK(controls.status.requests.empty());
+        fixture.PressSessionAction("###McpRevokeSession");
+        CHECK(controls.status.revision.session.principal == 0);
     }
 }  // namespace

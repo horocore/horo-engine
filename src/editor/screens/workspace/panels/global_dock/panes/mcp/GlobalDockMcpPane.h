@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/Localization/LocalizedGui.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
 
 #include <array>
 #include <chrono>
@@ -27,8 +28,10 @@ namespace Horo::Editor {
 
         GlobalDockMcpPane() : LocalizedGui(kTextScope) {}
 
-        /** @brief Binds the host's bounded log source for this workspace. @param query Borrowed query, or null. */
-        void Attach(const Log::IStructuredLogQuery *query) noexcept;
+        /** @brief Binds the host's log and local controls.
+         * @param query Borrowed history query. @param controls Optional local editor control port.
+         */
+        void Attach(const Log::IStructuredLogQuery *query, IWorkspaceMcpControls *controls = nullptr) noexcept;
         /** @brief Drops the workspace query and all cached presentation state. */
         void Detach() noexcept;
         /** @brief Draws the filtered history and its local export action. */
@@ -63,6 +66,10 @@ namespace Horo::Editor {
         void AppendRow(const Log::StructuredLogRecord &record);
         /** @brief Measures translated controls against the available toolbar width. */
         void DrawToolbar(const ImVec2 &origin, float width, const EditorGuiContext &context);
+        /** @brief Draws live capabilities and controller-owned actions independently of history. */
+        void DrawSession(float width, const EditorGuiContext &context);
+        /** @brief Presents a single active request and routes cancellation to its authenticated owner. */
+        void DrawRequest(const WorkspaceMcpRequest &request, float width, const EditorGuiContext &context);
         /** @brief Lays out the audit columns and presents the admitted rows. */
         void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
         /** @brief Draws a validated row using bounded column clipping. */
@@ -74,6 +81,9 @@ namespace Horo::Editor {
 
         std::array<char, 256> m_search{};
         const Log::IStructuredLogQuery *m_query{};
+        IWorkspaceMcpControls *m_controls{};
+        WorkspaceMcpStatus m_live;
+        bool m_controlError{};
         std::uint64_t m_revision{};
         std::vector<Row> m_rows;
         Filter m_filter{Filter::All};

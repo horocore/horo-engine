@@ -123,7 +123,15 @@ namespace Horo::Editor {
                                                      std::shared_ptr<Mcp::McpInProcessAdapter> client,
                                                      std::shared_ptr<const Mcp::McpToolSnapshot> tools, Mcp::McpSessionAdmission admission)
         : policy_(std::move(policy)), controller_(std::move(controller)), manager_(std::move(manager)), client_(std::move(client)),
-          tools_(std::move(tools)), admission_(std::move(admission)) {}
+          tools_(std::move(tools)), sessionContext_{.session = client_->Session(),
+                                                    .clientIdentity = std::move(admission.clientIdentity),
+                                                    .capabilities = std::move(admission.capabilities),
+                                                    .projectIdentity = std::move(admission.projectIdentity),
+                                                    .authorizationRevision = admission.authorizationRevision,
+                                                    .registryRevision = admission.registryRevision,
+                                                    .deadline = admission.authority->ExpiresAt(),
+                                                    .authority = std::move(admission.authority),
+                                                    .authorization = policy_} {}
 
     EditorCommandMcpSession::~EditorCommandMcpSession() {
         static_cast<void>(Close());
@@ -136,7 +144,44 @@ namespace Horo::Editor {
 
     /** @copydoc EditorCommandMcpSession::ToolEffect */
     Result<Mcp::McpToolEffect> EditorCommandMcpSession::ToolEffect(const std::string_view tool) const {
-        return tools_->Effect({std::string{tool}}, admission_.capabilities);
+        return tools_->Effect({std::string{tool}}, sessionContext_.capabilities);
+    }
+
+    /** @copydoc EditorCommandMcpSession::SessionKey */
+    WorkspaceMcpSessionKey EditorCommandMcpSession::SessionKey() const noexcept {
+        const auto handle = client_->Session();
+        return handle.IsValid() && !sessionContext_.authority->IsStopRequested()
+                   ? WorkspaceMcpSessionKey{sessionContext_.authority->AuditIdentity(), handle.id, handle.generation}
+                   : WorkspaceMcpSessionKey{};
+    }
+
+    /** @copydoc EditorCommandMcpSession::ReadMcpStatus */
+    std::optional<WorkspaceMcpStatus> EditorCommandMcpSession::ReadMcpStatus(const WorkspaceMcpRevision known) const {
+        const auto key = SessionKey();
+        if (!key.principal)
+            return known.session.principal ? std::optional{WorkspaceMcpStatus{}} : std::nullopt;
+        auto active = controller_->ReadActiveRequests(sessionContext_, known.session == key ? known.requests : 0);
+        if (active.HasError())
+            return known.session.principal ? std::optional{WorkspaceMcpStatus{}} : std::nullopt;
+        if (!active.Value())
+            return std::nullopt;
+        auto snapshot = std::move(active).Value().value();
+        WorkspaceMcpStatus status{{key, snapshot.revision}, sessionContext_.capabilities};
+        status.requests.reserve(snapshot.requests.size());
+        for (auto &request : snapshot.requests)
+            status.requests.push_back({request.id, std::move(request.tool), request.running});
+        return status;
+    }
+
+    /** @copydoc EditorCommandMcpSession::CancelRequest */
+    Result<void> EditorCommandMcpSession::CancelRequest(const std::uint64_t request) const {
+        const auto cancelled =
+            client_->Call({.id = "local-mcp-cancel", .method = "operations/cancel", .params = {{"operationId", request}}});
+        if (cancelled.HasError())
+            return Result<void>::Failure(cancelled.ErrorValue());
+        if (cancelled.Value().at("status") != "cancelled")
+            return Result<void>::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorCommandMcpSession::RequestApproval */
@@ -149,16 +194,9 @@ namespace Horo::Editor {
             return Outcome::Failure(effect.ErrorValue());
         if (effect.Value() == Mcp::McpToolEffect::Query)
             return Outcome::Failure(MakeError(Mcp::McpErrors::RequestInvalid));
-        const Mcp::McpRequestContext context{.session = client_->Session(),
-                                             .clientIdentity = admission_.clientIdentity,
-                                             .capabilities = admission_.capabilities,
-                                             .projectIdentity = admission_.projectIdentity,
-                                             .authorizationRevision = admission_.authorizationRevision,
-                                             .registryRevision = admission_.registryRevision,
-                                             .deadline = admission_.authority->ExpiresAt(),
-                                             .authority = admission_.authority,
-                                             .authorization = policy_,
-                                             .requestIdentity = request.id};
+        auto context = sessionContext_;
+        context.session = client_->Session();
+        context.requestIdentity = request.id;
         auto challenge = policy_->Challenge(context, request, 1min);
         if (challenge.HasValue()) {
             if (pendingApproval_)
@@ -184,7 +222,7 @@ namespace Horo::Editor {
     /** @copydoc EditorCommandMcpSession::Close */
     Result<void> EditorCommandMcpSession::Close() {
         pendingApproval_.reset();
-        policy_->Revoke(admission_.authority);
+        policy_->Revoke(sessionContext_.authority);
         client_->Disconnect();
         const auto sessions = manager_->Shutdown();
         auto drained = controller_->Shutdown();

@@ -10,7 +10,7 @@ namespace Horo::Security {
 
 namespace Horo::Editor {
     /** @brief Admits at most one explicitly approved embedded client for the current workspace. */
-    class EditorMcpWorkspaceHost final : public IEditorWorkspaceCommandHost {
+    class EditorMcpWorkspaceHost final : public IEditorWorkspaceCommandHost, public IWorkspaceMcpControls {
     public:
         /** @brief Supplies platform entropy without opening a session. @param random Native entropy provider. */
         explicit EditorMcpWorkspaceHost(std::shared_ptr<Security::SecureRandomSource> random);
@@ -22,6 +22,13 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PumpWorkspaceCommands() override;
         /** @copydoc IEditorWorkspaceCommandHost::Detach */
         [[nodiscard]] Result<void> Detach() override;
+
+        /** @copydoc IWorkspaceMcpControls::ReadMcpStatus */
+        [[nodiscard]] std::optional<WorkspaceMcpStatus> ReadMcpStatus(WorkspaceMcpRevision known) const override;
+        /** @copydoc IWorkspaceMcpControls::CancelMcpRequest */
+        [[nodiscard]] Result<void> CancelMcpRequest(WorkspaceMcpSessionKey session, std::uint64_t request) override;
+        /** @copydoc IWorkspaceMcpControls::RevokeMcpSession */
+        [[nodiscard]] Result<void> RevokeMcpSession(WorkspaceMcpSessionKey session) override;
 
         /** @brief Opens a session after the local operator authorizes the exact client and grants.
          * @param client Host-issued client identity. @param grants Exact approved command capabilities.
@@ -36,6 +43,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CloseSession();
 
     private:
+        /** @brief Checks that the displayed authority still owns the current session. */
+        [[nodiscard]] bool OwnsSession(WorkspaceMcpSessionKey session) const noexcept;
+
         std::shared_ptr<Security::SecureRandomSource> random_;
         EditorWorkspaceCommandAccess workspace_;
         std::unique_ptr<EditorCommandMcpSession> session_;

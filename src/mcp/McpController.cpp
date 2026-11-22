@@ -130,6 +130,7 @@ namespace Horo::Mcp {
         std::unordered_map<std::uint64_t, std::shared_ptr<Operation>> operations;
         std::deque<std::uint64_t> recent;
         std::uint64_t nextId{1};
+        std::uint64_t activeRevision{1};
         std::size_t pending{};
         std::size_t active{};
         std::size_t callbacks{};
@@ -156,6 +157,7 @@ namespace Horo::Mcp {
             }
             --active;
             operation->state = terminal;
+            ++activeRevision;
             operation->error = std::move(error);
             operation->result = std::move(result);
             operation->phase.clear();
@@ -236,6 +238,7 @@ namespace Horo::Mcp {
             queues[Index(owner)].push_back(operation);
             ++pending;
             ++active;
+            ++activeRevision;
             AuditOperation("operation.queued", *operation);
             StopIfRequested(operation);
             return Result<nlohmann::json>::Success(View(*operation));
@@ -271,6 +274,28 @@ namespace Horo::Mcp {
     }
 
     McpController::McpController(ConstructionKey, std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    /** @copydoc McpController::ReadActiveRequests */
+    Result<std::optional<McpActiveRequestSnapshot>> McpController::ReadActiveRequests(const McpRequestContext &context,
+                                                                                      const std::uint64_t knownRevision) const {
+        using Outcome = Result<std::optional<McpActiveRequestSnapshot>>;
+        if (!context.session.IsValid() || context.authorization != state_->authorization)
+            return Outcome::Failure(MakeError(McpErrors::AuthorizationDenied));
+        std::lock_guard lock{state_->mutex};
+        if (const auto authorized = state_->authorization->Validate(context); authorized.HasError())
+            return Outcome::Failure(authorized.ErrorValue());
+        if (state_->stopping)
+            return Outcome::Failure(MakeError(McpErrors::ShuttingDown));
+        if (knownRevision == state_->activeRevision)
+            return Outcome::Success(std::nullopt);
+        McpActiveRequestSnapshot snapshot{.revision = state_->activeRevision};
+        for (const auto &[id, operation] : state_->operations) {
+            if (operation->session == context.session && operation->context.authority == context.authority && !Terminal(operation->state))
+                snapshot.requests.push_back({id, operation->tool.value, operation->state == OperationState::Running});
+        }
+        std::ranges::sort(snapshot.requests, {}, &McpActiveRequest::id);
+        return Outcome::Success(std::move(snapshot));
+    }
 
     McpController::~McpController() noexcept {
         try {
@@ -455,6 +480,7 @@ namespace Horo::Mcp {
             queue.pop_front();
             --state->pending;
             operation->state = OperationState::Running;
+            ++state->activeRevision;
             AuditOperation("operation.started", *operation);
             ++state->callbacks;
         }

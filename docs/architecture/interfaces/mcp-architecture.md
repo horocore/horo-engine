@@ -487,6 +487,10 @@ The editor's bottom-dock MCP tab displays the most recent 256 matching typed
 records retained by the live process log. Its search, approval and error filters
 apply to both the displayed rows and the explicit CSV copy action. The export
 uses only the validated audit schema and host-generated correlations.
+Active controls query the authenticated owner directly and remain available while
+history is paused or unavailable. An operator can read the current grants,
+cancel a queued or executing MCP request, or revoke the entire session and its
+native workspace leases. Actions reject a retired session generation.
 
 ## Save Tool Boundary
 

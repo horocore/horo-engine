@@ -29,12 +29,19 @@ namespace Horo::Editor {
     /** @copydoc RegisterDefaultWorkspacePanels(WorkspacePanelRegistry&,std::span<const GlobalDockPaneFactory>) */
     void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry,
                                         const std::span<const GlobalDockPaneFactory> globalDockPaneFactories) {
+        RegisterDefaultWorkspacePanels(registry, globalDockPaneFactories, nullptr);
+    }
+
+    /** @copydoc RegisterDefaultWorkspacePanels(WorkspacePanelRegistry&,std::span<const GlobalDockPaneFactory>,IWorkspaceMcpControls*) */
+    void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry,
+                                        const std::span<const GlobalDockPaneFactory> globalDockPaneFactories,
+                                        IWorkspaceMcpControls *mcpControls) {
         registry.RegisterPanel(std::make_shared<HierarchyPanel>());
         registry.RegisterPanel(std::make_shared<InspectorPanel>());
         registry.RegisterPanel(std::make_shared<InputMappingPanel>());
         registry.RegisterPanel(std::make_shared<AccessibilityContrastPanel>());
         registry.RegisterPanel(std::make_shared<FoliagePaletteTab>());
-        auto globalDock = std::make_shared<GlobalDockPanel>();
+        auto globalDock = std::make_shared<GlobalDockPanel>(GlobalDockTab::Assets, mcpControls);
         static_cast<void>(globalDock->RegisterPane(std::make_unique<PlatformDiagnosticsPane>()));
         for (const GlobalDockPaneFactory &factory : globalDockPaneFactories) {
             if (factory)
