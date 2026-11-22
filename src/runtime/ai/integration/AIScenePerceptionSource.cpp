@@ -203,10 +203,9 @@ namespace Horo::AI {
         };
 
         [[nodiscard]] Result<PreparedProjection> PrepareProjectionBatch(Runtime::RuntimeSceneView scene,
-                                                                         const PerceptionSpatialSnapshot &filtering,
-                                                                         const Detail::AgentRuntimeState &agent,
-                                                                         const AiRuntimeCapability &capability,
-                                                                         const std::uint64_t tick) {
+                                                                        const PerceptionSpatialSnapshot &filtering,
+                                                                        const Detail::AgentRuntimeState &agent,
+                                                                        const AiRuntimeCapability &capability, const std::uint64_t tick) {
             using Output = Result<PreparedProjection>;
             auto &sensing = *agent.sensing;
             const auto remembered = sensing.memory.Snapshot(tick, {&scene, ViewSourceAlive});
