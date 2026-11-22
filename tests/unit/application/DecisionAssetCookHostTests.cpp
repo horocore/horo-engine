@@ -1178,17 +1178,32 @@ namespace {
         REQUIRE(admitted.HasValue());
         REQUIRE(admitted.Value().plan);
 
+        const auto movedLayout =
+            std::format(R"({{"kind":"horo.decision.graph.layout","asset":"{}","version":1,"graph":2,"nodes":[[1,321.0,765.0]]}})",
+                        fixture.child.ToString());
+        Files::WriteFile(editorMetadata, {reinterpret_cast<const std::uint8_t *>(movedLayout.data()), movedLayout.size()});
+        fixture.Capture();
+        const auto recooked = fixture.Cook();
+        REQUIRE(recooked.HasValue());
+        CHECK(recooked.Value().cacheHits == base.assets.size());
+        CHECK(recooked.Value().cookedAssets == 0);
+        const auto layoutOnly = fixture.Current();
+        CHECK(layoutOnly.manifestDigest == accepted.manifestDigest);
+        const auto repacked = BuildAssetArchive(files, chunks.Value(), layoutOnly);
+        REQUIRE(repacked.HasValue());
+        CHECK(repacked.Value() == packed.Value());
+
         fixture.WriteGraph("assets/root.horo_sm", CallingMachine(1, 999, DecisionPlanKind::BehaviorTree));
         fixture.Capture();
         REQUIRE(fixture.Cook().HasError());
         CHECK(fixture.request.assets.pinnedInputs->VerifyUnchanged().HasValue());
         CHECK(fixture.Current().manifestDigest == accepted.manifestDigest);
-        CHECK(fixture.Current().generationRoot == accepted.generationRoot);
+        CHECK(fixture.Current().generationRoot == layoutOnly.generationRoot);
         CHECK(player.Value().Load(fixture.root, {}).Value() == runtime.Value());
         std::ifstream editorFile(editorMetadata, std::ios::binary);
         REQUIRE(editorFile.good());
         const std::string retained{std::istreambuf_iterator<char>{editorFile}, std::istreambuf_iterator<char>{}};
-        CHECK(retained == layout);
+        CHECK(retained == movedLayout);
         auto instance = fixture.ai.Instance(admitted.Value().plan);
         CHECK(fixture.ai.Step(*instance, 1) == AiTaskState::Running);
         CHECK(fixture.ai.Step(*instance, 2) == AiTaskState::Succeeded);

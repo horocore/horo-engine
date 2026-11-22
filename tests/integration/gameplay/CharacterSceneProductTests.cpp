@@ -1496,15 +1496,24 @@ namespace Horo::Application::CharacterSceneProductTest {
                           std::to_string(gameplay.descriptorRevision), "deny", "--ai-decision", "49", fixture.project.sceneId.ToString()});
         auto single = arguments;
         single.insert(single.end(), {"--ai-replay", "50", "1"});
+        const auto replayDirectory = fixture.project.project.dir.path / "replay-evidence";
+        const auto replayPath = Utf8Path(replayDirectory);
+        single.insert(single.end(), {"--ai-replay-output", replayPath});
+        REQUIRE_FALSE(std::filesystem::exists(replayDirectory));
         if constexpr (HORO_TEST_NETWORK_PRODUCT_PACKAGED) {
             constexpr auto denial = "AI replay capture is unavailable in the packaged network product";
             fixture.project.WriteProjectMetadata(R"({"schemaVersion":1,"development":{"liveMutation":true,"replayCapture":true}})");
+            const auto optedIn = Internal::PrepareHeadlessProjectSceneResources(options);
+            REQUIRE(optedIn.HasValue());
+            REQUIRE(optedIn.Value()->developmentReplayAllowed);
             CHECK(RunCli(std::move(single), denial).exitCode == 3);
-            arguments.insert(arguments.end(), {"--ai-replay-window", "50", "1", "2"});
+            CHECK_FALSE(std::filesystem::exists(replayDirectory));
+            arguments.insert(arguments.end(), {"--ai-replay-window", "50", "1", "2", "--ai-replay-output", replayPath});
             CHECK(RunCli(std::move(arguments), denial).exitCode == 3);
         } else {
             CHECK(RunCli(std::move(single), "Project AI policy does not grant development replay capture").exitCode == 3);
         }
+        CHECK_FALSE(std::filesystem::exists(replayDirectory));
     }
 
     TEST_CASE("Terminal Scene options reject malformed incomplete and escaping input", "[character][scene][cli][product]") {
