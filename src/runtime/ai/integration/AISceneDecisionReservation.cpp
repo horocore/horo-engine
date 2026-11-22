@@ -14,7 +14,7 @@ namespace Horo::AI {
         class DecisionReplacementGuard final {
         public:
             explicit DecisionReplacementGuard(bool &replacing) noexcept : replacing_(replacing) {
-                replacing_ = true;
+                replacing = true;
             }
 
             ~DecisionReplacementGuard() {

@@ -732,7 +732,7 @@ namespace Horo::AI {
 
             std::optional<Result<void>> nestedReplacement;
             next.probe.onCreate = [&nestedReplacement, &runtime, agent, &previous, &replacement] {
-                if (!nestedReplacement) {
+                if (!nestedReplacement.has_value()) {
                     nestedReplacement = Result<void>::Success();
                     nestedReplacement = runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement);
                 }
@@ -742,7 +742,7 @@ namespace Horo::AI {
                 evaluationDuringAbortRejected = scheduler->EvaluateAtDecision(3).HasError();
             };
             REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement).HasValue());
-            REQUIRE(nestedReplacement);
+            REQUIRE(nestedReplacement.has_value());
             TestSupport::ExpectError(*nestedReplacement, AIErrors::SchedulerPhaseInvalid);
             CHECK(next.probe.factories == 1);
             CHECK(evaluationDuringAbortRejected);
