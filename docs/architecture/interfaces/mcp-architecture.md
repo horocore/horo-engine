@@ -487,6 +487,11 @@ from the committed viewport mesh. A hit carries its distance, world position,
 geometric normal in triangle winding order, and slope relative to world up.
 A valid miss omits the sample. Missing mesh data and requests exceeding the
 65,536-triangle page budget produce explicit errors.
+`inspect.collisions` pages through the authored colliders contributed by one
+visible object. Each row identifies the visible body and collider slots and
+reports the body-local pose, scale, flags, and analytic shape dimensions.
+Asset-backed shapes expose their kind. A reference to an unavailable body
+fails explicitly. Continuations use the same Scene fence as the other tools.
 
 ## MCP History Retention And Redaction
 

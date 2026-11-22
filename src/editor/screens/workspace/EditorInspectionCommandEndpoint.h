@@ -8,10 +8,12 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -174,6 +176,53 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Published numeric shape descriptors, with asset-backed geometry identified by kind only. */
+    struct InspectedColliderBox {
+        std::array<float, 3> halfExtentsMeters;
+    };
+
+    struct InspectedColliderSphere {
+        float radiusMeters;
+    };
+
+    struct InspectedColliderCapsule {
+        float radiusMeters;
+        float cylindricalHalfHeightMeters;
+    };
+
+    struct InspectedColliderPlane {
+        std::array<float, 3> normal;
+        float signedDistanceMeters;
+    };
+
+    struct InspectedColliderAsset {};
+
+    using InspectedColliderShape = std::variant<InspectedColliderBox, InspectedColliderSphere, InspectedColliderCapsule,
+                                                InspectedColliderPlane, InspectedColliderAsset>;
+
+    /** @brief An authored collider contributor and its exact body-local shape placement. */
+    struct InspectedCollider {
+        std::uint64_t object{};
+        std::uint64_t slot{};
+        std::uint64_t bodyObject{};
+        std::uint64_t bodySlot{};
+        std::array<float, 3> translationMeters{};
+        std::array<float, 4> rotationXYZW{};
+        std::array<float, 3> scale{};
+        InspectedColliderShape shape;
+        bool enabled{};
+        bool sensor{};
+    };
+
+    /** @brief Bounded collider rows, in authored order for one previously resolved object. */
+    struct CollisionInspectionPage {
+        static constexpr std::size_t MaximumColliders = 16;
+        static constexpr std::size_t MaximumOffset = std::numeric_limits<std::uint32_t>::max();
+        InspectionSceneRevision scene;
+        std::vector<InspectedCollider> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -186,5 +235,6 @@ namespace Horo::Editor {
         std::function<Result<DistanceInspectionPage>(const ObjectInspectionRequest &)> readDistances;
         std::function<Result<GridInspectionPage>(const ObjectInspectionRequest &)> readGridOffsets;
         std::function<Result<SurfaceInspectionPage>(const ObjectInspectionRequest &)> readSurfaces;
+        std::function<Result<CollisionInspectionPage>(const ObjectInspectionRequest &)> readCollisions;
     };
 }  // namespace Horo::Editor

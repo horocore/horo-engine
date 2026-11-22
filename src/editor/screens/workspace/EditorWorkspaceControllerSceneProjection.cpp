@@ -46,6 +46,60 @@ namespace Horo::Editor {
                                                         .code = ErrorCode{"surface_budget_exceeded"},
                                                         .defaultSeverity = ErrorSeverity::Warning,
                                                         .summary = "The requested surface page exceeds its triangle budget."};
+        const ErrorCodeDescriptor ColliderBodyUnavailable{.domain = ErrorDomainId{"editor.inspection"},
+                                                          .code = ErrorCode{"collider_body_unavailable"},
+                                                          .defaultSeverity = ErrorSeverity::Warning,
+                                                          .summary = "A collider's exact authored body is unavailable."};
+
+        /** @brief Converts the existing typed Physics geometry into the private wire projection. */
+        struct ProjectColliderShape {
+            InspectedColliderShape operator()(const Runtime::PhysicsBoxCollider &shape) const {
+                const auto &size = shape.halfExtentsMeters;
+                return InspectedColliderBox{{size.x, size.y, size.z}};
+            }
+
+            InspectedColliderShape operator()(const Runtime::PhysicsSphereCollider &shape) const {
+                return InspectedColliderSphere{shape.radiusMeters};
+            }
+
+            InspectedColliderShape operator()(const Runtime::PhysicsCapsuleCollider &shape) const {
+                return InspectedColliderCapsule{shape.radiusMeters, shape.cylindricalHalfHeightMeters};
+            }
+
+            InspectedColliderShape operator()(const Runtime::PhysicsStaticPlaneCollider &shape) const {
+                const auto &normal = shape.normal;
+                return InspectedColliderPlane{{normal.x, normal.y, normal.z}, shape.signedDistanceMeters};
+            }
+
+            InspectedColliderShape operator()(const Runtime::PhysicsShapeAssetReference &) const {
+                return InspectedColliderAsset{};
+            }
+
+            InspectedColliderShape operator()(const Runtime::PhysicsAnalyticCollider &shape) const {
+                return std::visit(*this, shape);
+            }
+        };
+
+        /** @brief Copies an authored collider once its exact visible body and slot have been validated. */
+        Result<InspectedCollider> ProjectCollider(const SceneObjectId object, const Runtime::ColliderComponent &collider,
+                                                  const std::span<const SceneObject> objects) {
+            using Output = Result<InspectedCollider>;
+            const auto body = std::ranges::find(objects, SceneObjectId{collider.body.object.value}, &SceneObject::id);
+            if (body == objects.end() || !body->effectivelyVisible || !body->components.rigidBody ||
+                body->components.rigidBody->body != collider.body.body)
+                return Output::Failure(MakeError(ColliderBodyUnavailable));
+            const auto &pose = collider.localPose;
+            return Output::Success({.object = object.value,
+                                    .slot = collider.collider.value,
+                                    .bodyObject = body->id.value,
+                                    .bodySlot = collider.body.body.value,
+                                    .translationMeters = {pose.translation.x, pose.translation.y, pose.translation.z},
+                                    .rotationXYZW = {pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w},
+                                    .scale = {collider.scale.x, collider.scale.y, collider.scale.z},
+                                    .shape = std::visit(ProjectColliderShape{}, collider.source),
+                                    .enabled = collider.enabled,
+                                    .sensor = collider.sensor});
+        }
 
         /** @brief Normalizes a finite bounded world segment once for the entire page. */
         std::optional<InspectionSurfaceRay> NormalizeSurfaceRay(const std::optional<InspectionSurfaceRay> &ray) {
@@ -192,6 +246,12 @@ namespace Horo::Editor {
             const auto maximum = ObjectInspectionRequest::MaximumObjects;
             return count <= maximum && request.offset < count && request.limit > 0 && request.limit <= maximum &&
                    (request.offset == 0 || request.expected.has_value());
+        }
+
+        /** @brief Admits only one exact source object and a bounded collider window. */
+        bool ValidCollisionPage(const ObjectInspectionRequest &request) {
+            return request.objects.size() == 1 && request.limit > 0 && request.limit <= CollisionInspectionPage::MaximumColliders &&
+                   request.offset <= CollisionInspectionPage::MaximumOffset && (request.offset == 0 || request.expected.has_value());
         }
 
         using InspectionObjects = std::array<const SceneObject *, ObjectInspectionRequest::MaximumObjects>;
@@ -414,6 +474,8 @@ namespace Horo::Editor {
             return InspectGridOffsets(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectSurfaces(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectCollisions(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -536,6 +598,37 @@ namespace Horo::Editor {
                 return Output::Failure(pose.ErrorValue());
             return SampleSurface(m_viewportScene, object.id, pose.Value(), *ray, remainingTriangles);
         });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectCollisions */
+    Result<CollisionInspectionPage> EditorWorkspaceController::InspectCollisions(const ObjectInspectionRequest &request) const {
+        using Output = Result<CollisionInspectionPage>;
+        const auto scene = InspectSceneRevision();
+        if (scene.HasError())
+            return Output::Failure(scene.ErrorValue());
+        if (request.expected && *request.expected != scene.Value())
+            return Output::Failure(MakeError(InspectionStale));
+        if (!ValidCollisionPage(request))
+            return Output::Failure(MakeError(InspectionInvalidPage));
+        const auto resolved = ResolveInspectionObjects(m_viewModel.objects, request.objects);
+        if (resolved.HasError())
+            return Output::Failure(resolved.ErrorValue());
+        const auto &object = *resolved.Value().front();
+        const auto &colliders = object.components.colliders;
+        if (request.offset != 0 && request.offset >= colliders.size())
+            return Output::Failure(MakeError(InspectionInvalidPage));
+        CollisionInspectionPage page{.scene = scene.Value()};
+        const auto count = std::min(request.limit, colliders.size() - request.offset);
+        page.records.reserve(count);
+        for (const auto &collider : std::span{colliders}.subspan(request.offset, count)) {
+            auto projected = ProjectCollider(object.id, collider, m_viewModel.objects);
+            if (projected.HasError())
+                return Output::Failure(projected.ErrorValue());
+            page.records.push_back(std::move(projected).Value());
+        }
+        if (request.offset + count < colliders.size())
+            page.nextOffset = request.offset + count;
+        return Output::Success(std::move(page));
     }
 
     /** @copydoc EditorWorkspaceController::HasCurrentInspectionGeometry */

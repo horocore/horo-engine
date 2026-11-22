@@ -37,6 +37,16 @@ namespace Horo::Editor {
                     {"additionalProperties", false}};
         }
 
+        /** @brief Pages the collider contributors of one exact object. */
+        Json CollisionInputSchema() {
+            auto result = InputSchema();
+            auto &fields = result.at("properties");
+            fields.at("objects")["maxItems"] = 1;
+            fields.at("offset")["maximum"] = CollisionInspectionPage::MaximumOffset;
+            fields.at("limit")["maximum"] = CollisionInspectionPage::MaximumColliders;
+            return result;
+        }
+
         /** @brief Requires a separate visible reference for paginated target measurements. */
         Json DistanceInputSchema() {
             auto result = InputSchema();
@@ -77,12 +87,12 @@ namespace Horo::Editor {
         }
 
         /** @brief Places a typed record in the shared revision-fenced page envelope. */
-        Json PageSchema(const Json &row) {
+        Json PageSchema(const Json &row, const std::size_t maxItems = MaximumObjects, const std::size_t maxOffset = MaximumObjects - 1) {
             return {{"type", "object"},
                     {"properties",
                      {{"scene", SceneSchema()},
-                      {"records", {{"type", "array"}, {"maxItems", MaximumObjects}, {"items", row}}},
-                      {"nextOffset", {{"type", "integer"}, {"minimum", 1}, {"maximum", MaximumObjects - 1}}}}},
+                      {"records", {{"type", "array"}, {"maxItems", maxItems}, {"items", row}}},
+                      {"nextOffset", {{"type", "integer"}, {"minimum", 1}, {"maximum", maxOffset}}}}},
                     {"required", {"scene", "records"}},
                     {"additionalProperties", false}};
         }
@@ -190,6 +200,40 @@ namespace Horo::Editor {
                                {"additionalProperties", false}});
         }
 
+        /** @brief Describes the closed set of authored collider fields. */
+        Json CollisionSchema() {
+            const Json id{{"type", "integer"}, {"minimum", 1}};
+            const Json flag{{"type", "boolean"}};
+            const Json dimension{{"type", "number"}, {"minimum", 0}};
+            const Json shape{{"type", "object"},
+                             {"properties",
+                              {{"kind", {{"type", "string"}, {"enum", {"box", "sphere", "capsule", "plane", "asset"}}}},
+                               {"halfExtentsMeters", VectorSchema(3)},
+                               {"radiusMeters", dimension},
+                               {"cylindricalHalfHeightMeters", dimension},
+                               {"normal", VectorSchema(3)},
+                               {"signedDistanceMeters", {{"type", "number"}}}}},
+                             {"required", {"kind"}},
+                             {"additionalProperties", false}};
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", id},
+                                 {"slot", id},
+                                 {"bodyObject", id},
+                                 {"bodySlot", id},
+                                 {"translationMeters", VectorSchema(3)},
+                                 {"rotationXYZW", VectorSchema(4)},
+                                 {"scale", VectorSchema(3)},
+                                 {"shape", shape},
+                                 {"enabled", flag},
+                                 {"sensor", flag}}},
+                               {"required",
+                                {"object", "slot", "bodyObject", "bodySlot", "translationMeters", "rotationXYZW", "scale", "shape",
+                                 "enabled", "sensor"}},
+                               {"additionalProperties", false}},
+                              CollisionInspectionPage::MaximumColliders, CollisionInspectionPage::MaximumOffset);
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -268,6 +312,45 @@ namespace Horo::Editor {
                                     {"slopeRadians", sample.slopeRadians}};
             }
             return result;
+        }
+
+        /** @brief Converts each typed shape to its closed wire representation. */
+        struct WriteColliderShape {
+            Json operator()(const InspectedColliderBox &shape) const {
+                return {{"kind", "box"}, {"halfExtentsMeters", shape.halfExtentsMeters}};
+            }
+
+            Json operator()(const InspectedColliderSphere &shape) const {
+                return {{"kind", "sphere"}, {"radiusMeters", shape.radiusMeters}};
+            }
+
+            Json operator()(const InspectedColliderCapsule &shape) const {
+                return {{"kind", "capsule"},
+                        {"radiusMeters", shape.radiusMeters},
+                        {"cylindricalHalfHeightMeters", shape.cylindricalHalfHeightMeters}};
+            }
+
+            Json operator()(const InspectedColliderPlane &shape) const {
+                return {{"kind", "plane"}, {"normal", shape.normal}, {"signedDistanceMeters", shape.signedDistanceMeters}};
+            }
+
+            Json operator()(const InspectedColliderAsset &) const {
+                return {{"kind", "asset"}};
+            }
+        };
+
+        /** @brief Emits exact authored collider identities and numeric placement. */
+        Json WriteRecord(const InspectedCollider &entry) {
+            return {{"object", entry.object},
+                    {"slot", entry.slot},
+                    {"bodyObject", entry.bodyObject},
+                    {"bodySlot", entry.bodySlot},
+                    {"translationMeters", entry.translationMeters},
+                    {"rotationXYZW", entry.rotationXYZW},
+                    {"scale", entry.scale},
+                    {"shape", std::visit(WriteColliderShape{}, entry.shape)},
+                    {"enabled", entry.enabled},
+                    {"sensor", entry.sensor}};
         }
 
         /** @brief Exports an owner-produced page with an optional continuation offset. */
@@ -372,6 +455,10 @@ namespace Horo::Editor {
                              readSurfaces>(tools, endpoint, "inspect.surfaces",
                                            "Sample the nearest committed mesh surface per visible object along a world-space ray.",
                                            SurfaceSchema, SurfaceInputSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::
+                             readCollisions>(tools, endpoint, "inspect.collisions",
+                                             "Page through authored collider shapes and body-local placement for one visible object.",
+                                             CollisionSchema, CollisionInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

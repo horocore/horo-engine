@@ -87,6 +87,7 @@ namespace Horo::Editor {
     struct DistanceInspectionPage;
     struct GridInspectionPage;
     struct SurfaceInspectionPage;
+    struct CollisionInspectionPage;
     struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
@@ -838,6 +839,9 @@ namespace Horo::Editor {
 
         /** @brief Samples committed viewport mesh surfaces with a bounded world-space segment. */
         [[nodiscard]] Result<SurfaceInspectionPage> InspectSurfaces(const ObjectInspectionRequest &request) const;
+
+        /** @brief Inspects the authored collider shapes contributed by one visible object. */
+        [[nodiscard]] Result<CollisionInspectionPage> InspectCollisions(const ObjectInspectionRequest &request) const;
         /** @brief Checks that the current extraction belongs to the committed authored Scene. */
         [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
         /** @brief Fences inspection against the authored Scene and its current editor projection. */

@@ -227,6 +227,55 @@ namespace {
         CHECK_FALSE(rows[1].contains("sample"));
     }
 
+    TEST_CASE("Collider inspection fences continuation and redacts asset-backed shapes", "[unit][editor][mcp][inspection]") {
+        const InspectionSceneRevision scene{7, 19};
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readCollisions = [scene](const ObjectInspectionRequest &request) {
+            InspectedCollider row{.object = request.objects.at(0),
+                                  .slot = 1,
+                                  .bodyObject = 9,
+                                  .bodySlot = 4,
+                                  .rotationXYZW = {0, 0, 0, 1},
+                                  .scale = {1, 1, 1},
+                                  .shape = InspectedColliderBox{{1, 2, 3}},
+                                  .enabled = true};
+            if (request.offset) {
+                CHECK(request.expected == scene);
+                CHECK(request.offset == 16);
+                row.slot = 17;
+                row.shape = InspectedColliderAsset{};
+                return Result<CollisionInspectionPage>::Success({.scene = scene, .records = {row}});
+            }
+            CollisionInspectionPage page{.scene = scene, .records = std::vector<InspectedCollider>(16, row), .nextOffset = 16};
+            page.records[1].shape = InspectedColliderSphere{2};
+            page.records[2].shape = InspectedColliderCapsule{1, 2};
+            page.records[3].shape = InspectedColliderPlane{{0, 1, 0}, -3};
+            return Result<CollisionInspectionPage>::Success(std::move(page));
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        CHECK(Execute(session, Command("multiple", "inspect.collisions", {{"objects", {42, 9}}})).at("status") == "failed");
+        CHECK(Execute(session, Command("unfenced", "inspect.collisions", {{"objects", {42}}, {"offset", 16}})).at("status") == "failed");
+        const auto first = Execute(session, Command("colliders", "inspect.collisions", {{"objects", {42}}}));
+        REQUIRE(first.at("status") == "succeeded");
+        const auto &payload = first["result"];
+        REQUIRE(payload["records"].size() == 16);
+        CHECK(payload["records"][0]["shape"]["halfExtentsMeters"] == Json::array({1, 2, 3}));
+        CHECK(payload["records"][1]["shape"]["radiusMeters"] == 2);
+        CHECK(payload["records"][2]["shape"]["cylindricalHalfHeightMeters"] == 2);
+        CHECK(payload["records"][3]["shape"]["signedDistanceMeters"] == -3);
+        const auto second = Execute(session, Command("tail", "inspect.collisions",
+                                                     {{"objects", {42}}, {"offset", payload["nextOffset"]}, {"scene", payload["scene"]}}));
+        REQUIRE(second.at("status") == "succeeded");
+        CHECK(second["result"]["records"][0]["bodyObject"] == 9);
+        CHECK((second["result"]["records"][0]["shape"] == Json{{"kind", "asset"}}));
+    }
+
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",
