@@ -94,6 +94,7 @@ namespace Horo::Editor {
     struct EditorInspectionPhysics;
     struct InspectionSceneRevision;
     struct AgentSceneObjectRename;
+    struct AgentSceneLightUpdate;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
     struct CapturedDecisionExternal;
@@ -342,12 +343,14 @@ namespace Horo::Editor {
          * @param renames Bounded list of proposed object names.
          * @param cancellation Revocable proposal lifetime.
          * @param authorized Optional live client authority for an embedded request.
+         * @param lights Bounded list of enabled-state changes for existing authored lights.
          * @return Owner-issued review identity or a zero-mutation rejection.
          */
         [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneEdits(InspectionSceneRevision revision,
                                                                    std::span<const SceneObjectTransformUpdate> updates,
                                                                    std::span<const AgentSceneObjectRename> renames,
-                                                                   CancellationToken cancellation, std::function<bool()> authorized = {});
+                                                                   CancellationToken cancellation, std::function<bool()> authorized = {},
+                                                                   std::span<const AgentSceneLightUpdate> lights = {});
 
         /** @brief Applies the displayed proposal after an explicit local approval.
          * @param review Exact owner-issued review identity.
@@ -1637,6 +1640,12 @@ namespace Horo::Editor {
         [[nodiscard]] bool CanReviewAgentSceneEdits() const;
         /** @brief Captures one exact visible object's replacement without altering authored state. */
         [[nodiscard]] Result<SceneObjectReplacement> CaptureAgentSceneReplacement(SceneObjectId id) const;
+        /** @brief Merge an additional typed field change into the captured replacement for this object. */
+        [[nodiscard]] Result<SceneObjectReplacement *> FindOrCaptureAgentSceneReplacement(
+            SceneObjectId id, std::vector<SceneObjectReplacement> &changes) const;
+        /** @brief Stage existing light changes for the same authored transaction as transforms and renames. */
+        [[nodiscard]] Result<void> StageAgentSceneLights(std::span<const AgentSceneLightUpdate> lights,
+                                                         std::vector<SceneObjectReplacement> &changes) const;
         void PreviewLightComponent(SceneObjectId object, const Runtime::LightComponent &light);
         void CancelLightComponentPreview();
         void RefreshViewportLightProjection();

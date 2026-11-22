@@ -3482,6 +3482,8 @@
     "workspace.viewport.review_with_agent": {"text": "AI ile incele"},
     "workspace.viewport.agent_review.summary": {"text": "Yapay zekâ {} nesnede değişiklik öneriyor."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (nesne {})"},
+    "workspace.viewport.agent_review.enable_light": {"text": "{} üzerindeki ışığı aç (nesne {})"},
+    "workspace.viewport.agent_review.disable_light": {"text": "{} üzerindeki ışığı kapat (nesne {})"},
     "workspace.viewport.agent_review.apply": {"text": "Sahne değişikliklerini uygula"},
     "workspace.viewport.agent_review.discard": {"text": "Önizlemeyi iptal et"},
     "workspace.viewport.agent_review.invalid": {"text": "Bu sahne önerisi artık güncel değil."},

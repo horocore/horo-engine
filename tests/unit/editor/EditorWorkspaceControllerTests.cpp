@@ -440,6 +440,59 @@ namespace {
         }
     }
 
+    TEST_CASE("Agent Scene review applies light and object edits in one undo entry", "[unit][editor][scene-review]") {
+        Runtime::RuntimeSceneService scenes;
+        CancellationSource process;
+        EditorWorkspaceDependencies dependencies;
+        dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+        EditorWorkspaceController controller{"light-review-project", scenes, {}, dependencies};
+        REQUIRE(scenes.Startup(process.Token()).HasValue());
+        const Runtime::FrameContext initial{1, {}, 0.0, 0, {}, false, process.Token()};
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, initial).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+
+        EditorWorkspaceViewCommandData create;
+        create.command = EditorWorkspaceViewCommand::CreatePrimitive;
+        create.primitivePayload = Runtime::PrimitiveId{"primitive.object.light_point"};
+        controller.ProcessCommand(create);
+        const Runtime::FrameContext next{2, {}, 0.0, 0, {}, false, process.Token()};
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, next).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+        REQUIRE(controller.ViewModel().objects.size() == 2);
+        const auto object = controller.ViewModel().objects.front();
+        const auto light = controller.ViewModel().objects.back();
+        REQUIRE(light.components.light);
+        REQUIRE(light.components.light->enabled);
+
+        const auto fence = controller.ViewModel().assetDropFence;
+        const InspectionSceneRevision revision{fence.replacementEpoch, fence.revision.value};
+        const std::array renames{AgentSceneObjectRename{object.id.value, "Reviewed box"}};
+        const std::array lights{AgentSceneLightUpdate{light.id.value, false}};
+        const std::array invalid{AgentSceneLightUpdate{object.id.value, false}};
+        CHECK(controller.PreviewAgentSceneEdits(revision, {}, renames, {}, {}, invalid).HasError());
+        CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        CHECK(controller.ViewModel().objects.front().name == object.name);
+
+        const auto preview = controller.PreviewAgentSceneEdits(revision, {}, renames, {}, {}, lights);
+        REQUIRE(preview.HasValue());
+        REQUIRE(controller.ViewModel().agentSceneReview);
+        const auto &review = *controller.ViewModel().agentSceneReview;
+        CHECK(review.objectCount == 2);
+        REQUIRE(review.lights.size() == 1);
+        CHECK(review.lights.front().object == light.id.value);
+        CHECK_FALSE(review.lights.front().enabled);
+        CHECK(controller.ViewModel().objects.front().name == object.name);
+        CHECK(controller.ViewModel().objects.back().components.light->enabled);
+        CHECK(controller.ViewModel().documentRevision == fence.revision);
+
+        REQUIRE(controller.ApproveAgentSceneReview(preview.Value()).HasValue());
+        CHECK(controller.ViewModel().objects.front().name == renames.front().name);
+        CHECK_FALSE(controller.ViewModel().objects.back().components.light->enabled);
+        controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
+        CHECK(controller.ViewModel().objects.front().name == object.name);
+        CHECK(controller.ViewModel().objects.back().components.light->enabled);
+    }
+
     TEST_CASE("Viewport Navigation Updates Only The Editor Camera Authority", "[unit][editor]") {
         TestWorkspaceController controller;
         const EditorViewportCamera before = controller.ViewportScene().camera;

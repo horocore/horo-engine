@@ -1183,9 +1183,17 @@ namespace Horo::Editor {
                 std::string after;
             };
 
+            /** @brief Effective enabled-state change for an existing light on an authored object. */
+            struct Light final {
+                std::uint64_t object{};
+                std::string name;
+                bool enabled{};
+            };
+
             std::uint64_t id{};
             std::size_t objectCount{};
             std::vector<Rename> renames;
+            std::vector<Light> lights;
         };
 
         std::optional<AgentSceneReviewView> agentSceneReview;

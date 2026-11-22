@@ -44,16 +44,48 @@ namespace Horo::Editor {
         return Output::Success({.object = id, .priorContent = fingerprint.Value(), .desired = *object});
     }
 
+    /** @copydoc EditorWorkspaceController::FindOrCaptureAgentSceneReplacement */
+    Result<SceneObjectReplacement *> EditorWorkspaceController::FindOrCaptureAgentSceneReplacement(
+        const SceneObjectId id, std::vector<SceneObjectReplacement> &changes) const {
+        using Output = Result<SceneObjectReplacement *>;
+        const auto found = std::ranges::find(changes, id, &SceneObjectReplacement::object);
+        if (found != changes.end())
+            return Output::Success(std::to_address(found));
+        auto captured = CaptureAgentSceneReplacement(id);
+        if (captured.HasError())
+            return Output::Failure(captured.ErrorValue());
+        return Output::Success(&changes.emplace_back(std::move(captured).Value()));
+    }
+
+    /** @copydoc EditorWorkspaceController::StageAgentSceneLights */
+    Result<void> EditorWorkspaceController::StageAgentSceneLights(const std::span<const AgentSceneLightUpdate> lights,
+                                                                  std::vector<SceneObjectReplacement> &changes) const {
+        for (const auto &update : lights) {
+            if (std::ranges::count(lights, update.object, &AgentSceneLightUpdate::object) != 1)
+                return Result<void>::Failure(RejectReview(SceneTransactionFailure::Invalid));
+            const auto change = FindOrCaptureAgentSceneReplacement({update.object}, changes);
+            if (change.HasError())
+                return Result<void>::Failure(change.ErrorValue());
+            auto &light = change.Value()->desired->components.light;
+            if (!light)
+                return Result<void>::Failure(RejectReview(SceneTransactionFailure::Invalid));
+            light->enabled = update.enabled;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorWorkspaceController::PreviewAgentSceneEdits */
     Result<std::uint64_t> EditorWorkspaceController::PreviewAgentSceneEdits(const InspectionSceneRevision revision,
                                                                             std::span<const SceneObjectTransformUpdate> updates,
                                                                             std::span<const AgentSceneObjectRename> renames,
                                                                             CancellationToken cancellation,
-                                                                            std::function<bool()> authorized) {
+                                                                            std::function<bool()> authorized,
+                                                                            std::span<const AgentSceneLightUpdate> lights) {
         using Output = Result<std::uint64_t>;
         ReconcileAgentSceneReview();
         if (updates.size() > MaximumProposalObjects || renames.size() > MaximumProposalObjects - updates.size() ||
-            (updates.empty() && renames.empty()))
+            lights.size() > MaximumProposalObjects - updates.size() - renames.size() ||
+            (updates.empty() && renames.empty() && lights.empty()))
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
         if (authorized && !authorized())
             return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
@@ -74,7 +106,7 @@ namespace Horo::Editor {
         if (owner.HasError())
             return Output::Failure(owner.ErrorValue());
         std::vector<SceneObjectReplacement> changes;
-        changes.reserve(updates.size() + renames.size());
+        changes.reserve(updates.size() + renames.size() + lights.size());
         for (const auto &update : updates) {
             auto replacement = CaptureAgentSceneReplacement(update.object);
             if (replacement.HasError())
@@ -91,19 +123,13 @@ namespace Horo::Editor {
             }) ||
                 std::ranges::count(renames, rename.object, &AgentSceneObjectRename::object) != 1)
                 return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-            const SceneObjectId id{rename.object};
-            const auto changed = std::ranges::find(changes, id, &SceneObjectReplacement::object);
-            if (changed != changes.end()) {
-                changed->desired->name = rename.name;
-                continue;
-            }
-            auto replacement = CaptureAgentSceneReplacement(id);
+            const auto replacement = FindOrCaptureAgentSceneReplacement({rename.object}, changes);
             if (replacement.HasError())
                 return Output::Failure(replacement.ErrorValue());
-            auto change = std::move(replacement).Value();
-            change.desired->name = rename.name;
-            changes.push_back(std::move(change));
+            replacement.Value()->desired->name = rename.name;
         }
+        if (const auto staged = StageAgentSceneLights(lights, changes); staged.HasError())
+            return Output::Failure(staged.ErrorValue());
         auto preview = owner.Value().PreviewReplacements(context, std::move(changes), {.maximumChanges = MaximumProposalObjects});
         if (preview.HasError())
             return Output::Failure(preview.ErrorValue());
@@ -118,12 +144,16 @@ namespace Horo::Editor {
                 effective.push_back({change.object, change.desired->localTransform});
             if (prior.name != change.desired->name)
                 view.renames.push_back({prior.id.value, prior.name, change.desired->name});
+            if (prior.components.light != change.desired->components.light)
+                view.lights.push_back({prior.id.value, prior.name, change.desired->components.light->enabled});
         }
         if (!effective.empty())
             PreviewObjectTransforms(effective);
         if (m_viewport.Current().transformPreviews.size() != effective.size())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        const auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
+        auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
+        if (!view.lights.empty())
+            kind = DocumentChangeKind::ComponentChanged;
         view.id = ++m_agentSceneReviewSerial;
         m_agentSceneReview.emplace(view.id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
                                    std::move(authorized), kind);

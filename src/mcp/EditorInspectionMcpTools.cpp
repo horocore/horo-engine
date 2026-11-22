@@ -121,6 +121,14 @@ namespace Horo::Editor {
                                                    {"minItems", 1},
                                                    {"maxItems", MaximumObjects},
                                                    {"items", std::move(rename)}};
+                Json light{{"type", "object"},
+                           {"properties", {{"object", {{"type", "integer"}, {"minimum", 1}}}, {"enabled", {{"type", "boolean"}}}}},
+                           {"required", {"object", "enabled"}},
+                           {"additionalProperties", false}};
+                schema["properties"]["lights"] = {{"type", "array"},
+                                                  {"minItems", 1},
+                                                  {"maxItems", MaximumObjects},
+                                                  {"items", std::move(light)}};
             }
             return schema;
         }
@@ -560,6 +568,17 @@ namespace Horo::Editor {
             std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint_;
         };
 
+        /** @brief Decodes one schema-validated optional list of typed Scene edits. */
+        template <class T, class Read> std::vector<T> ReadProposedEdits(const Json &arguments, const char *field, Read read) {
+            std::vector<T> values;
+            if (const auto rows = arguments.find(field); rows != arguments.end()) {
+                values.reserve(rows->size());
+                for (const auto &row : *rows)
+                    values.push_back(read(row));
+            }
+            return values;
+        }
+
         /** @brief Stages the exact proposal on the editor lane and retains a revocable, weak principal lease. */
         class SceneProposalTool final : public Mcp::IMcpToolAdapter {
         public:
@@ -576,27 +595,25 @@ namespace Horo::Editor {
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
                 const auto &scene = arguments.at("scene");
                 const InspectionSceneRevision revision{scene.at("epoch").get<std::uint64_t>(), scene.at("revision").get<std::uint64_t>()};
-                std::vector<AgentViewportTransform> transforms;
-                if (const auto rows = arguments.find("transforms"); rows != arguments.end()) {
-                    transforms.reserve(rows->size());
-                    for (const auto &row : *rows)
-                        transforms.push_back({row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
-                                              row.at("rotationXYZW").get<std::array<float, 4>>(),
-                                              row.at("scale").get<std::array<float, 3>>()});
-                }
-                std::vector<AgentSceneObjectRename> renames;
-                if (const auto rows = arguments.find("renames"); rows != arguments.end()) {
-                    renames.reserve(rows->size());
-                    for (const auto &row : *rows)
-                        renames.push_back({row.at("object").get<std::uint64_t>(), row.at("name").get<std::string>()});
-                }
-                if (transforms.size() + renames.size() == 0 || transforms.size() + renames.size() > MaximumObjects)
+                const auto transforms = ReadProposedEdits<AgentViewportTransform>(arguments, "transforms", [](const Json &row) {
+                    return AgentViewportTransform{row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
+                                                  row.at("rotationXYZW").get<std::array<float, 4>>(),
+                                                  row.at("scale").get<std::array<float, 3>>()};
+                });
+                const auto renames = ReadProposedEdits<AgentSceneObjectRename>(arguments, "renames", [](const Json &row) {
+                    return AgentSceneObjectRename{row.at("object").get<std::uint64_t>(), row.at("name").get<std::string>()};
+                });
+                const auto lights = ReadProposedEdits<AgentSceneLightUpdate>(arguments, "lights", [](const Json &row) {
+                    return AgentSceneLightUpdate{row.at("object").get<std::uint64_t>(), row.at("enabled").get<bool>()};
+                });
+                const auto count = transforms.size() + renames.size() + lights.size();
+                if (count == 0 || count > MaximumObjects)
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
                 auto authorized = [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
                     const auto active = principal.lock();
                     return active && !active->IsStopRequested();
                 };
-                const auto result = endpoint->proposeEdits(revision, transforms, renames, std::move(authorized));
+                const auto result = endpoint->proposeEdits(revision, transforms, renames, lights, std::move(authorized));
                 if (result.HasError())
                     return JsonResult::Failure(result.ErrorValue());
                 return JsonResult::Success({{"reviewId", std::to_string(result.Value())}});
@@ -612,8 +629,9 @@ namespace Horo::Editor {
             const bool broader = kind == SceneProposalKind::Edits;
             return {.descriptor =
                         {.id = {broader ? "scene.propose_edits" : "scene.propose_transforms"},
-                         .description = broader ? "Preview a batch of authored names and local transforms for local operator review."
-                                                : "Preview authored local transforms in the viewport for local operator review.",
+                         .description = broader
+                                            ? "Preview authored names, local transforms, and light enablement for local operator review."
+                                            : "Preview authored local transforms in the viewport for local operator review.",
                          .inputSchema = ProposalInputSchema(kind),
                          .outputSchema = {{"type", "object"},
                                           {"properties", {{"reviewId", {{"type", "string"}, {"minLength", 1}, {"maxLength", 20}}}}},

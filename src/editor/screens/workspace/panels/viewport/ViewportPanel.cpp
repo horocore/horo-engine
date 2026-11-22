@@ -18,17 +18,23 @@
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Keeps name details scrollable so a full review leaves room for the live viewport. */
-        void DrawSceneReviewRenames(const EditorWorkspaceViewModel::AgentSceneReviewView &review,
+        /** @brief Keeps review details scrollable so a full review leaves room for the live viewport. */
+        void DrawSceneReviewDetails(const EditorWorkspaceViewModel::AgentSceneReviewView &review,
                                     const ILocalizationService &localization) {
-            const float lines = static_cast<float>(std::min<std::size_t>(review.renames.size(), 3));
+            const float lines = static_cast<float>(std::min<std::size_t>(review.renames.size() + review.lights.size(), 3));
             const float height = std::min(lines * ImGui::GetTextLineHeightWithSpacing(), ImGui::GetContentRegionAvail().y * 0.25F);
             if (height <= 0.0F)
                 return;
-            if (ImGui::BeginChild("##SceneReviewRenames", {0, height})) {
+            if (ImGui::BeginChild("##SceneReviewDetails", {0, height})) {
                 const auto pattern = localization.Get("editor", "workspace.viewport.agent_review.rename");
                 for (const auto &rename : review.renames) {
                     const auto row = std::vformat(pattern, std::make_format_args(rename.before, rename.after, rename.object));
+                    ImGui::TextWrapped("%s", row.c_str());
+                }
+                for (const auto &light : review.lights) {
+                    const auto lightPattern = localization.Get("editor", light.enabled ? "workspace.viewport.agent_review.enable_light"
+                                                                                       : "workspace.viewport.agent_review.disable_light");
+                    const auto row = std::vformat(lightPattern, std::make_format_args(light.name, light.object));
                     ImGui::TextWrapped("%s", row.c_str());
                 }
             }
@@ -41,7 +47,7 @@ namespace Horo::Editor {
             const auto summary = std::vformat(localization.Get("editor", "workspace.viewport.agent_review.summary"),
                                               std::make_format_args(review.objectCount));
             ImGui::TextWrapped("%s", summary.c_str());
-            DrawSceneReviewRenames(review, localization);
+            DrawSceneReviewDetails(review, localization);
             const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
             const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");
             const bool approved =

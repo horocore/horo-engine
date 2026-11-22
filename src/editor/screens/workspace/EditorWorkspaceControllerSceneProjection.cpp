@@ -567,7 +567,8 @@ namespace Horo::Editor {
             return InspectVisualIssues(request);
         },
                                             [this](InspectionSceneRevision scene, std::span<const AgentViewportTransform> proposed,
-                                                   std::span<const AgentSceneObjectRename> renames, std::function<bool()> authorized) {
+                                                   std::span<const AgentSceneObjectRename> renames,
+                                                   std::span<const AgentSceneLightUpdate> lights, std::function<bool()> authorized) {
             std::vector<SceneObjectTransformUpdate> updates;
             updates.reserve(proposed.size());
             for (const auto &local : proposed) {
@@ -576,7 +577,7 @@ namespace Horo::Editor {
                                     {local.rotation[0], local.rotation[1], local.rotation[2], local.rotation[3]},
                                     {local.scale[0], local.scale[1], local.scale[2]}}});
             }
-            return PreviewAgentSceneEdits(scene, updates, renames, {}, std::move(authorized));
+            return PreviewAgentSceneEdits(scene, updates, renames, {}, std::move(authorized), lights);
         }});
         return m_inspectionCommandEndpoint;
     }

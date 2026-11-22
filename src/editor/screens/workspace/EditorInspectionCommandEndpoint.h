@@ -31,6 +31,12 @@ namespace Horo::Editor {
         std::string name;
     };
 
+    /** @brief One typed enabled-state replacement for an existing authored light. */
+    struct AgentSceneLightUpdate final {
+        std::uint64_t object{};
+        bool enabled{};
+    };
+
     /** @brief Explicit world-space ray segment. The owner normalizes direction before sampling. */
     struct InspectionSurfaceRay {
         std::array<double, 3> origin{};
@@ -311,7 +317,8 @@ namespace Horo::Editor {
         std::function<Result<VisualInspectionPage>(const ObjectInspectionRequest &)> readVisualIssues;
         /** @brief Stages a review while the originating principal is live. The result confers no mutation authority. */
         std::function<Result<std::uint64_t>(InspectionSceneRevision, std::span<const AgentViewportTransform>,
-                                            std::span<const AgentSceneObjectRename>, std::function<bool()>)>
+                                            std::span<const AgentSceneObjectRename>, std::span<const AgentSceneLightUpdate>,
+                                            std::function<bool()>)>
             proposeEdits;
     };
 }  // namespace Horo::Editor

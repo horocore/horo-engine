@@ -3482,6 +3482,8 @@
     "workspace.viewport.review_with_agent": {"text": "Review with AI"},
     "workspace.viewport.agent_review.summary": {"text": "AI proposes changes to {} object(s)."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (object {})"},
+    "workspace.viewport.agent_review.enable_light": {"text": "Enable light on {} (object {})"},
+    "workspace.viewport.agent_review.disable_light": {"text": "Disable light on {} (object {})"},
     "workspace.viewport.agent_review.apply": {"text": "Apply scene changes"},
     "workspace.viewport.agent_review.discard": {"text": "Discard preview"},
     "workspace.viewport.agent_review.invalid": {"text": "This scene proposal is no longer current."},
