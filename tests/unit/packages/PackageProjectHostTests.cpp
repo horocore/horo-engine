@@ -1,4 +1,6 @@
+#include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageProjectHost.h"
 
@@ -117,6 +119,7 @@ namespace {
         HostFixture() {
             const auto root = std::filesystem::canonical(project.Path());
             std::filesystem::create_directories(root / ".horo");
+            std::filesystem::create_directories(root / "Assets");
             const nlohmann::json intent{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
                                         {"dependencies",
                                          {{"com.horo.application-fixture", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}};
@@ -169,6 +172,17 @@ namespace {
             return {std::istreambuf_iterator<char>{input}, {}};
         }
 
+        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource() const {
+            auto native = Platform::CreateNativeProjectReadFiles(std::filesystem::canonical(project.Path()), "package-removal-test", 1);
+            REQUIRE(native.HasValue());
+            auto registry =
+                CreateProjectAssetRegistrySource(std::move(native).Value(), {.projectIdentity = "package-removal-test",
+                                                                             .projectGeneration = 1,
+                                                                             .deadline = std::chrono::steady_clock::time_point::max()});
+            REQUIRE(registry.HasValue());
+            return std::move(registry).Value();
+        }
+
         std::shared_ptr<PackageApplication> Acquire() {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (std::chrono::steady_clock::now() < deadline) {
@@ -195,10 +209,11 @@ namespace {
         REQUIRE(initial.HasValue());
         CHECK_FALSE(std::filesystem::exists(journal.parent_path()));
         const auto oldLock = fixture.Read("packages.lock");
+        const auto assets = fixture.AssetSource();
 
         SECTION("Failed replacement restores the exact previous request and allows retry") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
-            CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasError());
+            CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets).HasError());
             REQUIRE(std::filesystem::exists(journal));
             CHECK(fixture.Read("packages.json") != oldRequest);
             REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
@@ -206,12 +221,12 @@ namespace {
             CHECK(fixture.Read("packages.lock") == oldLock);
             CHECK_FALSE(std::filesystem::exists(journal));
             files.SetLockWrite(MetadataFiles::LockWrite::Normal);
-            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasValue());
+            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets).HasValue());
         }
 
         SECTION("Committed lock with an uncertain flush keeps the new pair") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
-            const auto committed = PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files);
+            const auto committed = PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, *assets);
             REQUIRE(committed.HasValue());
             CHECK(committed.Value().recoveryDiagnostic.has_value());
             CHECK(std::filesystem::exists(journal));
@@ -230,16 +245,17 @@ namespace {
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
                                           .platform = {"linux", "x64", "horo-sdk-2"}};
         const auto before = PreparePackageProject(policy, files, {});
+        const auto assets = fixture.AssetSource();
         REQUIRE(before.HasValue());
         const auto oldLock = fixture.Read("packages.lock");
         const auto oldRequest = fixture.Read("packages.json");
         fixture.Write("packages.json", oldRequest + "\n");
-        REQUIRE(PublishPackageProjectRemoval(policy, before.Value(), fixture.graph.package, files).HasError());
+        REQUIRE(PublishPackageProjectRemoval(policy, before.Value(), fixture.graph.package, files, *assets).HasError());
         CHECK(fixture.Read("packages.json") == oldRequest + "\n");
         const auto approved = PreparePackageProject(policy, files, {});
         REQUIRE(approved.HasValue());
         files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
-        REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files).HasError());
+        REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files, *assets).HasError());
         const auto edited = fixture.Read("packages.json") + "\n";
         fixture.Write("packages.json", edited);
         const auto conflicted = PreparePackageProject(policy, files, {});
@@ -248,6 +264,51 @@ namespace {
         CHECK(fixture.Read("packages.json") == edited);
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+    }
+
+    TEST_CASE("Package removal reports every affected native asset importer before changing metadata", "[packages][application][host]") {
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto writeAsset = [&](std::string_view filename, std::string_view id, const nlohmann::json &importer) {
+            const auto path = policy.projectRoot / "Assets" / filename;
+            std::ofstream source{path};
+            source << "{}";
+            REQUIRE(source.good());
+            auto sidecar = path;
+            sidecar += ".horo";
+            std::ofstream metadata{sidecar};
+            metadata << nlohmann::json{{"schemaVersion", 1}, {"assetId", id}, {"assetType", "core.scene"}, {"importerPackageId", importer}};
+            REQUIRE(metadata.good());
+        };
+        const std::string_view package = fixture.graph.package.Value();
+        writeAsset("Z.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0f", package);
+        writeAsset("A.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e", package);
+        writeAsset("Other.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "com.horo.other");
+
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, *assets);
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+        const auto &diagnostics = blocked.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 2);
+        CHECK(diagnostics[0].path == "Assets/A.horoasset");
+        CHECK(diagnostics[1].path == "Assets/Z.horoasset");
+        CHECK(diagnostics[0].message == package);
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+
+        writeAsset("Invalid.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0c", 23);
+        const auto incomplete = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, *assets);
+        REQUIRE(incomplete.HasError());
+        CHECK(incomplete.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
     TEST_CASE("Package project root rejects stale screen boundaries and retains closed capabilities safely",

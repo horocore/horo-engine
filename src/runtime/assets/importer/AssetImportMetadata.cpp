@@ -186,6 +186,8 @@ namespace Horo::Assets {
         if (!MetadataSchemaSupported(json)) {
             return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata schema is missing or unsupported."));
         }
+        if (const auto package = json.find("importerPackageId"); package != json.end() && !package->is_string())
+            return Result<AssetImportMetadata>::Failure(MetadataError("Asset importer package identity must be a string."));
 
         const auto id = AssetId::Parse(stringValue("assetId"));
         const auto type = AssetTypeId::Parse(stringValue("assetType"));

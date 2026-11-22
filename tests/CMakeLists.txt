@@ -6461,6 +6461,7 @@ add_executable(HoroPackageApplicationTests
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PackageCliHost.cpp")
 target_link_libraries(HoroPackageApplicationTests PRIVATE
     HoroPackageProjectHost HoroEngine::PackageApplication HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
+    HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectReadFiles
     HoroEngine::EditorPackageAdapters HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 target_include_directories(HoroPackageApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")

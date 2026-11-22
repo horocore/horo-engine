@@ -304,6 +304,22 @@ namespace Horo::Application::Internal {
                 return Publication::Success({cleared.ErrorValue()});
             return Publication::Success({});
         }
+
+        /** @brief Reports each asset that would lose its current reimport provider. */
+        Result<void> CheckImporterReferences(const Assets::IAssetRegistrySource &assets,
+                                             const Packages::PackageRemovalGraphPreview &impact) {
+            const auto references = InspectPackageRemovalImporters(assets, impact);
+            if (references.HasError())
+                return Result<void>::Failure(references.ErrorValue());
+            if (references.Value().empty())
+                return Result<void>::Success();
+            Error blocked{ErrorCode{"packages.host.importer_in_use"}, ErrorDomainId{"packages.host"}};
+            for (const auto &reference : references.Value())
+                blocked.diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_in_use"}, DiagnosticSeverity::Error,
+                                                 std::string{reference.package.Value()}, SourceLocation{"packages.host"},
+                                                 reference.assetPath);
+            return Result<void>::Failure(std::move(blocked));
+        }
     }  // namespace
 
     /** @copydoc PreparePackageProject */
@@ -345,7 +361,8 @@ namespace Horo::Application::Internal {
     /** @copydoc PublishPackageProjectRemoval */
     Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                     const PreparedPackageProject &expected,
-                                                                    const Packages::HoroPackageId &package, DurableFileSystem &files) {
+                                                                    const Packages::HoroPackageId &package, DurableFileSystem &files,
+                                                                    const Assets::IAssetRegistrySource &assets) {
         using Publication = Result<PackageMetadataPublication>;
         const auto directory = MetadataPath(policy.projectRoot);
         if (directory.HasError())
@@ -370,6 +387,8 @@ namespace Horo::Application::Internal {
         const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
         if (plan.HasError())
             return Publication::Failure(plan.ErrorValue());
+        if (auto references = CheckImporterReferences(assets, plan.Value().graph); references.HasError())
+            return Publication::Failure(references.ErrorValue());
         const MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
         if (!next.Fits(policy.limits.lockfile))
             return Publication::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));

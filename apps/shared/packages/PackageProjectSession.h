@@ -6,6 +6,10 @@ namespace Horo::AI {
     class DecisionNodeGeneration;
 }
 
+namespace Horo::Assets {
+    class IAssetRegistrySource;
+}
+
 namespace Horo::Packages {
     class GameplayPackageModuleHost;
 }
@@ -55,15 +59,29 @@ namespace Horo::Application::Internal {
         std::optional<Error> recoveryDiagnostic; /**< Durability or journal cleanup needs another recovery pass. */
     };
 
+    /** @brief Project-owned asset whose recorded importer will be withdrawn. */
+    struct PackageImporterReference final {
+        Packages::HoroPackageId package;
+        std::string assetPath;
+    };
+
+    /** @brief Lists all registered assets whose importer belongs to a removed package.
+     * @param assets Fresh root-bound project asset source. @param removal Exact lock graph impact.
+     * @return Complete importer evidence or a typed incomplete-inventory failure. */
+    [[nodiscard]] Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(
+        const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal);
+
     /** @brief Publishes the pair for an approved removal and keeps an undo journal until the pair is durable.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.
-     * @pre The caller has checked references and executable ownership for this snapshot and approved this removal.
+     * @param assets Read source bound to the same project's current assets.
+     * @pre The caller has checked other references and executable ownership for this snapshot and approved this removal.
      * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                                   const PreparedPackageProject &expected,
                                                                                   const Packages::HoroPackageId &package,
-                                                                                  DurableFileSystem &files);
+                                                                                  DurableFileSystem &files,
+                                                                                  const Assets::IAssetRegistrySource &assets);
 
     /** @brief Owns all project package authorities; aliasing application leases pin this entire owner.
      * @details Create/Pump/Close and final destruction belong to one host lane. The host retains its explicit session until
