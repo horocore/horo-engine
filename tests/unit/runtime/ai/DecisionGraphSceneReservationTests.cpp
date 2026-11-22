@@ -1089,6 +1089,73 @@ namespace Horo::AI {
             CHECK_FALSE(completion.IsCurrent());
         }
 
+        TEST_CASE("Mixed Scene recook retains equivalent state and restarts on a changed transition or Utility policy",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            const bool editTransition = GENERATE(false, true);
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            const auto key = MakeIdentity<BlackboardKeyId>(101);
+            const std::array keys{BlackboardKeyDescriptor{.key = key,
+                                                          .kind = BlackboardValueKind::Scalar,
+                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}}};
+            auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(schema.HasValue());
+            fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+
+            auto root = TreeNode(1, DecisionControlKind::Root);
+            auto call = TreeNode(2, DecisionControlKind::Subplan);
+            call.call = DecisionSubplanCall{Graph(12), DecisionPlanKind::StateMachine, {1, 1}};
+            auto machine = CallingMachine(12, 1, DecisionPlanKind::Utility);
+            auto utility = UtilitySource();
+            const auto compile = [&fixture, &root, &call, &machine, &utility] {
+                auto tree = Tree(11, {root, call}, {Edge(1, 1, 2)});
+                tree.executionTask = MakeIdentity<TaskId>(9000);
+                const std::array sources{tree, machine, utility};
+                return fixture.Compile(sources, 11);
+            };
+            const auto original = compile();
+            root.displayName = "Revised root caption";
+            const auto equivalent = compile();
+            REQUIRE(original->Digest() != equivalent->Digest());
+            if (editTransition)
+                std::get<StateMachineAssetDescriptor>(machine.body).transitions.front().childOutcome = AiTaskState::Failed;
+            else
+                std::get<UtilityDecisionSource>(utility.body).options.front().option.priority = 0.5;
+            const auto changed = compile();
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            const auto units = std::max(original->MaximumDecisionWorkUnits().value(), changed->MaximumDecisionWorkUnits().value());
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = units}}).Value();
+            auto scene = SceneFixture(fixture, *original);
+            scene.descriptor.cookedPlan = original;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(fixture.probe.tasks.size() == 1);
+            const auto task = fixture.probe.tasks.front();
+            const auto completion = fixture.probe.continuation;
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, original, equivalent).HasValue());
+            CHECK(fixture.probe.factories == 1);
+            CHECK(fixture.probe.aborts == 0);
+            CHECK(completion.IsCurrent());
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(fixture.probe.lastResumeTask == task);
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, equivalent, changed).HasValue());
+            CHECK_FALSE(completion.IsCurrent());
+            CHECK(fixture.probe.aborts == 1);
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK(fixture.probe.starts == 1);
+            REQUIRE(scheduler->EvaluateAtDecision(3).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
+            REQUIRE(fixture.probe.tasks.size() == 2);
+            CHECK(fixture.probe.tasks.back() != task);
+        }
+
         TEST_CASE("Cooked Scene reports raw task callback errors without failing a successful Selector fallback",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;

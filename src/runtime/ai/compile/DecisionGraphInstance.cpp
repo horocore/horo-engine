@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <tuple>
 
 namespace Horo::AI {
     /** @copydoc DecisionGraphInstance::CopyActiveTasks */
@@ -234,8 +235,19 @@ namespace Horo::AI {
         return occurrence.tree.get();
     }
 
-    /** @copydoc DecisionGraphInstance::TryRetainCompatibleTreeClosure */
-    Result<bool> DecisionGraphInstance::TryRetainCompatibleTreeClosure(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
+    namespace {
+        /** @brief Compares exact Utility selection policy while retaining option-ID order. */
+        bool SameUtilityOption(const UtilityOption &a, const UtilityOption &b) noexcept {
+            return std::tie(a.id, a.action, a.priority, a.compensation) == std::tie(b.id, b.action, b.priority, b.compensation) &&
+                   std::ranges::equal(a.considerations, b.considerations, [](const auto &left, const auto &right) {
+                return std::tie(left.key, left.minimum, left.maximum, left.weight, left.curve, left.parameter, left.invert) ==
+                       std::tie(right.key, right.minimum, right.maximum, right.weight, right.curve, right.parameter, right.invert);
+            });
+        }
+    }  // namespace
+
+    /** @copydoc DecisionGraphInstance::TryRetainCompatibleClosure */
+    Result<bool> DecisionGraphInstance::TryRetainCompatibleClosure(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
         using Retained = Result<bool>;
         if (!candidate || std::this_thread::get_id() != owner_ || evaluating_)
             return Invalid<bool>(AIErrors::DecisionAssetActivationInvalid);
@@ -246,21 +258,19 @@ namespace Horo::AI {
             return Retained::Success(false);
 
         for (std::size_t index = 0; index < occurrences_.size(); ++index) {
-            auto valid = ValidateRetainedTreeOccurrence(index, *candidate);
+            auto valid = ValidateRetainedOccurrence(index, *candidate);
             if (valid.HasError() || !valid.Value())
                 return valid;
         }
         // Every occurrence is validated. Publishing the new plans needs no callbacks or storage.
-        for (std::size_t index = 0; index < occurrences_.size(); ++index) {
-            const auto &graph = candidate->Graphs()[candidate->Occurrences()[index].plan];
-            occurrences_[index]->tree->PublishRetainedPlan(std::get<std::shared_ptr<const BehaviorTreeExecutionPlan>>(graph.execution));
-        }
+        for (std::size_t index = 0; index < occurrences_.size(); ++index)
+            PublishRetainedOccurrence(index, *candidate);
         plan_ = candidate;
         return Retained::Success(true);
     }
 
-    /** @copydoc DecisionGraphInstance::ValidateRetainedTreeOccurrence */
-    Result<bool> DecisionGraphInstance::ValidateRetainedTreeOccurrence(const std::size_t index, const CookedDecisionPlan &candidate) const {
+    /** @copydoc DecisionGraphInstance::ValidateRetainedOccurrence */
+    Result<bool> DecisionGraphInstance::ValidateRetainedOccurrence(const std::size_t index, const CookedDecisionPlan &candidate) const {
         using Retained = Result<bool>;
         const auto &current = plan_->Occurrences()[index];
         const auto &replacement = candidate.Occurrences()[index];
@@ -270,19 +280,56 @@ namespace Horo::AI {
 
         const auto &existing = plan_->Graphs()[current.plan];
         const auto &next = candidate.Graphs()[replacement.plan];
-        const auto &live = occurrences_[index]->tree;
-        const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&next.execution);
-        if (!live || !tree || next.asset != existing.asset || next.schemaVersion != existing.schemaVersion ||
-            next.executionTask != existing.executionTask || !live->plan_->IsCompatible(**tree))
+        if (next.execution.index() != existing.execution.index() || next.asset != existing.asset ||
+            next.schemaVersion != existing.schemaVersion || next.executionTask != existing.executionTask)
             return Retained::Success(false);
 
         if (!std::ranges::equal(existing.providerProperties, next.providerProperties, [](const auto &left, const auto &right) {
             return left.node == right.node && left.properties == right.properties;
         }))
             return Retained::Success(false);
-        if (auto admitted = live->AdmitReplacement(*tree, nullptr); admitted.HasError())
-            return Retained::Failure(admitted.ErrorValue());
+        const auto admitTree = [](const BehaviorTreeInstance &live, const std::shared_ptr<const BehaviorTreeExecutionPlan> &tree) {
+            if (!live.plan_->IsCompatible(*tree))
+                return Retained::Success(false);
+            if (auto admitted = live.AdmitReplacement(tree, nullptr); admitted.HasError())
+                return Retained::Failure(admitted.ErrorValue());
+            return Retained::Success(true);
+        };
+        const auto &state = *occurrences_[index];
+        if (state.tree)
+            return admitTree(*state.tree, std::get<std::shared_ptr<const BehaviorTreeExecutionPlan>>(next.execution));
+        if (state.machine) {
+            const auto &machine = std::get<std::shared_ptr<const CookedStateMachinePlan>>(next.execution);
+            return Retained::Success(state.machine->plan_->IsCompatible(*machine));
+        }
+
+        using Utility = std::shared_ptr<const CookedUtilityPlan>;
+        const auto &prior = *std::get<Utility>(existing.execution);
+        const auto &utility = *std::get<Utility>(next.execution);
+        const auto actions = utility.Actions();
+        if (prior.Root() != utility.Root() || !existing.bindings->HasEquivalentBindings(*next.bindings) ||
+            actions.size() != state.utility->actions.size() ||
+            !std::ranges::equal(prior.Selector().Options(), utility.Selector().Options(), SameUtilityOption))
+            return Retained::Success(false);
+        for (std::size_t action = 0; action < actions.size(); ++action)
+            if (auto admitted = admitTree(*state.utility->actions[action], actions[action]); admitted.HasError() || !admitted.Value())
+                return admitted;
         return Retained::Success(true);
+    }
+
+    /** @copydoc DecisionGraphInstance::PublishRetainedOccurrence */
+    void DecisionGraphInstance::PublishRetainedOccurrence(const std::size_t index, const CookedDecisionPlan &candidate) noexcept {
+        const auto &execution = candidate.Graphs()[candidate.Occurrences()[index].plan].execution;
+        auto &state = *occurrences_[index];
+        if (state.tree) {
+            state.tree->PublishRetainedPlan(std::get<std::shared_ptr<const BehaviorTreeExecutionPlan>>(execution));
+        } else if (state.machine) {
+            state.machine->plan_ = std::get<std::shared_ptr<const CookedStateMachinePlan>>(execution);
+        } else {
+            const auto actions = std::get<std::shared_ptr<const CookedUtilityPlan>>(execution)->Actions();
+            for (std::size_t action = 0; action < actions.size(); ++action)
+                state.utility->actions[action]->PublishRetainedPlan(actions[action]);
+        }
     }
 
     /** @copydoc DecisionGraphInstance::TraceOccurrence */

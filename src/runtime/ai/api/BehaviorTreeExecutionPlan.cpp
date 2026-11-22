@@ -140,27 +140,6 @@ namespace Horo::AI {
         }
 
         /** @brief Matches full admitted bindings; schema pointer identity fences the exact publication. */
-        bool CompatibleBindings(const DecisionAssetPlan &left, const DecisionAssetPlan &right) noexcept {
-            if (left.Asset() != right.Asset() || left.SchemaVersion() != right.SchemaVersion() ||
-                left.BlackboardSchema() != right.BlackboardSchema() || left.Nodes().size() != right.Nodes().size() ||
-                left.Bindings().size() != right.Bindings().size())
-                return false;
-            for (std::size_t index = 0; index < left.Nodes().size(); ++index) {
-                const auto &a = left.Nodes()[index];
-                const auto &b = right.Nodes()[index];
-                if (a.id != b.id || a.type != b.type || a.origin != b.origin || a.firstBlackboardBinding != b.firstBlackboardBinding ||
-                    a.blackboardBindingCount != b.blackboardBindingCount)
-                    return false;
-            }
-            for (std::size_t index = 0; index < left.Bindings().size(); ++index) {
-                const auto &a = left.Bindings()[index];
-                const auto &b = right.Bindings()[index];
-                if (a.key != b.key || a.schemaIndex != b.schemaIndex || a.kind != b.kind || a.cardinality != b.cardinality ||
-                    a.access != b.access || a.presence != b.presence || a.defaultValue != b.defaultValue)
-                    return false;
-            }
-            return true;
-        }
     }  // namespace
 
     /** @copydoc BehaviorTreeExecutionPlan::Compile */
@@ -314,7 +293,7 @@ namespace Horo::AI {
 
     /** @copydoc BehaviorTreeExecutionPlan::HasCompatibleBindings */
     bool BehaviorTreeExecutionPlan::HasCompatibleBindings(const BehaviorTreeExecutionPlan &candidate) const noexcept {
-        return CompatibleBindings(*bindings_, *candidate.bindings_) && CompatibleCallbacks(*this, candidate);
+        return bindings_->HasEquivalentBindings(*candidate.bindings_) && CompatibleCallbacks(*this, candidate);
     }
 
     /** @copydoc BehaviorTreeExecutionPlan::IsCompatible */

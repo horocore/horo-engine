@@ -277,6 +277,10 @@ namespace Horo::AI {
         [[nodiscard]] std::span<const DecisionPlanBlackboardBinding> Bindings() const noexcept;
         /** @brief Returns stable subplan dependencies. @return Borrowed dependency-table view. */
         [[nodiscard]] std::span<const DecisionPlanDependency> Dependencies() const noexcept;
+        /** @brief Checks whether existing runtime callbacks can keep their exact node and Blackboard bindings.
+         * @param candidate Compiled replacement bindings.
+         * @return True if all callback-visible bindings and schema identities match. */
+        [[nodiscard]] bool HasEquivalentBindings(const DecisionAssetPlan &candidate) const noexcept;
         /** @brief Actual retained logical container extents, excluding the separately owned schema lease. */
         [[nodiscard]] std::uint64_t StorageBytes() const noexcept;
         /**

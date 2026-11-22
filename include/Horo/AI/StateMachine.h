@@ -167,6 +167,11 @@ namespace Horo::AI {
             return source_.maximumTransitionsPerStep;
         }
 
+        /** @brief Checks whether existing state indices, transitions and provider roles can be retained.
+         * @param candidate Compiled replacement machine.
+         * @return True if the shape, executable state data and provider roles match. */
+        [[nodiscard]] bool IsCompatible(const CookedStateMachinePlan &candidate) const noexcept;
+
     private:
         friend class StateMachineInstance;
 
@@ -335,6 +340,7 @@ namespace Horo::AI {
 
     private:
         friend class CookedStateMachinePlan;
+        friend class DecisionGraphInstance;
         using Path = std::array<std::size_t, StateMachineLimits::Depth>;
         [[nodiscard]] std::size_t MakePath(DecisionNodeId target, Path &path) const noexcept;
         [[nodiscard]] Result<void> CheckBoundary(const BlackboardSnapshot &blackboard);

@@ -41,13 +41,10 @@ Replace and Evaluate again in the same tick must defer that evaluation; it recei
 TaskTransitionInvalid without callbacks until the next tick. Failed replacement
 does not install this fence and preserves ordinary same-tick event delivery.
 
-Regression sources cover growing async plans under an explicit reservation,
+Regression tests cover growing async plans under an explicit reservation,
 growth rejection without spare ownership, removed-continuation retirement,
 compatible/incompatible same-tick fencing, overflowing reservations and failure
-in every staged allocation, including mailbox storage. Their current native pass
-is pending the shared build slot. Full composed graph active-path migration,
-provider-generation replacement and atomic blackboard-schema migration remain
-outstanding; the standalone fixes do not satisfy the complete GAI-003.11 ticket.
+in every staged allocation, including mailbox storage.
 
 Scene composition now reserves its physical task namespace through
 `AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint` and captures observations
@@ -70,7 +67,26 @@ both operation and Foundation cancellation between bounded steps; cancellation
 does not forcibly stop native code, and image pins remain until work exits.
 
 Graph cancellation on its owner lane retires existing tasks before attempting to
-read an expired Scene snapshot. New regression sources exercise real Scene
+read an expired Scene snapshot. Regression tests exercise real Scene
 reservation/restore/disable/shutdown, disjoint native task indices, failed
-admission, move ownership, schema rejection before factories and BT/HSM child
-cleanup. These additions remain uncompiled pending the shared build grant.
+admission, move ownership, schema rejection before factories and BT/HSM child cleanup.
+
+The Scene scheduler exposes `AiSceneRuntime::ReplaceCookedDecisionAtSafePoint`
+for one exact agent and its current cooked image. Supply a compiled candidate of
+the same root and family before the first evaluation or after dispatch commits
+the current tick. The complete closure is validated before any occurrence is
+rebound. Equivalent Behavior Tree, State Machine and Utility execution preserves
+active calls, running task identities, selected actions and continuation mailboxes.
+
+A compatible same-schema edit keeps the existing Blackboard. For a newer version
+of that same schema, supply an explicit forward `BlackboardSchemaMigration`. A
+successful migration publishes the new plan, scheduler registration and complete
+canonical Blackboard together, and revokes old leases. Independent task or sensing
+owners require coordinated Scene replacement. Other accepted incompatible edits
+stage a fresh executor, including on a change of provider generation, then retire
+the entire old closure. Provider factories can fail or attempt reentry while the
+candidate is being prepared. Such a failure leaves the original registration,
+Blackboard and continuations usable. The candidate first runs on a later tick.
+
+The application that owns the Scene chooses when to compile and submit a
+candidate. The runtime API consumes the admitted plan at its simulation cutoff.

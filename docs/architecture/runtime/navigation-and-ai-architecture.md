@@ -2822,13 +2822,12 @@ retains live task state and its mailbox but obeys the same tick fence.
 Executor-reuse checks include exact provider/key bindings and the callback-role
 set, so changed node/type bindings cannot execute through the old frozen adapter.
 The prepared-executor `Replace` overload installs freshly bound callbacks in the
-same storage transaction; it always restarts opaque provider state. These tree
-invariants do not establish composed BT/HSM/Utility state or schema migration;
-the complete closure replacement transaction remains required by GAI-003.11.
+same storage transaction; it always restarts opaque provider state. The Scene
+owner applies the corresponding transaction to complete decision closures.
 
 For an active Scene agent in deterministic scheduling, the Scene owner can
 replace a budgeted cooked decision at a completed tick boundary. Admission checks
-the exact previous plan, root identity and decision kind. Compatible trees keep
+the exact previous plan, root identity and decision kind. Compatible closures keep
 the original provider bindings, running task identities and completion mailbox.
 With the same Blackboard schema, values and read leases remain current.
 An explicit forward migration can map canonical values to a newer version of
@@ -2862,9 +2861,10 @@ so reactive scheduling can continue their update and transition phases.
 Retirement hides the closed occurrence's signals. The scheduler admits mixed
 closures with a complete work allowance and can restart them at the replacement
 boundary, retiring every old occurrence.
-Equivalent Behavior Tree revisions validate the complete occurrence layout, task range and
-provider bindings before rebinding any tree. They preserve active call frames
-and independent mailboxes, including repeated occurrences of the same asset.
+Equivalent revisions validate the complete occurrence layout, task range,
+provider bindings, state transitions and Utility policies before rebinding any
+occurrence. They preserve active call frames, selected Utility actions and
+independent mailboxes, including repeated occurrences of the same asset.
 
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.

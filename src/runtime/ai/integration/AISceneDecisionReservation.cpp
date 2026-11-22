@@ -594,7 +594,7 @@ namespace Horo::AI {
             auto migrated = std::move(prepared).Value();
             return RestartCookedDecisionAtSafePoint(state, slot, std::move(replacement), &migrated);
         }
-        auto retained = executor->Decision().TryRetainCompatibleTreeClosure(replacement);
+        auto retained = executor->Decision().TryRetainCompatibleClosure(replacement);
         if (retained.HasError())
             return Outcome::Failure(retained.ErrorValue());
         if (!retained.Value())
