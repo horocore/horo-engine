@@ -7,8 +7,30 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace Horo::Editor {
+    /** @brief Editor tool mode at the time of explicit viewport capture. */
+    enum class AgentViewportTool : std::uint8_t {
+        Select,
+        Move,
+        Rotate,
+        Scale
+    };
+
+    /** @brief Numeric editor camera and interaction state with no renderer or runtime handles. */
+    struct AgentViewportOverview final {
+        std::uint64_t revision{};
+        std::array<float, 3> position{};
+        std::array<float, 3> target{};
+        std::array<float, 3> up{};
+        float verticalExtent{}; /**< Radians for perspective, world units for orthographic. */
+        float nearPlane{};
+        float farPlane{};
+        bool orthographic{};
+        AgentViewportTool tool{};
+    };
+
     /** @brief Owner-issued IDs from the selected scene revision, with no runtime handles or scene contents. */
     struct AgentSceneSelectionSnapshot final {
         static constexpr std::size_t MaximumObjects = 16;
@@ -18,6 +40,7 @@ namespace Horo::Editor {
         std::array<std::uint64_t, MaximumObjects> objects{};
         std::size_t objectCount{};
         bool truncated{};
-        CancellationToken lifetime; /**< Revoked by the owner when the source scene or selection changes. */
+        CancellationToken lifetime;                    /**< Revoked by the owner when the source scene or selection changes. */
+        std::optional<AgentViewportOverview> viewport; /**< Present only for a separately requested viewport review. */
     };
 }  // namespace Horo::Editor

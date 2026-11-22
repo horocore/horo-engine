@@ -89,6 +89,12 @@ The editor camera used by inline chat is not a gameplay camera component. It is
 the authoring viewport camera owned by the editor host. Runtime scenes must not
 depend on it.
 
+The local chat composer offers a separate numeric viewport review. It shows
+camera position, target, up, projection and clipping values, the active edit
+tool and bounded selected IDs. The viewport lease is retired by camera, tool,
+selection, Scene, preview or Play transitions. Selection-only review keeps its
+own lease and does not admit camera data.
+
 ```cpp
 struct ViewportInlineInvocation {
     EditorViewportId viewportId;

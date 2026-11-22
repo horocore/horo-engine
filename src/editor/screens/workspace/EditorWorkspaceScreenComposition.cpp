@@ -254,6 +254,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 }
             }
         },
+            .captureAgentViewport =
+                [this] {
+            return controller_->CaptureAgentViewport();
+        },
         };
         contributions_.panels.AttachAll(panelContext);
     }

@@ -86,6 +86,7 @@ namespace Horo::Editor {
         LOG_INFO("editor.gameplay", "Gameplay build session #%" PRIu64 " started.", *m_gameplayBuildSession);
         m_playAfterGameplayBuild = m_playAfterGameplayBuild || playWhenReady;
         if (playWhenReady) {
+            InvalidateAgentViewport();
             m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
             m_viewModel.activeDocumentPanelId = "horo.game";
             SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
@@ -144,6 +145,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::StartPlaySession() {
+        InvalidateAgentViewport();
         LOG_INFO("editor.play_session", "StartPlaySession initiated for project '%s'.", m_viewModel.projectRoot.c_str());
         if (m_nativeGameplayReloadQuarantined) {
             m_viewModel.playState = EditorPlayState::Failed;
@@ -258,6 +260,8 @@ namespace Horo::Editor {
                 m_viewModel.playState = EditorPlayState::Failed;
                 break;
         }
+        if (m_viewModel.playState != EditorPlayState::Idle)
+            InvalidateAgentViewport();
         m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
         RefreshPlayDecisionProblem();
         const auto scene = m_playSession.SceneView();

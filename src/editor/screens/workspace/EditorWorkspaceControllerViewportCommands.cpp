@@ -9,6 +9,7 @@ namespace Horo::Editor {
             LOG_ERROR("editor.viewport", "%s failed: %s", action, result.ErrorValue().message.c_str());
             return;
         }
+        InvalidateAgentViewport();
         if (m_cameraPreview) {
             SynchronizeRuntimeScenePreview();
             return;
@@ -44,8 +45,10 @@ namespace Horo::Editor {
                 break;
             }
             case EditorWorkspaceViewCommand::ChangeTransformTool:
-                if (cmd.transformToolPayload.has_value())
+                if (cmd.transformToolPayload && *cmd.transformToolPayload != m_viewModel.activeTransformTool) {
+                    InvalidateAgentViewport();
                     m_viewModel.activeTransformTool = *cmd.transformToolPayload;
+                }
                 break;
             case EditorWorkspaceViewCommand::ChangeTransformSpace:
                 if (cmd.transformSpacePayload.has_value())

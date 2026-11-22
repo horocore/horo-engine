@@ -235,6 +235,39 @@ namespace {
         }
     }
 
+    TEST_CASE("Viewport numbers are captured only after a user opens their review", "[editor][agent][gui][viewport]") {
+        CancellationSource owner;
+        int captured{};
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.captureAgentViewport = [&] {
+                ++captured;
+                return AgentSceneSelectionSnapshot{.documentEpoch = 1,
+                                                   .lifetime = owner.Token(),
+                                                   .viewport = AgentViewportOverview{.revision = 1,
+                                                                                     .position = {4, 5, 6},
+                                                                                     .target = {},
+                                                                                     .up = {0, 1, 0},
+                                                                                     .verticalExtent = 1,
+                                                                                     .nearPlane = 0.1F,
+                                                                                     .farPlane = 100}};
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", "http://127.0.0.1:11434");
+        fixture.Enter("##Model", "local-test");
+        fixture.Enter("##Prompt", "Explain this view");
+        CHECK(captured == 0);
+        CHECK(fixture.DrawnText().find("camera.position") == std::string::npos);
+        fixture.Activate("###context_viewport_offer");
+        CHECK(captured == 1);
+        CHECK(fixture.DrawnText().find("camera.position = [4, 5, 6]") != std::string::npos);
+        owner.RequestCancellation();
+        fixture.Activate("###context_approve");
+        CHECK(fixture.DrawnText().find("camera.position") == std::string::npos);
+        CHECK(fixture.DrawnText().find("Stop") == std::string::npos);
+        CHECK(captured == 1);
+    }
+
     TEST_CASE("Scene query approval discloses the exact count and retires a denied or changed review", "[editor][agent][gui]") {
         std::size_t count = 3;
         LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {

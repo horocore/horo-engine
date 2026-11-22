@@ -181,15 +181,17 @@ namespace Horo::Editor {
         if (!source)
             return;
         auto camera = m_viewport.Current().camera;
-        if (const auto framed = FrameSource(camera, *source); framed.HasValue())
+        if (const auto framed = FrameSource(camera, *source); framed.HasValue()) {
+            InvalidateAgentViewport();
             static_cast<void>(m_viewport.SetCamera(camera));
-        else
+        } else
             Failure(m_viewModel, framed.ErrorValue());
     }
 
     /** @brief Publish focus-dependent camera and retained palette projections after observing all open documents. */
     void EditorWorkspaceController::PublishTerrainFocus(std::optional<DocumentInstanceId> terrain, bool wasTerrain) {
         if (!terrain && m_activeTerrainDocument && m_terrainPriorCamera) {
+            InvalidateAgentViewport();
             static_cast<void>(m_viewport.SetCamera(*m_terrainPriorCamera));
             m_terrainPriorCamera.reset();
         }

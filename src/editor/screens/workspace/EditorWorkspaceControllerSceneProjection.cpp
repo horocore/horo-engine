@@ -9,6 +9,21 @@
 namespace Horo::Editor {
 
     namespace {
+        /** @brief Keeps the public numeric context independent of internal editor interaction enums. */
+        AgentViewportTool CapturedViewportTool(const EditorTransformTool tool) noexcept {
+            switch (tool) {
+                case EditorTransformTool::Move:
+                    return AgentViewportTool::Move;
+                case EditorTransformTool::Rotate:
+                    return AgentViewportTool::Rotate;
+                case EditorTransformTool::Scale:
+                    return AgentViewportTool::Scale;
+                case EditorTransformTool::Select:
+                    return AgentViewportTool::Select;
+            }
+            return AgentViewportTool::Select;
+        }
+
         /** @brief Classifies the complete typed authored component set for hierarchy presentation. */
         SceneObjectKind PresentedKind(const SceneObjectSnapshot &object) {
             int componentCount = 0;
@@ -48,18 +63,47 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::CaptureAgentSceneSelection */
     std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection() {
         const auto &selection = m_selection.Current();
-        const auto documentRevision = m_document.Revision().value;
         if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() || !selection.revision.value ||
             selection.objects.empty())
             return std::nullopt;
         if (!m_agentSceneSelectionLifetime)
             m_agentSceneSelectionLifetime.emplace();
+        return CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
+    }
+
+    /** @copydoc EditorWorkspaceController::CaptureAgentViewport */
+    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentViewport() {
+        const auto &camera = m_viewport.Current().camera;
+        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() ||
+            m_viewModel.playState != EditorPlayState::Idle || m_cameraPreview || !camera.IsValid())
+            return std::nullopt;
+        if (!m_agentViewportLifetime) {
+            m_agentViewportLifetime.emplace();
+            ++m_agentViewportRevision;
+        }
+        auto snapshot = CaptureAgentSelectionValues(*m_agentViewportLifetime);
+        const bool orthographic = camera.projection == Runtime::CameraProjection::Orthographic;
+        snapshot.viewport = AgentViewportOverview{.revision = m_agentViewportRevision,
+                                                  .position = {camera.position.x, camera.position.y, camera.position.z},
+                                                  .target = {camera.target.x, camera.target.y, camera.target.z},
+                                                  .up = {camera.up.x, camera.up.y, camera.up.z},
+                                                  .verticalExtent = orthographic ? camera.orthographicHeight : camera.verticalFovRadians,
+                                                  .nearPlane = camera.nearPlane,
+                                                  .farPlane = camera.farPlane,
+                                                  .orthographic = orthographic,
+                                                  .tool = CapturedViewportTool(m_viewModel.activeTransformTool)};
+        return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceController::CaptureAgentSelectionValues */
+    AgentSceneSelectionSnapshot EditorWorkspaceController::CaptureAgentSelectionValues(const CancellationSource &lifetime) const {
+        const auto &selection = m_selection.Current();
         AgentSceneSelectionSnapshot snapshot{.documentEpoch = m_document.ReplacementEpoch(),
-                                             .documentRevision = documentRevision,
+                                             .documentRevision = m_document.Revision().value,
                                              .selectionRevision = selection.revision.value,
                                              .objectCount = std::min(selection.objects.size(), AgentSceneSelectionSnapshot::MaximumObjects),
                                              .truncated = selection.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects,
-                                             .lifetime = m_agentSceneSelectionLifetime->Token()};
+                                             .lifetime = lifetime.Token()};
         for (std::size_t index = 0; index < snapshot.objectCount; ++index)
             snapshot.objects[index] = selection.objects[index].value;
         return snapshot;
@@ -67,9 +111,18 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::InvalidateAgentSceneSelection */
     void EditorWorkspaceController::InvalidateAgentSceneSelection() noexcept {
+        InvalidateAgentViewport();
         if (m_agentSceneSelectionLifetime) {
             m_agentSceneSelectionLifetime->RequestCancellation();
             m_agentSceneSelectionLifetime.reset();
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::InvalidateAgentViewport */
+    void EditorWorkspaceController::InvalidateAgentViewport() noexcept {
+        if (m_agentViewportLifetime) {
+            m_agentViewportLifetime->RequestCancellation();
+            m_agentViewportLifetime.reset();
         }
     }
 

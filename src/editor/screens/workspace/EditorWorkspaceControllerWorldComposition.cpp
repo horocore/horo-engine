@@ -17,6 +17,8 @@ namespace Horo::Editor {
         RefreshWorldStreamingPreview();
         if (!forceQuery && m_viewModel.worldDocument == lease)
             return;
+        if (m_viewModel.worldDocument != lease)
+            InvalidateAgentViewport();
         m_viewModel.worldDocument = lease;
         m_viewModel.worldBrowser.reset();
         if (!lease) {

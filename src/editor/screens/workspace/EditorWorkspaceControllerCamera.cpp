@@ -120,6 +120,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(started.ErrorValue());
         if (const auto published = candidate->playback->Publish(*scene); published.HasError())
             return published;
+        InvalidateAgentViewport();
         m_cameraPreview = std::move(candidate);
         m_activeRuntimeRevision = {};
         SynchronizeRuntimeScenePreview();

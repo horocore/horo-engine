@@ -5,12 +5,39 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace Horo::Editor {
     namespace {
         constexpr auto Residence = Security::AgentProviderResidence::Local;
         constexpr auto PreviewLifetime = std::chrono::minutes{5};
+
+        /** @brief Encodes the exact public numeric fields shown in the consent preview. */
+        std::optional<std::string> ViewportEvidence(const AgentViewportOverview &viewport) {
+            constexpr std::array modes{"select", "move", "rotate", "scale"};
+            const auto tool = static_cast<std::size_t>(viewport.tool);
+            if (!viewport.revision || tool >= modes.size() || !(viewport.verticalExtent > 0) || !(viewport.nearPlane > 0) ||
+                !(viewport.farPlane > viewport.nearPlane))
+                return std::nullopt;
+            const auto vector = [](const std::array<float, 3> &value) -> std::optional<std::string> {
+                if (!std::ranges::all_of(value, [](const float component) {
+                    return std::isfinite(component);
+                }))
+                    return std::nullopt;
+                return std::format("[{}, {}, {}]", value[0], value[1], value[2]);
+            };
+            const auto position = vector(viewport.position);
+            const auto target = vector(viewport.target);
+            const auto up = vector(viewport.up);
+            if (!position || !target || !up || !std::isfinite(viewport.verticalExtent) || !std::isfinite(viewport.farPlane))
+                return std::nullopt;
+            return std::format("camera.position = {}\ncamera.target = {}\ncamera.up = {}\ncamera.projection = {}\n"
+                               "camera.{} = {}\ncamera.clip = [{}, {}]\nviewport.tool = {}\n",
+                               *position, *target, *up, viewport.orthographic ? "orthographic" : "perspective",
+                               viewport.orthographic ? "height" : "verticalFovRadians", viewport.verticalExtent, viewport.nearPlane,
+                               viewport.farPlane, modes[tool]);
+        }
 
         /** @brief Reuses the host's bounded plain-display redaction without passing any raw data into history. */
         Result<std::string> RedactEvidence(const Agent::AgentContextProvenance &, const std::string_view text) {
@@ -295,15 +322,21 @@ namespace Horo::Editor {
                                                                                    const std::uint64_t requestId) {
         using Output = Result<EditorLocalAgentContext>;
         using namespace Agent;
-        if (!selection.documentEpoch || !selection.selectionRevision || !selection.objectCount ||
+        if (!selection.documentEpoch || (!selection.viewport && (!selection.selectionRevision || !selection.objectCount)) ||
             selection.objectCount > selection.objects.size())
             return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
         const auto objects = std::span{selection.objects}.first(selection.objectCount);
         if (std::ranges::find(objects, 0) != objects.end())
             return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
-        const auto revision =
-            std::format("scene:{}:{}:{}", selection.documentEpoch, selection.documentRevision, selection.selectionRevision);
+        auto revision = std::format("scene:{}:{}:{}", selection.documentEpoch, selection.documentRevision, selection.selectionRevision);
         std::string text;
+        if (selection.viewport) {
+            auto evidence = ViewportEvidence(*selection.viewport);
+            if (!evidence)
+                return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+            text = std::move(*evidence);
+            revision += std::format(":viewport:{}", selection.viewport->revision);
+        }
         for (const auto id : objects)
             text += std::format("Selected object ID {}\n", id);
         const AgentContextSelection selected = AgentContextAttachment{AgentContextAttachmentKind::Selection, "scene selection", revision,

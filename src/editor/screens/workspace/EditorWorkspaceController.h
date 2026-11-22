@@ -307,6 +307,9 @@ namespace Horo::Editor {
         /** @brief Captures the current ordinary Scene selection and its revocable revision on the owner lane. */
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection();
 
+        /** @brief Captures the currently authored camera and selection for one explicit local review. */
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport();
+
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
@@ -981,6 +984,8 @@ namespace Horo::Editor {
         std::unique_ptr<SceneFileWatchService> m_sceneFileWatch;
         EditorWorkspaceViewModel m_viewModel;
         std::optional<CancellationSource> m_agentSceneSelectionLifetime;
+        std::optional<CancellationSource> m_agentViewportLifetime;
+        std::uint64_t m_agentViewportRevision{};
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
@@ -1247,6 +1252,10 @@ namespace Horo::Editor {
         void RefreshSceneProjections();
         /** @brief Revokes agent evidence before publishing a changed scene or selection projection. */
         void InvalidateAgentSceneSelection() noexcept;
+        /** @brief Revokes only viewport-specific reviews after camera or tool changes. */
+        void InvalidateAgentViewport() noexcept;
+        /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */
+        [[nodiscard]] AgentSceneSelectionSnapshot CaptureAgentSelectionValues(const CancellationSource &lifetime) const;
         /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
         void RefreshInspectorDocumentPort();
         /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */

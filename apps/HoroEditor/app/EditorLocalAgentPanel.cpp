@@ -251,6 +251,7 @@ namespace Horo::Editor {
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
+                captureAgentViewport_ = context.captureAgentViewport;
                 captureEditorDiagnostics_ = context.captureEditorDiagnostics;
                 requestMcpAudit_ = context.requestMcpAudit;
                 buildOutput_ = context.buildOutputQuery;
@@ -392,6 +393,7 @@ namespace Horo::Editor {
                 patchDestination_.clear();
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
+                captureAgentViewport_ = {};
                 captureEditorDiagnostics_ = {};
                 requestMcpAudit_ = {};
                 sourcePicker_ = SourcePickerMode::None;
@@ -506,9 +508,18 @@ namespace Horo::Editor {
                     DrawClipboardActions(locale, ready) || DrawEditorDiagnosticsAction(locale, ready)) {
                     return;
                 }
-                const bool sceneAvailable = ready && captureSceneSelection_ && contextLifetime_ && !contextProject_.empty();
-                if (Button(locale, "context_scene_selection_offer", sceneAvailable)) {
-                    PrepareSceneSelectionReview();
+                DrawSceneActions(locale, ready);
+            }
+
+            /** @brief Offers explicit Scene evidence or a separately scoped scene count tool. */
+            void DrawSceneActions(const ILocalizationService &locale, const bool ready) {
+                const bool contextReady = ready && contextLifetime_ && !contextProject_.empty();
+                if (Button(locale, "context_scene_selection_offer", contextReady && captureSceneSelection_)) {
+                    PrepareSceneSelectionReview(captureSceneSelection_, "context_scene_selection_unavailable");
+                    return;
+                }
+                if (captureAgentViewport_ && Button(locale, "context_viewport_offer", contextReady)) {
+                    PrepareSceneSelectionReview(captureAgentViewport_, "context_viewport_unavailable");
                     return;
                 }
                 const auto count = sceneCount_ && !contextProject_.empty() ? sceneCount_() : std::nullopt;
@@ -615,16 +626,17 @@ namespace Horo::Editor {
             }
 
             /** @brief Requests only the current bounded scene selection from the workspace owner. */
-            void PrepareSceneSelectionReview() {
-                const auto snapshot = captureSceneSelection_();
+            void PrepareSceneSelectionReview(const std::function<std::optional<AgentSceneSelectionSnapshot>()> &capture,
+                                             const char *unavailable) {
+                const auto snapshot = capture();
                 if (!snapshot) {
-                    status_ = "context_scene_selection_unavailable";
+                    status_ = unavailable;
                     return;
                 }
                 auto prepared = EditorLocalAgentContext::PrepareSceneSelection(*snapshot, contextProject_, contextGeneration_,
                                                                                contextLifetime_->Token(), turn_ + 1);
                 if (prepared.HasError()) {
-                    status_ = "context_scene_selection_unavailable";
+                    status_ = unavailable;
                     return;
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
@@ -1448,6 +1460,7 @@ namespace Horo::Editor {
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
+            std::function<std::optional<AgentSceneSelectionSnapshot>()> captureAgentViewport_;
             std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;

@@ -311,6 +311,55 @@ namespace Horo::Editor {
         }
     }
 
+    TEST_CASE("Explicit viewport consent binds numeric camera values to the captured scene", "[unit][agent][context][viewport]") {
+        using namespace Agent;
+        CancellationSource workspace;
+        CancellationSource viewport;
+        const AgentSceneSelectionSnapshot snapshot{.documentEpoch = 2,
+                                                   .documentRevision = 6,
+                                                   .selectionRevision = 7,
+                                                   .lifetime = viewport.Token(),
+                                                   .viewport = AgentViewportOverview{.revision = 8,
+                                                                                     .position = {1, 2, 3},
+                                                                                     .target = {0, 0, 0},
+                                                                                     .up = {0, 1, 0},
+                                                                                     .verticalExtent = 8,
+                                                                                     .nearPlane = 1,
+                                                                                     .farPlane = 100,
+                                                                                     .orthographic = true,
+                                                                                     .tool = AgentViewportTool::Rotate}};
+        auto prepared = EditorLocalAgentContext::PrepareSceneSelection(snapshot, "project", 1, workspace.Token(), 9);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        const auto &item = context.Items().front();
+        const auto expected = item.candidate.text;
+        CHECK(item.provenance.revision == "scene:2:6:7:viewport:8");
+        CHECK(expected.find("camera.position = [1, 2, 3]") != std::string::npos);
+        CHECK(expected.find("camera.height = 8") != std::string::npos);
+        CHECK(expected.find("viewport.tool = rotate") != std::string::npos);
+        CHECK(expected.find("Selected object ID") == std::string::npos);
+        REQUIRE(context.Approve());
+        bool retired = false;
+        SECTION("The exact preview is used") {}
+        SECTION("The owner can revoke the viewport before send") {
+            viewport.RequestCancellation();
+            retired = true;
+        }
+        RecordingModel provider;
+        AgentTurnRuntime runtime;
+        const auto dispatch = context.Dispatch();
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain the view"}}};
+        const auto result = runtime.Run(provider, nullptr, 9, request, {}, {}, &dispatch);
+        if (retired) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(provider.sent.empty());
+        } else {
+            REQUIRE(result.status == AgentTurnStatus::Completed);
+            REQUIRE(provider.sent.size() == 2);
+            CHECK(provider.sent.front().text == expected);
+        }
+    }
+
     TEST_CASE("Local panel context refuses oversized and absent source snapshots", "[unit][agent][context][editor_source]") {
         TestSupport::SourceProject source;
         source.Put(std::string(Security::AgentPolicyLimits{}.maximumItemBytes + 1, 'x'));
