@@ -891,7 +891,7 @@ namespace Horo::Application::Internal {
                                                                        scene_->geometry->MotionObjects()};
         render_->passthrough.reset();
         if (const auto scope = passthroughScope_;
-            scope && HasPassthrough(*scope) && passthroughScope_ == scope && nativeReference.Value().Target() == scope->world)
+            scope && nativeReference.Value().Target() == scope->world && AuthorizePassthroughFrame(*scope))
             render_->passthrough.emplace(*scope, publication, nativeReference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         using Viewport = Editor::EditorVulkanXrViewportAccess;
@@ -1224,18 +1224,12 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::FrameState::EndRenderedProjection */
     Result<void> OpenXRPlayHost::FrameState::EndRenderedProjection(const XRFrameId &frame) {
         const std::array targets{NativeProjectionTarget{&color, acquisition->image}};
-        if (passthrough && host.passthroughScope_ == passthrough->scope && host.scene_ && host.scene_->passthroughGrant &&
-            !host.composition_.session.AllowsPassthrough(passthrough->scope)) {
-            host.RevokePassthrough();
-            host.passthroughState_ = XRCapabilityState::Denied;
-        }
-        const bool allowPassthrough = passthrough && host.HasPassthrough(passthrough->scope);
         if (!host.FrameLightingAuthorized()) {
             if (auto aborted = host.AbortForLostFrameLighting(); aborted.HasError())
                 return aborted;
             return compositor.EndEmpty(frame);
         }
-        if (allowPassthrough && passthrough && host.MatchesPassthroughGrant(passthrough->scope)) {
+        if (passthrough && host.AuthorizePassthroughFrame(passthrough->scope)) {
             const auto receipt =
                 Editor::EditorVulkanXrViewportAccess::TakePremultipliedProjection(host.composition_.viewport, passthrough->publication,
                                                                                   acquisition->texture);

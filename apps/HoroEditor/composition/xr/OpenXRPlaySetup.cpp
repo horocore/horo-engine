@@ -592,6 +592,21 @@ namespace Horo::Application::Internal {
                composition_.session.AllowsPassthrough(scope) && MatchesPassthroughGrant(scope);
     }
 
+    /** @copydoc OpenXRPlayHost::AuthorizePassthroughFrame */
+    bool OpenXRPlayHost::AuthorizePassthroughFrame(XR::XRPassthroughScope scope) noexcept {
+        if (passthroughScope_ != scope || !MatchesPassthroughGrant(scope))
+            return false;
+        const bool permitted = composition_.session.AllowsPassthrough(scope);
+        if (passthroughScope_ != scope || !MatchesPassthroughGrant(scope))
+            return false;
+        if (!permitted) {
+            RevokePassthrough();
+            passthroughState_ = XR::XRCapabilityState::Denied;
+            return false;
+        }
+        return native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active;
+    }
+
     /** @copydoc OpenXRPlayHost::ReadPassthroughState */
     XR::XRCapabilityState OpenXRPlayHost::ReadPassthroughState() const noexcept {
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)

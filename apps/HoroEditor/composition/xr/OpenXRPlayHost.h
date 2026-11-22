@@ -539,6 +539,8 @@ namespace Horo::Application::Internal {
          * @return Whether the exact native and Play scope is still authorized.
          */
         [[nodiscard]] bool HasPassthrough(XR::XRPassthroughScope scope) const noexcept;
+        /** @brief Checks the exact presentation scope and immediately retires a denied grant. */
+        [[nodiscard]] bool AuthorizePassthroughFrame(XR::XRPassthroughScope scope) noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
         [[nodiscard]] bool FrameLightingAuthorized() const noexcept;

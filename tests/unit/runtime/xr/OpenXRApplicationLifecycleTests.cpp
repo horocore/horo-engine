@@ -1347,12 +1347,14 @@ namespace Horo::Tests::OpenXRApplication {
             bool permitted{true};
             mutable std::optional<XR::XRPassthroughScope> observed;
             mutable Host::OpenXRPlayHost *revokeOnRead{};
+            mutable unsigned reads{};
 
             bool SupportsReconstruction() const noexcept override {
                 return true;
             }
 
             bool Allows(const XR::XRPassthroughScope &scope) const noexcept override {
+                ++reads;
                 if (!observed)
                     observed = scope;
                 if (auto *play = std::exchange(revokeOnRead, nullptr))
@@ -1367,6 +1369,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool revokeArmed = false;
         bool revokeOperatorInFlight = false;
         bool revokeInFlight = false;
+        bool revokeBeforeSubmit = false;
         bool revokeDuringBind = false;
         bool revokeBeforeCreate = false;
         bool denyNative = false;
@@ -1400,6 +1403,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
             revokeInFlight = true;
+        }
+        SECTION("render submission retires denied permission without waiting for the next event poll") {
+            revokeBeforeSubmit = true;
         }
         SECTION("Setup revokes its live operator consent before compositor submission") {
             revokeOperatorInFlight = true;
@@ -1493,10 +1499,19 @@ namespace Horo::Tests::OpenXRApplication {
             preview->RevokePassthrough();
             CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Unavailable);
         }
+        if (revokeBeforeSubmit)
+            permission->permitted = false;
+        const auto readsBeforeSubmit = permission->reads;
         fixture.vulkan->native.commandState.state.Complete();
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.frames.ends == 1);
-        const bool composed = active && !revokeInFlight && !revokeDuringBind && !revokeOperatorInFlight;
+        if (revokeBeforeSubmit) {
+            CHECK_FALSE(native.running);
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
+        }
+        const bool composed = active && !revokeInFlight && !revokeDuringBind && !revokeOperatorInFlight && !revokeBeforeSubmit;
+        if (composed || revokeBeforeSubmit)
+            CHECK(permission->reads == readsBeforeSubmit + 1);
         CHECK(fixture.script.frames.layers == (composed ? 2U : 1U));
         CHECK(fixture.script.frames.projectionFlags ==
               (composed ? std::uint64_t{XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT} : 0U));
