@@ -68,6 +68,7 @@ namespace Horo::Application {
         std::optional<std::uint64_t> expandedBytes;
         std::optional<std::size_t> verifiedFiles;
         std::optional<Packages::PackagePublisherVerificationDecision> publisher;
+        std::vector<Packages::LockedPackageReference> requiredBy; /**< Direct dependents in this exact plan, in package-ID order. */
     };
 
     /** @brief Complete bounded plan; semantic package-kind/license/import-copy facts remain explicitly unavailable.

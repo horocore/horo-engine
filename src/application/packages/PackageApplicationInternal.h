@@ -31,6 +31,8 @@ namespace Horo::Application {
         [[nodiscard]] Result<PackageOperationId> BeginRestore(PackageOperationKind kind, const CancellationToken &parent);
         void SubmitInstall(std::shared_ptr<const Packages::PackageRestoreGraph> graph);
         [[nodiscard]] Result<void> PublishPlan(std::shared_ptr<const Packages::PackageRestoreGraph> graph);
+        /** @brief Derives reverse dependency evidence from the same exact locked plans shown to callers. */
+        static void IndexPlanDependents(PackagePlanSnapshot &plan);
         /** @brief Owns one complete typed selection before staging or waiting for a quiescent boundary. */
         [[nodiscard]] Result<PackageOperationId> BeginActivation(PackageOperationKind kind, const ActivationRequest &request,
                                                                  const CancellationToken &parent);

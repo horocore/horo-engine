@@ -3,10 +3,26 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <new>
 #include <stdexcept>
 
 namespace Horo::Application {
+    /** @copydoc PackageApplication::Impl::IndexPlanDependents */
+    void PackageApplication::Impl::IndexPlanDependents(PackagePlanSnapshot &plan) {
+        std::map<std::string_view, PackagePlanEntry *, std::less<>> entries;
+        for (auto &entry : plan.packages)
+            entries.try_emplace(entry.locked.package.Value(), &entry);
+        for (const auto &indexed : entries) {
+            const auto &entry = indexed.second->locked;
+            for (const auto &dependency : entry.dependencies) {
+                const auto provider = entries.find(dependency.package.Value());
+                if (provider != entries.end() && provider->second->locked.version == dependency.version)
+                    provider->second->requiredBy.emplace_back(entry.package, entry.version);
+            }
+        }
+    }
+
     /** @brief Builds all presentation evidence before atomically replacing the borrowed plan view. */
     Result<void> PackageApplication::Impl::PublishPlan(std::shared_ptr<const Packages::PackageRestoreGraph> graph) {
         if (!graph || (plan && plan->revision == std::numeric_limits<std::uint64_t>::max()))
@@ -28,6 +44,7 @@ namespace Horo::Application {
                 }
                 candidate->packages.push_back(std::move(entry));
             }
+            IndexPlanDependents(*candidate);
             plan = std::move(candidate);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {

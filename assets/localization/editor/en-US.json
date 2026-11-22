@@ -4452,6 +4452,9 @@
     "workspace.packages.package": {
       "text": "Package identity"
     },
+    "workspace.packages.required_by": {
+      "text": "Required by packages in this plan"
+    },
     "workspace.packages.descriptor": {
       "text": "Declared extension descriptor path"
     },

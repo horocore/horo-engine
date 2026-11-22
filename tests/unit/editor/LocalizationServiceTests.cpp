@@ -347,6 +347,7 @@ namespace {
                                          "workspace.packages.restore",
                                          "workspace.packages.install",
                                          "workspace.packages.package",
+                                         "workspace.packages.required_by",
                                          "workspace.packages.descriptor",
                                          "workspace.packages.activate",
                                          "workspace.packages.gameplay_module",

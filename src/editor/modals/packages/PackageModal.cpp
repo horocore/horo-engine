@@ -5,6 +5,8 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 
+#include <algorithm>
+
 namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
@@ -98,6 +100,22 @@ namespace Horo::Editor {
         Ui::Hint(Text("semantic_unavailable").c_str(), context_.theme.fonts);
     }
 
+    /** @copydoc PackageModal::DrawPackageDependents */
+    void PackageModal::DrawPackageDependents() const {
+        const auto plan = session_ ? session_->Plan() : nullptr;
+        if (!plan || package_.empty())
+            return;
+        const auto &packages = plan->packages;
+        const auto selected = std::ranges::find_if(packages, [this](const auto &entry) {
+            return entry.locked.package.Value() == package_;
+        });
+        if (selected == packages.end() || selected->requiredBy.empty())
+            return;
+        Ui::FieldLabel(Text("required_by").c_str(), context_.theme.fonts);
+        for (const auto &dependant : selected->requiredBy)
+            Ui::Hint(dependant.package.Value().c_str(), context_.theme.fonts);
+    }
+
     /** @brief Keeps the original typed cause for structured diagnostics; visible copy remains localized. */
     void PackageModal::Record(const Result<Application::PackageOperationId> &result) {
         if (result.HasError())
@@ -146,6 +164,7 @@ namespace Horo::Editor {
             Record(session_->Submit(generation_, Application::PackageOperationKind::Install));
         Ui::FieldLabel(Text("package").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts));
+        DrawPackageDependents();
         Ui::FieldLabel(Text("descriptor").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
         const bool canActivate = session_ && !running && !package_.empty() && !descriptor_.empty();

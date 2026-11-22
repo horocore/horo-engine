@@ -29,6 +29,8 @@ namespace Horo::Editor {
         [[nodiscard]] const std::string &Text(const char *key) const;
         void Reconnect();
         void DrawPlan();
+        /** @brief Shows direct dependents of the package selected in the active plan. */
+        void DrawPackageDependents() const;
         void DrawDiagnostic(const Error &error) const;
         void DrawActions();
         void Activate(bool gameplayModule);

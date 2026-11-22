@@ -89,6 +89,7 @@ namespace Horo::Application {
             plan->revision = 1;
             for (const auto &entry : owner->impl_->configuration.lockedPlan->Packages())
                 plan->packages.push_back({.locked = entry});
+            Impl::IndexPlanDependents(*plan);
             owner->impl_->plan = std::move(plan);
         }
         return Result<std::unique_ptr<PackageApplication>>::Success(std::move(owner));

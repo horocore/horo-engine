@@ -129,6 +129,53 @@ namespace Horo::Tests::PackageApplicationService {
             CHECK(fixture.trust.calls == 0);
         }
 
+        TEST_CASE("Package plans report every direct dependent before and after verifying the archives", "[packages][application][plan]") {
+            Fixture fixture;
+            const auto &asset = fixture.graph;
+            const auto first = Parse<HoroPackageId>("com.horo.a-dependent");
+            const auto last = Parse<HoroPackageId>("com.horo.z-dependent");
+            const auto &provider = asset.lock->Packages().front();
+            const PackageResolutionPlan plan{
+                .packages = {{last, provider.version, provider.source, provider.artifactDigest, {provider.package}},
+                             {provider.package, provider.version, provider.source, provider.artifactDigest, {}},
+                             {first, provider.version, provider.source, provider.artifactDigest, {provider.package}}}};
+            const std::array roots{last, first};
+            const std::array artifacts{PackageLockArtifact{first, provider.version, provider.source, provider.artifactDigest,
+                                                           provider.manifestDigest, provider.fileManifestDigest},
+                                       PackageLockArtifact{provider.package, provider.version, provider.source, provider.artifactDigest,
+                                                           provider.manifestDigest, provider.fileManifestDigest},
+                                       PackageLockArtifact{last, provider.version, provider.source, provider.artifactDigest,
+                                                           provider.manifestDigest, provider.fileManifestDigest}};
+            auto lock = ValidatedPackageLockfileV1::Generate(plan, roots, asset.requestHash, artifacts);
+            REQUIRE(lock.HasValue());
+            auto configuration = fixture.Configuration();
+            configuration.restore.lockfileJson = lock.Value().SerializeCanonical();
+            configuration.lockedPlan = std::move(lock).Value();
+            auto application =
+                PackageApplication::Create(fixture.jobs, *fixture.restore, fixture.install, *fixture.lifecycle, std::move(configuration));
+            REQUIRE(application.HasValue());
+            fixture.application = std::move(application).Value();
+
+            const auto check = [&](const PackagePlanVerification verification) {
+                const auto visible = fixture.application->Plan();
+                REQUIRE(visible.HasValue());
+                const auto &packages = visible.Value()->packages;
+                REQUIRE(packages.size() == 3);
+                CHECK(packages[0].requiredBy.empty());
+                CHECK(packages[2].requiredBy.empty());
+                REQUIRE(packages[1].locked.package == provider.package);
+                CHECK(packages[1].verification == verification);
+                CHECK(packages[1].requiredBy == std::vector<LockedPackageReference>{{first, provider.version}, {last, provider.version}});
+            };
+            check(PackagePlanVerification::LockedOnly);
+            CHECK(fixture.source.calls.load() == 0);
+            const auto restore = fixture.application->Restore();
+            REQUIRE(restore.HasValue());
+            REQUIRE(WaitForTerminal(fixture, restore.Value()).outcome == PackageOperationOutcome::Succeeded);
+            check(PackagePlanVerification::ArchiveVerified);
+            CHECK_FALSE(fixture.install.InstalledRecord());
+        }
+
         TEST_CASE("Package application serializes mutations and fences replaced operation identities",
                   "[packages][application][generation]") {
             Fixture fixture;

@@ -4452,6 +4452,9 @@
     "workspace.packages.package": {
       "text": "Paket kimliği"
     },
+    "workspace.packages.required_by": {
+      "text": "Bu paketi gerektiren paketler"
+    },
     "workspace.packages.descriptor": {
       "text": "Bildirilen uzantı tanımlayıcısının yolu"
     },
