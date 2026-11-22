@@ -780,6 +780,67 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("EQS authored points cook and publish through the native owner in stable order", "[unit][ai][eqs][generator]") {
+            const std::array points{Math::WorldCoordinate64::FromMillimeters(5000, 20, 0),
+                                    Math::WorldCoordinate64::FromMillimeters(1000, 20, 0),
+                                    Math::WorldCoordinate64::FromMillimeters(-500, 20, 0)};
+            const auto registry = CaptureBuiltinQuerySchema().Value();
+            const auto query = MakeIdentity<QueryId>(201);
+            const auto stage = MakeIdentity<QueryStageId>(202);
+            const auto result = MakeIdentity<QueryResultSchemaId>(203);
+            auto authored = CreateBuiltinAuthoredPointQuery(query, stage, result, "Authored cover points", points, 3);
+            REQUIRE(authored.HasValue());
+            std::size_t first = 0;
+            SECTION("equal scores retain authored order") {}
+            SECTION("a distance stage can rank the same points") {
+                authored = AddBuiltinPointDistanceTest(authored.Value(), MakeIdentity<QueryStageId>(204), {6000, true});
+                REQUIRE(authored.HasValue());
+                first = 2;
+            }
+            const auto cooked = EnvironmentQueryCookedCodec::Encode(authored.Value(), registry);
+            REQUIRE(cooked.HasValue());
+            const auto plan = EnvironmentQueryCookedCodec::Decode(cooked.Value(), registry);
+            REQUIRE(plan.HasValue());
+            const auto *generator = registry.Find(plan.Value().Stages().front().generator);
+            REQUIRE(generator);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry).Value();
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            auto source = Source(view);
+            source.querierLocation = Math::WorldCoordinate64{};
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan.Value(), registry, providers, view, source);
+            REQUIRE(contexts.HasValue());
+            std::array<QueryGeneratedItem, points.size()> destination;
+            const auto original = destination;
+            QueryGeneratorOutput output{{stage, generator->id, generator->origin.provider, contexts.Value()->Revision()}, 2, destination};
+            ExpectError(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output), AIErrors::EnvironmentQueryLimitExceeded);
+            CHECK(destination == original);
+            output.maximumItems = destination.size();
+            REQUIRE(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output).Value().itemCount == points.size());
+            for (std::size_t index = 0; index < points.size(); ++index)
+                CHECK(destination[index] == QueryGeneratedItem{points[index]});
+            ++output.provenance.revision;
+            ExpectError(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output), AIErrors::EnvironmentQueryContextStale);
+
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {1, 1}};
+            auto execution = AdmitBuiltinPointQuery(plan.Value(), registry, view, {agent, contexts.Value()},
+                                                    {.submittedTick = 4, .deadlineTick = 44, .maximumCandidates = 3, .bestCount = 3});
+            REQUIRE(execution.HasValue());
+            RunPointQuery(*execution.Value(), 5);
+            const auto *published = execution.Value()->Published();
+            REQUIRE(published);
+            REQUIRE(published->status == QueryExecutionStatus::Completed);
+            CHECK(published->generator.stage == stage);
+            CHECK(published->generator.generator == generator->id);
+            CHECK(published->generator.provider == generator->origin.provider);
+            CHECK(published->generator.revision == contexts.Value()->Revision());
+            CHECK(published->generated == points.size());
+            CHECK(published->invalidCoordinates == 0);
+            REQUIRE(published->winners.size() == points.size());
+            CHECK(published->winners.front().item == QueryGeneratedItem{points[first]});
+        }
+
         TEST_CASE("Adaptive native EQS republishes a matching shortlist before spending provider work", "[unit][ai][eqs][cache]") {
             const auto scene = MakeScene();
             const auto view = scene->View();

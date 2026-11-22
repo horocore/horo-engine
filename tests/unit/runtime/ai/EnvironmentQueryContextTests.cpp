@@ -301,6 +301,45 @@ namespace Horo::AI {
             CHECK(items[1] == QueryGeneratedItem{points[1]});
         }
 
+        TEST_CASE("EQS authored point generation rejects incomplete position lists before writing", "[unit][ai][eqs][generator]") {
+            const auto query = MakeIdentity<QueryId>(31);
+            const auto stage = MakeIdentity<QueryStageId>(32);
+            const auto result = MakeIdentity<QueryResultSchemaId>(33);
+            const std::array<Math::WorldCoordinate64, MaximumBuiltinAuthoredQueryPoints + 1> points{};
+            ExpectError(CreateBuiltinAuthoredPointQuery(query, stage, result, "Positions", points, 3),
+                        AIErrors::EnvironmentQueryLimitExceeded);
+            const auto authored = CreateBuiltinAuthoredPointQuery(query, stage, result, "Positions", std::span{points}.first(3), 3);
+            REQUIRE(authored.HasValue());
+            QueryAssetSource source{.id = query,
+                                    .result = authored.Value().ResultSchema(),
+                                    .stages = {authored.Value().Stages().begin(), authored.Value().Stages().end()}};
+            auto &properties = source.stages.front().properties;
+            SECTION("position bytes are short") {
+                properties.back().value = std::vector<std::byte>{std::byte{1}};
+            }
+            SECTION("position identities contain a gap") {
+                properties.erase(properties.begin() + 1);
+            }
+            const auto asset = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(asset.HasValue());
+            const auto registry = CaptureBuiltinQuerySchema().Value();
+            const auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry);
+            REQUIRE(plan.HasValue());
+            const auto *generator = registry.Find(plan.Value().Stages().front().generator);
+            REQUIRE(generator);
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry).Value();
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan.Value(), registry, providers, view, Source(view));
+            REQUIRE(contexts.HasValue());
+            std::array<QueryGeneratedItem, 3> items{Math::WorldCoordinate64::FromMillimeters(10, 0, 0)};
+            const auto original = items;
+            const QueryGeneratorOutput output{{stage, generator->id, generator->origin.provider, contexts.Value()->Revision()}, 3, items};
+            ExpectError(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output), AIErrors::EnvironmentQuerySchemaInvalid);
+            CHECK(items == original);
+        }
+
         TEST_CASE("EQS contexts capture immutable built-ins once per execution revision", "[unit][ai][eqs][context]") {
             QueryFixture fixture;
             for (std::uint8_t index = 0; index < static_cast<std::uint8_t>(BuiltinQueryContext::Count); ++index)

@@ -199,8 +199,13 @@ namespace {
         const auto resultId = Decisions::MakeIdentity<QueryResultSchemaId>(45);
         const auto registry = CaptureBuiltinQuerySchema();
         REQUIRE(registry.HasValue());
-        const auto query = CreateBuiltinLatticeQuery(queryId, Decisions::MakeIdentity<QueryStageId>(46), resultId, "Test positions",
-                                                     {.stepMillimeters = 500, .outerSteps = 1}, 8);
+        const auto stage = Decisions::MakeIdentity<QueryStageId>(46);
+        const bool authoredPoints = GENERATE(false, true);
+        const std::array points{Math::WorldCoordinate64::FromMillimeters(-2400, 20, 1800),
+                                Math::WorldCoordinate64::FromMillimeters(8200, 0, 0)};
+        const auto query = authoredPoints ? CreateBuiltinAuthoredPointQuery(queryId, stage, resultId, "Authored positions", points, 8)
+                                          : CreateBuiltinLatticeQuery(queryId, stage, resultId, "Test positions",
+                                                                      {.stepMillimeters = 500, .outerSteps = 1}, 8);
         REQUIRE(query.HasValue());
         const std::array keys{
             BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
@@ -390,7 +395,7 @@ namespace {
             REQUIRE(after.HasValue());
             REQUIRE(after.Value());
             const auto &winner = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*after.Value()));
-            CHECK(winner == Math::WorldCoordinate64::FromMillimeters(2000, 0, -500));
+            CHECK(winner == (authoredPoints ? points.front() : Math::WorldCoordinate64::FromMillimeters(2000, 0, -500)));
             CHECK(fixture.probe.factories == 0);
             if (mode == NetworkProjectRole::ListenServer) {
                 auto client = service(NetworkModeServiceKind::Scene, NetworkModeWorldKind::Client, {8});

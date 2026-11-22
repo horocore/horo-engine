@@ -89,8 +89,16 @@ namespace Horo::AI {
                                                                           std::string displayName, const QueryPointLattice &lattice,
                                                                           std::uint32_t maximumResults);
 
+    inline constexpr std::size_t MaximumBuiltinAuthoredQueryPoints = EnvironmentQuerySchemaLimits::PropertiesPerStage;
+
+    /** @brief Captures up to @ref MaximumBuiltinAuthoredQueryPoints exact world points in authored order. */
+    [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinAuthoredPointQuery(QueryId query, QueryStageId stage,
+                                                                                QueryResultSchemaId result, std::string displayName,
+                                                                                std::span<const Math::WorldCoordinate64> points,
+                                                                                std::uint32_t maximumResults);
+
     /**
-     * @brief Dispatches an admitted point-lattice stage through its exact native provider and current query context.
+     * @brief Dispatches an admitted native point stage through its exact provider and current query context.
      * @param plan Immutable compiled query. @param contexts Context captured for the same query revision.
      * @param output Caller-owned destination and exact registered provenance.
      * @return Generation evidence or a typed incompatible/stale/budget failure, with no partial output on failure.
@@ -99,12 +107,12 @@ namespace Horo::AI {
                                                                                const QueryContextSnapshot &contexts,
                                                                                const QueryGeneratorOutput &output);
 
-    /** @brief Appends a point-distance stage to a native lattice source in semantic execution order.
-     * @param lattice Native lattice with zero or more native distance stages. @param stage Fresh stable test stage identity.
+    /** @brief Appends a point-distance stage to a native point query in semantic execution order.
+     * @param asset Native lattice or authored points. @param stage Fresh stable test stage identity.
      * @param settings Explicit radius and optional score. @return Detached complete source or typed refusal.
      * @post Existing stages retain their identities, source order and execution order.
      */
-    [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
+    [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &asset, QueryStageId stage,
                                                                             QueryPointDistanceTest settings);
 
     /** @brief Adds one blocking-geometry visibility filter to a native lattice, optionally with a Navigation stage.
