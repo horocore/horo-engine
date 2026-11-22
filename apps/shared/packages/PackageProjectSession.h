@@ -2,6 +2,8 @@
 /** @file PackageProjectSession.h @brief Non-installed application-root package authority composition. */
 #include "Horo/Application/PackageApplication.h"
 
+#include <string_view>
+
 namespace Horo::AI {
     class DecisionNodeGeneration;
 }
@@ -12,6 +14,10 @@ namespace Horo::Assets {
 
 namespace Horo::Packages {
     class GameplayPackageModuleHost;
+}
+
+namespace Horo::Platform {
+    struct ProjectReadContext;
 }
 
 namespace Horo::Application::Internal {
@@ -68,6 +74,39 @@ namespace Horo::Application::Internal {
     struct PackageMetadataPublication final {
         std::optional<Error> recoveryDiagnostic; /**< Durability or journal cleanup needs another recovery pass. */
     };
+
+    /** @brief Digests of the exact base and candidate documents shown in the approved update review. */
+    struct PackageUpdateApproval final {
+        Sha256Digest baseRequest;
+        Sha256Digest baseLock;
+        Sha256Digest candidateRequest;
+        Sha256Digest candidateLock;
+    };
+
+    /** @brief Inputs to the journaled publication of a staged candidate. */
+    struct ApprovedPackageProjectUpdate final {
+        const PreparedPackageProject &base;
+        const Packages::StagedPackageRestoreRecord &staged;
+        PackageUpdateApproval approval;
+        std::string_view candidateRequest;
+        std::string_view candidateLock;
+    };
+
+    /**
+     * @brief Publishes exact approved metadata under the project mutation lease.
+     * @param policy Host-selected project, platform and verification requirements.
+     * @param update Approved base and candidate documents and verified staging record.
+     * @param files Durable host filesystem.
+     * @param context Live project admission and cancellation authority.
+     * @return Commit result or a typed failure. A failed pre-commit publication attempts immediate journal recovery.
+     * @pre The caller owns approval, has checked live executable ownership and reference safety, and uses the host's publisher policy
+     * for staging. Any project-document migration must share a recovery boundary with publication.
+     * @details Publication never executes or activates a package. The unchanged lock is a no-op.
+     */
+    [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectUpdate(const PackageProjectPolicy &policy,
+                                                                                 const ApprovedPackageProjectUpdate &update,
+                                                                                 DurableFileSystem &files,
+                                                                                 const Platform::ProjectReadContext &context);
 
     /** @brief Project-owned asset whose recorded importer will be withdrawn. */
     struct PackageImporterReference final {

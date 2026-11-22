@@ -384,6 +384,14 @@ the next offset. Pass `--offset` to read the following page. A next offset of
 `-1` means there are no more rows. A pending package metadata recovery blocks
 the preview until a recovery-capable operation repairs the project.
 
+The update host publishes a previously reviewed candidate only when the exact
+base and candidate documents still match the review and the candidate lock
+matches a verified staging record for the same project. It uses the project
+mutation lease and the package metadata journal. A failed pre-commit write
+attempts recovery while holding the lease. If the lock replacement committed
+and durability remains uncertain, the journal preserves enough evidence to
+confirm the new pair on the next preparation.
+
 ## Uninstall Policy
 
 Before uninstall:

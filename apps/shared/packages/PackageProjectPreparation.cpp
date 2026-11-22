@@ -287,6 +287,32 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Checks the exact approved documents against immutable staging evidence and host restore policy. */
+        Result<void> CheckUpdateCandidate(const PackageProjectPolicy &policy, const ApprovedPackageProjectUpdate &update) {
+            if (update.candidateRequest.size() > RequestLimit || update.candidateLock.size() > policy.limits.lockfile.documentBytes)
+                return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
+            const auto graph = update.staged.Graph();
+            const auto &approval = update.approval;
+            if (!graph || graph->platform != policy.platform || update.staged.ProjectRoot() != policy.projectRoot ||
+                update.base.application.restore.projectRoot != policy.projectRoot ||
+                approval.baseRequest != update.base.requestDocumentDigest || approval.baseLock != update.base.lockDigest ||
+                approval.candidateRequest != Digest(update.candidateRequest) || approval.candidateLock != Digest(update.candidateLock) ||
+                approval.candidateLock != update.staged.LockDigest())
+                return Result<void>::Failure(MetadataConflict());
+            const auto candidate = ValidateDocuments(update.candidateRequest, update.candidateLock, policy.limits.lockfile);
+            if (candidate.HasError())
+                return Result<void>::Failure(candidate.ErrorValue());
+            const auto &request = candidate.Value().request;
+            if (graph->requestHash != request.Digest())
+                return Result<void>::Failure(MetadataConflict());
+            if (policy.requirePublisherVerification && std::ranges::any_of(graph->packages, [](const auto &package) {
+                return !package.publisher.has_value();
+            }))
+                return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::PublisherEvidenceUnavailable));
+            return candidate.Value().lock.ValidateForRestore(request.Digest(), policy.platform,
+                                                             policy.limits.supportedPackageFormatVersion);
+        }
+
         /** @brief Rechecks the request after the lock read and detects an in-flight paired publication. */
         Result<void> ConfirmReadablePair(const std::filesystem::path &metadata, const std::string_view request,
                                          const DurableFileSystem &files, const CancellationToken &cancellation) {
@@ -456,6 +482,41 @@ namespace Horo::Application::Internal {
         prepared.lockDigest = Digest(prepared.application.restore.lockfileJson);
         prepared.requestDocumentDigest = Digest(bytes.request);
         return Result<PreparedPackageProject>::Success(std::move(prepared));
+    }
+
+    /** @copydoc PublishPackageProjectUpdate */
+    Result<PackageMetadataPublication> PublishPackageProjectUpdate(const PackageProjectPolicy &policy,
+                                                                   const ApprovedPackageProjectUpdate &update, DurableFileSystem &files,
+                                                                   const Platform::ProjectReadContext &context) {
+        using Publication = Result<PackageMetadataPublication>;
+        if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
+            return Publication::Failure(authority.ErrorValue());
+        const auto directory = MetadataPath(policy.projectRoot);
+        if (directory.HasError())
+            return Publication::Failure(directory.ErrorValue());
+        if (auto candidate = CheckUpdateCandidate(policy, update); candidate.HasError())
+            return Publication::Failure(candidate.ErrorValue());
+        const auto &metadata = directory.Value();
+        auto lease = AcquireProjectMutation(metadata, files, "package-update");
+        if (lease.HasError())
+            return Publication::Failure(lease.ErrorValue());
+        const auto &limits = policy.limits.lockfile;
+        if (auto recovered = RecoverMetadata(metadata, limits, files, context.cancellation); recovered.HasError())
+            return Publication::Failure(recovered.ErrorValue());
+        const auto previous = ReadDocuments(metadata, limits, context.cancellation);
+        if (previous.HasError())
+            return Publication::Failure(previous.ErrorValue());
+        if (!previous.Value().Matches(update.base))
+            return Publication::Failure(MetadataConflict());
+        if (previous.Value().lock == update.candidateLock)
+            return Publication::Success({});
+        const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
+        auto result = CommitDocuments(metadata, previous.Value(), next, files, context);
+        if (result.HasValue())
+            return result;
+        if (auto recovered = RecoverMetadata(metadata, limits, files, {}); recovered.HasError())
+            return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(recovered).ErrorValue()));
+        return result;
     }
 
     /** @copydoc PublishPackageProjectRemoval */

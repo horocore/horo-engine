@@ -7,6 +7,7 @@
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageBehaviorReferences.h"
 #include "PackageProjectHost.h"
+#include "PackageRestoreTestSupport.h"
 
 #include <fstream>
 #include <functional>
@@ -297,6 +298,90 @@ namespace {
         REQUIRE(current.HasValue());
         CHECK(current.Value().application.portableRequest->Dependencies().empty());
         CHECK(current.Value().application.lockedPlan->Packages().empty());
+        CHECK_FALSE(std::filesystem::exists(journal));
+    }
+
+    TEST_CASE("Package update publishes only the reviewed staged candidate and recovers a failed commit",
+              "[packages][application][host][update]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto journal = policy.projectRoot / ".horo/local/package-metadata.pending";
+        const auto base = PreparePackageProject(policy, files, {});
+        REQUIRE(base.HasValue());
+        const auto originalRequest = fixture.Read("packages.json");
+        const auto originalLock = fixture.Read("packages.lock");
+        auto intent = nlohmann::json::parse(originalRequest);
+        intent["dependencies"][fixture.graph.package.Value()]["version"] = "^1.0.0";
+        const auto requestJson = intent.dump();
+        const auto request = Packages::ValidatedPackageRequest::Parse(requestJson);
+        REQUIRE(request.HasValue());
+        const auto &locked = base.Value().application.lockedPlan->Packages().front();
+        const Packages::PackageResolutionPlan resolution{
+            .packages = {{locked.package, locked.version, locked.source, locked.artifactDigest, {}}}};
+        const Packages::PackageLockArtifact artifact{.package = locked.package,
+                                                     .version = locked.version,
+                                                     .source = locked.source,
+                                                     .artifactDigest = locked.artifactDigest,
+                                                     .manifestDigest = locked.manifestDigest,
+                                                     .fileManifestDigest = locked.fileManifestDigest,
+                                                     .contributions = locked.contributions};
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate(resolution, std::span{&locked.package, 1},
+                                                                         request.Value().Digest(), std::span{&artifact, 1});
+        REQUIRE(lock.HasValue());
+        const auto lockJson = lock.Value().SerializeCanonical();
+
+        namespace RestoreTests = Horo::Tests::PackageRestore;
+        RestoreTests::ServiceFixture restore(fixture.graph.bytes);
+        std::filesystem::create_directories(journal.parent_path());
+        const auto operation = restore.service->StartStaged({.projectRoot = policy.projectRoot,
+                                                             .lockfileJson = lockJson,
+                                                             .expectedRequestHash = request.Value().Digest(),
+                                                             .platform = policy.platform});
+        REQUIRE(operation.HasValue());
+        const auto id = operation.Value().Id();
+        REQUIRE(RestoreTests::WaitForTerminal(*restore.service, id).outcome == Packages::PackageRestoreOutcome::Ready);
+        const auto staged = restore.service->Staged(id);
+        REQUIRE(staged);
+
+        ApprovedPackageProjectUpdate update{.base = base.Value(),
+                                            .staged = *staged,
+                                            .approval = {base.Value().requestDocumentDigest, base.Value().lockDigest,
+                                                         RestoreTests::Digest(requestJson), RestoreTests::Digest(lockJson)},
+                                            .candidateRequest = requestJson,
+                                            .candidateLock = lockJson};
+        const auto context = HostFixture::ReadContext();
+        SECTION("a different candidate lock is rejected even with a matching approval digest") {
+            const auto edited = lockJson + '\n';
+            update.candidateLock = edited;
+            update.approval.candidateLock = RestoreTests::Digest(edited);
+            REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasError());
+            CHECK(fixture.Read("packages.json") == originalRequest);
+        }
+        SECTION("an externally edited base is preserved") {
+            const auto edited = originalRequest + '\n';
+            fixture.Write("packages.json", edited);
+            REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasError());
+            CHECK(fixture.Read("packages.json") == edited);
+        }
+        SECTION("failure before the lock replacement restores the original pair before returning") {
+            files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
+            REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasError());
+            CHECK(fixture.Read("packages.json") == originalRequest);
+        }
+        SECTION("retry can keep the exact published pair after uncertain lock durability") {
+            files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
+            const auto published = PublishPackageProjectUpdate(policy, update, files, context);
+            REQUIRE(published.HasValue());
+            CHECK(published.Value().recoveryDiagnostic.has_value());
+            REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
+            CHECK(fixture.Read("packages.json") == requestJson);
+            CHECK(fixture.Read("packages.lock") == lockJson);
+            CHECK_FALSE(std::filesystem::exists(journal));
+            return;
+        }
+        CHECK(fixture.Read("packages.lock") == originalLock);
         CHECK_FALSE(std::filesystem::exists(journal));
     }
 
