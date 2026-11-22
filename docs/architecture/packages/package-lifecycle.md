@@ -405,6 +405,13 @@ recognizes the point only if the current request and lock still match those
 digests. Failed updates retain a previous completed rollback point. The point
 records package metadata and does not include project document migrations.
 
+`horo-engine package preview-rollback --project /path/to/project` reads the
+retained pair automatically. Pass its fingerprint as `--approve` to
+`package rollback-update`, together with the project and
+`--package-cache-root`. Rollback stages the older lock before publication and
+applies the same reference-safety boundary as forward updates. A successful
+rollback retains the pair it replaced as the next rollback point.
+
 ## Uninstall Policy
 
 Before uninstall:

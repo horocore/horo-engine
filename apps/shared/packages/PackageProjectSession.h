@@ -112,6 +112,8 @@ namespace Horo::Application::Internal {
     struct PackageRollbackDocuments final {
         std::string request;
         std::string lock;
+        Sha256Digest publishedRequest;
+        Sha256Digest publishedLock;
     };
 
     /**

@@ -651,7 +651,8 @@ namespace Horo::Application::Internal {
                 return Output::Failure(valid.ErrorValue());
             if (const auto stable = RecheckRemovalBase(metadata, limits, current.Value(), cancellation); stable.HasError())
                 return Output::Failure(stable.ErrorValue());
-            return Output::Success({std::string{point->oldRequest}, std::string{point->oldLock}});
+            return Output::Success(
+                {std::string{point->oldRequest}, std::string{point->oldLock}, point->publishedRequest, point->publishedLock});
         }
         return Output::Failure(Error{ErrorCode{"packages.host.rollback_unavailable"}, ErrorDomainId{"packages.host"}});
     }

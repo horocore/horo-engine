@@ -250,6 +250,8 @@ namespace Horo::Application::Internal {
         descriptors.insert(descriptors.end(), std::make_move_iterator(packages.begin()), std::make_move_iterator(packages.end()));
         descriptors.push_back(DescribePackageUpdatePreviewCommand());
         descriptors.push_back(DescribePackageApplyUpdateCommand());
+        descriptors.push_back(DescribePackageRollbackPreviewCommand());
+        descriptors.push_back(DescribePackageRollbackUpdateCommand());
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());
         descriptors.push_back(DescribePlatformServicesValidationCommand());
         descriptors.push_back(DescribePlatformServicesCookCommand());

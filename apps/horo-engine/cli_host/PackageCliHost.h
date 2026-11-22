@@ -16,6 +16,14 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Cli::CliCommandDescriptor DescribePackageApplyUpdateCommand();
     /** @brief Creates the approved package update adapter. @return Owned dispatcher registration. */
     [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageApplyUpdateCommandAdapter();
+    /** @brief Describes the read-only rollback preview. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRollbackPreviewCommand();
+    /** @brief Describes the approved rollback operation. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRollbackUpdateCommand();
+    /** @brief Creates the rollback preview adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRollbackPreviewCommandAdapter();
+    /** @brief Creates the approved rollback adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRollbackUpdateCommandAdapter();
 
     /** @brief Concrete services for one CLI/MCP process invocation, retained until all package callbacks are acknowledged. */
     class PackageCliHost final {

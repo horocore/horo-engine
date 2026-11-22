@@ -137,7 +137,12 @@ namespace {
         const auto descriptor = registration.adapter->GetDescriptor();
         auto applyRegistration = MakePackageApplyUpdateCommandAdapter();
         const auto applyDescriptor = applyRegistration.adapter->GetDescriptor();
-        const std::array descriptors{descriptor, applyDescriptor};
+        auto rollbackPreview = MakePackageRollbackPreviewCommandAdapter();
+        auto rollbackApply = MakePackageRollbackUpdateCommandAdapter();
+        const auto rollbackPreviewPath = rollbackPreview.adapter->GetDescriptor().path;
+        const auto rollbackApplyPath = rollbackApply.adapter->GetDescriptor().path;
+        const std::array descriptors{descriptor, applyDescriptor, rollbackPreview.adapter->GetDescriptor(),
+                                     rollbackApply.adapter->GetDescriptor()};
         CHECK(descriptor.sideEffects == CliSideEffectPolicy::ReadsState);
         CHECK(applyDescriptor.sideEffects == CliSideEffectPolicy::WritesFiles);
         const CliDispatchPolicy policy{.activeHost = CliHostKind::HoroEngine,
@@ -150,6 +155,8 @@ namespace {
         std::vector<CliCommandAdapterRegistration> adapters;
         adapters.push_back(std::move(registration));
         adapters.push_back(std::move(applyRegistration));
+        adapters.push_back(std::move(rollbackPreview));
+        adapters.push_back(std::move(rollbackApply));
         auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(adapters), policy);
         REQUIRE(dispatcher.HasValue());
         auto admitted = std::move(dispatcher).Value();
@@ -213,6 +220,24 @@ namespace {
             CHECK_FALSE(std::get<bool>(applied.Outcome().Value().fields.front().value));
             CHECK(read(metadata / "packages.json") == next.dump());
             CHECK(read(metadata / "packages.lock") == nextLock.dump());
+
+            CliCommandRequest rollback{.command = rollbackPreviewPath, .options = {NativeProject::PathOption("project", root)}};
+            const auto reviewed = admitted.Dispatch(rollback, {.invocation = {3}, .configuration = &configuration.Value()});
+            REQUIRE(reviewed.Outcome().HasValue());
+            const auto rollbackFingerprint = std::get<std::string>(reviewed.Outcome().Value().fields.back().value);
+            CHECK(rollbackFingerprint != fingerprint);
+            rollback.command = rollbackApplyPath;
+            rollback.options.push_back({"approve", {{rollbackFingerprint, CliValueSource::Invocation, {}}}});
+            rollback.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            fixture.Write("packages.json", next.dump() + '\n');
+            const auto stale = admitted.Dispatch(rollback, {.invocation = {4}, .configuration = &configuration.Value()});
+            REQUIRE(stale.Outcome().HasError());
+            CHECK(read(metadata / "packages.json") == next.dump() + '\n');
+            fixture.Write("packages.json", next.dump());
+            const auto restored = admitted.Dispatch(rollback, {.invocation = {5}, .configuration = &configuration.Value()});
+            REQUIRE(restored.Outcome().HasValue());
+            CHECK(read(metadata / "packages.json") == originalRequest);
+            CHECK(read(metadata / "packages.lock") == originalLock);
             return;
         }
         SECTION("a pending publication is left intact") {
