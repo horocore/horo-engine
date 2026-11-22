@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <new>
+#include <tuple>
 
 namespace Horo::AI {
     namespace {
@@ -168,24 +169,192 @@ namespace Horo::AI {
         return stop(Cancelled);
     }
 
-    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(
-        std::shared_ptr<const SymbolicDomain> domain, const std::span<const SymbolicLiteral> initial,
-        const std::span<const SymbolicLiteral> goal, const std::size_t work) {
+    const SymbolicDomain::Action *SymbolicHierarchy::FindAction(const SymbolicActionId id) const noexcept {
+        const auto actions = std::span{primitives_->actions_}.first(primitives_->actionCount_);
+        const auto identity = [](const SymbolicDomain::Action &action) { return action.identity.action; };
+        const auto found = std::ranges::lower_bound(actions, id, {}, identity);
+        return found != actions.end() && found->identity.action == id ? &*found : nullptr;
+    }
+
+    bool SymbolicHierarchy::HasCompound(const SymbolicCompoundId compound) const noexcept {
+        const auto methods = std::span{methods_}.first(methodCount_);
+        return std::ranges::binary_search(methods, compound, {}, &Method::compound);
+    }
+
+    Result<SymbolicHierarchy> SymbolicHierarchy::Capture(
+        std::shared_ptr<const SymbolicDomain> primitives, const std::span<const SymbolicMethodSource> sources) {
+        using Hierarchy = Result<SymbolicHierarchy>;
+        if (!primitives || sources.empty() || sources.size() > MaximumMethods)
+            return Hierarchy::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        SymbolicHierarchy hierarchy;
+        hierarchy.primitives_ = std::move(primitives);
+        for (const auto &source : sources) {
+            const auto conditions = hierarchy.primitives_->Encode(source.preconditions);
+            if (!source.method.IsValid() || !source.compound.IsValid() || !conditions || source.children.size() > MaximumChildren)
+                return Hierarchy::Failure(MakeError(AIErrors::TaskContextInvalid));
+            auto &method = hierarchy.methods_[hierarchy.methodCount_++];
+            method.id = source.method;
+            method.compound = source.compound;
+            method.preconditions = *conditions;
+            method.childCount = source.children.size();
+            std::ranges::copy(source.children, method.children.begin());
+        }
+        auto methods = std::span{hierarchy.methods_}.first(hierarchy.methodCount_);
+        std::ranges::sort(methods, {}, &Method::id);
+        if (std::ranges::adjacent_find(methods, {}, &Method::id) != methods.end())
+            return Hierarchy::Failure(MakeError(AIErrors::IdentityInvalid));
+        std::ranges::sort(methods, [](const Method &left, const Method &right) {
+            return std::tie(left.compound, left.id) < std::tie(right.compound, right.id);
+        });
+        const auto valid = [&](const SymbolicSubtask &child) {
+            if (const auto *action = std::get_if<SymbolicActionId>(&child))
+                return hierarchy.FindAction(*action) != nullptr;
+            return hierarchy.HasCompound(std::get<SymbolicCompoundId>(child));
+        };
+        for (const auto &method : methods) {
+            if (!std::ranges::all_of(std::span{method.children}.first(method.childCount), valid))
+                return Hierarchy::Failure(MakeError(AIErrors::TaskContextInvalid));
+        }
+        return Hierarchy::Success(std::move(hierarchy));
+    }
+
+    struct SymbolicHierarchy::Decomposition final {
+        static_assert(MaximumDepth < SymbolicPlan::MaximumStates);
+
+        struct Pending final {
+            std::array<SymbolicSubtask, MaximumDepth> tasks{};
+            std::size_t count{};
+        };
+
+        const SymbolicHierarchy &hierarchy;
+        AiWorkBudget &budget;
+        const CancellationToken &cancellation;
+        const AiTaskOperationContext *operation;
+        SymbolicPlan &plan;
+
+        SymbolicPlanStatus Solve(Pending pending, const std::uint64_t state, const std::size_t depth) noexcept {
+            using enum SymbolicPlanStatus;
+            if (PlanningCancelled(cancellation, operation))
+                return Cancelled;
+            if (pending.count == 0)
+                return Solved;
+            if (depth == MaximumDepth || !budget.Consume(1))
+                return BudgetExhausted;
+            const auto &next = pending.tasks[--pending.count];
+            if (const auto *action = std::get_if<SymbolicActionId>(&next))
+                return Primitive(*action, pending, state, depth + 1);
+            return Compound(std::get<SymbolicCompoundId>(next), pending, state, depth + 1);
+        }
+
+        SymbolicPlanStatus Primitive(SymbolicActionId id, const Pending &pending, std::uint64_t state,
+                                     const std::size_t depth) noexcept {
+            using enum SymbolicPlanStatus;
+            const auto *action = hierarchy.FindAction(id);
+            if (!action || !action->preconditions.Matches(state))
+                return NoPlan;
+            state = (state & ~action->effects.known) | action->effects.values;
+            plan.steps_[plan.count_++] = action->identity;
+            plan.cost_ += action->cost;
+            const auto outcome = Solve(pending, state, depth);
+            if (outcome != Solved) {
+                --plan.count_;
+                plan.cost_ -= action->cost;
+            }
+            return outcome;
+        }
+
+        SymbolicPlanStatus Compound(SymbolicCompoundId compound, const Pending &pending, const std::uint64_t state,
+                                    const std::size_t depth) noexcept {
+            using enum SymbolicPlanStatus;
+            const auto methods = std::span{hierarchy.methods_}.first(hierarchy.methodCount_);
+            const auto first = std::ranges::lower_bound(methods, compound, {}, &Method::compound);
+            for (auto method = first; method != methods.end() && method->compound == compound; ++method) {
+                if (PlanningCancelled(cancellation, operation))
+                    return Cancelled;
+                if (!budget.Consume(1))
+                    return BudgetExhausted;
+                if (!method->preconditions.Matches(state))
+                    continue;
+                if (method->childCount > pending.tasks.size() - pending.count || !budget.Consume(method->childCount))
+                    return BudgetExhausted;
+                auto expanded = pending;
+                for (auto index = method->childCount; index > 0; --index)
+                    expanded.tasks[expanded.count++] = method->children[index - 1];
+                const auto outcome = Solve(expanded, state, depth);
+                if (outcome != NoPlan)
+                    return outcome;
+            }
+            return NoPlan;
+        }
+    };
+
+    SymbolicPlan SymbolicHierarchy::Search(const std::span<const SymbolicLiteral> initial, const SymbolicCompoundId root,
+                                           const std::size_t work, const CancellationToken &cancellation) const noexcept {
+        return SearchImpl(initial, root, work, cancellation, nullptr);
+    }
+
+    SymbolicPlan SymbolicHierarchy::SearchImpl(const std::span<const SymbolicLiteral> initial, const SymbolicCompoundId root,
+                                               const std::size_t work, const CancellationToken &cancellation,
+                                               const AiTaskOperationContext *operation) const noexcept {
+        using enum SymbolicPlanStatus;
+        SymbolicPlan plan;
+        if (!primitives_)
+            return plan;
+        const auto facts = primitives_->Encode(initial);
+        if (!facts || !HasCompound(root) || work == 0 || work > SymbolicDomain::MaximumWork)
+            return plan;
+        AiWorkBudget budget{work};
+        Decomposition search{*this, budget, cancellation, operation, plan};
+        const auto outcome = search.Solve({{root}, 1}, facts->values, 0);
+        plan.status_ = PlanningCancelled(cancellation, operation) ? Cancelled : outcome;
+        if (plan.status_ != Solved) {
+            plan.count_ = 0;
+            plan.cost_ = 0;
+        }
+        return plan;
+    }
+
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::CaptureInputs(
+        const std::span<const SymbolicLiteral> initial, const std::size_t work) {
         using Job = Result<std::shared_ptr<SymbolicPlanningJob>>;
-        if (!domain || !domain->Encode(initial) || !domain->Encode(goal) || work == 0 || work > SymbolicDomain::MaximumWork)
+        if (initial.size() > SymbolicDomain::MaximumFacts || work == 0 || work > SymbolicDomain::MaximumWork)
             return Job::Failure(MakeError(AIErrors::TaskContextInvalid));
         try {
             auto job = std::shared_ptr<SymbolicPlanningJob>{new SymbolicPlanningJob};
-            job->domain_ = std::move(domain);
             std::ranges::copy(initial, job->initial_.begin());
-            std::ranges::copy(goal, job->goal_.begin());
             job->initialCount_ = initial.size();
-            job->goalCount_ = goal.size();
             job->work_ = work;
             return Job::Success(std::move(job));
         } catch (const std::bad_alloc &) {
             return Job::Failure(MakeError(AIErrors::AgentCapacityExceeded));
         }
+    }
+
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(
+        std::shared_ptr<const SymbolicDomain> domain, const std::span<const SymbolicLiteral> initial,
+        const std::span<const SymbolicLiteral> goal, const std::size_t work) {
+        if (!domain || !domain->Encode(initial) || !domain->Encode(goal))
+            return Result<std::shared_ptr<SymbolicPlanningJob>>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        auto job = CaptureInputs(initial, work);
+        if (job.HasValue()) {
+            job.Value()->domain_ = std::move(domain);
+            std::ranges::copy(goal, job.Value()->goal_.begin());
+            job.Value()->goalCount_ = goal.size();
+        }
+        return job;
+    }
+
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(
+        std::shared_ptr<const SymbolicHierarchy> hierarchy, const std::span<const SymbolicLiteral> initial,
+        const SymbolicCompoundId root, const std::size_t work) {
+        if (!hierarchy || !hierarchy->primitives_ || !hierarchy->primitives_->Encode(initial) || !hierarchy->HasCompound(root))
+            return Result<std::shared_ptr<SymbolicPlanningJob>>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        auto job = CaptureInputs(initial, work);
+        if (job.HasValue()) {
+            job.Value()->hierarchy_ = std::move(hierarchy);
+            job.Value()->root_ = root;
+        }
+        return job;
     }
 
     Result<void> SymbolicPlanningJob::Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const {
@@ -195,8 +364,11 @@ namespace Horo::AI {
         auto expected = State::Ready;
         if (!state_.compare_exchange_strong(expected, State::Running))
             return Result<void>::Failure(MakeError(AIErrors::TaskTransitionInvalid));
-        result_ = domain_->SearchImpl(std::span{initial_}.first(initialCount_), std::span{goal_}.first(goalCount_), work_, cancellation,
-                                      &operation);
+        const auto initial = std::span{initial_}.first(initialCount_);
+        if (hierarchy_)
+            result_ = hierarchy_->SearchImpl(initial, root_, work_, cancellation, &operation);
+        else
+            result_ = domain_->SearchImpl(initial, std::span{goal_}.first(goalCount_), work_, cancellation, &operation);
         state_.store(State::Complete, std::memory_order_release);
         return result_.Status() == SymbolicPlanStatus::Cancelled ? JobCancelled() : Result<void>::Success();
     }

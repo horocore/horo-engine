@@ -138,5 +138,83 @@ namespace Horo::AI {
             CHECK(job->Read()->Status() == SymbolicPlanStatus::Solved);
             CHECK(job->Read()->Cost() == 3);
         }
+
+        TEST_CASE("HTN backtracks without carrying primitive effects or task steps into another method", "[ai][planning][htn]") {
+            DomainFixture input;
+            auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicLiteral, 1> withoutKey{{{input.key, false}}};
+            const std::array<SymbolicSubtask, 2> rejected{Id<SymbolicActionId>(10), nested};
+            const std::array<SymbolicSubtask, 1> fallback{Id<SymbolicActionId>(30)};
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), root, withoutKey, fallback},
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, rejected},
+                SymbolicMethodSource{Id<SymbolicMethodId>(3), nested, withoutKey, {}},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(std::move(primitives), methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto result = hierarchy.Value().Search({}, root, 1024);
+            REQUIRE(result.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(result.Steps().size() == 1);
+            CHECK(result.Steps().front().task == input.forceTask);
+            CHECK(result.Cost() == 10);
+            const auto blocked = hierarchy.Value().Search(input.picked, root, 1024);
+            CHECK(blocked.Status() == SymbolicPlanStatus::NoPlan);
+            CHECK(blocked.Steps().empty());
+        }
+
+        TEST_CASE("HTN validates references and caps recursive decomposition", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array<SymbolicSubtask, 1> recursive{root};
+            const std::array<SymbolicSubtask, 1> unknown{Id<SymbolicActionId>(99)};
+            std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, unknown}};
+            CHECK(SymbolicHierarchy::Capture(primitives, methods).HasError());
+            methods.front().children = recursive;
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto result = hierarchy.Value().Search({}, root, SymbolicDomain::MaximumWork);
+            CHECK(result.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(result.Steps().empty());
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            const auto revoked = hierarchy.Value().Search({}, root, 1024, cancelled.Token());
+            CHECK(revoked.Status() == SymbolicPlanStatus::Cancelled);
+            CHECK(revoked.Steps().empty());
+        }
+
+        TEST_CASE("HTN jobs retain a nested method and publish ordered registered primitives", "[ai][planning][htn][jobs]") {
+            DomainFixture input;
+            auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 2> sequence{Id<SymbolicActionId>(10), nested};
+            std::array<SymbolicSubtask, 1> unlock{Id<SymbolicActionId>(20)};
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, sequence},
+                                     SymbolicMethodSource{Id<SymbolicMethodId>(2), nested, input.picked, unlock}};
+            auto captured = SymbolicHierarchy::Capture(std::move(primitives), methods);
+            REQUIRE(captured.HasValue());
+            auto hierarchy = std::make_shared<const SymbolicHierarchy>(std::move(captured).Value());
+            const auto job = SymbolicPlanningJob::Create(std::move(hierarchy), {}, root, 1024);
+            REQUIRE(job.HasValue());
+            unlock.front() = Id<SymbolicActionId>(99);
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            BehaviorTreeAsyncTestSupport::StartedTask caller;
+            auto service = AiTaskJobService::Create(jobs, 1);
+            REQUIRE(service.HasValue());
+            REQUIRE(service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job.Value()})
+                        .HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            service.Value()->Pump();
+            CHECK(caller.fixture.Evaluate(*caller.instance, 2) == AiTaskState::Succeeded);
+            const auto *result = job.Value()->Read();
+            REQUIRE(result);
+            REQUIRE(result->Steps().size() == 2);
+            CHECK(result->Steps()[0].task == input.pickTask);
+            CHECK(result->Steps()[1].task == input.openTask);
+            CHECK(result->Cost() == 3);
+        }
     }  // namespace
 }  // namespace Horo::AI

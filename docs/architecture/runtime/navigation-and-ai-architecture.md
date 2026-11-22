@@ -2629,6 +2629,10 @@ and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. A host can submit
 the same detached computation through the existing AI task job service.
 The decision owner admits the returned tasks at its normal safe point.
+The HTN adapter composes the same registered primitives into guarded compound
+methods. It tries methods in stable ID order, preserves authored child order,
+and backtracks on copied facts. The work allowance and hard bound on pending
+tasks and decomposition depth terminate recursive methods with a typed result.
 
 ### Runtime Task & Lifecycle Alignment
 

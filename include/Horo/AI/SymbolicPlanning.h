@@ -6,10 +6,13 @@
 #include "Horo/AI/AITaskJobService.h"
 
 #include <atomic>
+#include <variant>
 
 namespace Horo::AI {
     using SymbolicFactId = AiStableIdentity<struct SymbolicFactIdentityTag>;
     using SymbolicActionId = AiStableIdentity<struct SymbolicActionIdentityTag>;
+    using SymbolicCompoundId = AiStableIdentity<struct SymbolicCompoundIdentityTag>;
+    using SymbolicMethodId = AiStableIdentity<struct SymbolicMethodIdentityTag>;
 
     struct SymbolicLiteral final {
         SymbolicFactId fact;
@@ -45,6 +48,7 @@ namespace Horo::AI {
 
     private:
         friend class SymbolicDomain;
+        friend class SymbolicHierarchy;
         SymbolicPlanStatus status_{SymbolicPlanStatus::InvalidInput};
         std::uint64_t cost_{};
         std::array<SymbolicPlanStep, MaximumStates - 1> steps_{};
@@ -69,6 +73,7 @@ namespace Horo::AI {
 
     private:
         friend class SymbolicPlanningJob;
+        friend class SymbolicHierarchy;
         SymbolicDomain() = default;
         struct Mask final {
             std::uint64_t known{};
@@ -93,12 +98,62 @@ namespace Horo::AI {
         std::size_t actionCount_{};
     };
 
+    using SymbolicSubtask = std::variant<SymbolicActionId, SymbolicCompoundId>;
+
+    /** @brief Guarded HTN method. Child tasks execute in authored order. */
+    struct SymbolicMethodSource final {
+        SymbolicMethodId method;
+        SymbolicCompoundId compound;
+        std::span<const SymbolicLiteral> preconditions;
+        std::span<const SymbolicSubtask> children;
+    };
+
+    /** @brief Deterministic HTN decomposition using the same registered primitives as symbolic search. */
+    class SymbolicHierarchy final {
+    public:
+        static constexpr std::size_t MaximumMethods = 64;
+        static constexpr std::size_t MaximumChildren = 16;
+        static constexpr std::size_t MaximumDepth = 64;
+
+        /** @brief Copies method definitions and verifies every primitive and compound reference. */
+        [[nodiscard]] static Result<SymbolicHierarchy> Capture(
+            std::shared_ptr<const SymbolicDomain> primitives, std::span<const SymbolicMethodSource> methods);
+
+        /** @brief Tries applicable methods in stable method-ID order and returns the first complete plan. */
+        [[nodiscard]] SymbolicPlan Search(std::span<const SymbolicLiteral> initial, SymbolicCompoundId root,
+                                          std::size_t work, const CancellationToken &cancellation = {}) const noexcept;
+
+    private:
+        friend class SymbolicPlanningJob;
+        struct Decomposition;
+        struct Method final {
+            SymbolicMethodId id;
+            SymbolicCompoundId compound;
+            SymbolicDomain::Mask preconditions;
+            std::array<SymbolicSubtask, MaximumChildren> children{};
+            std::size_t childCount{};
+        };
+
+        SymbolicHierarchy() = default;
+        [[nodiscard]] bool HasCompound(SymbolicCompoundId compound) const noexcept;
+        [[nodiscard]] const SymbolicDomain::Action *FindAction(SymbolicActionId action) const noexcept;
+        [[nodiscard]] SymbolicPlan SearchImpl(std::span<const SymbolicLiteral> initial, SymbolicCompoundId root,
+                                              std::size_t work, const CancellationToken &cancellation,
+                                              const AiTaskOperationContext *operation) const noexcept;
+        std::shared_ptr<const SymbolicDomain> primitives_;
+        std::array<Method, MaximumMethods> methods_{};
+        std::size_t methodCount_{};
+    };
+
     /** @brief One-shot detached search for the existing AI task job service. */
     class SymbolicPlanningJob final : public IAiTaskJob {
     public:
         [[nodiscard]] static Result<std::shared_ptr<SymbolicPlanningJob>> Create(
             std::shared_ptr<const SymbolicDomain> domain, std::span<const SymbolicLiteral> initial,
             std::span<const SymbolicLiteral> goal, std::size_t work);
+        [[nodiscard]] static Result<std::shared_ptr<SymbolicPlanningJob>> Create(
+            std::shared_ptr<const SymbolicHierarchy> hierarchy, std::span<const SymbolicLiteral> initial,
+            SymbolicCompoundId root, std::size_t work);
 
         [[nodiscard]] Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const override;
         /** @brief Reads an immutable result after the task owner receives completion. */
@@ -106,8 +161,12 @@ namespace Horo::AI {
 
     private:
         SymbolicPlanningJob() = default;
+        [[nodiscard]] static Result<std::shared_ptr<SymbolicPlanningJob>> CaptureInputs(
+            std::span<const SymbolicLiteral> initial, std::size_t work);
         enum class State : std::uint8_t { Ready, Running, Complete };
         std::shared_ptr<const SymbolicDomain> domain_;
+        std::shared_ptr<const SymbolicHierarchy> hierarchy_;
+        SymbolicCompoundId root_;
         std::array<SymbolicLiteral, SymbolicDomain::MaximumFacts> initial_{};
         std::array<SymbolicLiteral, SymbolicDomain::MaximumFacts> goal_{};
         std::size_t initialCount_{};
