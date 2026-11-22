@@ -682,7 +682,7 @@ namespace Horo::Tests::OpenXR {
         RequireFailureIdentity(fixture.owner.RegisterFeatureProvider(stale, {"XR_TEST_unavailable", "xrAbsent"}), XRErrors::IdentityStale);
 
         std::size_t fenced{};
-        fixture.fence.onValidate = [&] {
+        fixture.fence.onValidate = [&fixture, &fenced] {
             ++fenced;
             RequireFailureIdentity(fixture.owner.RetireSession(), XRErrors::OperationUnavailable);
             RequireFailureIdentity(fixture.owner.Close(), XRErrors::OperationUnavailable);

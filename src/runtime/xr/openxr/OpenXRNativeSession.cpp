@@ -853,8 +853,28 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<NativeFeatureProviderHandle>;
         if (controlThread_ != std::this_thread::get_id() || registeringProvider_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (auto current = ValidateXRSession(session, owner_); current.HasError())
-            return Outcome::Failure(std::move(current).ErrorValue());
+
+        struct RegistrationScope final {
+            bool &registering;
+
+            explicit RegistrationScope(bool &active) noexcept : registering(active) {
+                active = true;
+            }
+
+            RegistrationScope(const RegistrationScope &) = delete;
+            RegistrationScope &operator=(const RegistrationScope &) = delete;
+
+            ~RegistrationScope() {
+                registering = false;
+            }
+        };
+
+        const RegistrationScope scope{registeringProvider_};
+        const auto current = Borrow(session);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (current.Value().instance == XR_NULL_HANDLE || (prepared && prepared->incarnation != current.Value().incarnation))
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         if (!ValidName(route.extension, XR_MAX_EXTENSION_NAME_SIZE))
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
         const auto slot = ExtensionSlot(route.extension);
@@ -871,32 +891,9 @@ namespace Horo::XR::OpenXRInternal {
         if (!CopyPolicyName(admission.coreVersion ? route.coreSymbol : route.extensionSymbol, symbol))
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Selected native feature provider has no valid symbol"));
 
-        struct RegistrationScope final {
-            bool &registering;
-
-            explicit RegistrationScope(bool &active) noexcept : registering(active) {
-                registering = true;
-            }
-
-            ~RegistrationScope() {
-                registering = false;
-            }
-        };
-
-        const RegistrationScope scope{registeringProvider_};
-        const auto current = Borrow(session);
-        if (current.HasError())
-            return Outcome::Failure(current.ErrorValue());
-        if (owner_ != session || current.Value().instance == XR_NULL_HANDLE)
-            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
-
-        if (prepared && prepared->incarnation != current.Value().incarnation)
-            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
-
         PFN_xrVoidFunction function = prepared ? prepared->function : nullptr;
         const auto result = prepared ? XR_SUCCESS : dispatch_.getProc(current.Value().instance, symbol.data(), &function);
-        const auto fenced = Borrow(session);
-        if (fenced.HasError())
+        if (const auto fenced = Borrow(session); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());
         if (owner_ != session || nativeSessionIncarnation_ != current.Value().incarnation)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
