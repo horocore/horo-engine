@@ -5,6 +5,7 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessProjectScene.h"
 #include "HeadlessReplayArtifact.h"
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AITaskContinuation.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQueryGameplay.h"
@@ -892,6 +893,57 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(replayComparison.HasValue());
         REQUIRE(replayComparison.Value());
         CHECK(replayComparison.Value()->boundary == AI::AiReplayBoundary::QueryPublication);
+    }
+
+    TEST_CASE("Standalone and dedicated AI products retire failed and pending decision callbacks",
+              "[ai][qualification][character][product]") {
+        using Role = Network::NetworkProjectRole;
+        const auto role = GENERATE(Role::Standalone, Role::DedicatedServer);
+        NavigationProductFixture fixture;
+        DecisionFixture::Fixture decision;
+        decision.probe.succeedTick = std::numeric_limits<std::uint64_t>::max();
+        auto source = DecisionFixture::TaskTree(11);
+        source.executionTask = DecisionFixture::MakeIdentity<AI::TaskId>(9000);
+        const std::array catalog{AI::AiControllerDescriptor{.controller = DecisionFixture::MakeIdentity<AI::ControllerTypeId>(49),
+                                                            .decisionAsset = source.asset,
+                                                            .decisionKind = AI::DecisionPlanKind::BehaviorTree,
+                                                            .blackboardSchema = decision.schema}};
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt);
+        bool failStart{};
+        SECTION("Provider failure has one typed terminal cleanup") {
+            failStart = true;
+            decision.probe.startOutcome = Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+        }
+        SECTION("Host shutdown cancels a pending callback once") {}
+
+        NativeNavigationProductWorld product;
+        const auto started =
+            product.Start(fixture, NavigationGameplay(), {}, Physics::PhysicsRuntimeMode::Canonical, [&](auto &input, auto &assets) {
+            input.aiControllers = catalog;
+            input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
+                Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
+                                                      .environment = decision.Environment(),
+                                                      .bindings = {{catalog.front().controller, asset}},
+                                                      .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, {}, {}}});
+        }, role, role == Role::DedicatedServer ? std::optional{Internal::HeadlessSimulationAssets{.decisions = {asset}}} : std::nullopt);
+        if (started.HasError())
+            UNSCOPED_INFO(started.ErrorValue().message);
+        REQUIRE(started.HasValue());
+        product.RunFrame();
+        REQUIRE(decision.probe.starts == 1);
+        const auto continuation = decision.probe.continuation;
+        CHECK(continuation.IsCurrent() == !failStart);
+        product.Stop();
+        product.Stop();
+        REQUIRE(decision.probe.cleanups == 1);
+        CHECK(decision.probe.aborts == (failStart ? 0 : 1));
+        CHECK(decision.probe.lastTerminal == (failStart ? AI::AiTaskState::Failed : AI::AiTaskState::Cancelled));
+        if (failStart) {
+            REQUIRE(decision.probe.lastFailure);
+            CHECK(decision.probe.lastFailure->code.Value() == AI::AIErrors::CapabilityUnavailable.code.Value());
+        }
+        AI::AiTaskTerminalResult late{.state = AI::AiTaskState::Succeeded};
+        REQUIRE(continuation.PublishTerminal(late).Value() == AI::AiTaskPublicationDisposition::Stale);
     }
 
     TEST_CASE("Cooked AI decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {
