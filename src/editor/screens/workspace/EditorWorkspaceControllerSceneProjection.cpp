@@ -275,6 +275,23 @@ namespace Horo::Editor {
             return Output::Success(resolved);
         }
 
+        /** @brief Resolves a pair to exact authored body slots without exposing invisible objects. */
+        Result<std::array<Runtime::PhysicsBodyReference, 2>> ResolvePenetrationBodies(const std::span<const SceneObject> objects,
+                                                                                      const ObjectInspectionRequest &request) {
+            using Output = Result<std::array<Runtime::PhysicsBodyReference, 2>>;
+            if (request.objects.size() != 2 || request.offset != 0 || !request.physicsChannel)
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            const auto resolved = ResolveInspectionObjects(objects, request.objects);
+            if (resolved.HasError())
+                return Output::Failure(resolved.ErrorValue());
+            const auto *source = resolved.Value()[0];
+            const auto *target = resolved.Value()[1];
+            if (!source->components.rigidBody || !target->components.rigidBody)
+                return Output::Failure(MakeError(ColliderBodyUnavailable));
+            return Output::Success({Runtime::PhysicsBodyReference{{source->id.value}, source->components.rigidBody->body},
+                                    Runtime::PhysicsBodyReference{{target->id.value}, target->components.rigidBody->body}});
+        }
+
         /** @brief Propagates authoring admission failures and rejects stale continuation revisions. */
         Result<void> CheckInspectionScene(const Result<InspectionSceneRevision> &scene, const ObjectInspectionRequest &request) {
             if (scene.HasError())
@@ -645,24 +662,18 @@ namespace Horo::Editor {
         const auto scene = InspectSceneRevision();
         if (const auto admitted = CheckInspectionScene(scene, request); admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
-        if (request.objects.size() != 2 || request.offset != 0 || !request.physicsChannel)
-            return Output::Failure(MakeError(InspectionInvalidPage));
-        const auto resolved = ResolveInspectionObjects(m_viewModel.objects, request.objects);
-        if (resolved.HasError())
-            return Output::Failure(resolved.ErrorValue());
-        const auto *source = resolved.Value()[0];
-        const auto *target = resolved.Value()[1];
-        if (!source->components.rigidBody || !target->components.rigidBody)
-            return Output::Failure(MakeError(ColliderBodyUnavailable));
+        const auto bodies = ResolvePenetrationBodies(m_viewModel.objects, request);
+        if (bodies.HasError())
+            return Output::Failure(bodies.ErrorValue());
         const auto active = m_runtimeScene.ActiveScene();
         if (!m_inspectionPhysics || !m_inspectionPhysics->capture || !active ||
             active->DefinitionRevision().value != m_document.State().value)
             return Output::Failure(MakeError(InspectionUnavailable));
-        const auto sample = m_inspectionPhysics->capture(*active, {{source->id.value}, source->components.rigidBody->body},
-                                                         {{target->id.value}, target->components.rigidBody->body}, *request.physicsChannel);
+        const auto &[source, target] = bodies.Value();
+        const auto sample = m_inspectionPhysics->capture(*active, source, target, *request.physicsChannel);
         if (sample.HasError())
             return Output::Failure(sample.ErrorValue());
-        return Output::Success({.scene = scene.Value(), .records = {{source->id.value, target->id.value, sample.Value()}}});
+        return Output::Success({.scene = scene.Value(), .records = {{source.object.value, target.object.value, sample.Value()}}});
     }
 
     /** @copydoc EditorWorkspaceController::HasCurrentInspectionGeometry */

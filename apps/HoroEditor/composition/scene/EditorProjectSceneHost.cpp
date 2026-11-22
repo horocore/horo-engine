@@ -107,6 +107,39 @@ namespace Horo::Application::Internal {
         return Visibility::Success(clear);
     }
 
+    namespace {
+        /** @brief Measures the strongest positive contact between already admitted native body handles. */
+        Result<std::optional<Editor::InspectionPenetrationSample>> MeasurePreviewPenetration(
+            const Physics::Detail::PhysicsSceneHostScope &binding, Physics::BodyHandle source, Physics::BodyHandle target,
+            Physics::PhysicsQueryChannelId channel) {
+            using Output = Result<std::optional<Editor::InspectionPenetrationSample>>;
+            const auto body = binding.physics.ReadSceneBodyReconciliation(source);
+            if (body.HasError())
+                return Output::Failure(body.ErrorValue());
+            const auto &state = body.Value();
+            const Physics::PhysicsQueryDescriptor descriptor{.world = binding.physics.Identity(),
+                                                             .sceneGeneration = binding.scene.value,
+                                                             .geometry =
+                                                                 Physics::PhysicsOverlapQuery{state.observedShape, state.state.pose},
+                                                             .filter = {.channel = channel, .excludedBody = source},
+                                                             .collection = Physics::PhysicsQueryCollection::All,
+                                                             .maximumHitCount = Physics::MaximumPhysicsQueryHits};
+            std::vector<Physics::PhysicsQueryHit> hits(descriptor.maximumHitCount);
+            const auto result = binding.physics.Query(descriptor, hits);
+            if (result.HasError())
+                return Output::Failure(result.ErrorValue());
+            if (result.Value().truncated)
+                return Output::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
+            std::optional<Editor::InspectionPenetrationSample> strongest;
+            for (const auto &hit : std::span{hits}.first(result.Value().hitCount)) {
+                const auto depth = hit.penetrationDepthMeters;
+                if (hit.body == target && depth > (strongest ? strongest->depthMeters : 0.0F))
+                    strongest = Editor::InspectionPenetrationSample{depth, {hit.position.x, hit.position.y, hit.position.z}};
+            }
+            return Output::Success(strongest);
+        }
+    }  // namespace
+
     /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::CapturePreviewPenetration */
     Result<std::optional<Editor::InspectionPenetrationSample>> EditorProjectSceneDetail::ProjectPlaySceneHost::CapturePreviewPenetration(
         const Runtime::RuntimeSceneView &scene, const Runtime::PhysicsBodyReference &source, const Runtime::PhysicsBodyReference &target,
@@ -130,29 +163,7 @@ namespace Horo::Application::Internal {
         const auto to = findBody(target);
         if (from == binding.bodyBindings.end() || to == binding.bodyBindings.end() || from == to)
             return Output::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
-        const auto body = binding.physics.ReadSceneBodyReconciliation(from->handle);
-        if (body.HasError())
-            return Output::Failure(body.ErrorValue());
-        const auto &state = body.Value();
-        const Physics::PhysicsQueryDescriptor descriptor{.world = binding.physics.Identity(),
-                                                         .sceneGeneration = binding.scene.value,
-                                                         .geometry = Physics::PhysicsOverlapQuery{state.observedShape, state.state.pose},
-                                                         .filter = {.channel = channel.Value(), .excludedBody = from->handle},
-                                                         .collection = Physics::PhysicsQueryCollection::All,
-                                                         .maximumHitCount = Physics::MaximumPhysicsQueryHits};
-        std::vector<Physics::PhysicsQueryHit> hits(descriptor.maximumHitCount);
-        const auto result = binding.physics.Query(descriptor, hits);
-        if (result.HasError())
-            return Output::Failure(result.ErrorValue());
-        if (result.Value().truncated)
-            return Output::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
-        std::optional<Editor::InspectionPenetrationSample> strongest;
-        for (const auto &hit : std::span{hits}.first(result.Value().hitCount)) {
-            const auto depth = hit.penetrationDepthMeters;
-            if (hit.body == to->handle && depth > (strongest ? strongest->depthMeters : 0.0F))
-                strongest = Editor::InspectionPenetrationSample{depth, {hit.position.x, hit.position.y, hit.position.z}};
-        }
-        return Output::Success(strongest);
+        return MeasurePreviewPenetration(binding, from->handle, to->handle, channel.Value());
     }
 
     /** @copydoc PrepareEditorProjectPreview */
