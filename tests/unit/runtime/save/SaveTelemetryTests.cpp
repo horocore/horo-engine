@@ -372,7 +372,9 @@ TEST_CASE("Support bundle rejects ambiguous diagnostic members before classifyin
     const auto input = session.directory / "duplicate-member";
     const auto output = session.directory / "bundle.zip";
     std::filesystem::path entry = "crash/duplicate-member.json";
-    SECTION("JSON crash metadata") {}
+    SECTION("JSON crash metadata") {
+        // Keep the default JSON archive entry for this case.
+    }
     SECTION("Final JSONL record without a newline") {
         entry.replace_extension(".jsonl");
     }
@@ -466,16 +468,32 @@ TEST_CASE("Save telemetry cancelled interrupted and sync contract observations u
     Session session;
     REQUIRE(session.host);
     REQUIRE(session.Register());
-    {
+    const auto path = session.directory / "save.jsonl";
+    const auto retain = [&path](const auto &emit, const std::string_view marker) {
+        // A producer can lose the bounded logging queue during dispatch. Verify the
+        // exact retained record before asserting over aggregated counts below.
+        for (std::size_t attempt = 0; attempt < 32; ++attempt) {
+            emit();
+            REQUIRE(Log::Logger::Flush());
+            if (Read(path).find(marker) != std::string::npos)
+                return;
+            std::this_thread::yield();
+        }
+        FAIL("The fixture did not retain the expected diagnostic record");
+    };
+    retain([] {
         SaveStageObservation cancelled{SaveTelemetryStage::Capture, 81};
         cancelled.Fail(MakeError(SaveErrors::OperationCancelled, "private-cancellation"));
         cancelled.Complete(SaveTelemetryOutcome::Succeeded);
+    }, R"("outcome":"cancelled")");
+    retain([] {
         SaveStageObservation interrupted{SaveTelemetryStage::Participant, 81};
+    }, R"("outcome":"interrupted")");
+    retain([] {
         SaveStageObservation sync{SaveTelemetryStage::Sync, 81};
         sync.Complete(SaveTelemetryOutcome::Failed, {.bytes = 64, .retries = 2});
-    }
-    REQUIRE(Log::Logger::Flush());
-    const std::array paths{session.directory / "save.jsonl"};
+    }, R"("stage":"sync")");
+    const std::array paths{path};
     const auto summary = SummarizeSaveTelemetry(paths);
     REQUIRE(summary.HasValue());
     REQUIRE(summary.Value().second.find("cancelled") != std::string::npos);

@@ -172,7 +172,7 @@ namespace Horo::Diagnostics {
 
         /** @brief Redacts a record and reports whether its enclosing causal record also needs to be dropped. */
         bool RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
-            if (!key.empty() && Detail::IsSensitiveKey(key)) {
+            if (Detail::IsSensitiveKey(key)) {
                 value = "[REDACTED]";
                 return false;
             }

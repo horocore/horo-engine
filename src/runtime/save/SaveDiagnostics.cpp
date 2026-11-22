@@ -442,7 +442,8 @@ namespace Horo::Runtime {
 
     /** @copydoc RedactSaveDiagnosticError */
     Error RedactSaveDiagnosticError(const Error &error) {
-        std::array<const ErrorCodeDescriptor *, MaximumSaveDiagnosticCauseDepth + 1> descriptors{};
+        std::array<const ErrorCodeDescriptor *, MaximumSaveDiagnosticCauseDepth + 1> descriptors;
+        descriptors.fill(&SaveErrors::DiagnosticUnsupported);
         std::size_t count{};
         for (const Error *node = &error; node && count < descriptors.size(); node = node->cause.Get()) {
             const auto policy = PolicyFor(*node);
