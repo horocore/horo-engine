@@ -399,6 +399,12 @@ attempts recovery while holding the lease. If the lock replacement committed
 and durability remains uncertain, the journal preserves enough evidence to
 confirm the new pair on the next preparation.
 
+The metadata update retains one rollback point containing the exact previous
+request and lock. It records the new pair's digests before committing. A retry
+recognizes the point only if the current request and lock still match those
+digests. Failed updates retain a previous completed rollback point. The point
+records package metadata and does not include project document migrations.
+
 ## Uninstall Policy
 
 Before uninstall:

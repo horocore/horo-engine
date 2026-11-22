@@ -352,6 +352,17 @@ namespace {
                                             .candidateRequest = requestJson,
                                             .candidateLock = lockJson};
         const auto context = HostFixture::ReadContext();
+        SECTION("a committed update retains the exact previous pair until the project changes") {
+            REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasValue());
+            const auto previous = ReadPackageProjectRollback(policy, files, {});
+            REQUIRE(previous.HasValue());
+            CHECK(previous.Value().request == originalRequest);
+            CHECK(previous.Value().lock == originalLock);
+            fixture.Write("packages.json", requestJson + '\n');
+            CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
+            CHECK(fixture.Read("packages.json") == requestJson + '\n');
+            return;
+        }
         SECTION("a different candidate lock is rejected even with a matching approval digest") {
             const auto edited = lockJson + '\n';
             update.candidateLock = edited;
@@ -379,10 +390,15 @@ namespace {
             CHECK(fixture.Read("packages.json") == requestJson);
             CHECK(fixture.Read("packages.lock") == lockJson);
             CHECK_FALSE(std::filesystem::exists(journal));
+            const auto previous = ReadPackageProjectRollback(policy, files, {});
+            REQUIRE(previous.HasValue());
+            CHECK(previous.Value().lock == originalLock);
+            CHECK(previous.Value().request == originalRequest);
             return;
         }
         CHECK(fixture.Read("packages.lock") == originalLock);
         CHECK_FALSE(std::filesystem::exists(journal));
+        CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
     }
 
     TEST_CASE("Package removal fences authored writes and detects external edits during inventory", "[packages][application][host]") {

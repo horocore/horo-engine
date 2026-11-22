@@ -108,6 +108,22 @@ namespace Horo::Application::Internal {
                                                                                  DurableFileSystem &files,
                                                                                  const Platform::ProjectReadContext &context);
 
+    /** @brief Exact previous metadata bytes for the currently published update. */
+    struct PackageRollbackDocuments final {
+        std::string request;
+        std::string lock;
+    };
+
+    /**
+     * @brief Reads the previous pair only when the current project still matches the published update.
+     * @param policy Host project identity and metadata bounds.
+     * @param files Host filesystem used for read-only checkpoint admission.
+     * @param cancellation Parent read cancellation.
+     * @return Previous valid documents or a typed missing, stale, or damaged checkpoint error.
+     */
+    [[nodiscard]] Result<PackageRollbackDocuments> ReadPackageProjectRollback(const PackageProjectPolicy &policy, DurableFileSystem &files,
+                                                                              const CancellationToken &cancellation);
+
     /** @brief Project-owned asset whose recorded importer will be withdrawn. */
     struct PackageImporterReference final {
         Packages::HoroPackageId package;

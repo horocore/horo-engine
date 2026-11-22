@@ -5,6 +5,7 @@
 #include "PackageProjectSession.h"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <iterator>
 
@@ -22,6 +23,10 @@ namespace Horo::Application::Internal {
 
         std::filesystem::path JournalPath(const std::filesystem::path &metadata) {
             return metadata / "local/package-metadata.pending";
+        }
+
+        std::filesystem::path RollbackPath(const std::filesystem::path &metadata, const bool pending) {
+            return metadata / (pending ? "local/package-update.rollback.pending" : "local/package-update.rollback");
         }
 
         std::span<const std::byte> Bytes(const std::string_view bytes) {
@@ -190,6 +195,82 @@ namespace Horo::Application::Internal {
             if (entry.Value() && (entry.Value()->kind != FileEntryKind::RegularFile || entry.Value()->hardLinks != 1))
                 return Result<bool>::Failure(MetadataConflict());
             return Result<bool>::Success(entry.Value().has_value());
+        }
+
+        constexpr std::string_view RollbackMagic = "HOROPUR1";
+        constexpr auto RollbackHeader = RollbackMagic.size() + 2 * DigestSize;
+        constexpr auto RollbackOverhead = RollbackHeader + DigestSize + 24U;
+
+        struct RollbackPoint final {
+            Sha256Digest publishedRequest;
+            Sha256Digest publishedLock;
+            std::string_view oldRequest;
+            std::string_view oldLock;
+
+            /** @brief Tests the exact committed side of the reviewed update. */
+            bool MatchesPublished(const MetadataDocuments &documents) const {
+                return Digest(documents.request) == publishedRequest && Digest(documents.lock) == publishedLock;
+            }
+        };
+
+        /** @brief Stores one exact document pair, bounded by the same limits as project metadata. */
+        std::string EncodeRollbackPoint(const MetadataDocuments &previous, const PackageUpdateApproval &approval) {
+            std::string bytes{RollbackMagic};
+            AppendDigest(bytes, approval.candidateRequest);
+            AppendDigest(bytes, approval.candidateLock);
+            bytes.append(std::to_string(previous.request.size()));
+            bytes.push_back('\n');
+            bytes.append(previous.request);
+            bytes.append(previous.lock);
+            AppendDigest(bytes, Digest(bytes));
+            return bytes;
+        }
+
+        /** @brief Validates framing and checksum before returning views into the owned file bytes. */
+        std::optional<RollbackPoint> DecodeRollbackPoint(const std::string_view bytes, const Packages::PackageLockfileLimits &limits) {
+            if (bytes.size() <= RollbackHeader + DigestSize || !bytes.starts_with(RollbackMagic))
+                return std::nullopt;
+            const auto body = bytes.substr(0, bytes.size() - DigestSize);
+            if (DecodeDigest(bytes.substr(body.size())) != Digest(body))
+                return std::nullopt;
+            const auto separator = body.find('\n', RollbackHeader);
+            if (separator == std::string_view::npos || separator - RollbackHeader > 20)
+                return std::nullopt;
+            std::size_t requestSize{};
+            const auto end = body.data() + separator;
+            const auto converted = std::from_chars(body.data() + RollbackHeader, end, requestSize);
+            const auto documents = body.substr(separator + 1);
+            if (converted.ec != std::errc{} || converted.ptr != end || requestSize == 0 || requestSize > RequestLimit ||
+                requestSize >= documents.size() || documents.size() - requestSize > limits.documentBytes)
+                return std::nullopt;
+            return RollbackPoint{DecodeDigest(body.substr(RollbackMagic.size(), DigestSize)),
+                                 DecodeDigest(body.substr(RollbackMagic.size() + DigestSize, DigestSize)), documents.substr(0, requestSize),
+                                 documents.substr(requestSize)};
+        }
+
+        /** @brief Reconciles a staged checkpoint only after metadata recovery establishes a complete pair. */
+        Result<void> ReconcileRollbackPoint(const std::filesystem::path &metadata, const MetadataDocuments &current,
+                                            const Packages::PackageLockfileLimits &limits, DurableFileSystem &files) {
+            const auto pending = RollbackPath(metadata, true);
+            const auto exists = HasJournal(pending, files);
+            if (exists.HasError())
+                return Result<void>::Failure(exists.ErrorValue());
+            if (!exists.Value())
+                return Result<void>::Success();
+            const auto bytes = ReadMetadata(pending, RequestLimit + limits.documentBytes + RollbackOverhead, {});
+            if (bytes.HasError())
+                return Result<void>::Failure(bytes.ErrorValue());
+            const auto point = DecodeRollbackPoint(bytes.Value(), limits);
+            if (!point)
+                return Result<void>::Failure(MetadataConflict());
+            if (point->MatchesPublished(current)) {
+                const auto target = RollbackPath(metadata, false);
+                if (const auto prior = HasJournal(target, files); prior.HasError())
+                    return Result<void>::Failure(prior.ErrorValue());
+                AtomicFileReplacementReceipt receipt;
+                return files.AtomicReplaceTracked(pending, target, receipt);
+            }
+            return files.RemoveDurable(pending);
         }
 
         /** @brief Serializes repair and removal with authored Scene, asset and migration writers across processes. */
@@ -508,15 +589,71 @@ namespace Horo::Application::Internal {
             return Publication::Failure(previous.ErrorValue());
         if (!previous.Value().Matches(update.base))
             return Publication::Failure(MetadataConflict());
+        if (auto reconciled = ReconcileRollbackPoint(metadata, previous.Value(), limits, files); reconciled.HasError())
+            return Publication::Failure(reconciled.ErrorValue());
         if (previous.Value().lock == update.candidateLock)
             return Publication::Success({});
         const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
+        AtomicFileReplacementReceipt rollbackReceipt;
+        if (auto checkpoint = ReplaceMetadata(RollbackPath(metadata, true), EncodeRollbackPoint(previous.Value(), update.approval), files,
+                                              rollbackReceipt);
+            checkpoint.HasError())
+            return Publication::Failure(checkpoint.ErrorValue());
         auto result = CommitDocuments(metadata, previous.Value(), next, files, context);
-        if (result.HasValue())
+        if (result.HasValue()) {
+            if (!result.Value().recoveryDiagnostic) {
+                if (auto reconciled = ReconcileRollbackPoint(metadata, next, limits, files); reconciled.HasError())
+                    return Publication::Success({std::move(reconciled).ErrorValue()});
+            }
             return result;
+        }
         if (auto recovered = RecoverMetadata(metadata, limits, files, {}); recovered.HasError())
             return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(recovered).ErrorValue()));
+        if (auto reconciled = ReconcileRollbackPoint(metadata, previous.Value(), limits, files); reconciled.HasError())
+            return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(reconciled).ErrorValue()));
         return result;
+    }
+
+    /** @copydoc ReadPackageProjectRollback */
+    Result<PackageRollbackDocuments> ReadPackageProjectRollback(const PackageProjectPolicy &policy, DurableFileSystem &files,
+                                                                const CancellationToken &cancellation) {
+        using Output = Result<PackageRollbackDocuments>;
+        const auto directory = MetadataPath(policy.projectRoot);
+        if (directory.HasError())
+            return Output::Failure(directory.ErrorValue());
+        const auto &metadata = directory.Value();
+        const auto &limits = policy.limits.lockfile;
+        const auto current = ReadDocuments(metadata, limits, cancellation);
+        if (current.HasError())
+            return Output::Failure(current.ErrorValue());
+        if (const auto stable = ConfirmReadablePair(metadata, current.Value().request, files, cancellation); stable.HasError())
+            return Output::Failure(stable.ErrorValue());
+        for (const bool pending : {true, false}) {
+            const auto path = RollbackPath(metadata, pending);
+            const auto exists = HasJournal(path, files);
+            if (exists.HasError())
+                return Output::Failure(exists.ErrorValue());
+            if (!exists.Value())
+                continue;
+            const auto bytes = ReadMetadata(path, RequestLimit + limits.documentBytes + RollbackOverhead, cancellation);
+            if (bytes.HasError())
+                return Output::Failure(bytes.ErrorValue());
+            const auto point = DecodeRollbackPoint(bytes.Value(), limits);
+            if (!point)
+                return Output::Failure(MetadataConflict());
+            if (!point->MatchesPublished(current.Value())) {
+                if (pending)
+                    continue;
+                return Output::Failure(MetadataConflict());
+            }
+            const auto valid = ValidateDocuments(point->oldRequest, point->oldLock, limits);
+            if (valid.HasError())
+                return Output::Failure(valid.ErrorValue());
+            if (const auto stable = RecheckRemovalBase(metadata, limits, current.Value(), cancellation); stable.HasError())
+                return Output::Failure(stable.ErrorValue());
+            return Output::Success({std::string{point->oldRequest}, std::string{point->oldLock}});
+        }
+        return Output::Failure(Error{ErrorCode{"packages.host.rollback_unavailable"}, ErrorDomainId{"packages.host"}});
     }
 
     /** @copydoc PublishPackageProjectRemoval */
