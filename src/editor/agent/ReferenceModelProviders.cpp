@@ -186,6 +186,10 @@ namespace Horo::Agent {
                     }
                     state.pending.erase(0, newline + 1);
                 }
+                if (state.pending.size() > kMaximumLineBytes) {
+                    state.oversized = true;
+                    return 0;
+                }
                 return bytes;
             } catch (...) {
                 // Buffer growth can fail before the guarded consumer is entered; never unwind through libcurl.

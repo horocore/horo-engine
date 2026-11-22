@@ -87,6 +87,16 @@ class Handler(BaseHTTPRequestHandler):
         if payload["model"] == "malformed":
             self.send_records(["not json\n"], status=200)
             return
+        if payload["model"] in {"oversized-record", "oversized-final-fragment"}:
+            padding = "x" * (256 * 1024)
+            if cloud:
+                records = ["data:[DONE]\n", ":" + padding]
+            else:
+                records = [json.dumps({"done": True, "padding": padding})]
+            if payload["model"] == "oversized-record":
+                records.append("\n")
+            self.send_records(records)
+            return
         if payload["model"] == "history":
             messages = payload.get("messages", [])
             if len(messages) != 3 or messages[1].get("tool_calls", [{}])[0].get("function", {}).get("name") != "scene_query":

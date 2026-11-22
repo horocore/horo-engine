@@ -7,6 +7,7 @@
 #include "Horo/Security/SecurityErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
@@ -319,6 +320,24 @@ TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent]
             REQUIRE(limited.error->message.find("private") == std::string::npos);
         }
     }
+}
+
+TEST_CASE("HTTP adapters bound response records even without a final newline", "[agent][model][http]") {
+    const auto cloud = GENERATE(false, true);
+    const auto model = GENERATE("oversized-record", "oversized-final-fragment");
+    auto provider = Create(cloud);
+    const auto outcome = provider->Stream(Request(model), [](const ModelEvent &) {
+        FAIL("An oversized response cannot publish an event");
+        return true;
+    }, {});
+    REQUIRE(outcome.error);
+    CHECK(outcome.error->code == ModelErrorCode::Protocol);
+    CHECK(outcome.error->message == "Model response exceeds limit");
+
+    const auto recovered = provider->Stream(Request("normal"), [](const ModelEvent &) {
+        return true;
+    }, {});
+    CHECK(recovered.Succeeded());
 }
 
 TEST_CASE("HTTP response buffer allocation failure stays inside the C callback boundary", "[agent][model][http]") {
