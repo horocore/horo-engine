@@ -250,6 +250,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererOpenGL::Shutdown */
     void EditorViewportRendererOpenGL::Shutdown() noexcept {
+        imageCapture_.Shutdown();
         preparedCrossFade_.reset();
         if (crossFadeProgram_)
             glDeleteProgram(std::exchange(crossFadeProgram_, 0));

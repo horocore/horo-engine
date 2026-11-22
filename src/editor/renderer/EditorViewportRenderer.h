@@ -7,6 +7,7 @@
 
 #include "EditorRendererErrors.h"
 #include "EditorViewportColorTypes.h"
+#include "EditorViewportImageCapture.h"
 #include "EditorViewportLighting.h"
 #include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
@@ -57,6 +58,21 @@ namespace Horo::Editor {
     class IEditorViewportRenderer : public Render::IStaticMeshPassExecutor {
     public:
         virtual ~IEditorViewportRenderer() = default;
+
+        /** @brief Requests a bounded copy from the exact currently allocated offscreen viewport. */
+        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion) {
+            return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
+        }
+
+        /** @brief Observes an exact capture without blocking on renderer work. */
+        [[nodiscard]] virtual std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t) {
+            return std::nullopt;
+        }
+
+        /** @brief Cancels an exact capture while pending. */
+        virtual bool CancelImageCapture(std::uint64_t) noexcept {
+            return false;
+        }
 
         /** @brief Opts in to a cross-fade compositor before viewport textures are first allocated. */
         [[nodiscard]] virtual Result<void> EnableCameraCrossFade() {

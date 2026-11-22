@@ -15,6 +15,10 @@ namespace Horo::Editor {
         /** @brief Binds a ready generic offscreen render target. */
         [[nodiscard]] static Result<void> BindRenderTarget(const Render::RenderFrontend &frontend, Render::RenderTargetHandle target);
 
+        /** @brief Resolves the private framebuffer for one ready offscreen target. */
+        [[nodiscard]] static Result<std::uint32_t> ResolveFramebuffer(const Render::RenderFrontend &frontend,
+                                                                      Render::RenderTargetHandle target);
+
         /** @brief Binds a ready generic texture view to an OpenGL texture unit slot. */
         [[nodiscard]] static Result<void> BindTexture(const Render::RenderFrontend &frontend, Render::RenderTextureViewHandle view,
                                                       std::uint32_t unit);

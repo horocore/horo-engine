@@ -4882,6 +4882,11 @@ target_link_libraries(HoroAssetSceneDropTests PRIVATE HoroEngine::EditorRenderEx
 add_executable(HoroEditorViewportResourceTests
         unit/editor/EditorViewportResourcesTests.cpp
 )
+if (TARGET HoroEditorViewportOpenGL)
+    target_sources(HoroEditorViewportResourceTests PRIVATE unit/editor/OpenGLViewportImageCaptureTests.cpp)
+    target_include_directories(HoroEditorViewportResourceTests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroEditorViewportResourceTests PRIVATE HoroEngine::EditorViewportOpenGL HoroThirdParty::Glad)
+endif ()
 target_link_libraries(HoroEditorViewportResourceTests
         PRIVATE
         HoroEngine::EditorViewportResources

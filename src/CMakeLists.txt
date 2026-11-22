@@ -4265,6 +4265,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
             editor/renderer/opengl/OpenGLViewportResourceBridge.cpp
             editor/renderer/opengl/OpenGLStateSnapshot.cpp
             editor/renderer/opengl/EditorViewportRendererOpenGL.cpp
+            editor/renderer/opengl/OpenGLViewportImageCapture.cpp
             editor/renderer/opengl/EditorViewportPreparedFrameOpenGL.cpp
     )
     add_library(HoroEngine::EditorViewportOpenGL ALIAS HoroEditorViewportOpenGL)

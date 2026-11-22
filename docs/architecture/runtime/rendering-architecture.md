@@ -1119,6 +1119,12 @@ usable until the new generation is ready, and release follows dependency order. 
 editor-private OpenGL bridge resolves ready generic handles to backend instances for
 frame-local command encoding. OpenGL names, framebuffer objects, and vertex-array
 objects remain private to the OpenGL module and its matching editor integration.
+The OpenGL editor viewport can copy one explicitly requested rectangle from the
+exact offscreen target generation after successful viewport rendering. The GPU
+copy uses a bounded pixel pack buffer and a fence. The owner polls the fence
+with zero timeout and publishes detached top-to-bottom RGBA8 bytes. Resize,
+renderer failure, cancellation, and expiry prevent pending bytes from
+publishing while the staging allocation retires on its own fence.
 The Metal editor viewport still uses its transitional frontend-owned logical target
 identity and editor-private texture bridge until its corresponding resource-migration
 ticket is complete.

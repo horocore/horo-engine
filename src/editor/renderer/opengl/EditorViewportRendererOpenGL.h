@@ -2,6 +2,7 @@
 
 #include "EditorViewportForwardLighting.h"
 #include "EditorViewportShaderParameters.h"
+#include "OpenGLViewportImageCapture.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
@@ -21,6 +22,9 @@ namespace Horo::Editor {
 
         /** @brief Creates shader, geometry, and offscreen target state in the current OpenGL context. */
         [[nodiscard]] Result<void> Initialize();
+        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region) override;
+        [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
+        bool CancelImageCapture(std::uint64_t id) noexcept override;
         [[nodiscard]] Result<void> EnableCameraCrossFade() override;
         [[nodiscard]] EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept override;
         [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
@@ -143,6 +147,7 @@ namespace Horo::Editor {
         Render::RenderBufferHandle gridVertexBufferHandle_;
         Render::RenderFrontend *frontend_{nullptr};
         EditorViewportResources resources_;
+        OpenGLViewportImageCapture imageCapture_;
         UniformLocations uniforms_{};
         EditorViewportExtent requestedExtent_{};
         EditorViewportGridOptions gridOptions_{};
