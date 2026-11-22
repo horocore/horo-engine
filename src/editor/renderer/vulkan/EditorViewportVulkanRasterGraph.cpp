@@ -394,7 +394,8 @@ namespace Horo::Editor {
 
         /** @brief Reuses the opaque, shadow and output owners on the paint program's single combined graph. */
         RenderGraphPassRef BuildCanvas(RasterVariant &variant, RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
-                                       const FrameSlot &slot, RenderQueueId queue, const CanvasSample &source, const bool overlay) {
+                                       const FrameSlot &slot, RenderQueueId queue, const CanvasSample &source, const bool overlay,
+                                       const VulkanViewportImageCapture::Copy *capture) {
             RasterGraphAuthor author{builder, queue};
             const auto atlas = author.Attach(attachments.atlas);
             const RasterOutput output{author.Attach(attachments.color), author.Attach(attachments.depth), attachments.colorView,
@@ -403,6 +404,8 @@ namespace Horo::Editor {
             AuthorAtlas(author, variant, slot, atlas);
             AuthorScene(author, variant, slot, atlas, output, overlay, atlasPasses);
             const auto consumer = AuthorCanvas(author, variant, source, output);
+            if (capture)
+                variant.workloads[variant.count++] = author.Capture(output.color, *capture);
             author.AppendInitialStates(initial);
             return consumer;
         }
@@ -529,6 +532,8 @@ namespace Horo::Editor {
     /** @brief Keeps all material spans and the authoritative producer alive until graph execution has taken its native pins. */
     struct EditorViewportRendererVulkan::ViewportCanvasGraph final {
         std::shared_ptr<ViewportRasterGraphs> topology;
+        std::shared_ptr<ViewportCanvasGraph> captureVariant;
+        std::uint64_t captureId{};
         std::unique_ptr<Render::UiPaintProgram> paint;
         std::unique_ptr<CanvasQuadProgram> quad;
         std::array<RasterVariant, std::tuple_size_v<FrameSlots>> slots;
@@ -587,8 +592,33 @@ namespace Horo::Editor {
             return prepared;
         if (!request.writer.artifact.reflection)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        if (viewportCanvasGraph_ && viewportCanvasGraph_->topology == viewportRasterGraphs_ && viewportCanvasGraph_->Matches(request))
-            return Result<void>::Success();
+        if (!viewportCanvasGraph_ || viewportCanvasGraph_->topology != viewportRasterGraphs_ || !viewportCanvasGraph_->Matches(request)) {
+            auto base = BuildViewportCanvasGraph(request, cancellation, nullptr);
+            if (base.HasError())
+                return Result<void>::Failure(base.ErrorValue());
+            viewportCanvasGraph_ = std::move(base).Value();
+        }
+        auto &base = *viewportCanvasGraph_;
+        const auto capture = imageCapture_.Pending();
+        if (!capture) {
+            base.captureVariant.reset();
+        } else if (!base.captureVariant || base.captureId != capture->id) {
+            auto variant = BuildViewportCanvasGraph(request, cancellation, &*capture);
+            if (variant.HasError()) {
+                imageCapture_.Fail();
+                base.captureVariant.reset();
+            } else {
+                base.captureVariant = std::move(variant).Value();
+                base.captureId = capture->id;
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::BuildViewportCanvasGraph */
+    Result<std::shared_ptr<EditorViewportRendererVulkan::ViewportCanvasGraph>> EditorViewportRendererVulkan::BuildViewportCanvasGraph(
+        const ViewportCanvasPreparation &request, const CancellationToken &cancellation, const VulkanViewportImageCapture::Copy *capture) {
+        using Outcome = Result<std::shared_ptr<ViewportCanvasGraph>>;
         try {
             auto candidate = std::make_shared<ViewportCanvasGraph>();
             candidate->topology = viewportRasterGraphs_;
@@ -599,12 +629,13 @@ namespace Horo::Editor {
             candidate->overlay = request.overlay;
             auto quad = CreateCanvasQuadProgram(request.consumer, request.space, RenderTextureFormat::Rgba8Unorm);
             if (quad.HasError())
-                return Result<void>::Failure(quad.ErrorValue());
+                return Outcome::Failure(quad.ErrorValue());
             candidate->quad = std::move(quad).Value();
 
             const UiPaintSceneCanvasGraph scene{request.limits, device_.graphicsIdentity,
-                                                [this, &candidate](RenderGraphBuilder &builder, const UiPaintSceneCanvasSource &source,
-                                                                   std::vector<RenderGraphImportedState> &initial) {
+                                                [this, &candidate, capture](RenderGraphBuilder &builder,
+                                                                            const UiPaintSceneCanvasSource &source,
+                                                                            std::vector<RenderGraphImportedState> &initial) {
                 auto &program = *candidate->quad;
                 if (const auto bound = BindCanvasQuadSource(program, source.slot, source.surface.color); bound.HasError())
                     return Result<RenderGraphPassRef>::Failure(bound.ErrorValue());
@@ -613,23 +644,22 @@ namespace Horo::Editor {
                                                                 program.space == UiRenderCompositionSpace::World};
                 return Result<RenderGraphPassRef>::Success(candidate->topology->BuildCanvas(candidate->slots[source.slot], builder, initial,
                                                                                             slots_[source.slot], device_.graphicsIdentity,
-                                                                                            sample, candidate->overlay));
+                                                                                            sample, candidate->overlay, capture));
             }};
             auto program = UiPaintProgram::CreateSceneCanvas(frontend_, request.paint, request.prototype, request.textures, request.writer,
                                                              scene, cancellation);
             if (program.HasError())
-                return Result<void>::Failure(program.ErrorValue());
+                return Outcome::Failure(program.ErrorValue());
             candidate->paint = std::move(program).Value();
             if (const auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-                return Result<void>::Failure(processed.ErrorValue());
+                return Outcome::Failure(processed.ErrorValue());
             if (const auto checked = candidate->paint->ValidatePreparation(); checked.HasError())
-                return checked;
-            viewportCanvasGraph_ = std::move(candidate);
-            return Result<void>::Success();
+                return Outcome::Failure(checked.ErrorValue());
+            return Outcome::Success(std::move(candidate));
         } catch (const BuildFailure &failure) {
-            return Result<void>::Failure(failure.error);
+            return Outcome::Failure(failure.error);
         } catch (const std::bad_alloc &) {
-            return Result<void>::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
+            return Outcome::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
         }
     }
 
@@ -638,12 +668,13 @@ namespace Horo::Editor {
                                                                      const Render::StaticMeshPassDescriptor &pass,
                                                                      const std::optional<Math::Mat4> &placement,
                                                                      const ViewportCanvasSource &source) {
-        if (imageCapture_.Pending())
-            imageCapture_.Fail();
         using namespace Render;
         if (!viewportCanvasGraph_ || !source || color_ || preparedCrossFade_ || viewportCanvasGraph_->topology != viewportRasterGraphs_)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
-        auto &canvas = *viewportCanvasGraph_;
+        auto &base = *viewportCanvasGraph_;
+        const auto capture = imageCapture_.Pending();
+        const bool withCapture = capture && base.captureVariant && capture->id == base.captureId;
+        auto &canvas = withCapture ? *base.captureVariant : base;
         const auto slot = PrepareViewportSlot(frame.Token(), pass);
         if (slot.HasError())
             return Result<void>::Failure(slot.ErrorValue());
@@ -680,8 +711,17 @@ namespace Horo::Editor {
         if (frameInput.HasError())
             return Result<void>::Failure(frameInput.ErrorValue());
         recordedEver_ = true;
-        return canvas.paint->ExecuteSceneCanvas(frame, frameInput.Value(), std::move(submission).Value(),
-                                                std::span{variant.workloads}.first(variant.count));
+        const auto workloads = std::span{variant.workloads}.first(variant.count);
+        if (!withCapture)
+            return canvas.paint->ExecuteSceneCanvas(frame, frameInput.Value(), std::move(submission).Value(), workloads);
+        const auto recorded = Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*canvas.paint, frame, frameInput.Value(),
+                                                                                               std::move(submission).Value(), workloads);
+        if (recorded.HasError()) {
+            imageCapture_.Fail();
+            return Result<void>::Failure(recorded.ErrorValue());
+        }
+        imageCapture_.Recorded(recorded.Value());
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareViewportRasterGraphs */

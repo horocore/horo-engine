@@ -254,6 +254,10 @@ namespace Horo::Editor {
         struct XrProjectionGraph;
         struct ViewportRasterGraphs;
         struct ViewportCanvasGraph;
+        /** @brief Prepares one complete canvas graph, optionally with the exact admitted image copy. */
+        [[nodiscard]] Result<std::shared_ptr<ViewportCanvasGraph>> BuildViewportCanvasGraph(
+            const ViewportCanvasPreparation &request, const CancellationToken &cancellation,
+            const VulkanViewportImageCapture::Copy *capture);
 
         /** @brief Borrows canvas recording inputs only while the exact prepared scene phase executes. */
         struct CanvasFrame final {

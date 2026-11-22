@@ -785,9 +785,9 @@ stops sampling when the Play generation or target changes. Workspace retirement
 withdraws the artifact.
 
 The same pack offers an approved `viewport.capture_image` crop on the OpenGL
-authored viewport and the ordinary Vulkan desktop raster graph while Play is
-idle. Vulkan copies the resolved presentation attachment after its scene and
-color work. Coordinates use a top-left pixel origin,
+and Vulkan authored desktop viewports while Play is idle. Vulkan copies the
+resolved presentation attachment after the scene and its color work, or after
+compositing its Camera or World canvas. Coordinates use a top-left pixel origin,
 with at most 256 pixels per axis. `debug.get_image` reports capture status and
 returns ready RGBA8 pixels as hexadecimal in chunks of up to 2,048 bytes. Start
 at offset zero and use `nextOffset` until the result omits it. Reads belong to the

@@ -284,6 +284,22 @@ namespace Horo::Tests::VulkanEditor {
         }
     };
 
+    /** @brief Polls renderer-owned staging through the ordinary cold resource boundary. */
+    EditorViewportImageSnapshot WaitForViewportCrop(Host &host, const RenderSceneView &scene, std::uint64_t id,
+                                                    EditorViewportExtent extent = {320, 240}) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        do {
+            host.SynchronizeViewport(scene, extent);
+            auto image = host.viewport->ReadImageCapture(id);
+            REQUIRE(image);
+            if (image->phase != EditorViewportImagePhase::Pending)
+                return std::move(*image);
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        } while (std::chrono::steady_clock::now() < deadline);
+        FAIL("The exact viewport crop did not complete.");
+        std::terminate();
+    }
+
     /** @brief Reads the exact published viewport attachment after a real native frame. */
     std::vector<std::uint8_t> ReadViewportColor(Host &host, const RenderSamplerHandle readbackSampler) {
         using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
@@ -426,6 +442,7 @@ namespace Horo::Tests::VulkanEditor {
             const auto output = host.viewport->TextureView();
             host.ComposeGui(frame, &output);
             Check(frame.Present());
+            host.viewport->FinishColorFrame(true);
             return centerPixel(ReadViewportColor(host, sampler));
         };
         auto placement = Math::Mat4::Identity();
@@ -439,6 +456,31 @@ namespace Horo::Tests::VulkanEditor {
             const auto behind = render(3, placement);
             CHECK(behind == opaque);
         }
+        const EditorViewportImageRegion region{pass.extent.width / 2, pass.extent.height / 2, 1, 1};
+        const bool revokeBeforeRecording = GENERATE(false, true);
+        bool authorized = true;
+        const auto capture = UiRequire(host.viewport->RequestImageCapture(region, [&] {
+            return authorized;
+        }));
+        host.SynchronizeViewport(scene, Host::CameraQualificationExtent);
+        Check(host.viewport->PrepareViewportCanvas(pass, prepared));
+        authorized = !revokeBeforeRecording;
+        programIdentity = nullptr;
+        placement.values[14] = 1;
+        const auto composited = render(4, space == World ? std::optional{placement} : std::nullopt);
+        const auto image = WaitForViewportCrop(host, scene, capture, Host::CameraQualificationExtent);
+        if (revokeBeforeRecording) {
+            CHECK(image.phase == EditorViewportImagePhase::Cancelled);
+            CHECK_FALSE(image.artifact);
+        } else {
+            REQUIRE(image.phase == EditorViewportImagePhase::Ready);
+            REQUIRE(image.artifact);
+            CHECK(image.artifact->region == region);
+            REQUIRE(image.artifact->rgba.size() == region.Bytes());
+            const auto &rgba = image.artifact->rgba;
+            CHECK((std::array{std::to_integer<int>(rgba[0]), std::to_integer<int>(rgba[1]), std::to_integer<int>(rgba[2])} == composited));
+        }
+        CHECK(composited == front);
         Check(host.frontend->ReleaseSampler(sampler));
         CHECK(host.Drain());
     }
@@ -942,26 +984,17 @@ namespace Horo::Tests::VulkanEditor {
         Check(frame.Present(), "present the same attachment after the copy");
         host.viewport->FinishColorFrame(true);
 
-        std::optional<EditorViewportImageSnapshot> image;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        do {
-            host.SynchronizeViewport({});
-            image = host.viewport->ReadImageCapture(requested.Value());
-            REQUIRE(image);
-            if (image->phase != EditorViewportImagePhase::Pending)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        } while (std::chrono::steady_clock::now() < deadline);
-        REQUIRE(image->phase == EditorViewportImagePhase::Ready);
-        REQUIRE(image->artifact);
-        CHECK(image->artifact->region == region);
-        REQUIRE(image->artifact->rgba.size() == region.Bytes());
+        const auto image = WaitForViewportCrop(host, {}, requested.Value());
+        REQUIRE(image.phase == EditorViewportImagePhase::Ready);
+        REQUIRE(image.artifact);
+        CHECK(image.artifact->region == region);
+        REQUIRE(image.artifact->rgba.size() == region.Bytes());
         const std::array red{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{255}};
         for (std::size_t offset = 0; offset < region.Bytes(); offset += red.size())
-            CHECK(std::ranges::equal(std::span{image->artifact->rgba}.subspan(offset, red.size()), red));
+            CHECK(std::ranges::equal(std::span{image.artifact->rgba}.subspan(offset, red.size()), red));
         authorized = false;
         CHECK(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Cancelled);
-        CHECK(image->publication.expired());
+        CHECK(image.publication.expired());
         CHECK(host.Drain());
     }
 
