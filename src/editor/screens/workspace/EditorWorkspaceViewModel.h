@@ -174,6 +174,7 @@ namespace Horo::Editor {
         RequestSourceLanguage,
         ApplySourceCompletion,
         OpenSourceReference,
+        SelectSourceSymbol,
         ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -407,11 +408,24 @@ namespace Horo::Editor {
         std::size_t index{};
     };
 
+    /** @brief Symbol list tied to the source bytes used to project its ranges. */
+    struct SourceLanguageSymbols final {
+        SourceDocumentSnapshot source;
+        Language::LanguageSymbols symbols;
+    };
+
+    /** @brief Selection from the published source symbol list. */
+    struct SourceSymbolIntent final {
+        std::shared_ptr<const SourceLanguageSymbols> result;
+        std::size_t index{};
+    };
+
     enum class SourceLanguageStatusKind : std::uint8_t {
         Waiting,
         Refused,
         NoDefinition,
         NoReferences,
+        NoDocumentSymbols,
         NoCompletion,
         NoSymbol,
         ScriptModuleUnavailable
@@ -878,6 +892,7 @@ namespace Horo::Editor {
         std::optional<SourceLanguageIntent> sourceLanguageIntent;
         std::optional<SourceCompletionIntent> sourceCompletionIntent;
         std::optional<SourceReferenceIntent> sourceReferenceIntent;
+        std::optional<SourceSymbolIntent> sourceSymbolIntent;
         std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
@@ -1214,6 +1229,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
         std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
         std::shared_ptr<const SourceLanguageReferences> sourceReferences;
+        std::shared_ptr<const SourceLanguageSymbols> sourceSymbols;
         std::vector<Language::ScriptModuleSourceBinding> sourceScriptBindings;
         std::optional<SourceLanguageHover> sourceLanguageHover;
         std::optional<SourceLanguageStatus> sourceLanguageStatus;

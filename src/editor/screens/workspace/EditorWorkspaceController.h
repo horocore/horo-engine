@@ -1468,6 +1468,10 @@ namespace Horo::Editor {
         [[nodiscard]] bool FocusSourceLocation(const Language::LanguageLocation &target);
         /** @brief Opens a reference selected from the active source publication. */
         void OpenSourceReference(const SourceReferenceIntent &intent);
+        /** @brief Publishes the byte selection of a symbol from the active source. */
+        void SelectSourceSymbol(const SourceSymbolIntent &intent);
+        /** @brief Publishes the document symbols from a current provider reply. */
+        void AcceptSourceSymbols(Language::LanguageResult &result);
         /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
         /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */

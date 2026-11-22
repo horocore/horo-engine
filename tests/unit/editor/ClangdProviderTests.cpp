@@ -146,6 +146,7 @@ namespace {
         bool navigated = false;
         bool referencesFound = false;
         bool described = false;
+        bool foundDocumentSymbol = false;
         std::optional<SourceEditingPlan> completionPlan;
         const auto firstReference = code.find("horo_fixture_symbol");
         const auto secondReference = code.find("horo_fixture_symbol", firstReference + 1);
@@ -176,6 +177,14 @@ namespace {
                 }
                 if (const auto *hover = std::get_if<LanguageHover>(&event.payload))
                     described |= hover->text.find("horo_fixture_symbol") != std::string::npos;
+                if (const auto *symbols = std::get_if<LanguageSymbols>(&event.payload)) {
+                    const auto declaration = code.find("repeat()");
+                    foundDocumentSymbol |= event.context.source.SharesStateWith(documents.front()) &&
+                                           std::ranges::any_of(symbols->items, [&](const LanguageSymbol &symbol) {
+                        return symbol.name == "repeat" && symbol.selection.start <= declaration &&
+                               symbol.selection.end >= declaration + std::string_view{"repeat"}.size();
+                    });
+                }
                 if (const auto *completion = std::get_if<LanguageCompletions>(&event.payload)) {
                     const auto item = std::ranges::find_if(completion->items, [](const auto &candidate) {
                         return candidate.label.find("horo_fixture_symbol") != std::string::npos;
@@ -207,6 +216,11 @@ namespace {
         REQUIRE(Await([&](const auto now) {
             observe(now);
             return described;
+        }));
+        REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Symbols).HasValue());
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return foundDocumentSymbol;
         }));
         REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Completion, {.offset = completionOffset}).HasValue());
         REQUIRE(Await([&](const auto now) {

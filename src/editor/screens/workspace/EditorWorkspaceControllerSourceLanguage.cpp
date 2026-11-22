@@ -111,13 +111,14 @@ namespace Horo::Editor {
         m_pendingSourceLanguage.reset();
         m_viewModel.sourceCompletions.reset();
         m_viewModel.sourceReferences.reset();
+        m_viewModel.sourceSymbols.reset();
         m_viewModel.sourceLanguageHover.reset();
         if (Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, intent.source.Identity().key.source)) {
             RequestScriptLanguage(intent);
             return;
         }
-        if (!m_sourceLanguage ||
-            (intent.kind != Definition && intent.kind != Completion && intent.kind != References && intent.kind != Hover))
+        if (!m_sourceLanguage || (intent.kind != Definition && intent.kind != Completion && intent.kind != References &&
+                                  intent.kind != Hover && intent.kind != Symbols))
             return;
         const auto request = m_sourceLanguage->Request(intent.source, intent.kind, {.offset = intent.view.caret});
         if (request.HasError()) {
@@ -176,6 +177,10 @@ namespace Horo::Editor {
             AcceptSourceHover(result, view);
             return;
         }
+        if (result.context.kind == SourceLanguageRequestKind::Symbols) {
+            AcceptSourceSymbols(result);
+            return;
+        }
         auto *navigation = std::get_if<Language::LanguageNavigation>(&result.payload);
         if (result.context.kind == SourceLanguageRequestKind::References) {
             if (!navigation || navigation->targets.empty()) {
@@ -188,6 +193,28 @@ namespace Horo::Editor {
         }
         if (!navigation || navigation->targets.empty() || !FocusSourceLocation(navigation->targets.front()))
             m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoDefinition};
+    }
+
+    /** @copydoc EditorWorkspaceController::AcceptSourceSymbols */
+    void EditorWorkspaceController::AcceptSourceSymbols(Language::LanguageResult &result) {
+        auto *symbols = std::get_if<Language::LanguageSymbols>(&result.payload);
+        if (!symbols || symbols->items.empty()) {
+            m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoDocumentSymbols};
+            return;
+        }
+        m_viewModel.sourceSymbols =
+            std::make_shared<const SourceLanguageSymbols>(SourceLanguageSymbols{std::move(result.context.source), std::move(*symbols)});
+    }
+
+    /** @copydoc EditorWorkspaceController::SelectSourceSymbol */
+    void EditorWorkspaceController::SelectSourceSymbol(const SourceSymbolIntent &intent) {
+        const auto &result = intent.result;
+        if (!result || result != m_viewModel.sourceSymbols || !result->source.IsCurrent() ||
+            result->source.Identity().instance != m_viewModel.workspacePanelHost.ActiveDocument() ||
+            intent.index >= result->symbols.items.size())
+            return;
+        m_viewModel.sourceLanguageFocus = std::make_shared<const Language::LanguageSourceFocus>(
+            Language::LanguageSourceFocus{result->source, result->symbols.items[intent.index].selection});
     }
 
     /** @copydoc EditorWorkspaceController::AcceptSourceHover */
@@ -258,6 +285,8 @@ namespace Horo::Editor {
             m_viewModel.sourceCompletions.reset();
         if (m_viewModel.sourceReferences && !m_viewModel.sourceReferences->source.IsCurrent())
             m_viewModel.sourceReferences.reset();
+        if (m_viewModel.sourceSymbols && !m_viewModel.sourceSymbols->source.IsCurrent())
+            m_viewModel.sourceSymbols.reset();
         if (m_viewModel.sourceLanguageHover && !m_viewModel.sourceLanguageHover->source.IsCurrent())
             m_viewModel.sourceLanguageHover.reset();
         std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {

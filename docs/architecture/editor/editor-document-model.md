@@ -264,8 +264,9 @@ retries initial admission if its compile database was missing. Diagnostics
 are displayed only on the exact source publication that received them.
 The C++ source toolbar requests symbol descriptions, definitions, references,
 and completions for the active selection. Definitions and selected references
-open embedded project sources and select the resolved UTF-16 range. Reference results
-display project paths and positions for the requesting source selection.
+open embedded project sources and select the resolved UTF-16 range. Reference
+results display project paths and positions for the requesting source selection.
+The document symbol list jumps to a declaration in the current source revision.
 Completion acceptance applies the main and additional edits
 as one revision-fenced undo step. Changes of source publication retire results.
 
