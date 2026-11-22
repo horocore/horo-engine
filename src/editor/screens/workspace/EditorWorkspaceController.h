@@ -89,6 +89,7 @@ namespace Horo::Editor {
     struct SurfaceInspectionPage;
     struct CollisionInspectionPage;
     struct PenetrationInspectionPage;
+    struct VisualInspectionPage;
     struct EditorInspectionPhysics;
     struct InspectionSceneRevision;
     struct EditorBuildCommandEndpoint;
@@ -848,6 +849,9 @@ namespace Horo::Editor {
 
         /** @brief Reads positive penetration for an exact visible authored body pair. */
         [[nodiscard]] Result<PenetrationInspectionPage> InspectPenetrations(const ObjectInspectionRequest &request) const;
+
+        /** @brief Reports projected bounds clipping and overlap in an explicit viewport region. */
+        [[nodiscard]] Result<VisualInspectionPage> InspectVisualIssues(const ObjectInspectionRequest &request) const;
         /** @brief Checks that the current extraction belongs to the committed authored Scene. */
         [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
         /** @brief Fences inspection against the authored Scene and its current editor projection. */

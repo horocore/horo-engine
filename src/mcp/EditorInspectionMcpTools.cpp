@@ -81,6 +81,32 @@ namespace Horo::Editor {
             return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
         }
 
+        /** @brief Describes a top-left-origin normalized viewport rectangle. */
+        Json ViewportRectangleSchema() {
+            Json point = VectorSchema(2);
+            point["items"] = {{"type", "number"}, {"minimum", 0}, {"maximum", 1}};
+            return {{"type", "object"},
+                    {"properties", {{"minimum", point}, {"maximum", point}}},
+                    {"required", {"minimum", "maximum"}},
+                    {"additionalProperties", false}};
+        }
+
+        /** @brief Captures the viewport as one bounded observation to avoid cross-camera page drift. */
+        Json VisualInputSchema() {
+            auto result = InputSchema();
+            auto &fields = result.at("properties");
+            fields.erase("offset");
+            fields.erase("limit");
+            auto region = ViewportRectangleSchema();
+            region["properties"]["aspect"] = {{"type", "number"},
+                                              {"minimum", std::numeric_limits<float>::denorm_min()},
+                                              {"maximum", std::numeric_limits<float>::max()}};
+            region["required"].push_back("aspect");
+            fields["viewportRegion"] = std::move(region);
+            result["required"].push_back("viewportRegion");
+            return result;
+        }
+
         /** @brief Requires a bounded world-space ray for every surface page. */
         Json SurfaceInputSchema() {
             auto result = InputSchema();
@@ -277,6 +303,24 @@ namespace Horo::Editor {
                               1);
         }
 
+        /** @brief Describes each object's clipped bounds and strongest projected overlap. */
+        Json VisualSchema() {
+            const Json id{{"type", "integer"}, {"minimum", 1}};
+            const Json overlap{{"type", "object"},
+                               {"properties",
+                                {{"object", id}, {"area", {{"type", "number"}, {"minimum", SmallestPositiveNumber}, {"maximum", 1}}}}},
+                               {"required", {"object", "area"}},
+                               {"additionalProperties", false}};
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", id},
+                                 {"regionBounds", ViewportRectangleSchema()},
+                                 {"clipped", {{"type", "boolean"}}},
+                                 {"largestOverlap", overlap}}},
+                               {"required", {"object", "clipped"}},
+                               {"additionalProperties", false}});
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -294,6 +338,10 @@ namespace Horo::Editor {
                                          ray->at("maximumDistance").get<double>()};
             if (const auto channel = arguments.find("channel"); channel != arguments.end())
                 request.physicsChannel = channel->get<std::string>();
+            if (const auto region = arguments.find("viewportRegion"); region != arguments.end())
+                request.viewportRegion = InspectionViewportRegion{{region->at("minimum").get<std::array<double, 2>>(),
+                                                                   region->at("maximum").get<std::array<double, 2>>()},
+                                                                  region->at("aspect").get<float>()};
             return request;
         }
 
@@ -421,6 +469,16 @@ namespace Horo::Editor {
             return result;
         }
 
+        /** @brief Emits visible geometric evidence without asset names or rendered data. */
+        Json WriteRecord(const InspectedVisualIssues &entry) {
+            Json result{{"object", entry.object}, {"clipped", entry.clipped}};
+            if (entry.regionBounds)
+                result["regionBounds"] = {{"minimum", entry.regionBounds->minimum}, {"maximum", entry.regionBounds->maximum}};
+            if (entry.largestOverlap)
+                result["largestOverlap"] = {{"object", entry.largestOverlap->object}, {"area", entry.largestOverlap->area}};
+            return result;
+        }
+
         /** @brief Exports an owner-produced page with an optional continuation offset. */
         template <typename Page> Json WritePage(const Page &page) {
             Json rows = Json::array();
@@ -532,6 +590,10 @@ namespace Horo::Editor {
                              readPenetrations>(tools, endpoint, "inspect.penetrations",
                                                "Read the deepest published Physics overlap between two visible authored bodies.",
                                                PenetrationSchema, PenetrationInputSchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::
+                             readVisualIssues>(tools, endpoint, "inspect.visual_issues",
+                                               "Read projected bounds clipping and overlap within a normalized viewport region.",
+                                               VisualSchema, VisualInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

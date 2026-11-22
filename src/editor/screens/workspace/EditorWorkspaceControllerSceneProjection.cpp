@@ -386,6 +386,35 @@ namespace Horo::Editor {
             return BoundsAtPose(geometry, object.id, world.Value().localToWorld, true);
         }
 
+        /** @brief Validates the exact normalized region independently of the MCP input schema. */
+        bool ValidViewportRegion(const std::optional<InspectionViewportRegion> &region) {
+            if (!region || !std::isfinite(region->aspect) || region->aspect <= 0.0F)
+                return false;
+            const auto &rect = region->rect;
+            for (std::size_t axis = 0; axis < rect.minimum.size(); ++axis) {
+                if (!(0.0 <= rect.minimum[axis] && rect.minimum[axis] < rect.maximum[axis] && rect.maximum[axis] <= 1.0))
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Projects the exact committed world bounds with one snapshot of the editor camera. */
+        Result<InspectedVisualIssues> ProjectInspectionVisualIssues(const InspectedBounds &bounds, const Math::Mat4 &viewProjection,
+                                                                    const InspectionViewportRect &region) {
+            using Output = Result<InspectedVisualIssues>;
+            std::array<InspectionClipPoint, 8> corners{};
+            for (std::size_t index = 0; index < corners.size(); ++index) {
+                const Math::Vec4 point{(index & 1U) ? bounds.maximum[0] : bounds.minimum[0],
+                                       (index & 2U) ? bounds.maximum[1] : bounds.minimum[1],
+                                       (index & 4U) ? bounds.maximum[2] : bounds.minimum[2], 1.0F};
+                const auto clip = Math::TransformHomogeneous(viewProjection, point);
+                if (!Math::IsFinite(clip))
+                    return Output::Failure(MakeError(InspectionBoundsUnavailable));
+                corners[index] = {clip.x, clip.y, clip.z, clip.w};
+            }
+            return Output::Success(MeasureInspectionViewport(bounds.object, corners, region));
+        }
+
         struct DistanceSample {
             InspectedBounds bounds;
             Math::Vec3 forward;
@@ -525,6 +554,8 @@ namespace Horo::Editor {
             return InspectCollisions(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectPenetrations(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectVisualIssues(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -696,6 +727,35 @@ namespace Horo::Editor {
         if (sample.HasError())
             return Output::Failure(sample.ErrorValue());
         return Output::Success({.scene = scene.Value(), .records = {{source.object.value, target.object.value, sample.Value()}}});
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectVisualIssues */
+    Result<VisualInspectionPage> EditorWorkspaceController::InspectVisualIssues(const ObjectInspectionRequest &request) const {
+        using Output = Result<VisualInspectionPage>;
+        if (request.offset != 0 || request.limit != ObjectInspectionRequest::MaximumObjects || !ValidViewportRegion(request.viewportRegion))
+            return Output::Failure(MakeError(InspectionInvalidPage));
+        const auto active = m_runtimeScene.ActiveScene();
+        if (!active || !HasCurrentInspectionGeometry(*active))
+            return Output::Failure(MakeError(InspectionGeometryUnavailable));
+        const auto &region = *request.viewportRegion;
+        const auto projection = BuildEditorViewportViewProjection(m_viewportScene.camera, region.aspect, Math::ClipDepthRange::ZeroToOne);
+        if (projection.HasError())
+            return Output::Failure(projection.ErrorValue());
+        auto page = ReadInspectionPage<VisualInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                             [this, &active, &projection, &region](const SceneObject &object) {
+            const auto pose = ResolveSceneObjectWorldTransforms(*active, object.id);
+            if (pose.HasError())
+                return Result<InspectedVisualIssues>::Failure(MakeError(InspectionBoundsUnavailable));
+            const auto bounds = BoundsAtPose(m_viewportScene, object.id, pose.Value().localToWorld, false);
+            if (bounds.HasError())
+                return Result<InspectedVisualIssues>::Failure(bounds.ErrorValue());
+            return ProjectInspectionVisualIssues(bounds.Value(), projection.Value(), region.rect);
+        });
+        if (page.HasError())
+            return page;
+        auto measured = std::move(page).Value();
+        MeasureInspectionViewportOverlaps(measured.records);
+        return Output::Success(std::move(measured));
     }
 
     /** @copydoc EditorWorkspaceController::HasCurrentInspectionGeometry */

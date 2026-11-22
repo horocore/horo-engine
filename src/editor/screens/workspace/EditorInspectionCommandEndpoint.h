@@ -31,6 +31,18 @@ namespace Horo::Editor {
         double maximumDistance{};
     };
 
+    /** @brief Top-left-origin normalized viewport rectangle. */
+    struct InspectionViewportRect {
+        std::array<double, 2> minimum{};
+        std::array<double, 2> maximum{1.0, 1.0};
+    };
+
+    /** @brief Caller-supplied viewport aspect and normalized inspection region. */
+    struct InspectionViewportRegion {
+        InspectionViewportRect rect;
+        float aspect{};
+    };
+
     /** @brief Exact object set and optional continuation fence. */
     struct ObjectInspectionRequest {
         static constexpr std::size_t MaximumObjects = 16;
@@ -42,6 +54,7 @@ namespace Horo::Editor {
         std::optional<double> gridStep;               /**< Used only by the grid-offset tool. */
         std::optional<InspectionSurfaceRay> surfaceRay;
         std::optional<std::string> physicsChannel;
+        std::optional<InspectionViewportRegion> viewportRegion;
     };
 
     /** @brief Authored TRS, local and world matrices, and the authored object's world pivot. */
@@ -253,6 +266,27 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Largest positive projected bounds overlap in the requested region. */
+    struct InspectionViewportOverlap {
+        std::uint64_t object{};
+        double area{};
+    };
+
+    /** @brief Geometric visual diagnostics for one authored object within the requested region. */
+    struct InspectedVisualIssues {
+        std::uint64_t object{};
+        std::optional<InspectionViewportRect> regionBounds;
+        bool clipped{};
+        std::optional<InspectionViewportOverlap> largestOverlap;
+    };
+
+    /** @brief One complete viewport sample, bounded to the requested object set. */
+    struct VisualInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedVisualIssues> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -267,5 +301,6 @@ namespace Horo::Editor {
         std::function<Result<SurfaceInspectionPage>(const ObjectInspectionRequest &)> readSurfaces;
         std::function<Result<CollisionInspectionPage>(const ObjectInspectionRequest &)> readCollisions;
         std::function<Result<PenetrationInspectionPage>(const ObjectInspectionRequest &)> readPenetrations;
+        std::function<Result<VisualInspectionPage>(const ObjectInspectionRequest &)> readVisualIssues;
     };
 }  // namespace Horo::Editor

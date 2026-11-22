@@ -503,6 +503,12 @@ positive overlap against the second body. Contact position is measured in
 the current Physics origin frame. The sample is absent for an admitted pair
 with no positive contact. Disabled or unavailable Physics and capacity
 failures propagate as explicit errors.
+`inspect.visual_issues` samples up to 16 specified objects with one editor
+camera observation. The request supplies a viewport aspect ratio and a
+top-left-origin normalized rectangle. Each row describes the intersection
+of the projected world bounds with that region and whether clipping occurred.
+It also reports the largest projected overlap with another requested object
+using normalized viewport area. These diagnostics describe bounding geometry.
 
 ## MCP History Retention And Redaction
 

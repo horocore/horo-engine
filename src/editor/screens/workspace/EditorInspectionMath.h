@@ -52,6 +52,98 @@ namespace Horo::Editor {
         return result;
     }
 
+    using InspectionClipPoint = std::array<double, 4>;
+
+    /** @brief Intersects a homogeneous box edge with the canonical zero-to-one clip-depth interval. */
+    inline std::optional<std::array<double, 2>> ClipInspectionEdge(const InspectionClipPoint &from, const InspectionClipPoint &to) {
+        std::array<double, 2> interval{0.0, 1.0};
+        const std::array fromDepth{from[2], from[3] - from[2]};
+        const std::array toDepth{to[2], to[3] - to[2]};
+        for (std::size_t plane = 0; plane < fromDepth.size(); ++plane) {
+            const double start = fromDepth[plane];
+            const double end = toDepth[plane];
+            if (start < 0.0 && end < 0.0)
+                return std::nullopt;
+            if (start < 0.0)
+                interval[0] = std::max(interval[0], start / (start - end));
+            else if (end < 0.0)
+                interval[1] = std::min(interval[1], start / (start - end));
+        }
+        return interval[0] <= interval[1] ? std::optional{interval} : std::nullopt;
+    }
+
+    /** @brief Intersects two normalized viewport rectangles. */
+    inline InspectionViewportRect IntersectInspectionRect(const InspectionViewportRect &lhs, const InspectionViewportRect &rhs) {
+        return {{std::max(lhs.minimum[0], rhs.minimum[0]), std::max(lhs.minimum[1], rhs.minimum[1])},
+                {std::min(lhs.maximum[0], rhs.maximum[0]), std::min(lhs.maximum[1], rhs.maximum[1])}};
+    }
+
+    /** @brief Returns positive area for a nonempty rectangle and zero for touching or disjoint regions. */
+    inline double InspectionRectArea(const InspectionViewportRect &rect) {
+        return std::max(rect.maximum[0] - rect.minimum[0], 0.0) * std::max(rect.maximum[1] - rect.minimum[1], 0.0);
+    }
+
+    /** @brief Accumulates one projected edge endpoint before the explicit screen-region clip. */
+    inline void IncludeInspectionPoint(InspectionViewportRect &bounds, const InspectionClipPoint &from, const InspectionClipPoint &to,
+                                       const double fraction) {
+        const double w = std::lerp(from[3], to[3], fraction);
+        if (w <= 0.0)
+            return;
+        const std::array point{0.5 + 0.5 * std::lerp(from[0], to[0], fraction) / w, 0.5 - 0.5 * std::lerp(from[1], to[1], fraction) / w};
+        for (std::size_t axis = 0; axis < point.size(); ++axis) {
+            bounds.minimum[axis] = std::min(bounds.minimum[axis], point[axis]);
+            bounds.maximum[axis] = std::max(bounds.maximum[axis], point[axis]);
+        }
+    }
+
+    /** @brief Projects eight ordered box corners and clips their twelve edges before perspective division. */
+    inline InspectedVisualIssues MeasureInspectionViewport(const std::uint64_t object, const std::array<InspectionClipPoint, 8> &corners,
+                                                           const InspectionViewportRect &region) {
+        constexpr double inf = std::numeric_limits<double>::infinity();
+        InspectionViewportRect bounds{{inf, inf}, {-inf, -inf}};
+        bool depthClipped{};
+        for (std::size_t vertex = 0; vertex < corners.size(); ++vertex) {
+            for (const std::size_t axis : {1U, 2U, 4U}) {
+                if ((vertex & axis) != 0)
+                    continue;
+                const auto &from = corners[vertex];
+                const auto &to = corners[vertex | axis];
+                const auto clip = ClipInspectionEdge(from, to);
+                if (!clip) {
+                    depthClipped = true;
+                    continue;
+                }
+                depthClipped |= (*clip)[0] != 0.0 || (*clip)[1] != 1.0;
+                IncludeInspectionPoint(bounds, from, to, (*clip)[0]);
+                IncludeInspectionPoint(bounds, from, to, (*clip)[1]);
+            }
+        }
+        const auto cropped = IntersectInspectionRect(bounds, region);
+        if (InspectionRectArea(cropped) == 0.0)
+            return {.object = object};
+        return {.object = object,
+                .regionBounds = cropped,
+                .clipped = depthClipped || bounds.minimum != cropped.minimum || bounds.maximum != cropped.maximum};
+    }
+
+    /** @brief Compares positive projected area against each other explicitly requested visible target. */
+    inline void MeasureInspectionViewportOverlaps(std::span<InspectedVisualIssues> rows) {
+        for (auto &source : rows) {
+            if (!source.regionBounds)
+                continue;
+            double strongest{};
+            for (const auto &peer : rows) {
+                if (peer.object == source.object || !peer.regionBounds)
+                    continue;
+                const auto area = InspectionRectArea(IntersectInspectionRect(*source.regionBounds, *peer.regionBounds));
+                if (area > strongest) {
+                    strongest = area;
+                    source.largestOverlap = InspectionViewportOverlap{peer.object, area};
+                }
+            }
+        }
+    }
+
     /** @brief Measures finite world AABBs. For an overlapping axis, both nearest points use the same shared coordinate. */
     inline InspectedDistance MeasureInspectionDistance(const InspectedBounds &reference, const InspectedBounds &target,
                                                        const double forwardAngleRadians) {

@@ -344,6 +344,68 @@ namespace {
         CHECK(rows.back()["oriented"]["volume"] == 32);
     }
 
+    TEST_CASE("Visual diagnostics clip before perspective division and measure projected overlap", "[unit][editor][mcp][inspection]") {
+        std::array<InspectionClipPoint, 8> corners{};
+        for (std::size_t index = 0; index < corners.size(); ++index) {
+            corners[index] = {(index & 1U) ? 1.0 : -1.0, (index & 2U) ? 1.0 : -1.0, (index & 4U) ? 1.0 : -1.0, (index & 4U) ? 3.0 : 1.0};
+        }
+        auto crossing = MeasureInspectionViewport(1, corners, {});
+        REQUIRE(crossing.regionBounds);
+        CHECK(crossing.clipped);
+        CHECK((crossing.regionBounds->minimum == std::array<double, 2>{0.25, 0.25}));
+        CHECK((crossing.regionBounds->maximum == std::array<double, 2>{0.75, 0.75}));
+        const auto cropped = MeasureInspectionViewport(1, corners, {{0.5, 0}, {1, 1}});
+        REQUIRE(cropped.regionBounds);
+        CHECK(cropped.regionBounds->minimum[0] == 0.5);
+        auto outside = MeasureInspectionViewport(3, corners, {{0, 0}, {0.125, 0.125}});
+        CHECK_FALSE(outside.regionBounds);
+        const auto peer = InspectedVisualIssues{.object = 2, .regionBounds = InspectionViewportRect{{0.5, 0.25}, {1, 0.75}}};
+        std::array rows{crossing, peer, outside};
+        MeasureInspectionViewportOverlaps(rows);
+        REQUIRE(rows[0].largestOverlap);
+        CHECK(rows[0].largestOverlap->object == 2);
+        CHECK(rows[0].largestOverlap->area == 0.125);
+        CHECK_FALSE(rows[2].largestOverlap);
+        for (auto &point : corners)
+            point[2] = point[3] + 1.0;
+        CHECK_FALSE(MeasureInspectionViewport(4, corners, {}).regionBounds);
+    }
+
+    TEST_CASE("Visual inspection requires one bounded region and serializes its evidence", "[unit][editor][mcp][inspection]") {
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readVisualIssues = [](const ObjectInspectionRequest &request) {
+            REQUIRE(request.viewportRegion);
+            CHECK(request.viewportRegion->aspect == 2.0F);
+            CHECK(request.viewportRegion->rect.maximum[0] == 0.75);
+            return Result<VisualInspectionPage>::Success(
+                {.scene = {7, 19},
+                 .records = {{.object = request.objects.at(0),
+                              .regionBounds = request.viewportRegion->rect,
+                              .clipped = true,
+                              .largestOverlap = InspectionViewportOverlap{request.objects.at(1), 0.25}},
+                             {.object = request.objects.at(1)}}});
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        CHECK(Execute(session, Command("missing", "inspect.visual_issues", {{"objects", {42, 9}}})).at("status") == "failed");
+        const Json region{{"minimum", {0.25, 0}}, {"maximum", {0.75, 1}}, {"aspect", 2}};
+        CHECK(Execute(session, Command("pages", "inspect.visual_issues", {{"objects", {42, 9}}, {"viewportRegion", region}, {"limit", 1}}))
+                  .at("status") == "failed");
+        const auto status =
+            Execute(session, Command("visual", "inspect.visual_issues", {{"objects", {42, 9}}, {"viewportRegion", region}}));
+        REQUIRE(status.at("status") == "succeeded");
+        const auto &rows = status["result"]["records"];
+        CHECK(rows[0]["clipped"] == true);
+        CHECK(rows[0]["largestOverlap"]["area"] == 0.25);
+        CHECK(rows[0]["largestOverlap"]["object"] == 9);
+        CHECK_FALSE(rows[1].contains("regionBounds"));
+    }
+
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",
