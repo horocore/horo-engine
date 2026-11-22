@@ -145,6 +145,15 @@ namespace Horo::Tests::OpenXRApplication {
             bool admission{true};
             std::function<void()> onCheckAdmission;
 
+            enum class ProjectionFixture {
+                Quad
+            };
+
+            explicit ApplicationFixture(ProjectionFixture)
+                : ApplicationFixture(true, 5, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
+                                     XR::XRProjectFeaturePolicy::Unrequested, false, std::nullopt, XR::XRProjectFeaturePolicy::Unrequested,
+                                     false, {}, nullptr, false, false, false, 4) {}
+
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
@@ -154,7 +163,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         const bool planePreview = false,
                                         std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
                                         const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false,
-                                        const bool anchorPersistence = false, const bool fixedFoveation = false)
+                                        const bool anchorPersistence = false, const bool fixedFoveation = false,
+                                        const std::uint32_t maximumProjectionViews = 2)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
@@ -234,7 +244,8 @@ namespace Horo::Tests::OpenXRApplication {
                                                                                                          Render::RenderBackendId{"vulkan"},
                                                                                                          [this] {
                         vulkan->port.ReleaseDrainedChild();
-                    })}).HasValue());
+                    }, maximumProjectionViews)})
+                                .HasValue());
                 } else {
                     REQUIRE(Render::RegisterNullRenderBackend(renderers).HasValue());
                 }
@@ -3660,15 +3671,17 @@ namespace Horo::Tests::OpenXRApplication {
         };
 
         /** @brief Owns fixture handles for one exact external acquisition before it is queued. */
-        struct ViewportWriterImport final {
+        template <std::size_t Views> struct ViewportWriterImport final {
             Render::RenderTextureHandle texture;
-            std::array<Render::RenderTextureViewHandle, 2> views;
+            std::array<Render::RenderTextureViewHandle, Views> views;
         };
 
-        ViewportWriterImport ImportWriterImage(Render::RenderFrontend &frontend, std::shared_ptr<const ViewportWriterImage> source) {
+        template <std::size_t Views = 2>
+        ViewportWriterImport<Views> ImportWriterImage(Render::RenderFrontend &frontend, std::shared_ptr<const ViewportWriterImage> source) {
             using namespace Render;
             const auto texture = RequireValue(RenderNative::RenderExternalTextureAccess::Import(frontend, source));
-            ViewportWriterImport imported{texture};
+            REQUIRE(source->allocation.layerCount == Views);
+            ViewportWriterImport<Views> imported{texture};
             for (std::uint32_t eye = 0; eye < imported.views.size(); ++eye) {
                 const auto view = RequireValue(
                     frontend.CreateTextureView({.texture = texture,
@@ -3777,6 +3790,86 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(reducer.expired());
     }
 
+    TEST_CASE("Selected Vulkan viewport draws every color and depth subresource of an opaque quad projection",
+              "[xr][application][renderer][quad]") {
+        using namespace Render;
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        ApplicationFixture fixture{ApplicationFixture::ProjectionFixture::Quad};
+        auto &frontend = *fixture.frontend;
+        auto &viewport = *fixture.viewport;
+        auto &vulkan = fixture.vulkan->native;
+        const auto &support = frontend.Capabilities().support;
+        auto source = std::make_shared<ViewportWriterImage>();
+        source->device = RequireValue(Viewport::Device(viewport));
+        source->incarnation = support.deviceIncarnation;
+        source->id = 900;
+        source->allocation = {.extent = {8, 8},
+                              .format = RenderTextureFormat::Rgba8Unorm,
+                              .layerCount = 4,
+                              .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+        auto geometry = RequireValue(fixture.source.Port().Capture(fixture.definition.Revision(), fixture.scene->View()));
+        const auto instances = RequireValue(geometry->Update(fixture.scene->View()));
+        REQUIRE(instances.size() == 1);
+        const auto prepare = [&](bool retainDepth) {
+            return Viewport::Prepare(viewport, geometry->Resources(), source->allocation, source->AcquiredState(),
+                                     source->RequiredFinalState(), retainDepth);
+        };
+        CHECK(prepare(true).HasError());
+        RequireValue(prepare(false));
+        const auto color = ImportWriterImage<4>(frontend, source);
+
+        auto clip = Math::Mat4::Identity();
+        clip.values[12] = -2.0F;
+        clip.values[13] = -3.0F;
+        clip.values[14] = 0.5F;
+        const std::array cameras{MultiviewSceneView{0, clip}, MultiviewSceneView{1, clip}, MultiviewSceneView{2, clip},
+                                 MultiviewSceneView{3, clip}};
+        const std::array rectangles{MultiviewRenderRectangle{0, 0, 8, 8}, MultiviewRenderRectangle{0, 0, 8, 8},
+                                    MultiviewRenderRectangle{1, 2, 3, 4}, MultiviewRenderRectangle{2, 1, 4, 2}};
+        const MultiviewPublication publication{1, 1, 1, 1, support.deviceIncarnation, support.capabilityRevision};
+        CHECK(
+            Viewport::Bind(viewport, color.texture, std::span{color.views}.first(2), publication, cameras, instances, nullptr).HasError());
+        const auto bind = [&](const Editor::EditorXrProjectionAlpha alpha) {
+            return Viewport::Bind(viewport, color.texture, color.views, publication, cameras, instances, nullptr, alpha, nullptr, nullptr,
+                                  rectangles);
+        };
+        CHECK(bind(Editor::EditorXrProjectionAlpha::Premultiplied).HasError());
+        RequireValue(bind(Editor::EditorXrProjectionAlpha::Opaque));
+
+        auto frame = RequireValue(frontend.BeginFrame({1, {8, 8}}));
+        const auto submission = RequireValue(Viewport::Execute(viewport, frame, {}));
+        RequireValue(frame.Present());
+        CHECK(RequireValue(Viewport::ResolveSubmission(viewport, submission)) == Viewport::SubmissionState::Accepted);
+        REQUIRE(vulkan.encoded.renderingCalls.size() == cameras.size());
+        REQUIRE(vulkan.encoded.drawCalls.size() == cameras.size());
+        REQUIRE(vulkan.encoded.scissors.size() == cameras.size());
+        for (std::size_t index = 0; index < cameras.size(); ++index) {
+            const auto &raster = vulkan.encoded.renderingCalls[index];
+            const auto &scissor = vulkan.encoded.scissors[index];
+            const auto &rectangle = rectangles[index];
+            CHECK(raster.extent.width == source->allocation.extent.width);
+            CHECK(raster.extent.height == source->allocation.extent.height);
+            CHECK(scissor.offset.x == static_cast<std::int32_t>(rectangle.x));
+            CHECK(scissor.offset.y == static_cast<std::int32_t>(rectangle.y));
+            CHECK(scissor.extent.width == rectangle.width);
+            CHECK(scissor.extent.height == rectangle.height);
+            CHECK(raster.depth);
+            for (std::size_t previous = 0; previous < index; ++previous) {
+                CHECK(raster.colorView != vulkan.encoded.renderingCalls[previous].colorView);
+                CHECK(raster.depthView != vulkan.encoded.renderingCalls[previous].depthView);
+            }
+            CHECK(vulkan.encoded.drawCalls[index].firstView == index);
+        }
+
+        vulkan.commandState.state.Complete();
+        RequireValue(Viewport::Poll(viewport));
+        RequireValue(Viewport::Retire(viewport));
+        for (const auto view : color.views)
+            RequireValue(frontend.ReleaseTextureView(view));
+        RequireValue(frontend.ReleaseTexture(color.texture));
+        RequireValue(frontend.ProcessResourceRequests());
+    }
+
     TEST_CASE("Selected Vulkan viewport records asymmetric motion depth only after completed projection history",
               "[xr][application][play][reprojection][renderer]") {
         using namespace Render;
@@ -3870,10 +3963,10 @@ namespace Horo::Tests::OpenXRApplication {
         auto outside = colorRects;
         ++outside.back().width;
         CHECK(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
-                             Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, &outside)
+                             Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, outside)
                   .HasError());
         RequireValue(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
-                                    Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, &colorRects));
+                                    Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, colorRects));
         const auto mirror = Viewport::Mirror(viewport, publication.frame, first.views.front());
         REQUIRE(mirror.sampledView == first.views.front());
         CHECK(mirror.u0 == 1.0F / 8.0F);

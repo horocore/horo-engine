@@ -165,15 +165,17 @@ namespace Horo::Editor {
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
-        [[nodiscard]] Result<void> BindXrFrame(
-            Render::RenderTextureHandle color, const std::array<Render::RenderTextureViewHandle, 2> &eyeViews,
-            const Render::MultiviewPublication &publication, std::span<const Render::MultiviewSceneView> views,
-            std::span<const Render::RenderStaticMeshInstance> instances, const Render::MultiviewMotionFrame *motion,
-            std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
-            const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
-            const Render::MultiviewEnvironmentLighting *lighting = nullptr,
-            const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr,
-            const EditorVulkanXrViewportAccess::CanvasPlacement *canvas = nullptr, float vignetteOpacity = 0.0F);
+        [[nodiscard]] Result<void> BindXrFrame(Render::RenderTextureHandle color, std::span<const Render::RenderTextureViewHandle> eyeViews,
+                                               const Render::MultiviewPublication &publication,
+                                               std::span<const Render::MultiviewSceneView> views,
+                                               std::span<const Render::RenderStaticMeshInstance> instances,
+                                               const Render::MultiviewMotionFrame *motion,
+                                               std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
+                                               const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+                                               std::span<const Render::MultiviewRenderRectangle> rectangles = {},
+                                               const EditorVulkanXrViewportAccess::CanvasPlacement *canvas = nullptr,
+                                               float vignetteOpacity = 0.0F);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */

@@ -920,7 +920,7 @@ namespace Horo::Application::Internal {
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
             return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary, environmentInput, &rectangles, placement ? &*placement : nullptr, vignette);
+                                  alpha, auxiliary, environmentInput, rectangles, placement ? &*placement : nullptr, vignette);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;

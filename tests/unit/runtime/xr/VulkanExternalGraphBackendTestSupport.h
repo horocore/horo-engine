@@ -16,7 +16,7 @@ namespace Horo::Render::VulkanExternalTest {
             *lastImportedSource{};  // Synchronous test-only observation, never an owner.
 
         explicit ExternalGraphBackend(NativeGraphFixture &fixture, RenderBackendId backend = RenderBackendId{"xr-bridge-test"},
-                                      std::function<void()> releaseDrainedChildren = {})
+                                      std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2)
             : fixture_(&fixture), releaseDrainedChildren_(std::move(releaseDrainedChildren)) {
             capabilities_.backend = std::move(backend);
             capabilities_.support.deviceIncarnation = 11;
@@ -26,7 +26,7 @@ namespace Horo::Render::VulkanExternalTest {
             capabilities_.support.features.Enable(RenderCapability::TextureResources);
             capabilities_.support.features.Enable(RenderCapability::RenderTargetResources);
             capabilities_.support.features.Enable(RenderCapability::ViewIndexedShaders);
-            capabilities_.support.limits = {65536, 2048, 1, 3, 2, 2};
+            capabilities_.support.limits = {65536, 2048, 1, 3, 2, maximumProjectionViews};
             capabilities_.support.formats.sampleCountMask = 2;
             capabilities_.support.formats.usages.fill(RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled);
             capabilities_.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::R32Float)] =
@@ -235,18 +235,20 @@ namespace Horo::Render::VulkanExternalTest {
     class ExternalGraphProvider final : public IRenderBackendProvider {
     public:
         explicit ExternalGraphProvider(NativeGraphFixture &fixture, RenderBackendId backend = RenderBackendId{"xr-bridge-test"},
-                                       std::function<void()> releaseDrainedChildren = {})
-            : fixture_(&fixture), backend_(std::move(backend)), releaseDrainedChildren_(std::move(releaseDrainedChildren)) {}
+                                       std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2)
+            : fixture_(&fixture), backend_(std::move(backend)), releaseDrainedChildren_(std::move(releaseDrainedChildren)),
+              maximumProjectionViews_(maximumProjectionViews) {}
 
         Result<std::unique_ptr<IRenderBackend>> Create() const override {
             return Result<std::unique_ptr<IRenderBackend>>::Success(
-                std::make_unique<ExternalGraphBackend>(*fixture_, backend_, releaseDrainedChildren_));
+                std::make_unique<ExternalGraphBackend>(*fixture_, backend_, releaseDrainedChildren_, maximumProjectionViews_));
         }
 
     private:
         NativeGraphFixture *fixture_;
         RenderBackendId backend_;
         std::function<void()> releaseDrainedChildren_;
+        std::uint32_t maximumProjectionViews_;
     };
 
 }  // namespace Horo::Render::VulkanExternalTest
