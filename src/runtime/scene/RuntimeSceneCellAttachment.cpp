@@ -160,7 +160,12 @@ namespace Horo::Runtime {
 
         /** @brief Publishes scoped receipt ownership after the one canonical queue accepts the command. */
         Result<SceneInstanceOperation> QueueInstance(RuntimeSceneService &service, SceneCommandBuffer commands,
-                                                     std::shared_ptr<const AttachmentOwnership> ownership) {
+                                                     std::shared_ptr<const AttachmentOwnership> ownership,
+                                                     std::shared_ptr<const SceneGroupPublication> publication) {
+            if (publication) {
+                if (auto bound = commands.BindBaselinePublication(std::move(publication)); bound.HasError())
+                    return Result<SceneInstanceOperation>::Failure(bound.ErrorValue());
+            }
             auto queued = service.QueueTrackedStructuralCommands(std::move(commands));
             if (queued.HasError())
                 return Result<SceneInstanceOperation>::Failure(queued.ErrorValue());
@@ -243,7 +248,8 @@ namespace Horo::Runtime {
                                                               const SceneCellAttachmentRequest &request,
                                                               std::vector<RuntimeGroupAssetLease> resources,
                                                               std::shared_ptr<const SceneCellPayloadAuthority> authority,
-                                                              const SceneInstanceOperation *replaces) {
+                                                              const SceneInstanceOperation *replaces,
+                                                              std::shared_ptr<const SceneGroupPublication> publication) {
         using Outcome = Result<SceneInstanceOperation>;
         const auto &identity = payload.Identity();
         if (!address.parent.IsValid() || !address.instance.IsValid() || address.definition != identity.scene ||
@@ -271,7 +277,7 @@ namespace Horo::Runtime {
             if (auto staged = StageAttach(commands, payload, request, std::move(resources), std::move(authority), ownership);
                 staged.HasError())
                 return Outcome::Failure(staged.ErrorValue());
-            return QueueInstance(service, std::move(commands), std::move(ownership));
+            return QueueInstance(service, std::move(commands), std::move(ownership), std::move(publication));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         }
@@ -293,7 +299,8 @@ namespace Horo::Runtime {
     /** @copydoc QueueStreamedSceneRemoval */
     Result<SceneInstanceOperation> QueueStreamedSceneRemoval(RuntimeSceneService &service, const SceneInstanceOperation &current,
                                                              const SceneCellAttachmentRequest &request,
-                                                             std::shared_ptr<const SceneCellPayloadAuthority> authority) {
+                                                             std::shared_ptr<const SceneCellPayloadAuthority> authority,
+                                                             std::shared_ptr<const SceneGroupPublication> publication) {
         using Outcome = Result<SceneInstanceOperation>;
         const auto *prior = ResidentInstance(service, current);
         if (!prior || request.runtime != prior->Instance()->parent || !prior->IsCell(prior->Identity(), request.fence.epoch))
@@ -306,7 +313,7 @@ namespace Horo::Runtime {
             auto removal = std::make_shared<const AttachmentOwnership>(identity, request.fence, prior->Instance());
             if (auto staged = StageDetach(commands, identity, request, std::move(authority), removal); staged.HasError())
                 return Outcome::Failure(staged.ErrorValue());
-            return QueueInstance(service, std::move(commands), std::move(removal));
+            return QueueInstance(service, std::move(commands), std::move(removal), std::move(publication));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         }

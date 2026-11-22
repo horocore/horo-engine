@@ -550,6 +550,44 @@ namespace Horo::Navigation {
         CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
     }
 
+    TEST_CASE("Streamed NavMesh preparation rolls back only its own candidate and wakes old readers after publication",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        Harness host;
+        REQUIRE_FALSE(host.Activate(Definition()));
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        const auto old = host.participant->Acquire().Value();
+        const auto original = old.Descriptor();
+        auto candidate = original;
+        candidate.topology = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(world->StageEmptyTopology(original, candidate.topology).HasValue());
+        CHECK(host.participant->PrepareStreamedPublication(original, candidate.topology, {}).HasError());
+        REQUIRE(world->ValidateStagedTopology(candidate).HasValue());
+        REQUIRE(world->DiscardStagedTopology(candidate).HasValue());
+
+        candidate.topology = NavigationGeneration::Create(candidate.topology.Value() + 1).Value();
+        {
+            auto prepared = host.participant->PrepareStreamedPublication(original, candidate.topology, {});
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            CHECK(world->ActiveDescriptor().Value() == original);
+        }
+        CHECK_FALSE(world->HasStagedCandidate());
+        CHECK_FALSE(old.IsRevoked());
+
+        candidate.topology = NavigationGeneration::Create(candidate.topology.Value() + 1).Value();
+        auto prepared = host.participant->PrepareStreamedPublication(original, candidate.topology, {});
+        REQUIRE(prepared.HasValue());
+        REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+        prepared.Value()->Publish();
+        CHECK(world->ActiveDescriptor().Value() == candidate);
+        CHECK(old.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        CHECK_FALSE(old.Cancellation().IsCancellationRequested());
+        REQUIRE(prepared.Value()->AfterPublication().HasValue());
+        CHECK(old.Cancellation().IsCancellationRequested());
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+    }
+
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
               "[unit][navigation][navmesh_asset][canonical][budget]") {
         auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();

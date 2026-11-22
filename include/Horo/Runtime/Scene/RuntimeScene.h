@@ -639,6 +639,11 @@ namespace Horo::Runtime {
          * @pre A bound buffer must remain a single ordinary group until it is committed.
          */
         [[nodiscard]] Result<void> BindGroupPublication(std::shared_ptr<const SceneGroupPublication> publication);
+        /** @brief Binds one optional feature owner to a single attach or detach transaction.
+         * @param publication Owner of the exact cell feature preparation.
+         * @return Success or typed rejection, preserving the command buffer on failure.
+         */
+        [[nodiscard]] Result<void> BindBaselinePublication(std::shared_ptr<const SceneGroupPublication> publication);
         /** @brief Queues an independent baseline or an exact revision replacement in the receiving scene.
          * @param definition Owned validated flattened input; authored IDs must be unique in the final scene.
          * @param resources Complete exact named dependency closure, already prepared by the asset owner.
@@ -756,6 +761,7 @@ namespace Horo::Runtime {
                                      AttachBaselineCommand, DetachBaselineCommand>;
         [[nodiscard]] Result<void> ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const;
         [[nodiscard]] bool HasSingleOrdinaryGroup() const noexcept;
+        [[nodiscard]] bool HasSingleBaseline() const noexcept;
         [[nodiscard]] Result<void> ValidateBaselineResources(const Assets::AssetRegistry *registry) const;
         std::vector<Command> commands_;
         std::shared_ptr<const SceneGroupPublication> groupPublication_;
@@ -1025,6 +1031,7 @@ namespace Horo::Runtime {
     private:
         friend class RuntimeSceneView;
         friend class RuntimeSceneService;
+        struct RuntimeSceneStorage;
         /** @brief Atomically applies validated initial poses to this private candidate, preserving topology generations. */
         [[nodiscard]] Result<void> ApplyInitialPlacements(std::span<const SceneInitialPlacement> placements);
 
@@ -1034,8 +1041,15 @@ namespace Horo::Runtime {
             RestoreMaterialization,
             ReplicaTransforms
         };
-        [[nodiscard]] Result<void> PrepareGroupPublication(const SceneCommandBuffer &commands, const StructuralCommitResult &result,
+        [[nodiscard]] Result<void> PrepareGroupPublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                           const StructuralCommitResult &result,
                                                            std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
+        /** @brief Prepares the command-scoped owner for an exact committed or detached baseline. */
+        [[nodiscard]] Result<void> PrepareBaselinePublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                              std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
+        /** @brief Validates and retains one command-scoped candidate without publishing it. */
+        [[nodiscard]] Result<void> PrepareCommandOwner(const SceneGroupPublication &publication, std::span<const EntityRef> members,
+                                                       bool creating, std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
         /** @brief Publishes the structural aggregate and makes any tracked result visible before notifying owners.
          * @param commands Structural intent to prepare and validate.
          * @param registry Optional current registry owner used by resource admission.

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <new>
 #include <utility>
 
@@ -196,18 +197,46 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationWorldLifecycle::DiscardStagedTopology */
     Result<void> NavigationWorldLifecycle::DiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
+        return TryDiscardStagedTopology(candidate) ? Result<void>::Success() : Failure<void>(NavigationErrors::StaleSnapshot);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::TryDiscardStagedTopology */
+    bool NavigationWorldLifecycle::TryDiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept {
         if (!IsStagedTopology(candidate))
-            return Failure<void>(NavigationErrors::StaleSnapshot);
+            return false;
         Revoke(staged_, NavigationWorldRevocation::WorldRetired);
         staged_.reset();
-        return Result<void>::Success();
+        return true;
     }
 
     /** @copydoc NavigationWorldLifecycle::CommitStagedTopology */
     Result<void> NavigationWorldLifecycle::CommitStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
+        if (auto valid = ValidateStagedTopology(candidate); valid.HasError())
+            return valid;
+        PublishStaged();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::ValidateStagedTopology */
+    Result<void> NavigationWorldLifecycle::ValidateStagedTopology(const NavigationWorldActivationDescriptor &candidate) const {
         if (!IsStagedTopology(candidate))
             return Failure<void>(NavigationErrors::StaleSnapshot);
-        return CommitAtSafePoint(candidate.scene, candidate.sceneGeneration);
+        if (!CanRetireActive())
+            return Failure<void>(NavigationErrors::CapacityExceeded);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::PublishValidatedTopology */
+    void NavigationWorldLifecycle::PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept {
+        assert(IsStagedTopology(candidate) && CanRetireActive());
+        (void)candidate;
+        PublishStaged(/*deferCancellation=*/true);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::NotifyRetired */
+    void NavigationWorldLifecycle::NotifyRetired(const NavigationWorldReadLease &predecessor) noexcept {
+        if (predecessor.IsRevoked())
+            predecessor.record_->cancellation.RequestCancellation();
     }
 
     /** @copydoc NavigationWorldLifecycle::CommitAtSafePoint */
@@ -221,13 +250,20 @@ namespace Horo::Navigation {
         if (!CanRetireActive())
             return Failure<void>(NavigationErrors::CapacityExceeded);
 
+        PublishStaged();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::PublishStaged */
+    void NavigationWorldLifecycle::PublishStaged(bool deferCancellation) noexcept {
+        using enum NavigationWorldLifecycleState;
         const bool replacesTopology = active_ && active_->descriptor.world == staged_->descriptor.world;
         const bool keepPaused = state_ == Paused && replacesTopology;
-        RetireActive(replacesTopology ? NavigationWorldRevocation::TopologyReplaced : NavigationWorldRevocation::WorldRetired);
+        RetireActive(replacesTopology ? NavigationWorldRevocation::TopologyReplaced : NavigationWorldRevocation::WorldRetired,
+                     deferCancellation);
         active_ = std::move(staged_);
         lastStagedTopology_ = active_->descriptor.topology;
         state_ = keepPaused ? Paused : Active;
-        return Result<void>::Success();
     }
 
     /** @copydoc NavigationWorldLifecycle::Pause */
@@ -350,10 +386,15 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationWorldLifecycle::RetireActive */
-    void NavigationWorldLifecycle::RetireActive(NavigationWorldRevocation reason) noexcept {
+    void NavigationWorldLifecycle::RetireActive(NavigationWorldRevocation reason, bool deferCancellation) noexcept {
         if (!active_)
             return;
-        Revoke(active_, reason);
+        if (deferCancellation) {
+            auto current = NavigationWorldRevocation::None;
+            active_->revocation.compare_exchange_strong(current, reason);
+        } else {
+            Revoke(active_, reason);
+        }
         if (active_.use_count() > 1)
             retired_.push_back(active_);
         active_.reset();

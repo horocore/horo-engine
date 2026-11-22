@@ -27,6 +27,50 @@ namespace Horo::Navigation {
         };
     }  // namespace Detail
 
+    /** @brief Rolls back detached navigation work unless the containing structural transaction commits it. */
+    class NavigationStreamedTopologyPublication final : public Runtime::SceneStructuralCandidate {
+    public:
+        NavigationStreamedTopologyPublication(std::shared_ptr<Detail::NavigationAssetSceneState> state,
+                                              std::shared_ptr<NavigationWorldLifecycle> world,
+                                              NavigationWorldActivationDescriptor candidate, NavigationWorldReadLease predecessor)
+            : state_(std::move(state)), world_(std::move(world)), candidate_(candidate), predecessor_(std::move(predecessor)) {}
+
+        ~NavigationStreamedTopologyPublication() override {
+            if (ownsStage_)
+                static_cast<void>(world_->TryDiscardStagedTopology(candidate_));
+        }
+
+        /** @brief Records ownership only after this candidate successfully stages its provider. */
+        void OwnStagedTopology() noexcept {
+            ownsStage_ = true;
+        }
+
+        Result<void> ValidatePublication() const override {
+            if (state_->closed || state_->active != world_)
+                return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+            return world_->ValidateStagedTopology(candidate_);
+        }
+
+        void Publish() noexcept override {
+            world_->PublishValidatedTopology(candidate_);
+            ownsStage_ = false;
+        }
+
+        Result<void> AfterPublication() override {
+            NavigationWorldLifecycle::NotifyRetired(predecessor_);
+            predecessor_ = {};
+            static_cast<void>(world_->CollectRetired());
+            return Result<void>::Success();
+        }
+
+    private:
+        std::shared_ptr<Detail::NavigationAssetSceneState> state_;
+        std::shared_ptr<NavigationWorldLifecycle> world_;
+        NavigationWorldActivationDescriptor candidate_;
+        NavigationWorldReadLease predecessor_; /**< Pins retirement capacity through the no-fail publication phase. */
+        bool ownsStage_{};
+    };
+
     namespace {
         /** @brief Backend lifetime, not cache residency or Scene borrows, owns immutable tile and reservation pins. */
         class PinnedAssetBackend final : public INavigationQueryBackend {
@@ -499,6 +543,33 @@ namespace Horo::Navigation {
                                                                              state_->accounting, provenance));
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        }
+    }
+
+    /** @copydoc NavigationAssetSceneActivationParticipant::PrepareStreamedPublication */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NavigationAssetSceneActivationParticipant::PrepareStreamedPublication(
+        const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
+        std::span<const NavigationStreamedSurface> surfaces) {
+        using Candidate = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        const auto world = ActiveWorld();
+        if (!world)
+            return Candidate::Failure(MakeError(NavigationErrors::NoNavigationData));
+        NavigationWorldReadLease predecessor;
+        auto lease = world->Acquire(expected.world);
+        if (lease.HasValue())
+            predecessor = std::move(lease).Value();
+        else if (lease.ErrorValue().code.Value() != NavigationErrors::NoNavigationData.code.Value())
+            return Candidate::Failure(lease.ErrorValue());
+        auto candidate = expected;
+        candidate.topology = next;
+        try {
+            auto prepared = std::make_unique<NavigationStreamedTopologyPublication>(state_, world, candidate, std::move(predecessor));
+            if (auto staged = StageStreamedTopology(expected, next, surfaces); staged.HasError())
+                return Candidate::Failure(staged.ErrorValue());
+            prepared->OwnStagedTopology();
+            return Candidate::Success(std::move(prepared));
+        } catch (const std::bad_alloc &) {
+            return Candidate::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
     }
 

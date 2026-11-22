@@ -110,6 +110,31 @@ namespace Horo::Runtime {
             Authority *authority{};
         };
 
+        class CellPublication final : public SceneGroupPublication {
+        public:
+            CellPublication(Counts &counts, Authority &authority, bool attaching)
+                : counts_(counts), authority_(authority), attaching_(attaching) {}
+
+            Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active, std::span<const EntityRef> members,
+                                                                      bool creating) const override {
+                CHECK(creating == attaching_);
+                REQUIRE(members.size() == 2);
+                for (const auto member : members) {
+                    CHECK(member.runtime == active.RuntimeId());
+                    CHECK(active.Get(member).HasValue() == !creating);
+                }
+                ++counts_.prepared;
+                if (counts_.invalidateFence)
+                    authority_.ready = false;
+                return Result<std::unique_ptr<SceneStructuralCandidate>>::Success(std::make_unique<Candidate>(counts_));
+            }
+
+        private:
+            Counts &counts_;
+            Authority &authority_;
+            bool attaching_;
+        };
+
         RuntimeSceneCellPayload Payload(const int cell = 0, const std::uint64_t revision = 1,
                                         const std::span<const SceneAssetDependency> dependencies = {}, const bool empty = false,
                                         const bool withCamera = false) {
@@ -843,6 +868,45 @@ namespace Horo::Runtime {
         REQUIRE(removal.Value().Receipt()->ResultValue());
         CHECK_FALSE(service.ActiveScene()->Find({10}));
         CHECK(service.ActiveScene()->Find({100}));
+    }
+
+    TEST_CASE("A streamed cell commits its command owner only with the exact admitted baseline", "[scene][cell_attachment][instances]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto payload = Payload();
+        const auto request = Request(service, payload);
+        const SceneInstanceAddress address{request.runtime, {2}, payload.Identity().scene, SceneInstanceMode::Streamed};
+        const auto authority = Owner(payload, request, counts);
+        const auto attachOwner = std::make_shared<CellPublication>(counts, *authority, true);
+        const auto attach = QueueStreamedSceneInstance(service, address, payload, request, {}, authority, nullptr, attachOwner);
+        REQUIRE(attach.HasValue());
+        Commit(service);
+        REQUIRE(attach.Value().Receipt()->ResultValue());
+        CHECK(counts.published == 1);
+        CHECK(counts.notified == 1);
+
+        const auto removeOwner = std::make_shared<CellPublication>(counts, *authority, false);
+        counts.invalidateFence = true;
+        const auto rejected = QueueStreamedSceneRemoval(service, attach.Value(), request, authority, removeOwner);
+        REQUIRE(rejected.HasValue());
+        Commit(service);
+        REQUIRE(rejected.Value().Receipt()->Failure());
+        CHECK(counts.rolledBack == 1);
+        CHECK(counts.published == 1);
+        CHECK(counts.notified == 1);
+        REQUIRE(FindStreamedSceneInstance(*service.ActiveScene(), address, payload.Identity(), request.fence.epoch));
+
+        counts.invalidateFence = false;
+        authority->ready = true;
+        const auto remove = QueueStreamedSceneRemoval(service, attach.Value(), request, authority, removeOwner);
+        REQUIRE(remove.HasValue());
+        Commit(service);
+        REQUIRE(remove.Value().Receipt()->ResultValue());
+        CHECK(counts.prepared == 3);
+        CHECK(counts.published == 2);
+        CHECK(counts.notified == 2);
+        CHECK_FALSE(FindStreamedSceneInstance(*service.ActiveScene(), address, payload.Identity(), request.fence.epoch));
     }
 
     TEST_CASE("Streamed operations cannot outlive the parent or reuse a cancelled attempt", "[scene][cell_attachment][instances]") {

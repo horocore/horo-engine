@@ -158,6 +158,10 @@ namespace Horo::Navigation {
          */
         [[nodiscard]] Result<void> CommitStagedTopology(const NavigationWorldActivationDescriptor &candidate);
 
+        /** @brief Checks exact staged identity and bounded retirement before an aggregate commit.
+         * @param candidate Exact staged topology. @return Success or typed stale/capacity rejection.
+         */
+        [[nodiscard]] Result<void> ValidateStagedTopology(const NavigationWorldActivationDescriptor &candidate) const;
         /**
          * @brief Publish the staged candidate at CommitDeferredLifecycleChanges.
          * @param expectedScene Exact active Scene incarnation at the safe point.
@@ -194,6 +198,13 @@ namespace Horo::Navigation {
         [[nodiscard]] bool HasStagedCandidate() const noexcept;
 
     private:
+        friend class NavigationStreamedTopologyPublication;
+        /** @brief Publishes the validated aggregate topology without waiting for cancellation observers. */
+        void PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept;
+        /** @brief Wakes cancellation observers on the exact predecessor after aggregate publication. */
+        static void NotifyRetired(const NavigationWorldReadLease &predecessor) noexcept;
+        /** @brief Discards only the named unpublished topology. @return True if it was discarded. */
+        bool TryDiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept;
         /** @brief Construct storage after bounded retirement allocation succeeds. */
         NavigationWorldLifecycle(std::uint32_t maximumRetiredWorlds,
                                  std::vector<std::shared_ptr<Detail::NavigationWorldRecord>> retired) noexcept;
@@ -204,12 +215,14 @@ namespace Horo::Navigation {
         [[nodiscard]] bool IsCurrentTopology(const NavigationWorldActivationDescriptor &expected) const noexcept;
         /** @brief Checks that the named candidate replaces topology within the live world. */
         [[nodiscard]] bool IsStagedTopology(const NavigationWorldActivationDescriptor &candidate) const noexcept;
+        /** @brief Publishes prevalidated detached state into the owner record. */
+        void PublishStaged(bool deferCancellation = false) noexcept;
         /** @brief Check whether replacing the active record preserves the configured retirement bound. */
         [[nodiscard]] bool CanRetireActive() const noexcept;
         /** @brief Permanently close admission and request cooperative cancellation for one record. */
         static void Revoke(const std::shared_ptr<Detail::NavigationWorldRecord> &record, NavigationWorldRevocation reason) noexcept;
         /** @brief Move the active owner pin into retirement when worker leases still exist. */
-        void RetireActive(NavigationWorldRevocation reason) noexcept;
+        void RetireActive(NavigationWorldRevocation reason, bool deferCancellation = false) noexcept;
 
         std::uint32_t maximumRetiredWorlds_{};
         std::shared_ptr<Detail::NavigationWorldRecord> staged_;

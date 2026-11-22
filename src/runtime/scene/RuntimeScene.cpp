@@ -521,7 +521,7 @@ namespace Horo::Runtime {
         if (const auto ready = applier.PrepareOwners(participants, owners, purpose); ready.HasError())
             return Result<StructuralCommitResult>::Failure(ready.ErrorValue());
         if (commands.groupPublication_) {
-            if (auto prepared = PrepareGroupPublication(commands, result, owners); prepared.HasError())
+            if (auto prepared = PrepareGroupPublication(commands, candidate, result, owners); prepared.HasError())
                 return Result<StructuralCommitResult>::Failure(prepared.ErrorValue());
         }
         // Candidate preparation may allocate. Cancellation is sampled again only after all fallible work,
@@ -549,6 +549,20 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc SceneCommandBuffer::BindBaselinePublication */
+    Result<void> SceneCommandBuffer::BindBaselinePublication(std::shared_ptr<const SceneGroupPublication> publication) {
+        if (!publication || groupPublication_ || !HasSingleBaseline())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        groupPublication_ = std::move(publication);
+        return Result<void>::Success();
+    }
+
+    /** @brief Identifies a single independently committed baseline operation. */
+    bool SceneCommandBuffer::HasSingleBaseline() const noexcept {
+        return commands_.size() == 1 && (std::holds_alternative<AttachBaselineCommand>(commands_.front()) ||
+                                         std::holds_alternative<DetachBaselineCommand>(commands_.front()));
+    }
+
     bool SceneCommandBuffer::HasSingleOrdinaryGroup() const noexcept {
         if (commands_.size() != 1)
             return false;
@@ -557,32 +571,56 @@ namespace Horo::Runtime {
         return std::holds_alternative<DestroyGroupCommand>(commands_.front());
     }
 
-    Result<void> RuntimeScene::PrepareGroupPublication(const SceneCommandBuffer &commands, const StructuralCommitResult &result,
+    Result<void> RuntimeScene::PrepareGroupPublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                       const StructuralCommitResult &result,
                                                        std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
-        if (!commands.HasSingleOrdinaryGroup())
-            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
         try {
-            const auto *destroy = std::get_if<SceneCommandBuffer::DestroyGroupCommand>(&commands.commands_.front());
-            std::vector<EntityRef> created;
-            if (!destroy) {
-                created.reserve(result.created.size());
-                for (const auto &resolution : result.created)
-                    created.push_back(resolution.entity);
-            }
-            const std::span<const EntityRef> members =
-                destroy ? std::span<const EntityRef>{destroy->entities} : std::span<const EntityRef>{created};
-            auto prepared = commands.groupPublication_->Prepare(View(), members, !destroy);
-            if (prepared.HasError())
-                return Result<void>::Failure(prepared.ErrorValue());
-            if (!prepared.Value() || !prepared.Value()->AgentIdentities().empty())
+            if (commands.HasSingleBaseline())
+                return PrepareBaselinePublication(commands, candidate, owners);
+            if (!commands.HasSingleOrdinaryGroup())
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
-            if (auto valid = prepared.Value()->ValidatePublication(); valid.HasError())
-                return valid;
-            owners.push_back(std::move(prepared).Value());
-            return Result<void>::Success();
+            const auto &publication = *commands.groupPublication_;
+            if (const auto *destroy = std::get_if<SceneCommandBuffer::DestroyGroupCommand>(&commands.commands_.front()))
+                return PrepareCommandOwner(publication, destroy->entities, false, owners);
+            std::vector<EntityRef> members;
+            members.reserve(result.created.size());
+            for (const auto &resolution : result.created)
+                members.push_back(resolution.entity);
+            return PrepareCommandOwner(publication, members, true, owners);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Could not allocate Scene group owner state."));
         }
+    }
+
+    /** @copydoc RuntimeScene::PrepareBaselinePublication */
+    Result<void> RuntimeScene::PrepareBaselinePublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                          std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        const auto &command = commands.commands_.front();
+        const auto *attach = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command);
+        const auto &baselines = attach ? candidate.baselines : storage_.baselines;
+        const auto definition = attach ? attach->definition.Id() : std::get<SceneCommandBuffer::DetachBaselineCommand>(command).id;
+        const auto baseline = std::ranges::find(baselines, definition, &BaselineAttachment::id);
+        if (baseline == baselines.end())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        std::vector<EntityRef> members;
+        members.reserve(baseline->entities.size());
+        for (const auto entity : baseline->entities)
+            members.push_back({runtimeId_, entity});
+        return PrepareCommandOwner(*commands.groupPublication_, members, attach != nullptr, owners);
+    }
+
+    /** @copydoc RuntimeScene::PrepareCommandOwner */
+    Result<void> RuntimeScene::PrepareCommandOwner(const SceneGroupPublication &publication, std::span<const EntityRef> members,
+                                                   bool creating, std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        auto prepared = publication.Prepare(View(), members, creating);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        if (!prepared.Value() || !prepared.Value()->AgentIdentities().empty())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (auto valid = prepared.Value()->ValidatePublication(); valid.HasError())
+            return valid;
+        owners.push_back(std::move(prepared).Value());
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Runtime
