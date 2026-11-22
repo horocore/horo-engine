@@ -1,5 +1,6 @@
 #include "../packages/PackageArchiveTestSupport.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Assets/AssetArchive.h"
 #include "Horo/Editor/UiCanvasDocument.h"
@@ -691,6 +692,70 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     CHECK(stages.PackagedPinnedGeneration());
     REQUIRE(result.candidate.has_value());
     CHECK(result.candidate->state == Release::ReleaseCandidateState::FinalVerified);
+}
+
+TEST_CASE("Player release archives an admitted model and rejects revoked task declarations",
+          "[native][prefab-cook][host][release][local-policy]") {
+    using namespace Horo::AI;
+    HostFixture fixture;
+    const auto modelAsset = Id("00000000-0000-0000-0000-0000000000c2");
+    const auto task = TaskId::Create(1).Value();
+    AiCapabilityDescriptorRegistry capabilities;
+    REQUIRE(capabilities.Register({task}).HasValue());
+    const auto tasks = capabilities.Freeze();
+    const auto target = LocalPolicyTargetId::Create(1).Value();
+    const std::array targets{target};
+    const std::array features{LocalPolicyFeatureId::Create(1).Value()};
+    const std::array<std::int16_t, 1> weights{-2};
+    const std::array rows{LocalPolicyRowSource{task, 2, weights}};
+    const LocalPolicyCookTarget profile{target, true, sizeof(LocalLearnedPolicy), 8};
+    const auto model = LocalLearnedPolicy::Cook({LocalPolicyModelId::Create(1).Value(), 1, targets, features, rows}, profile, tasks);
+    REQUIRE(model.HasValue());
+    const auto encoded = model.Value().EncodeCooked();
+    REQUIRE(encoded.HasValue());
+    constexpr std::string_view path = "assets/guard.horo_policy";
+    WriteFile(fixture.project.dir.path / path, encoded.Value());
+    fixture.WriteText(std::string{path} + ".horo", SidecarJson(modelAsset.ToString(), LocalPolicyAssetType));
+    const AssetRecord record{modelAsset, Type(LocalPolicyAssetType), ProjectPath::Parse(path).Value(),
+                             ProjectPath::Parse(std::string{path} + ".horo").Value()};
+    fixture.PublishRegistry(std::span{&record, 1});
+
+    auto admission = LocalPolicyAssetCookAdmission{fixture.request.assets.target, profile, tasks, std::nullopt};
+    const auto contribution = MakeLocalPolicyAssetCooker(admission);
+    REQUIRE(contribution.HasValue());
+    auto host = fixture.MakeHost(1, std::span{&contribution.Value(), 1});
+    const auto release = PrepareHostRelease(fixture);
+    const auto &plan = *release.preflight.plan;
+    ReleaseTestFixtures::FixedReleaseFacts facts{release.facts};
+    const auto cooked = host.CookForRelease(plan, facts, fixture.request, {});
+    REQUIRE(cooked.HasValue());
+    const auto active = ResolveCurrentCookGeneration(fixture.files, fixture.cooked.path);
+    REQUIRE(active.HasValue());
+    const auto contents = ReadCookGenerationContents(fixture.files, active.Value(), 1024U * 1024U);
+    REQUIRE(contents.HasValue());
+    const AssetChunkDefinition chunk{.id = AssetChunkId::Parse("base").Value(),
+                                     .kind = AssetChunkKind::Base,
+                                     .assets = {fixture.sceneId, TestMeshRecord().id, modelAsset}};
+    const auto chunks = AssetChunkPlan::Create(std::span{&chunk, 1});
+    REQUIRE(chunks.HasValue());
+    const auto package = PreparePrefabReleaseContent(fixture.files, cooked.Value(), fixture.request.assets.target, chunks.Value(), {});
+    REQUIRE(package.HasValue());
+    const auto archive = AssetArchiveProvider::Open(package.Value().archive, fixture.request.assets.target);
+    REQUIRE(archive.HasValue());
+    const auto artifact = RequireArchivedArtifact(archive.Value(), contents.Value().entries, modelAsset);
+    REQUIRE(artifact.type.Value() == LocalPolicyAssetType);
+    const auto decoded = LocalLearnedPolicy::DecodeCooked(artifact.payload, artifact.payloadDigest, profile, tasks);
+    REQUIRE(decoded.HasValue());
+    CHECK(decoded.Value().Digest() == model.Value().Digest());
+
+    admission.tasks = {};
+    const auto revoked = MakeLocalPolicyAssetCooker(admission);
+    REQUIRE(revoked.HasValue());
+    auto revokedHost = fixture.MakeHost(1, std::span{&revoked.Value(), 1});
+    const auto rejected = revokedHost.CookForRelease(plan, facts, fixture.request, {});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == AIErrors::TaskContextInvalid.code.Value());
+    fixture.AssertRetained(active.Value());
 }
 
 TEST_CASE("Player release verifies prefab archive digests and promotes only the staged bytes", "[native][prefab-cook][host][release]") {

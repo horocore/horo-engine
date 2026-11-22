@@ -2646,8 +2646,11 @@ canonical digest covering its schema, selected target and tensor contents.
 `LocalLearnedPolicy::EncodeCooked` emits those canonical bytes for a registered
 `core.local_learned_policy` file. The Decision Asset Cook host admits the model
 against the selected package's explicit interpreter, task declarations and
-budgets before publishing it through the ordinary asset transaction. Loading
-rechecks the expected digest and current target and task declarations.
+budgets before publishing it through the ordinary asset transaction. The
+Scene and release cook hosts can register the same target-scoped model as an
+explicit resource contribution. The cooker checks the current task declarations
+on both fresh inputs and cache hits. Loading rechecks the expected digest and
+current target and task declarations.
 Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model
 digest, deadline and current task declarations before returning a task to the

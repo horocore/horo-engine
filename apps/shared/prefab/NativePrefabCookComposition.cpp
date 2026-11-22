@@ -1,6 +1,7 @@
 #include "NativePrefabCookComposition.h"
 
 #include "HeadlessMeshCooker.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/ProjectMutation.h"
@@ -98,6 +99,15 @@ namespace Horo::Application::Internal {
         Assets::CookerCatalog catalog;
         if (auto registered = Assets::RegisterHeadlessMeshCooker(catalog); registered.HasError())
             return CookResult::Failure(std::move(registered).ErrorValue());
+        if (invocation.localPolicy) {
+            if (invocation.localPolicy->packageTarget != invocation.target)
+                return CookResult::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+            auto contribution = MakeLocalPolicyAssetCooker(*invocation.localPolicy);
+            if (contribution.HasError())
+                return CookResult::Failure(std::move(contribution).ErrorValue());
+            if (auto registered = catalog.Register(std::move(contribution).Value()); registered.HasError())
+                return CookResult::Failure(std::move(registered).ErrorValue());
+        }
         auto published = catalog.Publish();
         if (published.HasError())
             return CookResult::Failure(std::move(published).ErrorValue());

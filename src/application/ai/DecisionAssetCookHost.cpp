@@ -31,6 +31,47 @@ namespace Horo::Application {
     }  // namespace DecisionCookErrors
 
     namespace {
+        class LocalPolicyCookStrategy final : public Assets::ICookerStrategy {
+        public:
+            explicit LocalPolicyCookStrategy(const LocalPolicyAssetCookAdmission &admission) : admission_(admission) {}
+
+            Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
+                return {"horo.ai.local-policy.int16-linear.v1", {}, 1};
+            }
+
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &,
+                                                                                  const CancellationToken &cancellation) const override {
+                using Dependencies = Result<std::optional<std::vector<Assets::AssetId>>>;
+                if (cancellation.IsCancellationRequested())
+                    return Dependencies::Failure(MakeError(DecisionCookErrors::Cancelled));
+                return Dependencies::Success(std::vector<Assets::AssetId>{});
+            }
+
+            Result<void> ValidateCookedPayload(const Assets::CookSourceView &source,
+                                               const std::span<const std::uint8_t> payload) const override {
+                if (source.target != admission_.packageTarget)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+                auto admitted = AI::LocalLearnedPolicy::DecodeCooked(payload, source.sourceDigest, admission_.target, admission_.tasks,
+                                                                     admission_.blackboard);
+                if (admitted.HasError())
+                    return Result<void>::Failure(std::move(admitted).ErrorValue());
+                return Result<void>::Success();
+            }
+
+            Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
+                                                const CancellationToken &cancellation) const override {
+                using Output = Result<Assets::CookOutputSink>;
+                if (cancellation.IsCancellationRequested())
+                    return Output::Failure(MakeError(DecisionCookErrors::Cancelled));
+                if (auto valid = ValidateCookedPayload(source, source.bytes); valid.HasError())
+                    return Output::Failure(std::move(valid).ErrorValue());
+                return Output::Success({{source.bytes.begin(), source.bytes.end()}, {}, {}});
+            }
+
+        private:
+            const LocalPolicyAssetCookAdmission admission_;
+        };
+
         Result<void> ValidateRequest(const DecisionAssetCookRequest &request) {
             if (!request.assets.pinnedInputs || !request.assets.validateHostInputs || request.assets.keyProjection ||
                 request.assets.dependentPhase)
@@ -62,6 +103,23 @@ namespace Horo::Application {
             return Result<std::shared_ptr<const DecisionCookDetail::State>>::Success(std::move(state));
         }
     }  // namespace
+
+    Result<Assets::CookerContribution> MakeLocalPolicyAssetCooker(const LocalPolicyAssetCookAdmission &admission) {
+        using Contribution = Result<Assets::CookerContribution>;
+        if (!admission.packageTarget.IsValid() || !admission.target.id.IsValid())
+            return Contribution::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+        try {
+            auto type = Assets::AssetTypeId::Parse(AI::LocalPolicyAssetType);
+            if (type.HasError())
+                return Contribution::Failure(std::move(type).ErrorValue());
+            return Contribution::Success({"horo.builtin.local-policy",
+                                          type.Value(),
+                                          {admission.packageTarget},
+                                          std::make_shared<LocalPolicyCookStrategy>(admission)});
+        } catch (const std::bad_alloc &) {
+            return Contribution::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
 
     Result<Assets::AssetCookReport> DecisionAssetCookHost::Cook(JobSystem &jobs, const DecisionAssetCookRequest &request,
                                                                 const CancellationToken &cancellation) {

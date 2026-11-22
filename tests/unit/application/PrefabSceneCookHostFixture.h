@@ -133,14 +133,15 @@ namespace Horo::Application::PrefabCookTestSupport {
             WriteText("assets/hierarchy.prefab", canonical.Value());
         }
 
-        void PublishRegistry() {
-            REQUIRE(registry
-                        .Publish({TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
-                                  Record(sceneId, "core.scene", "assets/level.scene")})
-                        .status == AssetRegistryBuildStatus::Complete);
+        void PublishRegistry(const std::span<const AssetRecord> additional = {}) {
+            std::vector records{TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
+                                Record(sceneId, "core.scene", "assets/level.scene")};
+            records.insert(records.end(), additional.begin(), additional.end());
+            REQUIRE(registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
         }
 
-        PrefabSceneCookHost MakeHost(const std::uint8_t resourceSetting = 1) {
+        PrefabSceneCookHost MakeHost(const std::uint8_t resourceSetting = 1,
+                                     const std::span<const Assets::CookerContribution> additional = {}) {
             CookerCatalog catalog;
             REQUIRE(catalog
                         .Register({.contributionId = "test.mesh",
@@ -148,6 +149,8 @@ namespace Horo::Application::PrefabCookTestSupport {
                                    .targets = {request.assets.target},
                                    .strategy = std::make_shared<const SettingsCooker>(resourceSetting)})
                         .HasValue());
+            for (const auto &entry : additional)
+                REQUIRE(catalog.Register(entry).HasValue());
             auto sealed = catalog.Publish();
             REQUIRE(sealed.HasValue());
             return PrefabSceneCookHost{jobs, sealed.Value(), registry, inspector, mutations, migrations};

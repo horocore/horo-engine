@@ -2831,7 +2831,7 @@ add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabSceneCookHostFixture.h)
 target_sources(HoroPrefabSceneCookHostTests PRIVATE unit/application/PrefabMetricCookHostTests.cpp)
 target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ReleaseProcess)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroNetworkProductHost)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroNetworkProductHost HoroEngine::DecisionCookHost)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/animation)
 target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE

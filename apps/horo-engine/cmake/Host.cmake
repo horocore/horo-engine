@@ -66,7 +66,7 @@ target_include_directories(HoroNativePrefabCookHost PUBLIC "${CMAKE_CURRENT_SOUR
 target_compile_features(HoroNativePrefabCookHost PUBLIC cxx_std_20)
 target_link_libraries(HoroNativePrefabCookHost PUBLIC HoroEngine::Assets
     PRIVATE HoroEngine::PrefabCookHost HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectIo
-        HoroEngine::ProjectMutationGuard HoroBuiltinAssetCookerHostInternal)
+        HoroEngine::ProjectMutationGuard HoroBuiltinAssetCookerHostInternal HoroEngine::DecisionCookHost)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine

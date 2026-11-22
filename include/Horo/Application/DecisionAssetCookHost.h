@@ -33,6 +33,9 @@ namespace Horo::Application {
         std::optional<AI::BlackboardSchemaId> blackboard;
     };
 
+    /** @brief Creates the target-scoped resource cooker used by the Scene and release package hosts. */
+    [[nodiscard]] Result<Assets::CookerContribution> MakeLocalPolicyAssetCooker(const LocalPolicyAssetCookAdmission &admission);
+
     struct DecisionAssetCookRequest final {
         Assets::AssetCookRequest assets; /**< Actual pinned registry/files, project lease/fence and durable publication authority. */
         AI::DecisionCompilationEnvironment environment;

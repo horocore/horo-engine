@@ -6,6 +6,10 @@
 
 #include <chrono>
 
+namespace Horo::Application {
+    struct LocalPolicyAssetCookAdmission;
+}
+
 namespace Horo::Application::Internal {
     /** @brief An explicitly authorized project, target and runtime roots for a joined synchronous cook. */
     struct NativePrefabCookInvocation final {
@@ -16,7 +20,8 @@ namespace Horo::Application::Internal {
         BuildOutputStore *output{};
         OperationStore *operations{};
         Assets::AssetCookProgressSink progress;
-        std::optional<Assets::AssetRecord> *failedSource{}; /**< Reset on entry; filled only with a captured source record. */
+        std::optional<Assets::AssetRecord> *failedSource{};               /**< Reset on entry; filled only with a captured source record. */
+        std::shared_ptr<const LocalPolicyAssetCookAdmission> localPolicy; /**< Explicit target and task declarations for model files. */
     };
 
     /** @brief Cook one project through PrefabSceneCookHost using admitted headless built-in contributions.
