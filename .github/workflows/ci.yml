@@ -798,6 +798,16 @@ jobs:
           -BinaryName HoroSourceFileOpenServiceTests.exe -EvidenceName source-edit-stack
           -TestCase 'HoroSourceFileOpenServiceTests::Cancelled and allocation-failed source operations do not publish partial roots' -CaptureSymbolEvidence
 
+      - name: Qualify Clangd source intelligence on macOS
+        if: ${{ runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          clangd="$(xcrun --find clangd)"
+          test -x "$clangd"
+          "$clangd" --version
+          HORO_TEST_CLANGD="$clangd" ctest --test-dir build/ci --no-tests=error --output-on-failure \
+            -R 'HoroSourceLanguageSessionTests::.*Clangd'
+
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
