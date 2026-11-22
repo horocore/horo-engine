@@ -110,6 +110,23 @@ namespace Horo::AI {
     [[nodiscard]] Result<QueryNavigationSurfaceSettings> ReadBuiltinNavigationSurface(const EnvironmentQueryPlan &plan,
                                                                                       const QuerySchemaRegistry &registry);
 
+    /** @brief Point inventory or lattice captured before execution. */
+    struct BuiltinDetachedPointCandidates final {
+        struct Lattice final {
+            QueryPointLattice policy;
+            Math::WorldCoordinate64 center;
+        };
+
+        struct Authored final {
+            std::array<Math::WorldCoordinate64, MaximumBuiltinAuthoredQueryPoints> values{};
+            std::size_t count{};
+        };
+
+        std::variant<Lattice, Authored> source;
+        [[nodiscard]] std::size_t WorkUnits() const noexcept;
+        [[nodiscard]] Result<QueryGenerationResult> Generate(const QueryGeneratorOutput &output) const;
+    };
+
     /** @brief Captures up to @ref MaximumBuiltinAuthoredQueryPoints exact world points in authored order. */
     [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinAuthoredPointQuery(QueryId query, QueryStageId stage,
                                                                                 QueryResultSchemaId result, std::string displayName,
@@ -144,7 +161,7 @@ namespace Horo::AI {
 
     /** @brief Validated native line-of-sight plan for a bounded Physics owner batch. */
     struct BuiltinPointVisibilityPlan final {
-        QueryPointLattice lattice;
+        BuiltinDetachedPointCandidates candidates;
         QueryGeneratorProvenance generator;
         QueryStageId test;
         std::array<std::uint8_t, 16> channel;
@@ -153,12 +170,12 @@ namespace Horo::AI {
     /** @brief Checks for the native GeometryLineOfSight test in a compiled plan. */
     [[nodiscard]] bool UsesBuiltinPointVisibility(const EnvironmentQueryPlan &plan) noexcept;
 
-    /** @brief Validates exact native lattice and visibility descriptors before provider access. */
+    /** @brief Validates exact native point generator and visibility descriptors before provider access. */
     [[nodiscard]] Result<BuiltinPointVisibilityPlan> CaptureBuiltinPointVisibility(const EnvironmentQueryPlan &plan,
                                                                                    const QuerySchemaRegistry &registry,
                                                                                    const QueryContextSnapshot &contexts);
 
-    /** @brief Adds a reachability filter with optional lower-is-better traversal cost to a native lattice.
+    /** @brief Adds a reachability filter with optional lower-is-better traversal cost to a lattice or authored point list.
      * @param maximumScoredCost Positive finite normalization ceiling. Omit it for reachability alone.
      */
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
@@ -167,7 +184,7 @@ namespace Horo::AI {
 
     /** @brief Native lattice and one validated Navigation path stage. */
     struct BuiltinPointNavigationPlan final {
-        QueryPointLattice lattice;
+        BuiltinDetachedPointCandidates candidates;
         QueryGeneratorProvenance generator;
         QueryStageId test;
         std::optional<double> maximumScoredCost;
@@ -180,7 +197,7 @@ namespace Horo::AI {
     /** @brief Detects an authored Navigation reachability or traversal-cost stage. */
     [[nodiscard]] bool UsesBuiltinPointNavigation(const EnvironmentQueryPlan &plan) noexcept;
 
-    /** @brief Resolves the native lattice and path stage without reading Navigation state. */
+    /** @brief Resolves the point generator and path stage without reading Navigation state. */
     [[nodiscard]] Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan,
                                                                                    const QuerySchemaRegistry &registry,
                                                                                    const QueryContextSnapshot &contexts);

@@ -104,8 +104,8 @@ namespace Horo::AI {
                 return inputs.contexts->MatchesScene(scene_) && (!batch_ || owner_.RetainsVisibilityAuthority(scene_, batch_->publication));
             }
 
-            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
-                auto generated = GenerateQueryLattice(*inputs.contexts, plan_.lattice.center, plan_.lattice, output);
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
+                auto generated = plan_.candidates.Generate(output);
                 if (generated.HasError())
                     return generated;
                 count_ = generated.Value().itemCount;
@@ -210,10 +210,10 @@ namespace Horo::AI {
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
 
         const QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
-        const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
         const auto capacity = std::min(settings.maximumCandidates, MaximumQueryPhysicsVisibilityRays);
         auto source = std::make_unique<PointVisibilitySource>(captured.Value(), scene, querier, *eye, owner);
-        return Admission::Success({captured.Value().generator, rule, 2U * width * width, capacity, capacity, std::move(source)});
+        return Admission::Success(
+            {captured.Value().generator, rule, captured.Value().candidates.WorkUnits(), capacity, capacity, std::move(source)});
     }
 
     /** @copydoc QueryPhysicsProbe::~QueryPhysicsProbe */

@@ -109,8 +109,8 @@ namespace Horo::AI {
                 return inputs.contexts->MatchesScene(scene_) && CurrentAccess().has_value();
             }
 
-            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
-                return GenerateQueryLattice(*inputs.contexts, plan_.lattice.center, plan_.lattice, output);
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
+                return plan_.candidates.Generate(output);
             }
 
             Result<bool> StartTest(const QueryExecutionInputs &inputs, const QueryStageId stage, const QueryGeneratedItem &item) override {
@@ -458,11 +458,10 @@ namespace Horo::AI {
         if (access->deadlineTicks == 0 || !access->filter.IsValid() || !access->publication.activation.IsValid())
             return Admission::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
 
-        const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
         auto source =
             std::make_unique<PointNavigationSource>(captured.Value(), scene, querier, *start, settings.deadlineTick, owner, *access);
-        return Admission::Success({captured.Value().generator, captured.Value().Rule(), 2U * width * width, settings.maximumCandidates,
-                                   settings.testWorkUnits, std::move(source)});
+        return Admission::Success({captured.Value().generator, captured.Value().Rule(), captured.Value().candidates.WorkUnits(),
+                                   settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
     }
 
     /** @copydoc EvaluateBuiltinPointNavigationPath */

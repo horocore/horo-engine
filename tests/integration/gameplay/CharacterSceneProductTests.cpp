@@ -511,13 +511,16 @@ namespace Horo::Application::CharacterSceneProductTest {
             NavigationFirst,
             DistancePriority,
             CostPriority,
-            NavigationSurface
+            NavigationSurface,
+            AuthoredMixed
         };
-        const auto scenario = GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
-                                       Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface);
+        const auto scenario =
+            GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
+                     Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface, Scenario::AuthoredMixed);
         const bool surface = scenario == Scenario::NavigationSurface;
+        const bool authored = scenario == Scenario::AuthoredMixed;
         const bool scoreCost = scenario != Scenario::Reachability;
-        const bool usesDistance = scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority;
+        const bool usesDistance = authored || scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority;
         const bool mixed = usesDistance || scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
         std::optional<Fixture> character;
         if (mixed)
@@ -542,6 +545,15 @@ namespace Horo::Application::CharacterSceneProductTest {
         if (surface)
             generator = CreateBuiltinNavigationSurfaceQuery(MakeIdentity<QueryId>(1), MakeIdentity<QueryStageId>(1),
                                                             MakeIdentity<QueryResultSchemaId>(1), "Tactical surface", {2000, 16}, 1);
+        if (authored) {
+            const std::array points{
+                Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500),
+                Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
+                Math::WorldCoordinate64::FromMillimeters(16000, 0, 1000),
+            };
+            generator = CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(1), MakeIdentity<QueryStageId>(1),
+                                                        MakeIdentity<QueryResultSchemaId>(1), "Authored tactical positions", points, 1);
+        }
         REQUIRE(generator.HasValue());
         if (scenario == Scenario::VisibilityFirst) {
             generator = AddBuiltinPointVisibilityTest(generator.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
