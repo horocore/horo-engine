@@ -320,6 +320,25 @@ namespace Horo::Application::Internal {
                                                  reference.assetPath);
             return Result<void>::Failure(std::move(blocked));
         }
+
+        /** @brief Constructs replacement documents after checking departing importers against current assets. */
+        Result<MetadataDocuments> PrepareRemovalDocuments(const MetadataDocuments &previous, const Packages::PackageLockfileLimits &limits,
+                                                          const Packages::HoroPackageId &package,
+                                                          const Assets::IAssetRegistrySource &assets) {
+            using Prepared = Result<MetadataDocuments>;
+            const auto validated = ValidateDocuments(previous.request, previous.lock, limits);
+            if (validated.HasError())
+                return Prepared::Failure(validated.ErrorValue());
+            const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
+            if (plan.HasError())
+                return Prepared::Failure(plan.ErrorValue());
+            if (auto references = CheckImporterReferences(assets, plan.Value().graph); references.HasError())
+                return Prepared::Failure(references.ErrorValue());
+            MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
+            if (!next.Fits(limits))
+                return Prepared::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
+            return Prepared::Success(std::move(next));
+        }
     }  // namespace
 
     /** @copydoc PreparePackageProject */
@@ -381,18 +400,9 @@ namespace Horo::Application::Internal {
             return Publication::Failure(previous.ErrorValue());
         if (!previous.Value().Matches(expected))
             return Publication::Failure(MetadataConflict());
-        const auto validated = ValidateDocuments(previous.Value().request, previous.Value().lock, policy.limits.lockfile);
-        if (validated.HasError())
-            return Publication::Failure(validated.ErrorValue());
-        const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
-        if (plan.HasError())
-            return Publication::Failure(plan.ErrorValue());
-        if (auto references = CheckImporterReferences(assets, plan.Value().graph); references.HasError())
-            return Publication::Failure(references.ErrorValue());
-        const MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
-        if (!next.Fits(policy.limits.lockfile))
-            return Publication::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
-
-        return CommitDocuments(metadata, previous.Value(), next, files);
+        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, assets);
+        if (next.HasError())
+            return Publication::Failure(next.ErrorValue());
+        return CommitDocuments(metadata, previous.Value(), next.Value(), files);
     }
 }  // namespace Horo::Application::Internal

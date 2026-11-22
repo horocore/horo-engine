@@ -13,7 +13,7 @@ namespace Horo::Application::Internal {
             ImporterEvidenceSource(const Assets::IAssetRegistrySource &source, std::span<const Packages::LockedPackageReference> removed)
                 : source_(source) {
                 for (const auto &package : removed)
-                    removed_.emplace(package.package.Value(), &package.package);
+                    removed_.try_emplace(package.package.Value(), &package.package);
             }
 
             /** @copydoc Assets::IAssetRegistrySource::Capture */
