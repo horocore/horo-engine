@@ -41,6 +41,21 @@ namespace {
         CHECK(items.front().message.find("horo-source") == std::string::npos);
     }
 
+    TEST_CASE("Detached script syntax rejects invalid input and reports ranges in proposed bytes") {
+        const auto valid = CheckHoroScriptSyntaxText("error('must not execute')");
+        REQUIRE(valid.HasValue());
+        CHECK(valid.Value().items.empty());
+        CHECK(CheckHoroScriptSyntaxText(std::string(256 * 1024 + 1, ' ')).HasError());
+        CHECK(CheckHoroScriptSyntaxText("\xFF").HasError());
+
+        constexpr std::string_view proposed = "\xEF\xBB\xBF-- proposed\r\nlocal = 3\n";
+        const auto invalid = CheckHoroScriptSyntaxText(proposed);
+        REQUIRE(invalid.HasValue());
+        const auto &items = invalid.Value().items;
+        REQUIRE(items.size() == 1);
+        CHECK(items.front().span == LanguageByteSpan{proposed.find("local"), proposed.rfind('\n')});
+    }
+
     TEST_CASE("Horo Script syntax workspace retires the replaced revision before publishing diagnostics") {
         TestSupport::SourceProject project;
         project.Put("local =", "check.lua");

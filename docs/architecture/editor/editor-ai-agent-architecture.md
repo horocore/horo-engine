@@ -1140,6 +1140,11 @@ After the user applies a review, an open source tab can show the language
 findings for its exact applied buffer. A later edit retires this association.
 The buffer remains in the source owner and applying the review grants no build
 or test authority.
+The chat review can also check the syntax of a proposed HoroScript file before
+application. The bounded Lua parser runs on a worker against the immutable
+preview, without opening the script's libraries or executing it. The result is
+visible only for that exact proposal plan and current file base. The check
+leaves the review decisions and workspace files untouched.
 
 The workspace can also capture up to sixteen selected IDs from the current
 ordinary Scene for a separate local-model review. The capture identifies the

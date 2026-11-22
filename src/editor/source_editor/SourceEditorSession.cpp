@@ -48,8 +48,8 @@ namespace Horo::Editor {
                 markers.reserve(published->items.size());
                 for (const auto &diagnostic : published->items) {
                     const auto style = DiagnosticStyle(diagnostic.severity);
-                    counts->errors += style == SourceWidgetDecorationKind::Error;
-                    counts->warnings += style == SourceWidgetDecorationKind::Warning;
+                    counts->errors += std::size_t{style == SourceWidgetDecorationKind::Error};
+                    counts->warnings += std::size_t{style == SourceWidgetDecorationKind::Warning};
                     markers.emplace_back(diagnostic.span.start, diagnostic.span.end, style, diagnostic.message);
                 }
             }

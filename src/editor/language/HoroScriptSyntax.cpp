@@ -66,7 +66,7 @@ namespace Horo::Editor::Language {
         }
 
         /** @brief Decodes the line from Lua's fixed chunk label without treating file names as parser messages. */
-        LanguageDiagnostic SyntaxDiagnostic(std::string_view message, const SourceDocumentSnapshot &source, const std::size_t bom) {
+        LanguageDiagnostic SyntaxDiagnostic(std::string_view message, std::string_view source, const std::size_t bom) {
             const auto prefix = message.find(':');
             std::size_t line = 1;
             if (message.substr(0, prefix) == ChunkName && prefix != std::string_view::npos) {
@@ -78,23 +78,23 @@ namespace Horo::Editor::Language {
                         message.remove_prefix(1);
                 }
             }
-            return {SyntaxLine(source.Text(), line, bom), LanguageSeverity::Error, std::string{MarkerMessage(message)}};
+            return {SyntaxLine(source, line, bom), LanguageSeverity::Error, std::string{MarkerMessage(message)}};
         }
     }  // namespace
 
-    /** @copydoc CheckHoroScriptSyntax */
-    Result<LanguageResult> CheckHoroScriptSyntax(const SourceDocumentSnapshot &source) {
-        using Output = Result<LanguageResult>;
-        if (source.Revision() == 0)
-            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
-        if (source.Text().size() > MaximumSyntaxSourceBytes)
+    /** @copydoc CheckHoroScriptSyntaxText */
+    Result<LanguageDiagnostics> CheckHoroScriptSyntaxText(const std::string_view source) {
+        using Output = Result<LanguageDiagnostics>;
+        if (source.size() > MaximumSyntaxSourceBytes)
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        if (!IsValidUtf8ScalarSequence(source))
+            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
         std::size_t used = 0;
         const std::unique_ptr<lua_State, decltype(&lua_close)> parser{lua_newstate(AllocateSyntaxMemory, &used), lua_close};
         if (!parser)
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
-        const auto bom = source.Metadata().utf8Bom ? 3U : 0U;
-        const auto text = source.Text().substr(bom);
+        const auto bom = source.starts_with("\xEF\xBB\xBF") ? 3U : 0U;
+        const auto text = source.substr(bom);
         const int loaded = luaL_loadbufferx(parser.get(), text.data(), text.size(), "=horo-source", "t");
         LanguageDiagnostics diagnostics;
         if (loaded == LUA_ERRSYNTAX) {
@@ -103,7 +103,18 @@ namespace Horo::Editor::Language {
         } else if (loaded != LUA_OK) {
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         }
-        return Output::Success({{SourceLanguageRequestKind::Diagnostics, source}, std::move(diagnostics)});
+        return Output::Success(std::move(diagnostics));
+    }
+
+    /** @copydoc CheckHoroScriptSyntax */
+    Result<LanguageResult> CheckHoroScriptSyntax(const SourceDocumentSnapshot &source) {
+        using Output = Result<LanguageResult>;
+        if (source.Revision() == 0)
+            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+        auto diagnostics = CheckHoroScriptSyntaxText(source.Text());
+        if (diagnostics.HasError())
+            return Output::Failure(std::move(diagnostics).ErrorValue());
+        return Output::Success({{SourceLanguageRequestKind::Diagnostics, source}, std::move(diagnostics).Value()});
     }
 
     /** @copydoc HoroScriptSyntaxWorkspace::~HoroScriptSyntaxWorkspace */

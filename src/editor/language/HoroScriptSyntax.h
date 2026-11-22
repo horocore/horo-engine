@@ -19,6 +19,12 @@ namespace Horo::Editor::Language {
     /** @brief Parses Lua text without opening standard libraries, executing the chunk or returning a VM handle. */
     [[nodiscard]] Result<LanguageResult> CheckHoroScriptSyntax(const SourceDocumentSnapshot &source);
 
+    /** @brief Checks bounded detached source bytes without opening or mutating a document.
+     * @param source Proposed UTF-8 script, optionally including a BOM.
+     * @return Syntax diagnostics in the supplied byte coordinates, or a typed input/budget failure.
+     */
+    [[nodiscard]] Result<LanguageDiagnostics> CheckHoroScriptSyntaxText(std::string_view source);
+
     /** @brief Coalesces active-script checks to one worker and publishes only current document results. */
     class HoroScriptSyntaxWorkspace final {
     public:

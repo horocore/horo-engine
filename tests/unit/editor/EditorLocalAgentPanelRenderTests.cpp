@@ -946,6 +946,52 @@ namespace {
         CHECK(LoadEditorPatchCheckpoint(project.directory, "layout-test", std::span{&latest, 1}, {}).HasError());
     }
 
+    TEST_CASE("Chat checks detached proposed HoroScript and hides results after the source changes", "[editor][agent][source]") {
+        TestSupport::SourceProject project;
+        project.Put("return 1", "check.lua");
+        SourceFileOpenService owner{project.directory};
+        const auto base = *owner.Open({.path = "check.lua"}).Value().sourceSnapshot;
+        const std::array sources{base};
+        const bool invalid = GENERATE(false, true);
+        const auto *replacement = invalid ? "local =" : "error('must not execute')";
+        const auto *expected = invalid ? "The proposed script has a syntax error." : "Proposed script syntax passed.";
+        const std::string patch =
+            std::string{R"({"version":1,"files":[{"kind":"edit","path":"check.lua","hunks":[{"offset":0,"before":"return 1","after":")"} +
+            replacement + R"("}]}]})";
+        auto prepared = PrepareEditorLocalPatchReview(patch, {{base}, "test", 1}, "layout-test", 1);
+        REQUIRE(prepared.HasValue());
+        auto review = std::move(prepared).Value();
+        NativeDurableFileSystem files;
+        REQUIRE(
+            SaveEditorPatchCheckpoint(files, project.directory, {review.proposal, review.decisions, review.offeredPaths}, {}).HasValue());
+        LocalAgentFixture fixture{"en-US", [&project, &sources](PanelContext &panel) {
+            panel.projectFileRoot = &project.directory;
+            panel.openSourceSnapshots = [&sources] {
+                return std::span<const SourceDocumentSnapshot>{sources};
+            };
+            panel.requestSourceReview = [](const auto &, const auto &, auto, auto &) {
+                return false;
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Activate("###source_patch_checkpoint_load");
+        REQUIRE(Await([&fixture] {
+            return fixture.DrawnText().find("Check proposed script syntax") != std::string::npos;
+        }));
+        fixture.Activate("###source_patch_check_syntax");
+        REQUIRE(Await([&fixture, expected] {
+            return fixture.DrawnText().find(expected) != std::string::npos;
+        }));
+        CHECK(fixture.command.command == EditorWorkspaceViewCommand::None);
+        CHECK(owner.Documents().Snapshot(base.Identity().instance).Value().SharesStateWith(base));
+        std::ifstream disk{project.directory / "check.lua"};
+        CHECK(std::string(std::istreambuf_iterator<char>{disk}, {}) == "return 1");
+        REQUIRE(owner.Documents().Edit(base.Identity().instance, {base.Revision(), 7, 1, "2"}).HasValue());
+        const auto stale = fixture.DrawnText();
+        CHECK(stale.find(expected) == std::string::npos);
+        CHECK(stale.find("The source changed after this request.") != std::string::npos);
+    }
+
     TEST_CASE("Structural confirmation follows accepted files in a restored review", "[editor][agent][source]") {
         using namespace Proposals;
         TestSupport::SourceProject project;
