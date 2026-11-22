@@ -56,9 +56,8 @@ namespace Horo::AI {
             return true;
         }
 
-        std::optional<SymbolicPlanStatus> Expand(const std::size_t current, const std::span<const Action> actions,
-                                                  AiWorkBudget &budget, const CancellationToken &cancellation,
-                                                  const AiTaskOperationContext *operation) noexcept {
+        std::optional<SymbolicPlanStatus> Expand(const std::size_t current, const std::span<const Action> actions, AiWorkBudget &budget,
+                                                 const CancellationToken &cancellation, const AiTaskOperationContext *operation) noexcept {
             const auto &label = labels[current];
             for (std::size_t index = 0; index < actions.size(); ++index) {
                 if (PlanningCancelled(cancellation, operation))
@@ -96,9 +95,9 @@ namespace Horo::AI {
     }
 
     Result<SymbolicDomain> SymbolicDomain::Capture(const std::span<const SymbolicFactId> facts,
-                                                    const std::span<const SymbolicActionSource> actions,
-                                                    const AiCapabilityDescriptorSet &tasks,
-                                                    const std::optional<BlackboardSchemaId> blackboard) {
+                                                   const std::span<const SymbolicActionSource> actions,
+                                                   const AiCapabilityDescriptorSet &tasks,
+                                                   const std::optional<BlackboardSchemaId> blackboard) {
         using Domain = Result<SymbolicDomain>;
         if (facts.empty() || facts.size() > MaximumFacts || actions.size() > MaximumActions)
             return Domain::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
@@ -114,12 +113,14 @@ namespace Horo::AI {
             const auto task = tasks.Find(source.task);
             const auto before = result.Encode(source.preconditions);
             const auto after = result.Encode(source.effects);
-            if (!source.action.IsValid() || source.cost == 0 || !task || (task->blackboard && task->blackboard != blackboard) ||
-                !before || !after || after->known == 0)
+            if (!source.action.IsValid() || source.cost == 0 || !task || (task->blackboard && task->blackboard != blackboard) || !before ||
+                !after || after->known == 0)
                 return Domain::Failure(MakeError(AIErrors::TaskContextInvalid));
             result.actions_[result.actionCount_++] = {{source.action, source.task}, source.cost, *before, *after};
         }
-        const auto identity = [](const Action &action) { return action.identity.action; };
+        const auto identity = [](const Action &action) {
+            return action.identity.action;
+        };
         auto orderedActions = std::span{result.actions_}.first(result.actionCount_);
         std::ranges::sort(orderedActions, {}, identity);
         if (std::ranges::adjacent_find(orderedActions, {}, identity) != orderedActions.end())
@@ -132,9 +133,9 @@ namespace Horo::AI {
         return SearchImpl(initial, goal, work, cancellation, nullptr);
     }
 
-    SymbolicPlan SymbolicDomain::SearchImpl(const std::span<const SymbolicLiteral> initial,
-                                            const std::span<const SymbolicLiteral> goal, const std::size_t work,
-                                            const CancellationToken &cancellation, const AiTaskOperationContext *operation) const noexcept {
+    SymbolicPlan SymbolicDomain::SearchImpl(const std::span<const SymbolicLiteral> initial, const std::span<const SymbolicLiteral> goal,
+                                            const std::size_t work, const CancellationToken &cancellation,
+                                            const AiTaskOperationContext *operation) const noexcept {
         using enum SymbolicPlanStatus;
         const auto start = Encode(initial);
         const auto required = Encode(goal);
@@ -172,7 +173,9 @@ namespace Horo::AI {
 
     const SymbolicDomain::Action *SymbolicHierarchy::FindAction(const SymbolicActionId id) const noexcept {
         const auto actions = std::span{primitives_->actions_}.first(primitives_->actionCount_);
-        const auto identity = [](const SymbolicDomain::Action &action) { return action.identity.action; };
+        const auto identity = [](const SymbolicDomain::Action &action) {
+            return action.identity.action;
+        };
         const auto found = std::ranges::lower_bound(actions, id, {}, identity);
         return found != actions.end() && found->identity.action == id ? &*found : nullptr;
     }
@@ -182,8 +185,8 @@ namespace Horo::AI {
         return std::ranges::binary_search(methods, compound, {}, &Method::compound);
     }
 
-    Result<SymbolicHierarchy> SymbolicHierarchy::Capture(
-        std::shared_ptr<const SymbolicDomain> primitives, const std::span<const SymbolicMethodSource> sources) {
+    Result<SymbolicHierarchy> SymbolicHierarchy::Capture(std::shared_ptr<const SymbolicDomain> primitives,
+                                                         const std::span<const SymbolicMethodSource> sources) {
         using Hierarchy = Result<SymbolicHierarchy>;
         if (!primitives || sources.empty() || sources.size() > MaximumMethods)
             return Hierarchy::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
@@ -247,8 +250,7 @@ namespace Horo::AI {
             return Compound(std::get<SymbolicCompoundId>(next), pending, state, depth + 1);
         }
 
-        SymbolicPlanStatus Primitive(SymbolicActionId id, const Pending &pending, std::uint64_t state,
-                                     const std::size_t depth) noexcept {
+        SymbolicPlanStatus Primitive(SymbolicActionId id, const Pending &pending, std::uint64_t state, const std::size_t depth) noexcept {
             using enum SymbolicPlanStatus;
             const auto *action = hierarchy.FindAction(id);
             if (!action || !action->preconditions.Matches(state))
@@ -315,8 +317,9 @@ namespace Horo::AI {
         return plan;
     }
 
-    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileSymbolicTaskSequence(
-        const SymbolicPlan &plan, SymbolicExecutionBindings bindings, const AiCapabilityDescriptorSet &tasks) {
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileSymbolicTaskSequence(const SymbolicPlan &plan,
+                                                                                         SymbolicExecutionBindings bindings,
+                                                                                         const AiCapabilityDescriptorSet &tasks) {
         using Compiled = Result<std::shared_ptr<const BehaviorTreeExecutionPlan>>;
         const auto steps = plan.Steps();
         if (plan.Status() != SymbolicPlanStatus::Solved || steps.size() != bindings.occurrences.size())
@@ -352,8 +355,8 @@ namespace Horo::AI {
         }
     }
 
-    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::CaptureInputs(
-        const std::span<const SymbolicLiteral> initial, const std::size_t work) {
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::CaptureInputs(const std::span<const SymbolicLiteral> initial,
+                                                                                    const std::size_t work) {
         using Job = Result<std::shared_ptr<SymbolicPlanningJob>>;
         if (initial.size() > SymbolicDomain::MaximumFacts || work == 0 || work > SymbolicDomain::MaximumWork)
             return Job::Failure(MakeError(AIErrors::TaskContextInvalid));
@@ -368,9 +371,10 @@ namespace Horo::AI {
         }
     }
 
-    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(
-        std::shared_ptr<const SymbolicDomain> domain, const std::span<const SymbolicLiteral> initial,
-        const std::span<const SymbolicLiteral> goal, const std::size_t work) {
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(std::shared_ptr<const SymbolicDomain> domain,
+                                                                             const std::span<const SymbolicLiteral> initial,
+                                                                             const std::span<const SymbolicLiteral> goal,
+                                                                             const std::size_t work) {
         if (!domain || !domain->Encode(initial) || !domain->Encode(goal))
             return Result<std::shared_ptr<SymbolicPlanningJob>>::Failure(MakeError(AIErrors::TaskContextInvalid));
         auto job = CaptureInputs(initial, work);
@@ -382,9 +386,9 @@ namespace Horo::AI {
         return job;
     }
 
-    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(
-        std::shared_ptr<const SymbolicHierarchy> hierarchy, const std::span<const SymbolicLiteral> initial,
-        const SymbolicCompoundId root, const std::size_t work) {
+    Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::Create(std::shared_ptr<const SymbolicHierarchy> hierarchy,
+                                                                             const std::span<const SymbolicLiteral> initial,
+                                                                             const SymbolicCompoundId root, const std::size_t work) {
         if (!hierarchy || !hierarchy->primitives_ || !hierarchy->primitives_->Encode(initial) || !hierarchy->HasCompound(root))
             return Result<std::shared_ptr<SymbolicPlanningJob>>::Failure(MakeError(AIErrors::TaskContextInvalid));
         auto job = CaptureInputs(initial, work);

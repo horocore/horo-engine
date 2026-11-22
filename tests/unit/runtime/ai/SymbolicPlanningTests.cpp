@@ -58,10 +58,18 @@ namespace Horo::AI {
         TEST_CASE("Symbolic planning refuses contradictory facts and unknown task identities", "[ai][planning]") {
             DomainFixture input;
             const auto tasks = input.Registry();
-            SECTION("duplicate facts") { input.facts[0] = input.facts[1]; }
-            SECTION("unregistered task") { input.actions[0].task = Id<TaskId>(90); }
-            SECTION("duplicate transition identity") { input.actions[0].action = input.actions[1].action; }
-            SECTION("zero cost") { input.actions[0].cost = 0; }
+            SECTION("duplicate facts") {
+                input.facts[0] = input.facts[1];
+            }
+            SECTION("unregistered task") {
+                input.actions[0].task = Id<TaskId>(90);
+            }
+            SECTION("duplicate transition identity") {
+                input.actions[0].action = input.actions[1].action;
+            }
+            SECTION("zero cost") {
+                input.actions[0].cost = 0;
+            }
             SECTION("unknown effects") {
                 input.picked.front().fact = Id<SymbolicFactId>(99);
             }
@@ -94,7 +102,8 @@ namespace Horo::AI {
             const auto job = captured.Value();
             input.goal.front().value = false;
             const auto incarnation = Id<AiRuntimeIncarnation>(1);
-            AiTaskOperationContext operation{.taskDefinition = input.openTask, .task = {incarnation, {2, 1}},
+            AiTaskOperationContext operation{.taskDefinition = input.openTask,
+                                             .task = {incarnation, {2, 1}},
                                              .agent = {incarnation, {1, 1}}};
             CHECK(job->Read() == nullptr);
             SECTION("the worker produces one immutable result") {
@@ -127,9 +136,7 @@ namespace Horo::AI {
             BehaviorTreeAsyncTestSupport::StartedTask caller;
             auto service = AiTaskJobService::Create(jobs, 1);
             REQUIRE(service.HasValue());
-            REQUIRE(service.Value()
-                        ->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job})
-                        .HasValue());
+            REQUIRE(service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job}).HasValue());
             jobs.Shutdown(ShutdownPolicy::Drain);
             service.Value()->Pump();
             CHECK(service.Value()->PendingCount() == 0);
@@ -204,8 +211,8 @@ namespace Horo::AI {
             BehaviorTreeAsyncTestSupport::StartedTask caller;
             auto service = AiTaskJobService::Create(jobs, 1);
             REQUIRE(service.HasValue());
-            REQUIRE(service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job.Value()})
-                        .HasValue());
+            REQUIRE(
+                service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job.Value()}).HasValue());
             jobs.Shutdown(ShutdownPolicy::Drain);
             service.Value()->Pump();
             CHECK(caller.fixture.Evaluate(*caller.instance, 2) == AiTaskState::Succeeded);
@@ -228,8 +235,8 @@ namespace Horo::AI {
                 SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
                 SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
             };
-            const auto compiled = CompileSymbolicTaskSequence(plan, {scene.Bindings(), Id<DecisionNodeId>(1), occurrences},
-                                                               input.Registry());
+            const auto compiled =
+                CompileSymbolicTaskSequence(plan, {scene.Bindings(), Id<DecisionNodeId>(1), occurrences}, input.Registry());
             REQUIRE(compiled.HasValue());
             REQUIRE(compiled.Value());
             REQUIRE(compiled.Value()->Nodes().size() == 3);
@@ -238,10 +245,13 @@ namespace Horo::AI {
             CHECK(scene.probe->orderCount == 0);
 
             CancellationSource lifetime;
-            const BehaviorTreeInstanceBinding binding{
-                scene.agent, lifetime.Token(), 100, 1, {scene.agent, scene.schema->Identity(), scene.schema->Version(), 1, 1}};
-            auto instance = BehaviorTreeInstance::Create(compiled.Value(), binding,
-                                                        std::make_unique<BehaviorTreeTestSupport::Executor>(scene.probe));
+            const BehaviorTreeInstanceBinding binding{scene.agent,
+                                                      lifetime.Token(),
+                                                      100,
+                                                      1,
+                                                      {scene.agent, scene.schema->Identity(), scene.schema->Version(), 1, 1}};
+            auto instance =
+                BehaviorTreeInstance::Create(compiled.Value(), binding, std::make_unique<BehaviorTreeTestSupport::Executor>(scene.probe));
             REQUIRE(instance.HasValue());
             scene.probe->outcome[2] = AiTaskState::Running;
             CHECK(scene.Evaluate(*instance.Value(), 1) == AiTaskState::Running);
