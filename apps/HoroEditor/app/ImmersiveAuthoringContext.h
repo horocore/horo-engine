@@ -12,9 +12,22 @@
 #include <span>
 
 namespace Horo::Editor {
-    enum class ImmersiveAuthoringMode : std::uint8_t { Edit, Simulate, Play };
-    enum class ImmersiveRequestKind : std::uint8_t { Plan, Diagnostics };
-    enum class ImmersiveAdmission : std::uint8_t { Admitted, StaleContext, ModeDenied, PermissionDenied, InvalidRequest };
+    enum class ImmersiveAuthoringMode : std::uint8_t {
+        Edit,
+        Simulate,
+        Play
+    };
+    enum class ImmersiveRequestKind : std::uint8_t {
+        Plan,
+        Diagnostics
+    };
+    enum class ImmersiveAdmission : std::uint8_t {
+        Admitted,
+        StaleContext,
+        ModeDenied,
+        PermissionDenied,
+        InvalidRequest
+    };
 
     /** @brief Values captured from the authenticated editor, document and XR owners. */
     struct ImmersiveContextIdentity final {
@@ -41,12 +54,20 @@ namespace Horo::Editor {
     public:
         static constexpr std::size_t MaximumSelection = 32;
 
-        [[nodiscard]] const ImmersiveContextIdentity &Identity() const & noexcept { return identity_; }
+        [[nodiscard]] const ImmersiveContextIdentity &Identity() const & noexcept {
+            return identity_;
+        }
+
         [[nodiscard]] const ImmersiveContextIdentity &Identity() const && = delete;
-        [[nodiscard]] std::uint64_t Generation() const noexcept { return generation_; }
+
+        [[nodiscard]] std::uint64_t Generation() const noexcept {
+            return generation_;
+        }
+
         [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const & noexcept {
             return std::span{selection_}.first(selectionCount_);
         }
+
         [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const && = delete;
         [[nodiscard]] bool IsCurrent() const noexcept;
 
@@ -68,8 +89,8 @@ namespace Horo::Editor {
         ImmersiveAuthoringContext &operator=(const ImmersiveAuthoringContext &) = delete;
 
         /** @brief Publishes the current owner observation. Invalid observations revoke the last generation. */
-        [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(
-            const ImmersiveContextIdentity &identity, std::span<const SceneSource::SceneObjectId> selection) noexcept;
+        [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(const ImmersiveContextIdentity &identity,
+                                                                      std::span<const SceneSource::SceneObjectId> selection) noexcept;
         /** @brief Revokes all previously issued contexts before project, document or XR teardown. */
         void Revoke() noexcept;
         /** @brief Rechecks one captured request before any tool authority is consulted.

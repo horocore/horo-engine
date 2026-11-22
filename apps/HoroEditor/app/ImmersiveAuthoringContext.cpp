@@ -17,8 +17,7 @@ namespace Horo::Editor {
             const bool validWorld = (identity.worldGeneration == 0) == (identity.mode == Edit);
             return identity.projectOpening && identity.documentOpening && identity.documentRevision && identity.user &&
                    identity.conversation && identity.toolContext && identity.capabilities.IsValid() && identity.xrSession.IsValid() &&
-                   identity.referenceSpace.IsValid() && identity.referenceSpace.session == identity.xrSession && validMode &&
-                   validWorld;
+                   identity.referenceSpace.IsValid() && identity.referenceSpace.session == identity.xrSession && validMode && validWorld;
         }
 
         /** @brief Verifies selection without allocations or reordering the owner projection. */

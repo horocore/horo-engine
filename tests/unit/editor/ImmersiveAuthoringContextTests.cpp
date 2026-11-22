@@ -7,8 +7,19 @@ namespace Horo::Editor {
     namespace {
         ImmersiveContextIdentity Opening() {
             const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
-            return {1, 1, 1, session, {session, {0, 1}}, 1, 1, 1, XR::XRCapabilityRevision::Create(1).Value(),
-                    ImmersiveAuthoringMode::Edit, 0, true, true};
+            return {1,
+                    1,
+                    1,
+                    session,
+                    {session, {0, 1}},
+                    1,
+                    1,
+                    1,
+                    XR::XRCapabilityRevision::Create(1).Value(),
+                    ImmersiveAuthoringMode::Edit,
+                    0,
+                    true,
+                    true};
         }
 
         TEST_CASE("Immersive planning captures a bounded owned selection", "[agent][immersive]") {
@@ -38,23 +49,41 @@ namespace Horo::Editor {
             REQUIRE(first);
             REQUIRE(foreign);
             CHECK(owner.Admit(*foreign, ImmersiveRequestKind::Plan) == ImmersiveAdmission::StaleContext);
-            SECTION("project replacement") { ++identity.projectOpening; }
-            SECTION("document replacement") { ++identity.documentOpening; }
-            SECTION("document edit") { ++identity.documentRevision; }
+            SECTION("project replacement") {
+                ++identity.projectOpening;
+            }
+            SECTION("document replacement") {
+                ++identity.documentOpening;
+            }
+            SECTION("document edit") {
+                ++identity.documentRevision;
+            }
             SECTION("XR session replacement") {
                 ++identity.xrSession.slot.generation;
                 identity.referenceSpace.session = identity.xrSession;
             }
-            SECTION("reference space replacement") { ++identity.referenceSpace.slot.generation; }
-            SECTION("user change") { ++identity.user; }
-            SECTION("conversation change") { ++identity.conversation; }
-            SECTION("tool change") { ++identity.toolContext; }
-            SECTION("capability change") { identity.capabilities = XR::XRCapabilityRevision::Create(2).Value(); }
+            SECTION("reference space replacement") {
+                ++identity.referenceSpace.slot.generation;
+            }
+            SECTION("user change") {
+                ++identity.user;
+            }
+            SECTION("conversation change") {
+                ++identity.conversation;
+            }
+            SECTION("tool change") {
+                ++identity.toolContext;
+            }
+            SECTION("capability change") {
+                identity.capabilities = XR::XRCapabilityRevision::Create(2).Value();
+            }
             SECTION("mode transition") {
                 identity.mode = ImmersiveAuthoringMode::Simulate;
                 identity.worldGeneration = 2;
             }
-            SECTION("permission withdrawal") { identity.planningAllowed = false; }
+            SECTION("permission withdrawal") {
+                identity.planningAllowed = false;
+            }
             REQUIRE(owner.Publish(identity, {}));
             CHECK_FALSE(first->IsCurrent());
             CHECK(owner.Admit(*first, ImmersiveRequestKind::Plan) == ImmersiveAdmission::StaleContext);
