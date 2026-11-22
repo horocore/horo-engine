@@ -1,9 +1,10 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
+#include "EditorCommandMcpSession.h"
+#include "EditorSourceMcpTools.h"
 #include "EditorTestMcpTools.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Foundation/Platform.h"
-#include "Horo/Mcp/McpController.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Platform/ExternalProcess.h"
 
@@ -29,64 +30,22 @@ namespace {
         std::atomic_uint calls{};
     };
 
-    struct TestSession final {
-        std::shared_ptr<McpAuthorization> policy{Test::Authorization()};
-        std::shared_ptr<McpController> controller;
-        std::shared_ptr<McpSessionManager> manager;
-        McpSessionAdmission admission;
-        std::shared_ptr<McpInProcessAdapter> embedded;
+    void Approve(EditorCommandMcpSession &session, const McpRequest &request) {
+        const auto challenge = session.RequestApproval(request);
+        REQUIRE(challenge.HasValue());
+        REQUIRE(session.Decide(challenge.Value(), true).HasValue());
+    }
 
-        explicit TestSession(const std::shared_ptr<EditorTestCommandEndpoint> &endpoint) {
-            auto tools = MakeEditorTestMcpTools(endpoint);
-            REQUIRE(tools.HasValue());
-            auto registry = std::make_shared<McpToolRegistry>(policy);
-            std::vector<std::string> grants{std::string{EditorTestExecutionGrant}, std::string{EditorTestObservationGrant}};
-            auto revision = registry->Publish(std::move(tools).Value(), grants);
-            REQUIRE(revision.HasValue());
-            auto created = McpController::Create(registry, {}, policy);
-            REQUIRE(created.HasValue());
-            controller = std::move(created).Value();
-            REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
-            auto sessions = McpSessionManager::Create(controller, {}, policy);
-            REQUIRE(sessions.HasValue());
-            manager = std::move(sessions).Value();
-            admission = Test::Authenticate({.clientIdentity = "configured-tests",
-                                            .capabilities = std::move(grants),
-                                            .projectIdentity = "project-one",
-                                            .authorizationRevision = 3,
-                                            .registryRevision = revision.Value()},
-                                           policy);
-            auto connected = McpInProcessAdapter::Start(manager, admission);
-            REQUIRE(connected.HasValue());
-            embedded = std::move(connected).Value();
-        }
-
-        void Approve(const McpRequest &request) const {
-            const McpRequestContext context{.session = embedded->Session(),
-                                            .clientIdentity = admission.clientIdentity,
-                                            .capabilities = admission.capabilities,
-                                            .projectIdentity = admission.projectIdentity,
-                                            .authorizationRevision = admission.authorizationRevision,
-                                            .registryRevision = admission.registryRevision,
-                                            .deadline = std::chrono::steady_clock::now() + 1min,
-                                            .authority = admission.authority,
-                                            .authorization = policy,
-                                            .requestIdentity = request.id};
-            const auto challenge = policy->Challenge(context, request, 1min);
-            REQUIRE(challenge.HasValue());
-            REQUIRE(policy->Decide(challenge.Value(), true).HasValue());
-        }
-
-        Json Execute(const McpRequest &request) const {
-            const auto accepted = embedded->Call(request);
-            REQUIRE(accepted.HasValue());
-            REQUIRE(controller->Pump(McpOwnerContext::Editor).HasValue());
-            const auto status = embedded->Call(
-                {.id = "read-result", .method = "operations/get", .params = {{"operationId", accepted.Value().at("operationId")}}});
-            REQUIRE(status.HasValue());
-            return status.Value();
-        }
-    };
+    Json Execute(const EditorCommandMcpSession &session, const McpRequest &request) {
+        const auto client = session.Client();
+        const auto accepted = client->Call(request);
+        REQUIRE(accepted.HasValue());
+        REQUIRE(session.Pump().HasValue());
+        const auto status = client->Call(
+            {.id = "read-result", .method = "operations/get", .params = {{"operationId", accepted.Value().at("operationId")}}});
+        REQUIRE(status.HasValue());
+        return status.Value();
+    }
 
     McpRequest Command(std::string id, std::string tool, Json arguments = Json::object()) {
         return {.id = std::move(id), .method = "tools/call", .params = {{"name", std::move(tool)}, {"arguments", std::move(arguments)}}};
@@ -113,14 +72,22 @@ namespace {
         }, [&](const auto id) {
             return service.RequestCancel(id);
         }});
-        const TestSession session{endpoint};
+        auto session = EditorCommandMcpSession::Create({.test = endpoint},
+                                                       {"configured-tests",
+                                                        "project-one",
+                                                        3,
+                                                        {std::string{EditorTestExecutionGrant}, std::string{EditorTestObservationGrant}}},
+                                                       Test::Authorization());
+        REQUIRE(session.HasValue());
+        auto &host = *session.Value();
+        const auto client = host.Client();
 
         const auto start = Command("start", "editor.test.start");
-        const auto denied = session.embedded->Call(start);
+        const auto denied = client->Call(start);
         REQUIRE(denied.HasError());
         CHECK(runner.calls.load(std::memory_order_acquire) == 0);
-        session.Approve(start);
-        const auto launched = session.Execute(start);
+        Approve(host, start);
+        const auto launched = Execute(host, start);
         REQUIRE(launched.at("status") == "succeeded");
         const auto &result = launched.at("result");
         const auto id = result.at("testId");
@@ -131,17 +98,64 @@ namespace {
             std::this_thread::sleep_for(2ms);
         REQUIRE(runner.calls.load(std::memory_order_acquire) == 1);
         service.Poll();
-        const auto status = session.Execute(Command("observe", "editor.test.status", {{"testId", id}}));
+        const auto status = Execute(host, Command("observe", "editor.test.status", {{"testId", id}}));
         CHECK(status.at("status") == "succeeded");
         CHECK(status.at("result").at("testId") == id);
         CHECK(status.at("result").at("state") == "running");
 
         const auto cancel = Command("stop", "editor.test.cancel", {{"testId", id}});
-        CHECK(session.embedded->Call(cancel).HasError());
-        session.Approve(cancel);
-        CHECK(session.Execute(cancel).at("result").at("cancellationRequested") == true);
+        CHECK(client->Call(cancel).HasError());
+        Approve(host, cancel);
+        CHECK(Execute(host, cancel).at("result").at("cancellationRequested") == true);
         service.Close();
-        const auto terminal = session.Execute(Command("terminal", "editor.test.status", {{"testId", id}}));
+        const auto terminal = Execute(host, Command("terminal", "editor.test.status", {{"testId", id}}));
         CHECK(terminal.at("result").at("state") == "cancelled");
+    }
+
+    TEST_CASE("Editor command sessions bind grants and approvals to one active workspace", "[unit][editor][mcp]") {
+        int presentations{};
+        const auto source = std::make_shared<EditorSourceCommandEndpoint>(
+            EditorSourceCommandEndpoint{"project-one", 3, std::this_thread::get_id(),
+                                        [&](const SourceDocumentId &, std::optional<EditorSourceCommandPosition>, const auto &) {
+            ++presentations;
+            return Result<void>::Success();
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSourcePresentationGrant}}};
+        const auto policy = std::make_shared<McpAuthorization>(std::make_shared<Test::Entropy>());
+        CHECK(EditorCommandMcpSession::Create({.source = source}, admission, policy).HasError());
+        REQUIRE(policy->SetTrust("project-one", 3, true).HasValue());
+        CHECK(EditorCommandMcpSession::Create({}, admission, policy).HasError());
+        auto foreign = admission;
+        foreign.project = "other-project";
+        CHECK(EditorCommandMcpSession::Create({.source = source}, foreign, policy).HasError());
+
+        auto opened = EditorCommandMcpSession::Create({.source = source}, admission, policy);
+        REQUIRE(opened.HasValue());
+        auto &session = *opened.Value();
+        const auto client = session.Client();
+        const auto open = Command("request", "editor.source.open", {{"path", "main.cpp"}});
+        CHECK(client->Call(open).HasError());
+        const auto denied = session.RequestApproval(open);
+        REQUIRE(denied.HasValue());
+        CHECK(session.Decide(denied.Value(), false).HasValue());
+        CHECK(session.Decide(denied.Value(), true).HasError());
+        CHECK(client->Call(open).HasError());
+
+        Approve(session, open);
+        auto changed = open;
+        changed.params["arguments"]["path"] = "other.cpp";
+        CHECK(client->Call(changed).HasError());
+        CHECK(Execute(session, open).at("status") == "succeeded");
+        CHECK(client->Call(open).HasError());
+
+        const auto queued = Command("queued", "editor.source.open", {{"path", "main.cpp"}});
+        Approve(session, queued);
+        REQUIRE(client->Call(queued).HasValue());
+        REQUIRE(policy->SetTrust("project-one", 4, false).HasValue());
+        REQUIRE(session.Pump().HasValue());
+        CHECK(presentations == 1);
+        CHECK(session.RequestApproval(queued).HasError());
+        CHECK(session.Close().HasValue());
+        CHECK(client->Call(queued).HasError());
     }
 }  // namespace

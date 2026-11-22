@@ -200,9 +200,8 @@ Editor, Runtime, Background, or Build execution. Publication rejects an omitted
 owner instead of silently routing work to a frame-sensitive context. This is a
 deliberate registration migration: the registry test authoring helper and every
 host composition that publishes MCP tools must set the owner explicitly. The
-current repository has no host-published MCP tool pack; existing session and
-transport callers are unaffected. Active operations retain their snapshot and
-adapter lease across registry replacement until their owner invocation starts.
+registry retains the snapshot and adapter lease for each active operation
+across publication changes until its owner invocation starts.
 
 The registry admits a deliberately closed, non-referencing JSON Schema subset:
 `type`, `properties`, `required`, boolean `additionalProperties`, `items`, `enum`,
@@ -677,6 +676,14 @@ projection as embedded language navigation. Already open dirty sources
 retain their current buffers. Cancellation, closed workspaces, and
 project or authorization replacement prevent the old registration from
 opening a source.
+
+The internal editor command session publishes source, build and test packs in one
+immutable registry for the host-admitted workspace. The host supplies the
+client identity, applicable grants and already-trusted project revision. The
+embedded client can submit protocol requests. Only the local owner can request
+or decide a short-lived approval for an exact presentation or mutation call.
+The host pumps accepted calls on the editor lane and closes admission before
+releasing the borrowed workspace endpoints.
 
 ## Editor gameplay build commands
 
