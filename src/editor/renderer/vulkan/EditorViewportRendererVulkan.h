@@ -11,7 +11,7 @@
 #include "Horo/Runtime/Render/UiPaintProgram.h"
 #include "Horo/Runtime/Render/UiRenderComposition.h"
 #include "VulkanEditorGraphicsBridge.h"
-#include "VulkanViewportImageCapture.h"
+#include "editor/renderer/EditorGraphViewportImageCapture.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
 #include "host/EditorVulkanXrViewportAccess.h"
@@ -257,7 +257,7 @@ namespace Horo::Editor {
         /** @brief Prepares one complete canvas graph, optionally with the exact admitted image copy. */
         [[nodiscard]] Result<std::shared_ptr<ViewportCanvasGraph>> BuildViewportCanvasGraph(
             const ViewportCanvasPreparation &request, const CancellationToken &cancellation,
-            const VulkanViewportImageCapture::Copy *capture);
+            const EditorGraphViewportImageCapture::Copy *capture);
 
         /** @brief Borrows canvas recording inputs only while the exact prepared scene phase executes. */
         struct CanvasFrame final {
@@ -280,8 +280,8 @@ namespace Horo::Editor {
                                                               const std::optional<Render::DirectionalShadowFrame> *sourceShadow = nullptr);
         std::shared_ptr<ViewportRasterGraphs> viewportRasterGraphs_;
         /** @brief Returns the current desktop presentation attachment, including the post-color encode output. */
-        [[nodiscard]] VulkanViewportImageCapture::Source ImageSource() const noexcept;
-        VulkanViewportImageCapture imageCapture_;
+        [[nodiscard]] EditorGraphViewportImageCapture::Source ImageSource() const noexcept;
+        EditorGraphViewportImageCapture imageCapture_;
         std::shared_ptr<ViewportCanvasGraph> viewportCanvasGraph_;
         struct XrGraph;
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */

@@ -123,7 +123,15 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::FinishColorFrame */
     void EditorViewportRendererVulkan::FinishColorFrame(bool) noexcept {
-        imageCapture_.Finish(bridge_.Port(), frontend_.Capabilities().support.deviceIncarnation);
+        if (const auto signal = imageCapture_.UnconfirmedSignal(); signal.IsValid()) {
+            const auto *port = bridge_.Port();
+            bool accepted = false;
+            if (port) {
+                const auto submitted = port->WasSubmissionAccepted(signal, frontend_.Capabilities().support.deviceIncarnation);
+                accepted = submitted.HasValue() && submitted.Value();
+            }
+            imageCapture_.Finish(accepted);
+        }
         const auto submitted = std::exchange(pendingColorSubmission_, {});
         if (!color_)
             return;

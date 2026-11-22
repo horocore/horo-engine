@@ -76,6 +76,7 @@ namespace Horo::Editor {
     Result<void> MetalViewportClusteredFrame::Prepare(const Render::StaticMeshPassDescriptor &descriptor, const Render::RenderViewId view) {
         using namespace Render;
         ready_ = false;
+        captureVariant_.reset();
         const auto extent = resources_->AllocatedExtent();
         if (!descriptor.IsValid() || descriptor.target != resources_->Target() ||
             descriptor.extent != FramebufferExtent{extent.width, extent.height})
@@ -175,7 +176,7 @@ namespace Horo::Editor {
         const auto passes = variant.graph->Passes();
         if (passes.size() > variant.orderedWorkloads.size())
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::Capacity));
-        const auto inventory = std::span{variant.workloads}.first(BasePassCount() + (color_ ? 4 : 0));
+        const auto inventory = std::span{variant.workloads};
         for (std::size_t index = 0; index < passes.size(); ++index) {
             const auto found = std::ranges::find(inventory, passes[index].pass, &Render::RenderGraphPassWorkload::pass);
             if (found == inventory.end())
@@ -220,14 +221,17 @@ namespace Horo::Editor {
     }
 
     Result<void> MetalViewportClusteredFrame::Execute(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &descriptor,
-                                                      const Render::PrimaryOutputAttachment &output) {
+                                                      const Render::PrimaryOutputAttachment &output,
+                                                      EditorGraphViewportImageCapture *capture) {
         using namespace Render;
         auto &slot = slots_[activeSlot_];
         if (!ready_ || !MatchesTopology(slot, descriptor.scene) || preparedSignature_ != FrameSignature(descriptor))
             return Result<void>::Failure(MakeError(LightCullingErrors::InvalidInput));
         ready_ = false;
         const std::size_t cascades = shadow_ ? shadow_->cascadeCount : 0;
-        auto &variant = slot.variants[cascades];
+        const auto pending = capture && captureVariant_ ? capture->Pending() : std::nullopt;
+        const bool withCapture = pending && pending->id == captureId_;
+        auto &variant = withCapture ? *captureVariant_ : slot.variants[cascades];
         RefreshSceneWorkloads(slot, variant, descriptor, output);
         void *commands = bridge_->CurrentCommandBuffer();
         RefreshColorWorkloads(variant);
@@ -236,8 +240,13 @@ namespace Horo::Editor {
         const auto encoded = frame.ExecuteGraph(*variant.graph, std::span{variant.orderedWorkloads}.first(variant.graph->Passes().size()));
         if (color_ && encoded.HasValue())
             color_->Encoded();
-        if (encoded.HasValue())
+        if (encoded.HasValue()) {
             RecordEncoding(slot, descriptor, commands);
+            if (withCapture)
+                capture->Recorded();
+        } else if (withCapture) {
+            capture->Fail();
+        }
         return encoded;
     }
 }  // namespace Horo::Editor

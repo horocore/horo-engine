@@ -423,7 +423,11 @@ namespace Horo::Editor {
             return prepared;
         }
         if (auto *port = bridge_.Port())
-            imageCapture_.Prepare(frontend_, *port, ImageSource());
+            imageCapture_.Prepare(frontend_, ImageSource(),
+                                  {port, [](void *owner, std::uint64_t instance, Render::RenderTimelinePoint signal,
+                                            std::span<std::byte> destination) {
+                return static_cast<Render::Detail::IVulkanEditorGraphicsPort *>(owner)->ReadCompletedColor(instance, signal, destination);
+            }});
         if (prepared.Value() && !color_ && resources_.ColorTexture() != emptyGraphTexture_) {
             if (const auto clear = CreateEmptyGraph(); clear.HasError())
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
@@ -440,7 +444,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::ImageSource */
-    VulkanViewportImageCapture::Source EditorViewportRendererVulkan::ImageSource() const noexcept {
+    EditorGraphViewportImageCapture::Source EditorViewportRendererVulkan::ImageSource() const noexcept {
         if (!requestedExtent_.IsValid())
             return {};
         const auto extent = resources_.AllocatedExtent();

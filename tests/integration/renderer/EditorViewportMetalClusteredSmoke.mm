@@ -204,6 +204,7 @@ namespace {
             RequireResultInfo(viewport->ExecutePreparedFrame(frame, passes), "Execute clustered frontend graph");
             lastCommands = (__bridge id<MTLCommandBuffer>)bridge.CurrentCommandBuffer();
             RequireResultInfo(frame.Present(), "Submit and present actual frontend frame");
+            viewport->FinishColorFrame(true);
         }
 
         void Close() {
@@ -216,7 +217,7 @@ namespace {
         }
     };
 
-    void CheckActualPixels(ClusteredFixture &fixture) {
+    void CheckActualPixels(ClusteredFixture &fixture, const EditorViewportImageArtifact &crop) {
         RequireCompleted(fixture.lastCommands);
         const auto resolved = MetalViewportResourceBridge::ResolveTexture(*fixture.frontend, fixture.viewport->TextureView().sampledView);
         RequireResultInfo(resolved);
@@ -244,6 +245,8 @@ namespace {
         CHECK(pixel[0] > 20);
         CHECK(pixel[1] > 20);
         CHECK(pixel[2] > 20);
+        for (std::size_t channel = 0; channel < crop.rgba.size(); ++channel)
+            CHECK(std::to_integer<std::uint8_t>(crop.rgba[channel]) == pixel[channel]);
     }
 
     void CheckFamilyReplacement(ClusteredFixture &fixture, const EditorClusteredLightingAssets &assets) {
@@ -307,6 +310,21 @@ TEST_CASE("Configured cooked Metal viewport consumes real clustered storage thro
     for (std::uint64_t frame = 5; frame <= 8; ++frame)
         fixture.Render(scene.View(), frame);
     CHECK(fixture.viewport->LightingDiagnostics().completedLightRevision == scene.View().lightSnapshotRevision);
-    CheckActualPixels(fixture);
+    constexpr EditorViewportImageRegion region{64, 64, 1, 1};
+    const auto requested = fixture.viewport->RequestImageCapture(region);
+    RequireResultInfo(requested);
+    fixture.Prepare(scene.View());
+    fixture.Render(scene.View(), 9);
+    RequireCompleted(fixture.lastCommands);
+    fixture.Prepare(scene.View());
+    const auto crop = fixture.viewport->ReadImageCapture(requested.Value());
+    REQUIRE(crop);
+    REQUIRE(crop->phase == EditorViewportImagePhase::Ready);
+    REQUIRE(crop->artifact);
+    CHECK(crop->artifact->region == region);
+    REQUIRE(crop->artifact->rgba.size() == region.Bytes());
+    CheckActualPixels(fixture, *crop->artifact);
+    CHECK(fixture.viewport->CancelImageCapture(requested.Value()));
+    CHECK(crop->publication.expired());
     fixture.Close();
 }

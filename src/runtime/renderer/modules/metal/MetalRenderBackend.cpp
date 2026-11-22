@@ -845,6 +845,13 @@ namespace Horo::Render {
         return retainTexture_(waitContext_, viewInstance, commandBuffer_);
     }
 
+    /** @copydoc MetalEditorGraphicsBridge::ReadCompletedColor */
+    Result<bool> MetalEditorGraphicsBridge::ReadCompletedColor(std::uint64_t instance, std::span<std::byte> destination) {
+        if (!readColor_ || !waitContext_)
+            return Result<bool>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+        return readColor_(waitContext_, instance, destination);
+    }
+
     /** @copydoc MetalEditorGraphicsBridge::WaitUntilIdle */
     void MetalEditorGraphicsBridge::WaitUntilIdle() noexcept {
         if (waitUntilIdle_ != nullptr) {
@@ -860,16 +867,17 @@ namespace Horo::Render {
     }
 
     namespace Detail {
-        void MetalEditorGraphicsAccess::PublishPersistent(
-            MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,  // NOSONAR
-            void *waitContext,                                                    // NOSONAR(cpp:S5008)
-            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
-            MetalEditorGraphicsBridge::RetainTextureFunction retainTexture) noexcept {  // NOSONAR(cpp:S5205)
+        void MetalEditorGraphicsAccess::PublishPersistent(MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,  // NOSONAR
+                                                          void *waitContext,  // NOSONAR(cpp:S5008)
+                                                          MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
+                                                          MetalEditorGraphicsBridge::RetainTextureFunction retainTexture,
+                                                          MetalEditorGraphicsBridge::ReadColorFunction readColor) noexcept {
             bridge.device_ = device;
             bridge.commandQueue_ = commandQueue;
             bridge.waitContext_ = waitContext;
             bridge.waitUntilIdle_ = wait;
             bridge.retainTexture_ = retainTexture;
+            bridge.readColor_ = readColor;
         }
 
         void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer,  // NOSONAR(cpp:S5008)

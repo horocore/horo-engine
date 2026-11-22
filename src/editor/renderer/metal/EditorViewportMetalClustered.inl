@@ -71,6 +71,7 @@ void EditorViewportRendererMetal::SetColorFrameDelta(float deltaSeconds) noexcep
 
 /** @copydoc EditorViewportRendererMetal::FinishColorFrame */
 void EditorViewportRendererMetal::FinishColorFrame(bool accepted) noexcept {
+    impl_->imageCapture.Finish(accepted);
     if (impl_->color)
         impl_->color->Finish(accepted);
 }
@@ -108,6 +109,9 @@ Result<void> EditorViewportRendererMetal::PrepareLightingFrame(const Render::Sta
     const auto prepared = impl_->clusteredFrame->Prepare(pass, view);
     if (prepared.HasError())
         return ColorFrameFailure(prepared.ErrorValue(), "scene-prepare", ColorDiagnostics());
+    if (const auto copy = impl_->imageCapture.Pending())
+        if (impl_->clusteredFrame->PrepareCapture(pass, *copy).HasError())
+            impl_->imageCapture.Fail();
     return prepared;
 }
 
@@ -129,7 +133,7 @@ Result<void> EditorViewportRendererMetal::ExecutePreparedFrame(Render::RenderFra
         frame.Cancel();
         return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
     }
-    const auto encoded = impl_->clusteredFrame->Execute(frame, *parsed.Value().viewport, *parsed.Value().output);
+    const auto encoded = impl_->clusteredFrame->Execute(frame, *parsed.Value().viewport, *parsed.Value().output, &impl_->imageCapture);
     if (encoded.HasError()) {
         frame.Cancel();
         return ColorFrameFailure(encoded.ErrorValue(), "graph-execute", ColorDiagnostics());

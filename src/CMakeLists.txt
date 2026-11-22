@@ -3815,6 +3815,7 @@ target_link_libraries(HoroEditorViewportScene PUBLIC HoroEngine::EditorModel)
 
 add_library(HoroEditorViewportResources STATIC
         editor/renderer/EditorViewportResources.cpp
+        editor/renderer/EditorGraphViewportImageCapture.cpp
 )
 add_library(HoroEngine::EditorViewportResources ALIAS HoroEditorViewportResources)
 
@@ -3827,6 +3828,7 @@ target_link_libraries(HoroEditorViewportResources
         PUBLIC
         HoroEngine::EditorViewportScene
         HoroEngine::RenderFrontend
+        PRIVATE HoroRenderFrontendResourceAccessInternal
 )
 
 # Editor color behavior owns frontend resources, but never selects a native backend.
@@ -4234,7 +4236,6 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/EditorViewportVulkanCanvas.cpp
         editor/renderer/vulkan/EditorViewportVulkanCanvasProjection.cpp
         editor/renderer/vulkan/EditorViewportVulkanColor.cpp
-        editor/renderer/vulkan/VulkanViewportImageCapture.cpp
         editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
         editor/renderer/vulkan/EditorViewportVulkanLighting.cpp
         editor/renderer/vulkan/EditorViewportVulkanXr.cpp

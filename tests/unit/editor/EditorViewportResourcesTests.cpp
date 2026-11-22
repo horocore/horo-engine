@@ -2,10 +2,12 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraph.h"
+#include "editor/renderer/EditorGraphViewportImageCapture.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "runtime/renderer/frontend/RenderFrontendErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -97,6 +99,56 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Graph viewport observes a copy without a timeline only after frame acceptance", "[unit][editor][graph-image-capture]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    SettleResources(resources, *frontend, {}, {64, 32});
+    const EditorGraphViewportImageCapture::Source source{resources.Target(), resources.PresentationTexture(), {64, 32}};
+    EditorGraphViewportImageCapture capture;
+    const auto requested = capture.Request(source, {4, 3, 2, 1}, {});
+    REQUIRE(requested.HasValue());
+    unsigned polls{};
+    const EditorGraphViewportImageCapture::Readback reader{&polls, [](void *context, std::uint64_t instance, RenderTimelinePoint signal,
+                                                                      std::span<std::byte> bytes) {
+        CHECK(instance != 0);
+        CHECK_FALSE(signal.IsValid());
+        ++*static_cast<unsigned *>(context);
+        std::ranges::fill(bytes, std::byte{0x42});
+        return Result<bool>::Success(true);
+    }};
+    capture.Prepare(*frontend, source, reader);
+    REQUIRE(capture.Pending());
+    capture.Recorded();
+    capture.Prepare(*frontend, source, reader);
+    CHECK(polls == 0);
+
+    SECTION("frame rejection never exposes staging bytes") {
+        capture.Finish(false);
+        capture.Prepare(*frontend, source, reader);
+        CHECK(polls == 0);
+        const auto image = capture.Read(requested.Value(), source);
+        REQUIRE(image);
+        CHECK(image->phase == EditorViewportImagePhase::Failed);
+        CHECK_FALSE(image->artifact);
+    }
+    SECTION("frame acceptance publishes detached bytes once the backend approves them") {
+        capture.Finish(true);
+        capture.Prepare(*frontend, source, reader);
+        CHECK(polls == 1);
+        const auto image = capture.Read(requested.Value(), source);
+        REQUIRE(image);
+        REQUIRE(image->phase == EditorViewportImagePhase::Ready);
+        REQUIRE(image->artifact);
+        CHECK(image->artifact->rgba.size() == 8);
+        CHECK(image->artifact->rgba.front() == std::byte{0x42});
+        CHECK(capture.Cancel(requested.Value()));
+        CHECK(image->publication.expired());
+    }
+    capture.Shutdown(*frontend);
+    resources.Shutdown();
+}
 
 TEST_CASE("Color viewport publishes its encoded image while retaining distinct scene and display targets",
           "[unit][headless][renderer][resource][color]") {

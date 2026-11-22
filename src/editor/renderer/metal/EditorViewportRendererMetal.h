@@ -47,6 +47,13 @@ namespace Horo::Editor {
         void SetColorFrameDelta(float deltaSeconds) noexcept override;
         /** @copydoc IEditorViewportRenderer::FinishColorFrame */
         void FinishColorFrame(bool accepted) noexcept override;
+        /** @copydoc IEditorViewportRenderer::RequestImageCapture */
+        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
+                                                                std::function<bool()> authorized = {}) override;
+        /** @copydoc IEditorViewportRenderer::ReadImageCapture */
+        [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
+        /** @copydoc IEditorViewportRenderer::CancelImageCapture */
+        bool CancelImageCapture(std::uint64_t id) noexcept override;
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,

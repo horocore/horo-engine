@@ -1,7 +1,6 @@
-#include "VulkanViewportImageCapture.h"
+#include "editor/renderer/EditorGraphViewportImageCapture.h"
 
 #include "RenderFrontendResourceAccess.h"
-#include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
@@ -17,9 +16,9 @@ namespace Horo::Editor {
         static_assert(EditorViewportImageRegion::Channels == Render::RenderGraphColorReadback::BytesPerTexel);
     }  // namespace
 
-    /** @copydoc VulkanViewportImageCapture::Request */
-    Result<std::uint64_t> VulkanViewportImageCapture::Request(Source source, EditorViewportImageRegion region,
-                                                              std::function<bool()> authorized) {
+    /** @copydoc EditorGraphViewportImageCapture::Request */
+    Result<std::uint64_t> EditorGraphViewportImageCapture::Request(Source source, EditorViewportImageRegion region,
+                                                                   std::function<bool()> authorized) {
         using Output = Result<std::uint64_t>;
         const auto now = Clock::now();
         Expire(now);
@@ -36,8 +35,8 @@ namespace Horo::Editor {
         return Output::Success(++serial_);
     }
 
-    /** @copydoc VulkanViewportImageCapture::Read */
-    std::optional<EditorViewportImageSnapshot> VulkanViewportImageCapture::Read(std::uint64_t id, Source source) {
+    /** @copydoc EditorGraphViewportImageCapture::Read */
+    std::optional<EditorViewportImageSnapshot> EditorGraphViewportImageCapture::Read(std::uint64_t id, Source source) {
         Reconcile(source);
         if (!started_ || serial_ != id)
             return std::nullopt;
@@ -46,8 +45,8 @@ namespace Horo::Editor {
         return EditorViewportImageSnapshot{phase_, {}};
     }
 
-    /** @copydoc VulkanViewportImageCapture::Cancel */
-    bool VulkanViewportImageCapture::Cancel(std::uint64_t id) noexcept {
+    /** @copydoc EditorGraphViewportImageCapture::Cancel */
+    bool EditorGraphViewportImageCapture::Cancel(std::uint64_t id) noexcept {
         Expire(Clock::now());
         if (!id || serial_ != id || (phase_ != EditorViewportImagePhase::Pending && phase_ != EditorViewportImagePhase::Ready))
             return false;
@@ -56,17 +55,18 @@ namespace Horo::Editor {
     }
 
     /** @brief Withdraws both the detached pixels and any queued MCP deliveries. */
-    void VulkanViewportImageCapture::Withdraw(EditorViewportImagePhase phase) noexcept {
+    void EditorGraphViewportImageCapture::Withdraw(EditorViewportImagePhase phase) noexcept {
         publication_.reset();
         pixels_.reset();
         authorized_ = {};
         signal_ = {};
+        recorded_ = false;
         accepted_ = false;
         phase_ = phase;
     }
 
     /** @brief Applies TTL before checking the original owner and texture generation. */
-    void VulkanViewportImageCapture::Reconcile(Source source) {
+    void EditorGraphViewportImageCapture::Reconcile(Source source) {
         Expire(Clock::now());
         if (phase_ != EditorViewportImagePhase::Pending && phase_ != EditorViewportImagePhase::Ready)
             return;
@@ -77,13 +77,13 @@ namespace Horo::Editor {
     }
 
     /** @brief Enforces monotonic expiry regardless of frame or transport progress. */
-    void VulkanViewportImageCapture::Expire(Clock::time_point now) noexcept {
+    void EditorGraphViewportImageCapture::Expire(Clock::time_point now) noexcept {
         if (started_ && now - *started_ >= Lifetime)
             Withdraw(EditorViewportImagePhase::Expired);
     }
 
     /** @brief Cold-allocates exact coherent staging and detached storage for the issued crop. */
-    bool VulkanViewportImageCapture::PrepareStaging(Render::RenderFrontend &frontend) {
+    bool EditorGraphViewportImageCapture::PrepareStaging(Render::RenderFrontend &frontend) {
         using namespace Render;
         if (staging_.IsValid())
             return nativeStaging_ != 0;
@@ -111,8 +111,8 @@ namespace Horo::Editor {
     }
 
     /** @brief Observes only accepted completion and publishes the detached image without waiting. */
-    void VulkanViewportImageCapture::Poll(Render::Detail::IVulkanEditorGraphicsPort &port) {
-        const auto read = port.ReadCompletedColor(nativeStaging_, signal_, pixels_->rgba);
+    void EditorGraphViewportImageCapture::Poll(Readback readback) {
+        const auto read = readback.poll(readback.owner, nativeStaging_, signal_, pixels_->rgba);
         if (read.HasError())
             Fail();
         else if (read.Value())
@@ -120,63 +120,65 @@ namespace Horo::Editor {
     }
 
     /** @brief Drops the frontend owner reference. Accepted submissions retain their own buffer lease. */
-    void VulkanViewportImageCapture::ReleaseStaging(Render::RenderFrontend &frontend) noexcept {
+    void EditorGraphViewportImageCapture::ReleaseStaging(Render::RenderFrontend &frontend) noexcept {
         if (auto handle = std::exchange(staging_, {}); handle.IsValid())
             static_cast<void>(frontend.ReleaseBuffer(handle));
         nativeStaging_ = 0;
         signal_ = {};
+        recorded_ = false;
         accepted_ = false;
     }
 
-    /** @copydoc VulkanViewportImageCapture::Prepare */
-    void VulkanViewportImageCapture::Prepare(Render::RenderFrontend &frontend, Render::Detail::IVulkanEditorGraphicsPort &port,
-                                             Source source) {
+    /** @copydoc EditorGraphViewportImageCapture::Prepare */
+    void EditorGraphViewportImageCapture::Prepare(Render::RenderFrontend &frontend, Source source, Readback readback) {
         Reconcile(source);
         if (phase_ == EditorViewportImagePhase::Pending) {
             if (!PrepareStaging(frontend))
                 Fail();
             else if (accepted_)
-                Poll(port);
+                Poll(readback);
         }
         if (phase_ != EditorViewportImagePhase::Pending && staging_.IsValid())
             ReleaseStaging(frontend);
     }
 
-    /** @copydoc VulkanViewportImageCapture::Pending */
-    std::optional<VulkanViewportImageCapture::Copy> VulkanViewportImageCapture::Pending() {
+    /** @copydoc EditorGraphViewportImageCapture::Pending */
+    std::optional<EditorGraphViewportImageCapture::Copy> EditorGraphViewportImageCapture::Pending() {
         Reconcile(source_);
-        if (phase_ != EditorViewportImagePhase::Pending || !nativeStaging_ || signal_.IsValid())
+        if (phase_ != EditorViewportImagePhase::Pending || !nativeStaging_ || recorded_)
             return std::nullopt;
         return Copy{serial_, region_, staging_};
     }
 
-    /** @copydoc VulkanViewportImageCapture::Recorded */
-    void VulkanViewportImageCapture::Recorded(Render::RenderTimelinePoint signal) noexcept {
+    /** @copydoc EditorGraphViewportImageCapture::Recorded */
+    void EditorGraphViewportImageCapture::Recorded(Render::RenderTimelinePoint signal) noexcept {
         signal_ = signal;
+        recorded_ = true;
     }
 
-    /** @copydoc VulkanViewportImageCapture::Finish */
-    void VulkanViewportImageCapture::Finish(Render::Detail::IVulkanEditorGraphicsPort *port, std::uint64_t deviceIncarnation) noexcept {
-        if (!signal_.IsValid() || accepted_)
+    /** @copydoc EditorGraphViewportImageCapture::UnconfirmedSignal */
+    Render::RenderTimelinePoint EditorGraphViewportImageCapture::UnconfirmedSignal() const noexcept {
+        return recorded_ && !accepted_ ? signal_ : Render::RenderTimelinePoint{};
+    }
+
+    /** @copydoc EditorGraphViewportImageCapture::Finish */
+    void EditorGraphViewportImageCapture::Finish(bool accepted) noexcept {
+        if (!recorded_ || accepted_)
             return;
-        if (port) {
-            const auto submitted = port->WasSubmissionAccepted(signal_, deviceIncarnation);
-            if (submitted.HasValue() && submitted.Value()) {
-                accepted_ = true;
-                return;
-            }
-        }
-        Fail();
+        if (accepted)
+            accepted_ = true;
+        else
+            Fail();
     }
 
-    /** @copydoc VulkanViewportImageCapture::Fail */
-    void VulkanViewportImageCapture::Fail() noexcept {
+    /** @copydoc EditorGraphViewportImageCapture::Fail */
+    void EditorGraphViewportImageCapture::Fail() noexcept {
         if (phase_ == EditorViewportImagePhase::Pending)
             Withdraw(EditorViewportImagePhase::Failed);
     }
 
-    /** @copydoc VulkanViewportImageCapture::Shutdown */
-    void VulkanViewportImageCapture::Shutdown(Render::RenderFrontend &frontend) noexcept {
+    /** @copydoc EditorGraphViewportImageCapture::Shutdown */
+    void EditorGraphViewportImageCapture::Shutdown(Render::RenderFrontend &frontend) noexcept {
         Withdraw(EditorViewportImagePhase::Failed);
         started_.reset();
         ReleaseStaging(frontend);

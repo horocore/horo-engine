@@ -119,7 +119,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Copies from the last authored presentation attachment into the exact cold staging buffer. */
-            RenderGraphPassWorkload Capture(RenderGraphResourceId image, const VulkanViewportImageCapture::Copy &capture) {
+            RenderGraphPassWorkload Capture(RenderGraphResourceId image, const EditorGraphViewportImageCapture::Copy &capture) {
                 const auto target = Take(builder.ImportBuffer(capture.staging, RenderGraphResourceClass::Persistent));
                 initial.push_back({target, {}, RenderGraphInitialContents::Discarded});
                 const auto pass = Pass(RenderPassKind::Copy);
@@ -395,7 +395,7 @@ namespace Horo::Editor {
         /** @brief Reuses the opaque, shadow and output owners on the paint program's single combined graph. */
         RenderGraphPassRef BuildCanvas(RasterVariant &variant, RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
                                        const FrameSlot &slot, RenderQueueId queue, const CanvasSample &source, const bool overlay,
-                                       const VulkanViewportImageCapture::Copy *capture) {
+                                       const EditorGraphViewportImageCapture::Copy *capture) {
             RasterGraphAuthor author{builder, queue};
             const auto atlas = author.Attach(attachments.atlas);
             const RasterOutput output{author.Attach(attachments.color), author.Attach(attachments.depth), attachments.colorView,
@@ -413,7 +413,7 @@ namespace Horo::Editor {
         void Build(RasterVariant &variant, const FrameSlot &slot, RenderQueueId queue, bool overlay,
                    const EditorViewportColorPipeline *pipeline = nullptr,
                    const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {},
-                   const VulkanViewportImageCapture::Copy *capture = nullptr) {
+                   const EditorGraphViewportImageCapture::Copy *capture = nullptr) {
             variant.count = atlasPasses + 1;
             const auto draws = std::max<std::size_t>(1, meshes.size() + (overlay ? 1 : 0));
             RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr, false, capture != nullptr};
@@ -512,7 +512,7 @@ namespace Horo::Editor {
         /** @brief Builds exact staging bindings only while an approved copy needs its first native submission. */
         void PrepareCaptureSlots(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline *pipeline,
                                  const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel,
-                                 const VulkanViewportImageCapture::Copy &capture) {
+                                 const EditorGraphViewportImageCapture::Copy &capture) {
             const std::size_t colorSlot = pipeline ? pipeline->CandidateSlot() : 0;
             if (captureSlots && captureId == capture.id && captureColorSlot == colorSlot &&
                 (!pipeline || (*captureSlots)[0][0].color.MatchesInitialStates(*pipeline)))
@@ -617,7 +617,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::BuildViewportCanvasGraph */
     Result<std::shared_ptr<EditorViewportRendererVulkan::ViewportCanvasGraph>> EditorViewportRendererVulkan::BuildViewportCanvasGraph(
-        const ViewportCanvasPreparation &request, const CancellationToken &cancellation, const VulkanViewportImageCapture::Copy *capture) {
+        const ViewportCanvasPreparation &request, const CancellationToken &cancellation,
+        const EditorGraphViewportImageCapture::Copy *capture) {
         using Outcome = Result<std::shared_ptr<ViewportCanvasGraph>>;
         try {
             auto candidate = std::make_shared<ViewportCanvasGraph>();
