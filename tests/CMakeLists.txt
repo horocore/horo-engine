@@ -4241,6 +4241,14 @@ if (HORO_BUILD_EDITOR_GUI)
                 "$<TARGET_FILE:HoroEditorLocalAgentPanelRenderTests>" "$<TARGET_FILE_DIR:HoroEditorLocalAgentPanelRenderTests>")
     set_tests_properties(HoroEditorLocalAgentDockHttpTests PROPERTIES LABELS "unit;editor;agent;gui;headless" TIMEOUT 60)
 
+    add_executable(HoroEditorMcpCommandPanelTests
+        unit/editor/EditorMcpCommandPanelTests.cpp
+        ../apps/HoroEditor/app/EditorMcpCommandPanel.cpp)
+    target_include_directories(HoroEditorMcpCommandPanelTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace")
+    target_link_libraries(HoroEditorMcpCommandPanelTests PRIVATE HoroEngine::Gui HoroThirdParty::ImGui HoroMcpEditorCommandsInternal)
+    horo_register_catch_test(HoroEditorMcpCommandPanelTests LABELS "unit;editor;mcp;gui;headless")
+
     add_executable(HoroGlobalDockPanelRenderTests
             unit/editor/GlobalDockBuildActiveRenderTests.cpp
             unit/editor/GlobalDockBuildOutputPaneTests.cpp

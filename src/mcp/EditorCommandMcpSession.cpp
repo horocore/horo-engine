@@ -134,12 +134,17 @@ namespace Horo::Editor {
         return client_;
     }
 
+    /** @copydoc EditorCommandMcpSession::ToolEffect */
+    Result<Mcp::McpToolEffect> EditorCommandMcpSession::ToolEffect(const std::string_view tool) const {
+        return tools_->Effect({std::string{tool}}, admission_.capabilities);
+    }
+
     /** @copydoc EditorCommandMcpSession::RequestApproval */
     Result<std::uint64_t> EditorCommandMcpSession::RequestApproval(const Mcp::McpRequest &request) {
         using Outcome = Result<std::uint64_t>;
         if (const auto valid = Mcp::McpAuthorization::ValidateCallRequest(request); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
-        const auto effect = tools_->Effect({request.params.at("name").get<std::string>()}, admission_.capabilities);
+        const auto effect = ToolEffect(request.params.at("name").get_ref<const std::string &>());
         if (effect.HasError())
             return Outcome::Failure(effect.ErrorValue());
         if (effect.Value() == Mcp::McpToolEffect::Query)

@@ -7,6 +7,7 @@
 #include "EditorImageProviderHost.h"
 #include "EditorLightingOptions.h"
 #include "EditorLocalAgentPanel.h"
+#include "EditorMcpCommandPanel.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Accessibility/VisualSafety.h"
@@ -4337,7 +4338,9 @@ namespace Horo::Editor {
             const auto navigationBakeAccess = navigationBakes.Access();
             const NavigationViewportAccess navigationOverlayAccess{.prepare = navigationBakeAccess.prepare,
                                                                    .query = navigationBakeAccess.overlays};
+            EditorMcpWorkspaceHost workspaceCommands{Platform::CreateNativeSecureRandomSource()};
             WorkspacePanelRegistry workspacePanelRegistry;
+            workspacePanelRegistry.RegisterPanel(MakeEditorMcpCommandPanel(workspaceCommands));
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
             const auto localAgent =
@@ -4370,7 +4373,6 @@ namespace Horo::Editor {
                           streamingPolicy.ErrorValue().message.c_str());
                 return std::nullopt;
             }
-            EditorMcpWorkspaceHost workspaceCommands{Platform::CreateNativeSecureRandomSource()};
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,

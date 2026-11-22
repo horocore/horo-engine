@@ -692,6 +692,15 @@ project, and leaving the workspace retires the embedded session before
 withdrawing its application callbacks. A replacement workspace requires its
 own admission.
 
+Open **MCP Commands** in the editor workspace and enable source navigation,
+build commands, or CTest commands. Select an advertised tool and supply its
+arguments as a JSON object. For example, `editor.source.open` accepts
+`{"path":"gameplay/main.cpp"}`. `editor.test.start` takes an empty object and
+returns the test ID used by `editor.test.status` and `editor.test.cancel`.
+The approval view displays the exact immutable request before an effectful
+command can be queued. Hiding the panel withdraws an unanswered approval.
+Read-only status commands run with the selected session's observation grant.
+
 ## Editor gameplay build commands
 
 The editor command pack offers `editor.build.start`, `editor.build.status`,

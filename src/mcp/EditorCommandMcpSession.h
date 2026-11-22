@@ -5,10 +5,13 @@
 #include "EditorWorkspaceCommandAccess.h"
 #include "Horo/Mcp/McpSession.h"
 
+#include <string_view>
+
 namespace Horo::Mcp {
     class McpController;
     class McpInProcessAdapter;
     class McpToolSnapshot;
+    enum class McpToolEffect : std::uint8_t;
 }  // namespace Horo::Mcp
 
 namespace Horo::Editor {
@@ -44,6 +47,10 @@ namespace Horo::Editor {
 
         /** @brief Returns the authenticated request channel with no host approval authority. */
         [[nodiscard]] std::shared_ptr<const Mcp::McpInProcessAdapter> Client() const noexcept;
+
+        /** @brief Resolves the effect of a tool permitted for this client. @param tool Exact advertised tool ID. @return Effect or denial.
+         */
+        [[nodiscard]] Result<Mcp::McpToolEffect> ToolEffect(std::string_view tool) const;
 
         /** @brief Creates a short-lived challenge for an exact visible presentation or mutation request.
          * @param request The original request to show to the local operator.
