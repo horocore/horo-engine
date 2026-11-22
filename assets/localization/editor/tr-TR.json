@@ -1089,6 +1089,8 @@
     "workspace.environment_query.preview_filtered": {"text": "Elendi"},
     "workspace.environment_query.preview_missing_sample": {"text": "Örnek eksik"},
     "workspace.environment_query.preview_provider_unavailable": {"text": "Sağlayıcı kullanılamıyor"},
+    "workspace.environment_query.failure_stage": {"text": "Aşama"},
+    "workspace.environment_query.failure_provider": {"text": "Sağlayıcı"},
     "workspace.environment_query.preview_provider_failed": {"text": "Sağlayıcı başarısız"},
     "workspace.environment_query.preview_incomparable": {"text": "Karşılaştırılamaz"},
     "workspace.environment_query.preview_invalid_score": {"text": "Geçersiz puan"},

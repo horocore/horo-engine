@@ -1601,7 +1601,7 @@ namespace Horo::AI {
             for (const auto point : {SourceFailure::Generation, SourceFailure::Admission, SourceFailure::Poll, SourceFailure::UnknownPoll,
                                      SourceFailure::TypedAdmission}) {
                 ExecutionProbe failing{.failure = point}, healthy;
-                auto rejected = MakeExecution(failing, *scene);
+                auto rejected = MakeExecution(failing, *scene, false, false, nullptr, {2});
                 auto accepted = MakeExecution(healthy, *scene);
                 AiWorkBudget firstFailure{9}, firstHealthy{9}, secondHealthy{2};
                 REQUIRE_FALSE(rejected->Sync(5));
@@ -1629,6 +1629,12 @@ namespace Horo::AI {
                 CHECK(diagnostic.stage == (generating ? rejected->Published()->generator.stage : MakeIdentity<QueryStageId>(16)));
                 CHECK(diagnostic.reason ==
                       (point == SourceFailure::TypedAdmission ? QueryScoreStatus::ProviderUnavailable : QueryScoreStatus::ProviderFailed));
+                const auto debug = rejected->ReadDebugSnapshot(scene->View());
+                REQUIRE(debug);
+                REQUIRE(debug->failure);
+                CHECK(debug->failure->stage == diagnostic.stage);
+                CHECK(debug->failure->provider == diagnostic.provider);
+                CHECK(debug->failure->reason == diagnostic.reason);
                 CHECK(failing.cancelled == ((point == SourceFailure::Poll || point == SourceFailure::UnknownPoll) ? 1 : 0));
                 REQUIRE_FALSE(accepted->Sync(6));
                 accepted->Advance(6, {secondHealthy, secondHealthy, secondHealthy});

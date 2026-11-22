@@ -247,9 +247,10 @@ namespace Horo::AI {
         std::size_t evaluated{};
         std::size_t invalidCoordinates{};
         std::size_t winnerCount{};
-        std::vector<QueryDebugCandidate> candidates; /**< Even sample in stable generator order. */
-        std::vector<QueryDebugStage> stages;         /**< Completed test rows in execution order for sampled candidates. */
-        std::vector<QueryCandidateScore> winners;    /**< Ranking prefix up to the configured sample bound. */
+        std::vector<QueryDebugCandidate> candidates;   /**< Even sample in stable generator order. */
+        std::vector<QueryDebugStage> stages;           /**< Completed test rows in execution order for sampled candidates. */
+        std::vector<QueryCandidateScore> winners;      /**< Ranking prefix up to the configured sample bound. */
+        std::optional<QueryFailureDiagnostic> failure; /**< Representative terminal diagnostic, without provider data. */
     };
 
     /** @brief Scene-owner execution of one admitted tactical query with at most one retained provider result.

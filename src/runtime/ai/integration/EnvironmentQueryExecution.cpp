@@ -154,6 +154,7 @@ namespace Horo::AI {
         void CopyDebugWinners(QueryDebugSnapshot &snapshot, const QueryExecutionResult &result, const std::size_t limit,
                               const Runtime::RuntimeSceneView &scene) {
             snapshot.terminalStatus = result.status;
+            snapshot.failure = result.failure;
             snapshot.winnerCount = result.winners.size();
             const auto count = std::min(snapshot.winnerCount, limit);
             snapshot.winners.reserve(count);

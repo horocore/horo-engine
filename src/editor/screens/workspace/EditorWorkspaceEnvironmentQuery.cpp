@@ -413,6 +413,12 @@ namespace Horo::Editor {
             label(std::format("{} {}", text("workspace.environment_query.live_tick"), snapshot.observedTick), Theme::Text());
             if (snapshot.stale)
                 label(text("workspace.environment_query.preview_stale"), Theme::Warn());
+            if (const auto &failure = snapshot.failure; failure && !snapshot.stale) {
+                label(std::format("{} {} / {} {} / {}", text("workspace.environment_query.failure_stage"), failure->stage.Value(),
+                                  text("workspace.environment_query.failure_provider"), failure->provider.Value(),
+                                  text(QueryPreviewStatusKey(failure->reason))),
+                      Theme::Warn());
+            }
             label(std::format("{} {} / {} {} / {} {}", text("workspace.environment_query.preview_generated"), snapshot.generated,
                               text("workspace.environment_query.preview_shown"), snapshot.candidates.size(),
                               text("workspace.environment_query.preview_ranked"), snapshot.winnerCount),

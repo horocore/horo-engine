@@ -35,6 +35,7 @@
 #include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -806,6 +807,42 @@ namespace Horo::Application::CharacterSceneProductTest {
                                               {"reason", static_cast<std::uint8_t>(failure.reason)},
                                               {"phase", static_cast<std::uint8_t>(failure.phase)}});
         CHECK(json.at("blackboardSync").at("records").empty());
+
+        const auto exportTimeline = [&](const std::filesystem::path &file, const int expected) {
+            auto path = file.u8string();
+            std::array<char *, 1> args{reinterpret_cast<char *>(path.data())};
+            std::ostringstream output, errors;
+            const auto status = Internal::RunHeadlessReplayTimeline(args, output, errors);
+            INFO(errors.str());
+            REQUIRE(status == expected);
+            CHECK(errors.str().empty() == (expected == 0));
+            return output.str();
+        };
+        auto imported = json;
+        auto &diagnostic = imported["queryPublication"]["records"][0]["failure"];
+        diagnostic["privateDiagnostic"] = "private-provider-state";
+        const auto importedPath = root / "query-imported.json";
+        const auto writeImported = [&] {
+            auto &boundary = imported.at("queryPublication");
+            const auto records = boundary.at("records").dump();
+            boundary["digest"] = FormatSha256(ComputeSha256(std::as_bytes(std::span{records})));
+            std::ofstream stream{importedPath, std::ios::binary | std::ios::trunc};
+            stream << imported;
+            REQUIRE(stream.good());
+        };
+        writeImported();
+        const auto timeline = exportTimeline(importedPath, 0);
+        CHECK(timeline.find("private-provider-state") == std::string::npos);
+        const auto events = nlohmann::json::parse(timeline).at("events");
+        const auto event = std::ranges::find_if(events, [](const nlohmann::json &record) {
+            return record.at("boundary") == "query-publication" && !record.at("ordinal").is_null();
+        });
+        REQUIRE(event != events.end());
+        CHECK(event->at("operation").at("failure") == failureRecord);
+        diagnostic["candidateIndex"] = AI::EnvironmentQuerySchemaLimits::MaximumResults;
+        writeImported();
+        CHECK(exportTimeline(importedPath, 2).empty());
+
         auto differentFault = failed;
         differentFault.queries->publications.front().failure->reason = AI::QueryScoreStatus::ProviderFailed;
         const auto changedFault = publish(root / "query-failed-differently", differentFault);

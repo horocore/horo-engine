@@ -1089,6 +1089,8 @@
     "workspace.environment_query.preview_filtered": {"text": "Filtered"},
     "workspace.environment_query.preview_missing_sample": {"text": "Missing sample"},
     "workspace.environment_query.preview_provider_unavailable": {"text": "Provider unavailable"},
+    "workspace.environment_query.failure_stage": {"text": "Stage"},
+    "workspace.environment_query.failure_provider": {"text": "Provider"},
     "workspace.environment_query.preview_provider_failed": {"text": "Provider failed"},
     "workspace.environment_query.preview_incomparable": {"text": "Incomparable"},
     "workspace.environment_query.preview_invalid_score": {"text": "Invalid score"},

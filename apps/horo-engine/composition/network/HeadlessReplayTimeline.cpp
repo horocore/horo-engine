@@ -1,5 +1,7 @@
 #include "HeadlessReplayTimeline.h"
 
+#include "Horo/AI/EnvironmentQueryExecution.h"
+
 #include <algorithm>
 #include <initializer_list>
 #include <limits>
@@ -31,9 +33,35 @@ namespace Horo::Application::Internal {
                                 {"kind", "occurrence", "state", "transitionOrdinalOrCount"});
         }
 
+        /** @brief Projects bounded terminal diagnostics without provider payloads. */
+        Json QueryFailureFields(const Json &record) {
+            auto fields = SelectFields(record, {"stageId", "providerId"}, {"reason", "phase"});
+            const auto reason = fields.at("reason").get<std::uint32_t>();
+            const auto phase = fields.at("phase").get<std::uint32_t>();
+            if (fields.at("stageId") == "0" || fields.at("providerId") == "0" ||
+                reason <= static_cast<std::uint32_t>(AI::QueryScoreStatus::Eligible) ||
+                reason > static_cast<std::uint32_t>(AI::QueryScoreStatus::InvalidScore) ||
+                phase > static_cast<std::uint32_t>(AI::QueryFailurePhase::Scoring))
+                throw InvalidHeadlessReplayEvidence{};
+
+            const auto candidate = record.find("candidateIndex");
+            const bool generationFailed = phase == static_cast<std::uint32_t>(AI::QueryFailurePhase::Generation);
+            if ((candidate == record.end()) != generationFailed)
+                throw InvalidHeadlessReplayEvidence{};
+            if (candidate != record.end()) {
+                if (!candidate->is_number_unsigned() || *candidate >= AI::EnvironmentQuerySchemaLimits::MaximumResults)
+                    throw InvalidHeadlessReplayEvidence{};
+                fields["candidateIndex"] = *candidate;
+            }
+            return fields;
+        }
+
         /** @brief Correlates publication and Blackboard sync to the same cooked query and original publication tick. */
         Json QueryFields(const Json &record) {
-            return SelectFields(record, {"queryId", "nodeId", "outputKeyId", "publicationTick"}, {"status"});
+            auto fields = SelectFields(record, {"queryId", "nodeId", "outputKeyId", "publicationTick"}, {"status"});
+            if (const auto failure = record.find("failure"); failure != record.end())
+                fields["failure"] = QueryFailureFields(*failure);
+            return fields;
         }
 
         /** @brief Copies the runtime-issued path sequence without the private path geometry. */
