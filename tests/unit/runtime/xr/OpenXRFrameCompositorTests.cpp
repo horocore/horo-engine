@@ -118,6 +118,45 @@ namespace Horo::Tests::OpenXR {
             }
         }
 
+        TEST_CASE("Passthrough withdrawal during provider startup stops the exact grant at the next boundary",
+                  "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            auto unrelated = scope;
+            unrelated.grant = IdentityValue<XRPassthroughGrant>(2);
+            const std::string_view withdrawnAt = GENERATE("feature", "layer", "start", "resume", "validation");
+            f.passthrough.onStartup = [&](std::string_view phase) {
+                CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
+                f.native.owner.RevokePassthrough(unrelated);
+                if (withdrawnAt == phase)
+                    f.native.owner.RevokePassthrough(scope);
+                if (withdrawnAt == "validation" && phase == "resume")
+                    f.native.fence.onValidate = [&] {
+                        f.native.owner.RevokePassthrough(scope);
+                    };
+            };
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::PermissionDenied);
+            f.native.fence.onValidate = {};
+            const bool reachedResume = withdrawnAt == "resume" || withdrawnAt == "validation";
+            CHECK(f.passthrough.starts == (withdrawnAt == "start" || reachedResume ? 1U : 0U));
+            CHECK(f.passthrough.resumes == (reachedResume ? 1U : 0U));
+            CHECK(f.passthrough.pauses == f.passthrough.starts);
+            CHECK_FALSE(f.passthrough.running);
+            CHECK_FALSE(f.passthrough.liveLayer);
+            CHECK_FALSE(f.passthrough.liveFeature);
+            CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+
+            f.passthrough.onStartup = [&](std::string_view) {
+                f.native.owner.RevokePassthrough(scope);
+            };
+            REQUIRE(f.native.owner.StartPassthrough(unrelated).HasValue());
+            CHECK(f.native.owner.ReadPassthrough(unrelated) == NativePassthroughState::Active);
+            REQUIRE(f.native.owner.StopPassthrough(unrelated).HasValue());
+        }
+
         TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
             if (!NativePassthroughExtensionRequest())
                 SKIP("This test requires the Meta Quest provider.");

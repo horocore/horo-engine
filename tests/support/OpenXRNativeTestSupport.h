@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -276,6 +277,8 @@ namespace Horo::Tests::OpenXR {
 
     class Fence final : public IOpenXRCompositionFence {
     public:
+        std::function<void()> onValidate;
+
         Result<void> ValidatePreparation(const XRLoaderPreflightSnapshot &preflight,
                                          const XRLoaderPreflightAttempt attempt) const override {
             if (Script::active->stale)
@@ -285,6 +288,8 @@ namespace Horo::Tests::OpenXR {
         }
 
         Result<void> Validate(const XRSessionId &, const XRLoaderPreflightSnapshot &, const XRFeaturePlan &) const override {
+            if (onValidate)
+                onValidate();
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }
     };

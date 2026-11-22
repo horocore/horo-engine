@@ -22,6 +22,19 @@ namespace Horo::XR::OpenXRInternal {
             bool previous_;
         };
 
+        /** @brief Makes the in-flight grant revocable without publishing the candidate native handles. */
+        struct PassthroughPreparation final {
+            PassthroughPreparation(const XRPassthroughScope *&slot, const XRPassthroughScope &scope) noexcept : slot_(slot) {
+                slot_ = &scope;
+            }
+
+            ~PassthroughPreparation() {
+                slot_ = nullptr;
+            }
+
+            const XRPassthroughScope *&slot_;
+        };
+
         /** @brief Resolves the official extension dispatch through the exact instance. */
         template <typename Function>
         bool Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name, Function &function) {
@@ -59,6 +72,17 @@ namespace Horo::XR::OpenXRInternal {
                 default:
                     return MakeError(XRErrors::OperationUnavailable, operation);
             }
+        }
+
+        Result<void> CheckPassthroughStep(const char *operation, const XrResult result, const bool permitted,
+                                          const bool validHandle = true) {
+            if (result != XR_SUCCESS)
+                return Result<void>::Failure(PassthroughFailure(operation, result));
+            if (!permitted)
+                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup"));
+            if (!validHandle)
+                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, operation));
+            return Result<void>::Success();
         }
 
         /** @brief Verifies runtime reconstruction and two native compositor slots on the selected system. */
@@ -108,7 +132,9 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
 
         const PassthroughOperation operation{passthroughCall_};
-        const auto admission = ReadExtensionAdmission(scope.session, Extension);
+        Passthrough candidate{.scope = scope};
+        const PassthroughPreparation preparation{preparingPassthrough_, candidate.scope};
+        const auto admission = ReadExtensionAdmission(candidate.scope.session, Extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         const auto &extension = admission.Value();
@@ -119,7 +145,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::ContractVersionIncompatible));
         if (extension.state != NativeExtensionState::Enabled || extension.minimumVersion == 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Passthrough was not requested and enabled"));
-        const auto native = Borrow(scope.session);
+        const auto native = Borrow(candidate.scope.session);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
         PFN_xrGetSystemProperties system{};
@@ -127,7 +153,6 @@ namespace Horo::XR::OpenXRInternal {
         PFN_xrCreatePassthroughLayerFB createLayer{};
         PFN_xrPassthroughStartFB start{};
         PFN_xrPassthroughLayerResumeFB resume{};
-        Passthrough candidate{.scope = scope};
         const auto get = dispatch_.getProc;
         const auto instance = native.Value().instance;
         if (!Resolve(get, instance, "xrGetSystemProperties", system) || !Resolve(get, instance, "xrCreatePassthroughFB", create) ||
@@ -139,10 +164,12 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Passthrough dispatch is incomplete"));
         if (auto supported = CheckPassthroughSystem(system, native.Value()); supported.HasError())
             return supported;
-        if (const auto current = Borrow(scope.session); current.HasError())
+        if (const auto current = Borrow(candidate.scope.session); current.HasError())
             return Result<void>::Failure(current.ErrorValue());
 
-        lastPassthroughGrant_ = scope.grant;
+        if (auto permit = CheckPassthroughStep("passthrough startup", XR_SUCCESS, preparingPassthrough_ != nullptr); permit.HasError())
+            return permit;
+        lastPassthroughGrant_ = candidate.scope.grant;
         const auto session = native.Value().session;
         const auto prepare = [&]() -> Result<void> {
             const XrPassthroughCreateInfoFB feature{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
@@ -150,10 +177,10 @@ namespace Horo::XR::OpenXRInternal {
             auto result = create(session, &feature, &created);
             if (XR_SUCCEEDED(result))
                 candidate.feature = created;
-            if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure("xrCreatePassthroughFB", result));
-            if (candidate.feature == XR_NULL_HANDLE)
-                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Passthrough returned no feature"));
+            if (auto step = CheckPassthroughStep("xrCreatePassthroughFB", result, preparingPassthrough_ != nullptr,
+                                                 candidate.feature != XR_NULL_HANDLE);
+                step.HasError())
+                return step;
 
             const XrPassthroughLayerCreateInfoFB layer{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB, nullptr, candidate.feature, 0,
                                                        XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB};
@@ -161,20 +188,22 @@ namespace Horo::XR::OpenXRInternal {
             result = createLayer(session, &layer, &createdLayer);
             if (XR_SUCCEEDED(result))
                 candidate.layer = createdLayer;
-            if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure("xrCreatePassthroughLayerFB", result));
-            if (candidate.layer == XR_NULL_HANDLE)
-                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Passthrough returned no layer"));
+            if (auto step = CheckPassthroughStep("xrCreatePassthroughLayerFB", result, preparingPassthrough_ != nullptr,
+                                                 candidate.layer != XR_NULL_HANDLE);
+                step.HasError())
+                return step;
 
             result = start(candidate.feature);
             candidate.started = XR_SUCCEEDED(result);
-            if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure("xrPassthroughStartFB", result));
+            if (auto step = CheckPassthroughStep("xrPassthroughStartFB", result, preparingPassthrough_ != nullptr); step.HasError())
+                return step;
             result = resume(candidate.layer);
-            if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure("xrPassthroughLayerResumeFB", result));
-            const auto current = Borrow(scope.session);
-            return current.HasError() ? Result<void>::Failure(current.ErrorValue()) : Result<void>::Success();
+            if (auto step = CheckPassthroughStep("xrPassthroughLayerResumeFB", result, preparingPassthrough_ != nullptr); step.HasError())
+                return step;
+            const auto current = Borrow(candidate.scope.session);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            return CheckPassthroughStep("passthrough publication", XR_SUCCESS, preparingPassthrough_ != nullptr);
         }();
         passthrough_ = candidate;
         if (prepare.HasError()) {
@@ -195,6 +224,12 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::RevokePassthrough(const XRPassthroughScope &) */
     void OpenXRNativeSession::RevokePassthrough(const XRPassthroughScope &scope) noexcept {
+        if (controlThread_ != std::this_thread::get_id())
+            return;
+        if (preparingPassthrough_ && *preparingPassthrough_ == scope) {
+            RevokePassthrough();
+            return;
+        }
         if (ReadPassthrough(scope) == NativePassthroughState::Absent)
             return;
         passthrough_.admitted = false;
@@ -216,6 +251,10 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::RevokePassthrough */
     void OpenXRNativeSession::RevokePassthrough() noexcept {
+        if (preparingPassthrough_) {
+            lastPassthroughGrant_ = preparingPassthrough_->grant;
+            preparingPassthrough_ = nullptr;
+        }
         passthrough_.admitted = false;
         if (passthrough_.started) {
             const PassthroughOperation operation{passthroughCall_};

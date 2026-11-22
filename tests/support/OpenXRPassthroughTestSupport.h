@@ -3,6 +3,8 @@
 #include "support/OpenXRCensusTestSupport.h"
 #include "support/OpenXRFrameScriptTestSupport.h"
 
+#include <functional>
+
 namespace Horo::Tests::OpenXR {
     /** @brief Scripted v3 native provider behind the real selected session and compositor. */
     struct PassthroughScript final {
@@ -14,7 +16,10 @@ namespace Horo::Tests::OpenXR {
         bool liveLayer{};
         bool running{};
         std::uint32_t featuresCreated{};
+        std::uint32_t starts{};
+        std::uint32_t resumes{};
         std::uint32_t pauses{};
+        std::function<void(std::string_view)> onStartup;
         std::uint32_t layersDestroyed{};
 
         PassthroughScript() {
@@ -35,6 +40,8 @@ namespace Horo::Tests::OpenXR {
             ++active->featuresCreated;
             active->liveFeature = true;
             *feature = NativeHandle<XrPassthroughFB>(29);
+            if (active->onStartup)
+                active->onStartup("feature");
             return XR_SUCCESS;
         }
 
@@ -48,6 +55,8 @@ namespace Horo::Tests::OpenXR {
             CHECK_FALSE(active->liveLayer);
             active->liveLayer = true;
             *layer = NativeHandle<XrPassthroughLayerFB>(30);
+            if (active->onStartup)
+                active->onStartup("layer");
             return XR_SUCCESS;
         }
 
@@ -56,6 +65,9 @@ namespace Horo::Tests::OpenXR {
             CHECK(active->liveFeature);
             CHECK_FALSE(active->running);
             active->running = true;
+            ++active->starts;
+            if (active->onStartup)
+                active->onStartup("start");
             return XR_SUCCESS;
         }
 
@@ -63,6 +75,9 @@ namespace Horo::Tests::OpenXR {
             CHECK(layer == NativeHandle<XrPassthroughLayerFB>(30));
             CHECK(active->running);
             CHECK(active->liveLayer);
+            ++active->resumes;
+            if (active->onStartup)
+                active->onStartup("resume");
             return active->resumeResult;
         }
 

@@ -728,6 +728,7 @@ namespace Horo::XR::OpenXRInternal {
 
         Passthrough passthrough_;
         XRPassthroughGrant lastPassthroughGrant_;
+        const XRPassthroughScope *preparingPassthrough_{}; /**< Borrowed only for the synchronous startup call. */
         bool passthroughCall_{};
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */
