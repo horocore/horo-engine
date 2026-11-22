@@ -13,8 +13,7 @@ namespace Horo::Physics {
 
 namespace Horo::Application::Internal {
     /** @brief Visits each occurrence once and resumes after the first occurrence that spent shared work. */
-    template <typename Visitor>
-    std::size_t AdvanceSceneQueryBudgetOrder(const std::size_t count, const std::size_t cursor, Visitor visit) {
+    template <typename Visitor> std::size_t AdvanceSceneQueryBudgetOrder(const std::size_t count, const std::size_t cursor, Visitor visit) {
         if (count == 0)
             return 0;
         const auto start = cursor % count;

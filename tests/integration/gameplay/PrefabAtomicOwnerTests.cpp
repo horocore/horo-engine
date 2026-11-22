@@ -931,7 +931,9 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(std::ranges::all_of(visited, std::identity{}));
             }
             CHECK((served == std::array<std::size_t, 6>{0, 4, 0, 4, 0, 4}));
-            const auto noWork = [](std::size_t) { return false; };
+            const auto noWork = [](std::size_t) {
+                return false;
+            };
             CHECK(Internal::AdvanceSceneQueryBudgetOrder(8, cursor, noWork) == cursor);
             CHECK(Internal::AdvanceSceneQueryBudgetOrder(0, cursor, noWork) == 0);
         }
