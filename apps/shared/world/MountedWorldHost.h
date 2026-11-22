@@ -46,11 +46,18 @@ namespace Horo::Application::Internal {
         ForceEvict
     };
 
-    /** @brief Prepares a command owner for the complete proposed resident NavMesh set on the Scene owner lane. */
+    /** @brief Detached publication and coverage of the newly attached cell, independent of the resident union. */
+    struct MountedWorldNavigationPreparation final {
+        std::shared_ptr<const Runtime::SceneGroupPublication> publication;
+        bool attachedCellHasCoverage{};
+    };
+
+    /** @brief Prepares a command owner for the complete proposed resident NavMesh set on the Scene owner lane.
+     * @details For Attach, the final row is the newly attached cell whose coverage is returned in the preparation.
+     */
     using MountedWorldNavigationPublication =
-        std::function<Result<std::shared_ptr<const Runtime::SceneGroupPublication>>(const Runtime::RuntimeSceneView &,
-                                                                                    std::span<const MountedWorldNavigationCell>,
-                                                                                    MountedWorldNavigationChange)>;
+        std::function<Result<MountedWorldNavigationPreparation>(const Runtime::RuntimeSceneView &,
+                                                                std::span<const MountedWorldNavigationCell>, MountedWorldNavigationChange)>;
     /** @brief Advances provider-affine retirement and reports whether old query and tile pins are drained. */
     using MountedWorldNavigationRetirement = std::function<Result<bool>()>;
 
@@ -82,6 +89,20 @@ namespace Horo::Application::Internal {
         Attaching,
         Active,
         Retiring
+    };
+
+    /** @brief A visible cell can have declared coverage that contains no traversable tiles. */
+    enum class MountedWorldCellNavigationReadiness : std::uint8_t {
+        NotDeclared,
+        Unavailable,
+        Ready
+    };
+
+    /** @brief Current Scene visibility and Navigation availability for the exact admitted cell generation. */
+    struct MountedWorldCellReadiness final {
+        WorldStreaming::StreamingFence fence;
+        bool geometryVisible{};
+        MountedWorldCellNavigationReadiness navigation{};
     };
 
     /** @brief Explicit per-unit owner timing and complete CoreEcs frame-work bounds. */
@@ -256,6 +277,9 @@ namespace Horo::Application::Internal {
          * @return Shared resident and retiring payload bytes, or a typed error if the live owner is unavailable.
          */
         [[nodiscard]] Result<std::size_t> InspectLiveAssetBytes() const;
+
+        /** @brief Reads Scene visibility and Navigation separately for one live occurrence on the owner lane. */
+        [[nodiscard]] Result<MountedWorldCellReadiness> InspectLiveCell(Runtime::SceneInstanceId occurrence) const;
 
         /** @brief Advances at most one bounded unit during an exact, previously unused structural dispatch.
          * @param evidence Live CommitDeferredLifecycleChanges evidence from the bound scheduler.

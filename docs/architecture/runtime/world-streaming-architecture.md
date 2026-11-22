@@ -1150,6 +1150,12 @@ under the same world and Scene identity.
 An unloaded cell's old provider can remain charged while a query retains its
 lease. The mount holds the cell in Retiring and acknowledges completion only
 after the provider reports that those leases have drained.
+
+The mounted Scene facade reports geometry visibility and Navigation readiness
+independently for each exact live occurrence and cell generation. A visible
+cell with a verified but empty NavMesh reports Navigation unavailable, even
+when other resident cells contribute coverage. A ready result requires that
+the cell's own traversable tiles and its Scene attachment have both committed.
 The standalone host's forced eviction entry point names an exact live
 occurrence and uses the same Scene retirement fence. The new topology excludes
 that cell when the transaction commits. Pending or unconsumed path results

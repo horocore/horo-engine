@@ -200,6 +200,10 @@ namespace Horo::WorldCook {
                 return RequestHeadlessWorldCell(*scene_, demand_);
             }
 
+            Result<MountedWorldCellReadiness> FirstReadiness() const {
+                return InspectHeadlessWorldCell(*scene_, demand_.occurrence);
+            }
+
             void CheckTravelRefusal() {
                 const auto *original = scene_;
                 const std::array replacements{Network::World(Network::NetworkModeWorldKind::Standalone, runtime_.value + 1)};
@@ -589,11 +593,20 @@ namespace Horo::WorldCook {
             REQUIRE_FALSE(product.Attached());
             static_cast<void>(product.UntilAttached(true));
             static_cast<void>(product.RunFrame());  // Reconcile the exact positive Scene receipt.
+            const auto before = product.FirstReadiness();
+            REQUIRE(before.HasValue());
+            CHECK(before.Value().geometryVisible);
+            CHECK(before.Value().navigation == MountedWorldCellNavigationReadiness::NotDeclared);
             product.Withdraw();
             static_cast<void>(product.UntilAttached(false));
             static_cast<void>(product.RunFrame());  // Acknowledge retirement before issuing a fresh generation.
+            W::TestSupport::RequireError(product.FirstReadiness(), W::WorldArtifactErrors::Stale);
             product.Request();
             static_cast<void>(product.UntilAttached(true));
+            const auto after = product.FirstReadiness();
+            REQUIRE(after.HasValue());
+            CHECK(after.Value().geometryVisible);
+            CHECK(after.Value().fence.generation > before.Value().fence.generation);
         }
         SECTION("An in-frame replacement cannot drain a live mounted worker or revoke its parent") {
             MountedCellProduct product{true, true};
@@ -873,8 +886,8 @@ namespace Horo::WorldCook {
                 CHECK(desired.front().selection.tiles == tiles.tiles);
                 CHECK(ComputeSha256(std::as_bytes(desired.front().envelope)) == tiles.cookedEnvelope);
             }
-            return Result<std::shared_ptr<const S::SceneGroupPublication>>::Success(
-                std::make_shared<ObservedCellNavigation>(residentTiles, desired.size()));
+            return Result<MountedWorldNavigationPreparation>::Success(
+                {std::make_shared<ObservedCellNavigation>(residentTiles, desired.size()), false});
         }).HasValue());
         REQUIRE(host->Startup().HasValue());
         const auto until = [&](Stage expected) {
@@ -893,6 +906,11 @@ namespace Horo::WorldCook {
         until(Stage::Active);
         CHECK(residentTiles == 1);
         CHECK(scene.ActiveScene()->Find({11}));
+        const auto visible = mount.InspectLiveCell(request.occurrence);
+        REQUIRE(visible.HasValue());
+        CHECK(visible.Value().geometryVisible);
+        CHECK(visible.Value().fence.cell == identity.cell);
+        CHECK(visible.Value().navigation == MountedWorldCellNavigationReadiness::Unavailable);
         REQUIRE(mount.WithdrawLiveCell(request.occurrence).HasValue());
         until(Stage::Idle);
         CHECK(residentTiles == 0);
@@ -946,15 +964,22 @@ namespace Horo::WorldCook {
                                                                     .sourceDigest = digest,
                                                                     .polygons = {0, 1}}}});
         REQUIRE(tile.HasValue());
+        auto emptyInput = input;
+        emptyInput.tile.key.tile.x = 1;
+        emptyInput.tile.bounds = {{8, -1, 0}, {16, 1, 8}};
+        const auto empty = N::NavigationCookedTile::Create(emptyInput, {.key = emptyInput.tile.key.tile, .bounds = emptyInput.tile.bounds});
+        REQUIRE(empty.HasValue());
         const N::NavigationCookedTileSet closure{digest,
-                                                 {tile.Value()},
+                                                 {tile.Value(), empty.Value()},
                                                  N::NavigationCookedContentProvenance{{digest, digest, digest}, policy}};
         auto &base = fixture.baseArtifacts.front();
         base = N::TestSupport::ContentEnvelope(closure, Asset(8), fixture.Release().target);
         const auto rootDigest = T::DigestOf(base);
         std::get<BaseObjectBinding>(fixture.objects.back()).artifactHash = rootDigest;
         const auto identity = fixture.inputs.front().expected;
+        const auto sibling = fixture.inputs.back().expected;
         fixture.navigationCells.push_back({identity.cell, {Asset(8), rootDigest, {tile.Value()->Key()}}});
+        fixture.navigationCells.push_back({sibling.cell, {Asset(8), rootDigest, {empty.Value()->Key()}}});
         auto limits = Limits();
         limits.cell.maximumPayloads = 2;
         const auto published = fixture.Publish(limits);
@@ -1003,7 +1028,7 @@ namespace Horo::WorldCook {
         auto driver = std::make_unique<MountedCellDriver>(*mount, scene);
         const auto &progress = *driver;
         REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
-        REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4}).HasValue());
+        REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4, 0, 0, 2}).HasValue());
         REQUIRE(BindMountedWorldNavigation(*mount, *navigation, selected).HasValue());
         REQUIRE(host->Startup().HasValue());
         const auto until = [&](Stage expected) {
@@ -1020,6 +1045,17 @@ namespace Horo::WorldCook {
         };
         REQUIRE(mount->RequestLiveCell({identity.cell, {101}, identity.scene, identity.revision}).HasValue());
         until(Stage::Active);
+        const auto liveReadiness = mount->InspectLiveCell({101});
+        REQUIRE(liveReadiness.HasValue());
+        CHECK(liveReadiness.Value().geometryVisible);
+        CHECK(liveReadiness.Value().navigation == MountedWorldCellNavigationReadiness::Ready);
+        REQUIRE(mount->RequestLiveCell({sibling.cell, {102}, sibling.scene, sibling.revision}).HasValue());
+        until(Stage::Active);
+        const auto siblingReadiness = mount->InspectLiveCell({102});
+        REQUIRE(siblingReadiness.HasValue());
+        CHECK(siblingReadiness.Value().geometryVisible);
+        CHECK(siblingReadiness.Value().fence.cell == sibling.cell);
+        CHECK(siblingReadiness.Value().navigation == MountedWorldCellNavigationReadiness::Unavailable);
         auto old = navigation->assets->Acquire();
         REQUIRE(old.HasValue());
         auto retained = std::move(old).Value();
@@ -1056,6 +1092,11 @@ namespace Horo::WorldCook {
         W::TestSupport::RequireError(mount->ForceEvictLiveCell({999}), W::WorldArtifactErrors::Stale);
         REQUIRE(mount->ForceEvictLiveCell({101}).HasValue());
         until(Stage::Retiring);
+        const auto retiringReadiness = mount->InspectLiveCell({101});
+        REQUIRE(retiringReadiness.HasValue());
+        CHECK_FALSE(retiringReadiness.Value().geometryVisible);
+        CHECK(retiringReadiness.Value().fence == liveReadiness.Value().fence);
+        CHECK(retiringReadiness.Value().navigation == MountedWorldCellNavigationReadiness::Unavailable);
         W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
         CHECK(retained.Revocation() == N::NavigationWorldRevocation::TileEvicted);
         CHECK(retained.Cancellation().IsCancellationRequested());
@@ -1075,8 +1116,11 @@ namespace Horo::WorldCook {
         CHECK(completion->source.snapshot == source.snapshot);
         CHECK(completion->source.topology == source.topology);
         retained = {};
-        until(Stage::Idle);
+        until(Stage::Active);
         CHECK(navigation->assets->Snapshot().reservedProviderBytes == 0);
+        CHECK(mount->InspectLiveCell({102}).Value().geometryVisible);
+        REQUIRE(mount->WithdrawLiveCell({102}).HasValue());
+        until(Stage::Idle);
         host->Shutdown();
     }
 #endif

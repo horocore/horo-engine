@@ -11,7 +11,7 @@ namespace Horo::Application::Internal {
     namespace Nav = Navigation;
 
     namespace {
-        using Publication = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
+        using Publication = Result<MountedWorldNavigationPreparation>;
         using Content = Result<std::optional<Nav::LoadedNavMeshAsset>>;
 
         /** @brief Retains detached selected tiles until the exact Scene command commits or rolls back. */
@@ -94,6 +94,17 @@ namespace Horo::Application::Internal {
             return Content::Success(std::move(loaded).Value());
         }
 
+        /** @brief Tests only the changed cell's tiles, even when other cells contribute traversable coverage. */
+        bool HasAttachedCoverage(const std::optional<Nav::LoadedNavMeshAsset> &content, std::span<const MountedWorldNavigationCell> cells,
+                                 MountedWorldNavigationChange change) {
+            if (!content || change != MountedWorldNavigationChange::Attach || cells.empty())
+                return false;
+            const auto &keys = cells.back().selection.tiles;
+            return std::ranges::any_of(content->partitions.front().tiles, [&](const auto &tile) {
+                return !tile->Topology().IsEmpty() && std::ranges::binary_search(keys, tile->Key());
+            });
+        }
+
         /** @brief Issues an exact generation for this Scene command even if it is subsequently cancelled. */
         Publication PreparePublication(const Runtime::RuntimeSceneView &scene, std::span<const MountedWorldNavigationCell> desired,
                                        ProjectSceneNavigationWorld &world, const ProjectSceneNavigationSelection &selected,
@@ -110,12 +121,14 @@ namespace Horo::Application::Internal {
             auto content = PrepareCellContent(scene, desired, world, selected);
             if (content.HasError())
                 return Publication::Failure(content.ErrorValue());
+            const bool hasCoverage = HasAttachedCoverage(content.Value(), desired, change);
             const auto next = Nav::NavigationGeneration::Create(++lastIssued).Value();
             const auto reason = change == MountedWorldNavigationChange::ForceEvict ? Nav::NavigationTopologyChange::ForcedCellEviction
                                                                                    : Nav::NavigationTopologyChange::Replacement;
-            return Publication::Success(std::make_shared<CellNavigationOwner>(*world.assets, predecessor.Value(), next,
-                                                                              std::move(content).Value(), selected.surfaceGeneration,
-                                                                              reason));
+            return Publication::Success(
+                {std::make_shared<CellNavigationOwner>(*world.assets, predecessor.Value(), next, std::move(content).Value(),
+                                                       selected.surfaceGeneration, reason),
+                 hasCoverage});
         }
     }  // namespace
 

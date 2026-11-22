@@ -53,6 +53,7 @@ namespace Horo::Application::Internal {
     struct ProjectScenePerceptionPolicy;
     struct CommittedWorldSelection;
     struct CommittedWorldInitialCell;
+    struct MountedWorldCellReadiness;
     class MountedWorldRenderPacket;
 
     /** @brief Selects the sole descriptor authority for an authored Perception policy. */
@@ -449,6 +450,10 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<void> ForceEvictHeadlessWorldCell(const Network::INetworkModeService &service,
                                                            Runtime::SceneInstanceId occurrence);
+
+    /** @brief Reads exact live occurrence visibility and Navigation readiness from the standalone Scene owner. */
+    [[nodiscard]] Result<MountedWorldCellReadiness> InspectHeadlessWorldCell(const Network::INetworkModeService &service,
+                                                                             Runtime::SceneInstanceId occurrence);
 
     /** @brief Captures an exact active World camera and procedural geometry on the standalone Scene owner lane.
      * @param service Actual headless Scene service.

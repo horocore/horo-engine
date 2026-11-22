@@ -761,6 +761,7 @@ namespace Horo::Application::Internal {
             Runtime::SceneCellPayloadIdentity identity;
             std::vector<Runtime::SceneCellWorldAnchor> anchors;
             std::vector<Math::Vec3> initialLocalPositions;
+            bool navigationHasCoverage{};
         };
 
         struct PreparedCell final {
@@ -895,8 +896,9 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<MountedWorldLiveCellState> PollLiveAttachment();
         [[nodiscard]] Result<MountedWorldLiveCellState> RetireLiveCell(const Runtime::RuntimeSceneView &parent, std::size_t index);
         /** @brief Builds the exact aggregate command owner for an added or removed cell with Navigation content. */
-        [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> PrepareNavigationChange(
-            const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, MountedWorldNavigationChange change) const;
+        [[nodiscard]] Result<MountedWorldNavigationPreparation> PrepareNavigationChange(const Runtime::RuntimeSceneView &parent,
+                                                                                        WS::StreamingCellId cell,
+                                                                                        MountedWorldNavigationChange change) const;
         [[nodiscard]] Result<MountedWorldLiveCellState> RejectLive(const Error &error);
         /** @brief Reserves retirement of one exact Resident or Active cell until its resources have settled. */
         [[nodiscard]] Result<void> BeginLiveRetirement(const ActiveCell &cell);
@@ -1441,9 +1443,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc MountedWorld::State::PrepareNavigationChange */
-    Result<std::shared_ptr<const Runtime::SceneGroupPublication>> MountedWorld::State::PrepareNavigationChange(
-        const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, MountedWorldNavigationChange change) const {
-        using Output = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
+    Result<MountedWorldNavigationPreparation> MountedWorld::State::PrepareNavigationChange(const Runtime::RuntimeSceneView &parent,
+                                                                                           WS::StreamingCellId cell,
+                                                                                           MountedWorldNavigationChange change) const {
+        using Output = Result<MountedWorldNavigationPreparation>;
         const auto *changed = NavigationCell(cell);
         if (!changed)
             return Output::Success({});
@@ -1471,7 +1474,7 @@ namespace Horo::Application::Internal {
             if (creating && !append(*changed))
                 return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
             auto owner = live->navigation(parent, desired, change);
-            if (owner.HasValue() && !owner.Value())
+            if (owner.HasValue() && !owner.Value().publication)
                 return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
             return owner;
         } catch (const std::bad_alloc &) {
@@ -1485,7 +1488,7 @@ namespace Horo::Application::Internal {
         const auto &demand = *live->demand;
         if (demand.IsWithdrawn() || !*live->prepared)
             return RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled));
-        const auto &cell = *live->candidate;
+        auto &cell = *live->candidate;
         if (parent.RuntimeId() != cell.address.parent)
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (!live->prepared->value().assets.resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
@@ -1493,6 +1496,7 @@ namespace Horo::Application::Internal {
         auto navigation = PrepareNavigationChange(parent, cell.fence.cell, MountedWorldNavigationChange::Attach);
         if (navigation.HasError())
             return RejectLive(navigation.ErrorValue());
+        cell.navigationHasCoverage = navigation.Value().attachedCellHasCoverage;
         const auto operation = IssueLiveOperation();
         if (operation.HasError())
             return RejectLive(operation.ErrorValue());
@@ -1519,7 +1523,7 @@ namespace Horo::Application::Internal {
                                                                                                   live->limits.maximumCellAssets)},
                                                           .cancellation = demand.cancellation,
                                                           .ownerCancellation = demand.lifetime.Token(),
-                                                          .publication = std::move(navigation).Value()};
+                                                          .publication = std::move(navigation).Value().publication};
         const auto authority =
             std::make_shared<const InitialCellAuthority>(cell.identity, *residency, scheduler, activated.Value(),
                                                          MountedWorldStartup{demand.lifetime.Token(),
@@ -1610,7 +1614,7 @@ namespace Horo::Application::Internal {
                                                           .registry = parent.AssetRegistryRevision(),
                                                           .limits = {1, live->limits.maximumCellEntities, 1},
                                                           .expectedRevision = cell.identity.revision,
-                                                          .publication = std::move(navigation).Value()};
+                                                          .publication = std::move(navigation).Value().publication};
         auto authority = std::make_shared<const LiveCellRetirementAuthority>(cell.identity, *residency, scheduler, *live->reservation);
         auto queued = Runtime::QueueStreamedSceneRemoval(scene, resident.attachment, request, std::move(authority));
         if (queued.HasError())
@@ -1772,6 +1776,29 @@ namespace Horo::Application::Internal {
         found->demand.forcedEviction = true;
         found->demand.Withdraw();
         return Result<void>::Success();
+    }
+
+    /** @copydoc MountedWorld::InspectLiveCell */
+    Result<MountedWorldCellReadiness> MountedWorld::InspectLiveCell(Runtime::SceneInstanceId occurrence) const {
+        using Output = Result<MountedWorldCellReadiness>;
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        auto &live = *state_->live;
+        const auto found = live.FindResident(occurrence);
+        const State::ActiveCell *cell = found == live.residents.end() ? nullptr : &found->cell;
+        if (!cell && live.candidate && live.candidate->address.instance == occurrence)
+            cell = &*live.candidate;
+        if (!cell)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const auto parent = state_->scene.ActiveScene();
+        if (!parent || parent->RuntimeId() != cell->address.parent)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const bool visible = state_->AttachedParent(*cell).has_value();
+        using enum MountedWorldCellNavigationReadiness;
+        auto readiness = NotDeclared;
+        if (state_->NavigationCell(cell->fence.cell))
+            readiness = visible && cell->navigationHasCoverage ? Ready : Unavailable;
+        return Output::Success({cell->fence, visible, readiness});
     }
 
     /** @copydoc MountedWorld::InspectLiveAssetBytes */

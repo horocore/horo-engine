@@ -142,6 +142,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                          : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
         }
 
+        /** @brief Projects committed occurrence readiness without consulting a foreign or retired Scene. */
+        Result<MountedWorldCellReadiness> InspectMountedCell(Runtime::SceneInstanceId occurrence) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->InspectLiveCell(occurrence)
+                         : Result<MountedWorldCellReadiness>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
         /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
         Result<MountedWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
                                                                     std::span<const Runtime::SceneObjectId> meshes,
