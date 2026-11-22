@@ -18,6 +18,18 @@ namespace Horo::Editor {
                                                    .code = ErrorCode{"image_unavailable"},
                                                    .defaultSeverity = ErrorSeverity::Warning,
                                                    .summary = "The exact authored viewport is unavailable."};
+
+        /** @brief Binds renderer-owned observation and cancellation to the endpoint lifetime. */
+        void BindImageReadback(EditorDebugCaptureEndpoint &endpoint, IEditorViewportRenderer &viewport, CancellationToken lifetime) {
+            endpoint.readImage = [&viewport, lifetime](std::uint64_t id) {
+                if (lifetime.IsCancellationRequested())
+                    return std::optional<EditorViewportImageSnapshot>{};
+                return viewport.ReadImageCapture(id);
+            };
+            endpoint.cancelImage = [&viewport, lifetime](std::uint64_t id) {
+                return !lifetime.IsCancellationRequested() && viewport.CancelImageCapture(id);
+            };
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::BindDebugCapture */
@@ -46,9 +58,11 @@ namespace Horo::Editor {
                 return std::optional<EditorDebugCaptureArtifact>{};
             return m_debugCapture.Read(id, EditorDebugCaptureStorage::Clock::now());
         },
-                                            .cancel = [this, lifetime](std::uint64_t id) {
+                                            .cancel =
+                                                [this, lifetime](std::uint64_t id) {
             return !lifetime.IsCancellationRequested() && m_debugCapture.Cancel(id, EditorDebugCaptureStorage::Clock::now());
-        }};
+        },
+                                            .lifetime = lifetime};
         if (viewport) {
             endpoint.readImageSource = [this, viewport, lifetime] {
                 if (lifetime.IsCancellationRequested())
@@ -61,16 +75,8 @@ namespace Horo::Editor {
                     return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
                 return StartDebugImage(*viewport, source, region, std::move(authorized));
             };
-            endpoint.readImage = [viewport, lifetime](std::uint64_t id) {
-                if (lifetime.IsCancellationRequested())
-                    return std::optional<EditorViewportImageSnapshot>{};
-                return viewport->ReadImageCapture(id);
-            };
-            endpoint.cancelImage = [viewport, lifetime](std::uint64_t id) {
-                return !lifetime.IsCancellationRequested() && viewport->CancelImageCapture(id);
-            };
+            BindImageReadback(endpoint, *viewport, lifetime);
         }
-        endpoint.lifetime = lifetime;
         m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(std::move(endpoint));
         return m_debugCaptureEndpoint;
     }

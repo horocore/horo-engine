@@ -113,12 +113,15 @@ namespace {
         GraphCaptureViewport(RenderFrontend &frontend, EditorViewportResources &resources)
             : frontend_(frontend), resources_(resources), extent_(resources.AllocatedExtent()) {}
 
+        GraphCaptureViewport(const GraphCaptureViewport &) = delete;
+        GraphCaptureViewport &operator=(const GraphCaptureViewport &) = delete;
+
         ~GraphCaptureViewport() override {
             capture_.Shutdown(frontend_);
         }
 
         Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region, std::function<bool()> authorized) override {
-            ++requests;
+            ++requests_;
             return capture_.Request(Source(), region, std::move(authorized));
         }
 
@@ -156,9 +159,13 @@ namespace {
             extent_ = extent;
         }
 
-        void RequestGrid(const EditorViewportGridOptions &) noexcept override {}
+        void RequestGrid(const EditorViewportGridOptions &) noexcept override {
+            // The fixture records only viewport readback work.
+        }
 
-        void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &) noexcept override {}
+        void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &) noexcept override {
+            // The fixture records only viewport readback work.
+        }
 
         EditorViewportExtent RequestedExtent() const noexcept override {
             return extent_;
@@ -176,7 +183,9 @@ namespace {
             return resources_.IsReady();
         }
 
-        std::size_t requests{};
+        [[nodiscard]] std::size_t CaptureRequests() const noexcept {
+            return requests_;
+        }
 
     private:
         EditorGraphViewportImageCapture::Source Source() const {
@@ -187,6 +196,7 @@ namespace {
         EditorViewportResources &resources_;
         EditorViewportExtent extent_;
         EditorGraphViewportImageCapture capture_;
+        std::size_t requests_{};
     };
 #endif
 }  // namespace
@@ -210,8 +220,7 @@ TEST_CASE("Approved viewport pixels are published through the workspace and with
     REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
     workspace.SynchronizeRuntimeScenePreview();
     auto opened = EditorCommandMcpSession::Create({.debugCapture = workspace.BindDebugCapture("project-one", 3, &viewport)},
-                                                  {"viewport-client", "project-one", 3, {"editor.debug.capture"}},
-                                                  Test::Authorization());
+                                                  {"viewport-client", "project-one", 3, {"editor.debug.capture"}}, Test::Authorization());
     REQUIRE(opened.HasValue());
     auto &session = *opened.Value();
     const auto client = session.Client();
@@ -246,14 +255,14 @@ TEST_CASE("Approved viewport pixels are published through the workspace and with
     navigate.viewportNavigationPayload = EditorViewportNavigationDelta{.yawRadians = 0.2F};
     workspace.ProcessCommand(navigate);
     CHECK(execute(stale).at("status") == "failed");
-    CHECK(viewport.requests == 0);
+    CHECK(viewport.CaptureRequests() == 0);
 
     crop["source"] = execute(command("viewport.image_source")).at("result");
     const auto request = command("viewport.capture_image", crop);
     approve(request);
     const auto started = execute(request);
     REQUIRE(started.at("status") == "succeeded");
-    REQUIRE(viewport.requests == 1);
+    REQUIRE(viewport.CaptureRequests() == 1);
     const auto read = command("debug.get_image", started.at("result"));
     CHECK(execute(read).at("result").at("phase") == "pending");
     viewport.CompleteFrame();
