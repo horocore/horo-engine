@@ -267,7 +267,7 @@ selection. Definitions open embedded project sources and select the resolved
 UTF-16 range. Completion acceptance applies the main and additional edits
 as one revision-fenced undo step. Changes of source publication retire results.
 
-### Horo Script Syntax (EDT-003.11)
+### Horo Script Language Intelligence (EDT-003.11)
 
 The active source is classified by the project source policy. The Lua 5.4
 parser checks Horo Script text on a bounded background job. It opens no
@@ -283,9 +283,14 @@ declarations and an availability result for each declared alias. These
 values carry no invocation authority. A fresh request after provider
 replacement returns the current schema.
 Direct `horo.import("alias").namespace.member` queries use that schema to
-project typed source completion and hover. Completion supplies an exact
-identifier replacement range. The lexer excludes comments and strings
-from matching, and the source lease fences queries against later edits.
+project typed source completion and hover. The quoted alias can be completed
+without changing its quotes, and its hover identifies the registered namespace.
+The engine-owned `horo` members use the same inert catalog as Lua runtime
+registration and remain available to configured module sources when an import
+is missing. Declared imports expose the availability flag and optional error
+code even when their provider schema is absent. Completion uses an exact
+replacement range. The lexer excludes comments and unrelated strings, and
+the source lease fences later edits.
 After a successful parse, the background check warns at the first unknown
 namespace segment or member in each direct import with an available schema.
 Unavailable schemas suppress those warnings. The check is lexical and does

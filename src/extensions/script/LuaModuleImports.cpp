@@ -1,3 +1,4 @@
+#include "LuaModuleHostApi.h"
 #include "LuaModuleInternal.h"
 
 namespace Horo::Extensions::LuaModuleDetail {
@@ -36,9 +37,26 @@ namespace Horo::Extensions::LuaModuleDetail {
 
         void Missing(lua_State *lua, const ScriptModuleImport &imported) {
             lua_pushboolean(lua, 0);
-            lua_setfield(lua, -2, "available");
+            lua_setfield(lua, -2, LuaModuleImportAvailable);
             lua_pushlstring(lua, imported.Unavailable()->code.Value().data(), imported.Unavailable()->code.Value().size());
-            lua_setfield(lua, -2, "code");
+            lua_setfield(lua, -2, LuaModuleImportErrorCode);
+        }
+
+        /** @brief Pushes the runtime value for one member of the shared authoring catalog. */
+        void PushHostMember(lua_State *lua, State &state, const LuaModuleHostMemberKind kind) {
+            using enum LuaModuleHostMemberKind;
+            switch (kind) {
+                case Import:
+                    lua_pushcfunction(lua, LuaModuleDetail::Import);
+                    return;
+                case Unsigned:
+                    lua_pushcfunction(lua, LuaModuleDetail::Unsigned);
+                    return;
+                case Null:
+                    state.values.PrepareValueBox(BoxKind::Null, ScriptValue::Null());
+                    state.values.PushPreparedBox();
+                    return;
+            }
         }
 
         int NamespaceTable(lua_State *lua, State &state, const ScriptModuleContext &context,
@@ -50,7 +68,7 @@ namespace Horo::Extensions::LuaModuleDetail {
                 lua_newtable(lua);
                 if (imported.Backend()) {
                     lua_pushboolean(lua, 1);
-                    lua_setfield(lua, -2, "available");
+                    lua_setfield(lua, -2, LuaModuleImportAvailable);
                     lua_pushvalue(lua, -1);
                     Path(lua, plans[index]->namespaceSegments);
                     Constants(lua, state, imported.Backend()->Descriptor(), *plans[index]);
@@ -112,11 +130,12 @@ namespace Horo::Extensions::LuaModuleDetail {
     int BuildImports(lua_State *lua) {
         auto &state = Owner(lua);
         state.importsRef = NamespaceTable(lua, state, *state.authority, state.plans);
-        state.values.PrepareValueBox(BoxKind::Null, ScriptValue::Null());
         lua_rawgeti(lua, LUA_REGISTRYINDEX, state.horoRef);
         state.values.lua = lua;
-        state.values.PushPreparedBox();
-        lua_setfield(lua, -2, "null");
+        for (const auto &member : LuaModuleHostMembers) {
+            PushHostMember(lua, state, member.kind);
+            lua_setfield(lua, -2, member.name);
+        }
         lua_pop(lua, 1);
         state.scratchResult.reset();
         state.scratchValue.reset();

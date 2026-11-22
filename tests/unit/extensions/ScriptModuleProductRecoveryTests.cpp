@@ -1,4 +1,5 @@
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "LuaModuleHostApi.h"
 #include "ScriptModuleProductRecoverySupport.h"
 #include "editor/source_editor/HoroScriptModuleLanguage.h"
 
@@ -19,12 +20,12 @@ namespace Horo::Extensions::Tests {
             const auto member = source.Text().find(".add");
             REQUIRE(member != std::string_view::npos);
             const auto name = member + 1;
-            const auto completion = Take(QueryHoroScriptImports(source, Completion, name + 2, imports));
+            const auto completion = Take(QueryHoroScriptApi(source, Completion, name + 2, imports));
             const auto &choices = std::get<LanguageCompletions>(completion.payload).items;
             REQUIRE(choices.size() == 1);
             CHECK(choices.front().label == "add");
             CHECK(choices.front().primaryEdit == LanguageByteSpan{name, name + 3});
-            const auto hover = Take(QueryHoroScriptImports(source, Hover, name + 1, imports));
+            const auto hover = Take(QueryHoroScriptApi(source, Hover, name + 1, imports));
             CHECK(std::get<LanguageHover>(hover.payload).text.starts_with("add("));
         }
     }  // namespace
@@ -99,6 +100,21 @@ namespace Horo::Extensions::Tests {
         CHECK(host.modules->DescribeActiveModuleApis(package.id, package.module, project.Lease()).HasError());
         host.native->BeginShutdown();
         CHECK(host.modules->AuthoringApiRevision() == 0);
+    }
+
+    TEST_CASE("A signed Lua operation exposes the engine-owned authoring catalog", "[Extensions][ScriptModule][Authoring]") {
+        std::string source = "local count = 0\nfor _ in pairs(horo) do count = count + 1 end\nassert(count == ";
+        source += std::to_string(LuaModuleHostMembers.size()) + ")\n";
+        for (const auto &member : LuaModuleHostMembers)
+            source += std::string{"assert(horo."} + member.name + " ~= nil)\n";
+        source += "assert(horo.u64('42') == horo.u64('42'))\n";
+        source += "local imported = horo.import('backend-import')\nassert(imported.available and imported.code == nil)\n";
+        source += "return imported.com.horo.concurrent.api.add(20, 22)";
+        SignedPackage package{ScriptModuleRuntimeKind::Lua54, source};
+        package.Capture();
+        Headless host{package};
+        auto operation = Take(host.modules->Begin(package.Program(), host.Policy()));
+        Answer42(Await(*operation));
     }
 
     TEST_CASE("Actual signed Headless operations retain the same two VM states across a real additive provider update",

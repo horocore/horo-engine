@@ -11,7 +11,7 @@ namespace Horo::Extensions {
 }
 
 namespace Horo::Editor::Language {
-    /** @brief Projects completion or hover for an explicit Lua import member expression.
+    /** @brief Projects completion or hover for Lua host members, import aliases and explicit imported members.
      * @param source Current source publication.
      * @param kind Completion or hover.
      * @param offset UTF-8 byte position of the caret.
@@ -19,9 +19,9 @@ namespace Horo::Editor::Language {
      * @return Exact source result, an empty feature result when no matching member exists, or a typed query failure.
      * @details Only reads source text and metadata. The caller owns import generation and project lifetime.
      */
-    [[nodiscard]] Result<LanguageResult> QueryHoroScriptImports(const SourceDocumentSnapshot &source, SourceLanguageRequestKind kind,
-                                                                std::size_t offset,
-                                                                std::span<const Extensions::ScriptModuleApiMetadata> imports);
+    [[nodiscard]] Result<LanguageResult> QueryHoroScriptApi(const SourceDocumentSnapshot &source, SourceLanguageRequestKind kind,
+                                                            std::size_t offset,
+                                                            std::span<const Extensions::ScriptModuleApiMetadata> imports);
 
     /** @brief Finds mismatched namespaces and members in direct Lua imports with available schemas.
      * @param text Syntactically valid Lua source bytes, including the original line endings.

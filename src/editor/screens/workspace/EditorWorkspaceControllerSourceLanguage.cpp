@@ -40,7 +40,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ConfigureScriptLanguage */
     void EditorWorkspaceController::ConfigureScriptLanguage(std::shared_ptr<Extensions::ScriptModuleHostServices> host) {
         m_scriptLanguageHost = std::move(host);
-        if (!m_scriptLanguageHost || m_sourceOpenService.ProjectRoot().empty())
+        if (m_sourceOpenService.ProjectRoot().empty())
             return;
         auto bindings = Language::LoadScriptModuleSourceBindings(m_sourceOpenService.ProjectRoot());
         if (bindings.HasError()) {
@@ -58,18 +58,22 @@ namespace Horo::Editor {
         const auto *module = Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, identity.key.source);
         if (!module || !m_scriptLanguageHost)
             return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
-        const auto current = m_sourceOpenService.Documents().Snapshot(identity.instance);
-        if (current.HasError() || !current.Value().SharesStateWith(source))
-            return Output::Failure(MakeError(SourceDocumentErrors::Stale));
         return m_scriptLanguageHost->DescribeActiveModuleApis(module->package, module->module, m_scriptLanguageProject.Lease());
     }
 
     /** @copydoc EditorWorkspaceController::QueryScriptLanguage */
     Result<Language::LanguageResult> EditorWorkspaceController::QueryScriptLanguage(const SourceLanguageIntent &intent) {
+        using Output = Result<Language::LanguageResult>;
+        const auto current = m_sourceOpenService.Documents().Snapshot(intent.source.Identity().instance);
+        if (current.HasError() || !current.Value().SharesStateWith(intent.source))
+            return Output::Failure(MakeError(SourceDocumentErrors::Stale));
         const auto imports = CaptureScriptLanguageImports(intent.source);
-        if (imports.HasError())
-            return Result<Language::LanguageResult>::Failure(imports.ErrorValue());
-        return Language::QueryHoroScriptImports(intent.source, intent.kind, intent.view.caret, imports.Value());
+        const auto available = imports.HasValue() ? std::span<const Extensions::ScriptModuleApiMetadata>{imports.Value()}
+                                                  : std::span<const Extensions::ScriptModuleApiMetadata>{};
+        auto result = Language::QueryHoroScriptApi(intent.source, intent.kind, intent.view.caret, available);
+        if (imports.HasError() && result.HasValue() && std::holds_alternative<std::monostate>(result.Value().payload))
+            return Output::Failure(imports.ErrorValue());
+        return result;
     }
 
     /** @copydoc EditorWorkspaceController::RequestScriptLanguage */

@@ -107,6 +107,7 @@ function(horo_add_script_module_runtime_targets)
         HoroModuleScriptHostBridgeInternal HoroLuaScriptModuleRuntime HoroJavaScriptModuleRuntime)
 
     horo_stage_module_script_contract(HoroScriptModuleHostInternal
+        src/extensions/script/LuaModuleHostApi.h
         src/extensions/script/ScriptModuleHostServices.h
         src/extensions/script/ScriptModuleProgram.h)
     target_link_libraries(HoroScriptModuleHostInternal INTERFACE
