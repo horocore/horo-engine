@@ -14,6 +14,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <set>
 #include <span>
 #include <sstream>
 #include <string>
@@ -26,17 +27,32 @@ namespace Horo::Diagnostics {
         using Json = nlohmann::json;
         constexpr int MaximumDiagnosticJsonDepth = 64;
 
-        struct DiagnosticJsonDepthExceeded final {};
+        struct InvalidDiagnosticJsonStructure final {};
 
-        /** @brief Bounds the DOM before recursive redaction, serialization or destruction can visit it. */
+        /** @brief Rejects excessive nesting and ambiguous object members before privacy classification. */
         [[nodiscard]] std::optional<Json> ParseDiagnosticJson(const std::string &text) {
+            std::vector<std::set<std::string>> objectKeys;
             try {
-                return Json::parse(text, [](const int depth, const Json::parse_event_t, Json &) {
+                return Json::parse(text, [&objectKeys](const int depth, const Json::parse_event_t event, Json &value) {
                     if (depth > MaximumDiagnosticJsonDepth)
-                        throw DiagnosticJsonDepthExceeded{};
+                        throw InvalidDiagnosticJsonStructure{};
+                    switch (event) {
+                        case Json::parse_event_t::object_start:
+                            objectKeys.emplace_back();
+                            break;
+                        case Json::parse_event_t::object_end:
+                            objectKeys.pop_back();
+                            break;
+                        case Json::parse_event_t::key:
+                            if (!objectKeys.back().insert(value.get_ref<const std::string &>()).second)
+                                throw InvalidDiagnosticJsonStructure{};
+                            break;
+                        default:
+                            break;
+                    }
                     return true;
                 }, false, true);
-            } catch (const DiagnosticJsonDepthExceeded &) {
+            } catch (const InvalidDiagnosticJsonStructure &) {
                 return std::nullopt;
             }
         }

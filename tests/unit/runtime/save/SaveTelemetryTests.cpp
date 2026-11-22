@@ -366,6 +366,39 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
     CHECK(Read(rolledLog).find("private-rolled-row-display") != std::string::npos);
 }
 
+TEST_CASE("Support bundle rejects ambiguous diagnostic members before classifying Save privacy", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto input = session.directory / "duplicate-member";
+    const auto output = session.directory / "bundle.zip";
+    std::filesystem::path entry = "crash/duplicate-member.json";
+    SECTION("JSON crash metadata") {}
+    SECTION("Final JSONL record without a newline") {
+        entry.replace_extension(".jsonl");
+    }
+    const auto write = [&input](const std::string_view text) {
+        std::ofstream file{input, std::ios::binary};
+        REQUIRE(file.is_open());
+        file << text;
+        file.close();
+        REQUIRE(file.good());
+    };
+    const Application::HostDiagnosticBundleRequest request{.outputPath = output,
+                                                           .crashMetadata =
+                                                               Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}};
+    write(R"({"error":{"domain":"horo.save","\u0064omain":"horo.scene","message":"private-save-value"}})");
+    CHECK(session.host->GenerateDiagnosticBundle(request).HasError());
+    CHECK_FALSE(std::filesystem::exists(output));
+
+    write(R"({"separate":[{"domain":"horo.save","message":"private-save-value"},)"
+          R"({"domain":"horo.scene","message":"unrelated-scene-result"}]})");
+    const auto accepted = session.host->GenerateDiagnosticBundle(request);
+    REQUIRE(accepted.HasValue());
+    const auto archive = Read(accepted.Value().outputPath);
+    CHECK(archive.find("private-save-value") == std::string::npos);
+    CHECK(archive.find("unrelated-scene-result") != std::string::npos);
+}
+
 TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before publication", "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);

@@ -1872,8 +1872,8 @@ Editor and CLI bundles withhold both the Save telemetry namespace and the Save
 error domain from their raw JSON evidence. A Save error embedded as a cause
 suppresses each wrapping causal record, since wrappers can copy private text
 or fields. Independent sibling evidence remains available.
-Raw diagnostic JSON and JSONL records exceeding the parser's nesting limit
-fail bundle preparation before any archive is published.
+Raw diagnostic JSON and JSONL records with duplicate object members or
+excessive nesting fail bundle preparation before any archive is published.
 
 Auto, Checkpoint and Suspend operation snapshots publish canonical Save error
 descriptors and bounded causal classifications. Storage retry decisions still
