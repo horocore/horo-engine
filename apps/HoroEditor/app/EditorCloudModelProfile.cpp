@@ -73,8 +73,7 @@ namespace Horo::Editor {
         const auto bytes = files_.ReadFileBounded(path_, MaximumDocumentBytes);
         if (bytes.HasError())
             return Outcome::Failure(bytes.ErrorValue());
-        const auto &contents = bytes.Value();
-        if (!contents.empty()) {
+        if (const auto &contents = bytes.Value(); !contents.empty()) {
             if (auto decoded = ParseProfile({reinterpret_cast<const char *>(contents.data()), contents.size()}))
                 return Outcome::Success(std::move(decoded));
         }
@@ -118,8 +117,7 @@ namespace Horo::Editor {
             return false;
         }
         AtomicFileReplacementReceipt receipt;
-        const auto replaced = files_.AtomicReplaceTracked(prepared, path_, receipt);
-        if (!receipt.WasCommitted() && replaced.HasError())
+        if (const auto replaced = files_.AtomicReplaceTracked(prepared, path_, receipt); !receipt.WasCommitted() && replaced.HasError())
             static_cast<void>(files_.RemoveDurable(prepared));
         return receipt.WasCommitted();
     }
@@ -131,9 +129,10 @@ namespace Horo::Editor {
         using Outcome = Result<EditorCloudModelProfile>;
         if (!credentials_ || !ValidCloudModelEndpoint(endpoint) || !SafeField(model))
             return Outcome::Failure(MakeError(SecurityErrors::InvalidInput));
-        const auto lease = LockCurrent(expected);
-        if (lease.HasError())
-            return Outcome::Failure(lease.ErrorValue());
+        auto acquired = LockCurrent(expected);
+        if (acquired.HasError())
+            return Outcome::Failure(acquired.ErrorValue());
+        const auto writerLease = std::move(acquired).Value();
         if (expected && expected->retired) {
             const auto retired = credentials_->Revoke(*expected->retired);
             if (retired.HasError())
@@ -160,9 +159,10 @@ namespace Horo::Editor {
         using Outcome = Result<EditorCloudModelProfile>;
         if (!SafeField(model) || model.empty())
             return Outcome::Failure(MakeError(SecurityErrors::InvalidInput));
-        const auto lease = LockCurrent(expected);
-        if (lease.HasError())
-            return Outcome::Failure(lease.ErrorValue());
+        auto acquired = LockCurrent(expected);
+        if (acquired.HasError())
+            return Outcome::Failure(acquired.ErrorValue());
+        const auto writerLease = std::move(acquired).Value();
         EditorCloudModelProfile next{expected.endpoint, std::move(model), expected.credential, expected.retired};
         if (!Publish(next))
             return Outcome::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
@@ -173,9 +173,10 @@ namespace Horo::Editor {
     Result<void> EditorCloudModelProfileStore::Revoke(const EditorCloudModelProfile &expected) {
         if (!credentials_)
             return Result<void>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
-        const auto lease = LockCurrent(expected);
-        if (lease.HasError())
-            return Result<void>::Failure(lease.ErrorValue());
+        auto acquired = LockCurrent(expected);
+        if (acquired.HasError())
+            return Result<void>::Failure(acquired.ErrorValue());
+        const auto writerLease = std::move(acquired).Value();
         if (expected.retired) {
             const auto retired = credentials_->Revoke(*expected.retired);
             if (retired.HasError())
