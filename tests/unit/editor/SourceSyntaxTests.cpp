@@ -1,11 +1,14 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "ScriptModuleHostServices.h"
+#include "editor/source_editor/HoroScriptModuleLanguage.h"
 #include "editor/source_editor/SourceEditorTheme.h"
 #include "editor/source_editor/SourceSyntax.h"
 #include "editor/source_editor/SourceSyntaxCache.h"
 #include "editor/source_editor/SourceSyntaxProjection.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <fstream>
@@ -66,6 +69,46 @@ TEST_CASE("Horo Script syntax supports Lua comments strings and keywords", "[edi
     RequireRole("a.lua", "--[=[ first\r\nreturn ]=]\nlocal x", "return", SourceSyntaxRole::Comment);
     RequireRole("a.lua", "local s = [==[ -- text\nreturn ]==]", "return", SourceSyntaxRole::String);
     RequireRole("a.lua", "local s = \"return \\\"text\\\"\"", "return", SourceSyntaxRole::String);
+}
+
+TEST_CASE("Horo Script import queries ignore inert or out-of-scope aliases and retire with the source", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using enum SourceLanguageRequestKind;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-import-query"};
+    constexpr std::string_view code = R"(local a = [=[horo.import('available').pkg.api.read]=]
+-- horo.import('available').pkg.api.read
+local b = other.horo.import('available').pkg.api.read
+local c = horo.import('missing').pkg.api.read
+return horo.import('available').pkg.ap
+)";
+    std::ofstream(directory.Path() / "example.lua", std::ios::binary) << code;
+    SourceFileOpenService sources{directory.Path()};
+    const auto opened = sources.Open({.path = "example.lua"});
+    REQUIRE(opened.HasValue());
+    REQUIRE(opened.Value().sourceSnapshot);
+    const auto source = *opened.Value().sourceSnapshot;
+    const std::array imports{
+        Horo::Extensions::ScriptModuleApiMetadata{.alias = "available",
+                                                  .descriptor = Horo::Extensions::ScriptExportDescriptor{.nameSpace = "pkg.api",
+                                                                                                         .functions = {{.id = "read"}}}}};
+    auto cursor = code.find(".read");
+    for (int index = 0; index < 4; ++index) {
+        REQUIRE(cursor != code.npos);
+        const auto result = QueryHoroScriptImports(source, Hover, cursor + 2, imports);
+        REQUIRE(result.HasValue());
+        CHECK(std::holds_alternative<std::monostate>(result.Value().payload));
+        cursor = code.find(".read", cursor + 1);
+    }
+    const auto prefix = code.rfind(".ap") + 1;
+    const auto complete = QueryHoroScriptImports(source, Completion, prefix + 2, imports);
+    REQUIRE(complete.HasValue());
+    const auto &choices = std::get<LanguageCompletions>(complete.Value().payload).items;
+    REQUIRE(choices.size() == 1);
+    CHECK(choices.front().label == "api");
+    CHECK(choices.front().primaryEdit == LanguageByteSpan{prefix, prefix + 2});
+
+    REQUIRE(sources.Documents().Edit(source.Identity().instance, {source.Revision(), prefix, 2, "api"}).HasValue());
+    CHECK(QueryHoroScriptImports(source, Completion, prefix + 2, imports).HasError());
 }
 
 TEST_CASE("Configuration syntax separates properties values and comments", "[editor][source][syntax]") {

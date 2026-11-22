@@ -281,6 +281,10 @@ context capability intersection bound the query. The host returns copied
 declarations and an availability result for each declared alias. These
 values carry no invocation authority. A fresh request after provider
 replacement returns the current schema.
+Direct `horo.import("alias").namespace.member` queries use that schema to
+project typed source completion and hover. Completion supplies an exact
+identifier replacement range. The lexer excludes comments and strings
+from matching, and the source lease fences queries against later edits.
 
 ### Source Save Publication (EDT-003.5)
 

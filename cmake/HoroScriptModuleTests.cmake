@@ -35,12 +35,13 @@ add_executable(HoroModuleScriptProductHostTests
     "${PROJECT_SOURCE_DIR}/tests/unit/editor/EditorPlayModuleRecoveryTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/editor/ScriptModuleProjectRecoveryTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/editor/SceneDocumentPersistenceTestSupport.cpp")
-# Explicit test-only forwarders expose just the controller's three qualified contracts.
+# Explicit test-only forwarders expose the controller and source language contracts.
 set(controller_headers "${CMAKE_CURRENT_BINARY_DIR}/module-script-controller-headers")
 foreach(header IN ITEMS editor/gameplay/EditorPlaySessionController.h
         editor/document/RuntimeSceneConversion.h editor/document/SceneDocument.h
         editor/gameplay/ProjectGameplayRegistry.h
-        editor/document/SceneDocumentPersistence.h editor/document/SceneFileWatchService.h)
+        editor/document/SceneDocumentPersistence.h editor/document/SceneFileWatchService.h
+        editor/source_editor/HoroScriptModuleLanguage.h editor/language/LspResultProjection.h)
     file(CONFIGURE OUTPUT "${controller_headers}/${header}"
         CONTENT "#include \"${PROJECT_SOURCE_DIR}/src/${header}\"\n" @ONLY)
 endforeach()

@@ -1,13 +1,38 @@
+#include "Horo/Editor/SourceFileOpenService.h"
 #include "ScriptModuleProductRecoverySupport.h"
+#include "editor/source_editor/HoroScriptModuleLanguage.h"
 
 #include <algorithm>
 
 namespace Horo::Extensions::Tests {
     using namespace ProductRecoverySupport;
 
+    namespace {
+        /** @brief Exercises editor queries on the same signed source and registered API used by the host. */
+        void CheckSignedImportLanguageQueries(const SignedPackage &package, std::span<const ScriptModuleApiMetadata> imports) {
+            using namespace Editor::Language;
+            using enum Editor::SourceLanguageRequestKind;
+            Editor::SourceFileOpenService sources{package.package};
+            const auto opened = Take(sources.Open({.path = package.source}));
+            REQUIRE(opened.sourceSnapshot);
+            const auto &source = *opened.sourceSnapshot;
+            const auto member = source.Text().find(".add");
+            REQUIRE(member != std::string_view::npos);
+            const auto name = member + 1;
+            const auto completion = Take(QueryHoroScriptImports(source, Completion, name + 2, imports));
+            const auto &choices = std::get<LanguageCompletions>(completion.payload).items;
+            REQUIRE(choices.size() == 1);
+            CHECK(choices.front().label == "add");
+            CHECK(choices.front().primaryEdit == LanguageByteSpan{name, name + 3});
+            const auto hover = Take(QueryHoroScriptImports(source, Hover, name + 1, imports));
+            CHECK(std::get<LanguageHover>(hover.payload).text.starts_with("add("));
+        }
+    }  // namespace
+
     TEST_CASE("Script authoring metadata uses the actual provider generation and preserves denied imports as unavailable",
               "[Extensions][ScriptModule][Authoring]") {
-        SignedPackage package{ScriptModuleRuntimeKind::Lua54, "error('metadata queries must never execute this script')"};
+        SignedPackage package{ScriptModuleRuntimeKind::Lua54, "error('metadata queries must never execute this script')\n"
+                                                              "return horo.import('backend-import').com.horo.concurrent.api.add(20, 22)"};
         package.Capture();
         Headless host{package};
         const auto program = package.Program();
@@ -23,6 +48,8 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(beforeInstall[1].descriptor);
         REQUIRE(beforeInstall[1].unavailable);
         CHECK(beforeInstall[1].unavailable->code.Value() == ExtensionErrors::ScriptInvocationUnavailable.code.Value());
+
+        CheckSignedImportLanguageQueries(package, beforeInstall);
 
         Accept(host.modules->PrepareReference(true));
         const auto retained = Take(host.modules->DescribeApis(*program, policy));

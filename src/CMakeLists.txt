@@ -4045,6 +4045,8 @@ add_library(HoroEditorServices STATIC
         editor/language/ProjectLanguageWorkspace.cpp
         editor/language/ClangdProvider.cpp
         editor/language/HoroScriptSyntax.cpp
+        editor/source_editor/SourceSyntax.cpp
+        editor/source_editor/HoroScriptModuleLanguage.cpp
         editor/proposals/ProposedChangeSet.cpp
         editor/proposals/ProposedChangeSetCodec.cpp
         editor/proposals/ProposedUnifiedPatch.cpp
@@ -4514,7 +4516,6 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/source_editor/SourceReviewOverlay.cpp
             editor/source_editor/SourceReviewApplication.cpp
             editor/source_editor/SourceReviewHistory.cpp
-            editor/source_editor/SourceSyntax.cpp
             editor/source_editor/SourceSyntaxProjection.cpp
             editor/source_editor/SourceEditorTheme.cpp
             editor/screens/workspace/EditorWorkspaceInputRouting.cpp
