@@ -38,6 +38,7 @@ namespace Horo::Runtime {
 }
 
 namespace Horo::Render {
+    struct RenderCapabilitySnapshot;
     class RenderFrontend;
 }
 
@@ -149,6 +150,8 @@ namespace Horo::Application::Internal {
         std::uint32_t runtimeSwapchainFormatCount{}; /**< Total native format inventory, including non-color formats. */
         std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
         XR::XRCapabilityState eyeGaze{XR::XRCapabilityState::Unsupported}; /**< Policy-gated diagnostic state without gaze samples. */
+        std::uint64_t renderDeviceIncarnation{};                           /**< Selected renderer device at the time of preflight. */
+        std::uint64_t renderCapabilityRevision{}; /**< Selected renderer capability snapshot used to admit the profile. */
     };
 
     /** @brief Runtime-reported HMD selection admitted by the local Desktop probe. */
@@ -237,26 +240,32 @@ namespace Horo::Application::Internal {
             XR::OpenXRInternal::NativeSessionPreparationScope scope = XR::OpenXRInternal::NativeSessionPreparationScope::Owner);
         /** @brief Performs one cold test using the selected native owner, graphics binding and configuration.
          * @param bindings Same installed declaration used by Play to check requested action and space limits.
+         * @param renderer Current capability snapshot of the exact selected renderer.
          * @return Actual creation/census and retirement result, or typed failure with any cleanup cause.
          * @pre Owner lane with no Scene, input, image, frame or issued session. The caller serializes Play admission.
          * @post No native session is retained after success. Failure retains cleanup with this owner for an explicit
          * retry. Discovery and the selected device remain usable for subsequent Play preparation.
          */
-        [[nodiscard]] Result<OpenXRPackagedPreflight> RunPackagedPreflight(const OpenXRApplicationBindings &bindings);
+        [[nodiscard]] Result<OpenXRPackagedPreflight> RunPackagedPreflight(const OpenXRApplicationBindings &bindings,
+                                                                           const Render::RenderCapabilitySnapshot &renderer);
         /** @brief Runs an explicit Desktop target probe in the selected packaged process.
          * @param bindings Same installed declarations used by Play and XR Setup.
+         * @param renderer Current capability snapshot of the exact selected renderer.
          * @param target Explicit host, runtime-reported HMD and package identity. The desktop connection uses
          * the OS system-default OpenXR loader, and this target requires the selected runtime to match exactly.
          * @return Sealed compatibility after actual cold session retirement or preserved typed failure.
          * @post No physical-device/render-frame result, runtime names or tracking coordinates are published.
          */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ProbeDesktopTarget(const OpenXRApplicationBindings &bindings,
-                                                                         const OpenXRDesktopProbeTarget &target);
+                                                                         const OpenXRDesktopProbeTarget &target,
+                                                                         const Render::RenderCapabilitySnapshot &renderer);
         /** @brief Rechecks a sealed preflight against the current release installation, runtime and graphics device.
          * @param evidence Previously collected row; safe to retain after shutdown but unavailable for qualification.
+         * @param renderer Current capability snapshot of the exact selected renderer.
          * @return Exact admission or typed stale/trust/device failure. Performs no native OpenXR operation.
          */
-        [[nodiscard]] Result<void> ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const;
+        [[nodiscard]] Result<void> ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence,
+                                                               const Render::RenderCapabilitySnapshot &renderer) const;
         /** @brief Revokes retained compatibility after the selected native instance becomes unusable. */
         void RevokePackagedPreflight() noexcept;
         /** @brief Borrows actual complete native census and immutable policy from the SAME retained preparation.
@@ -509,7 +518,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool WantsHands() const noexcept;
         /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
         [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
-            const XR::OpenXRInternal::NativeSessionCensus &session);
+            const XR::OpenXRInternal::NativeSessionCensus &session, const Render::RenderCapabilitySnapshot &renderer);
         /** @return Retired plane children or native error retaining exact cleanup debt. */
         [[nodiscard]] Result<void> RetirePlaneCapture();
         /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
@@ -533,12 +542,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
         [[nodiscard]] Result<void> PrepareHands();
         [[nodiscard]] Result<void> RetireHands();
-        /** @brief Validates the exact native baseline stereo target shared with live Play without allocating swapchains.
-         * @param system Current selected instance/system census. @param session Current reversible session census.
-         * @return Success only when the native runtime offers the selected stereo target and color format.
-         */
-        [[nodiscard]] static Result<void> ValidatePackagedProjectionTargets(const XR::OpenXRInternal::NativeSystemCensus &system,
-                                                                            const XR::OpenXRInternal::NativeSessionCensus &session);
+        /** @brief Validates the selected projection target shared with live Play without allocating swapchains. */
+        [[nodiscard]] Result<void> ValidatePackagedProjectionTargets(const XR::OpenXRInternal::NativeSystemCensus &system,
+                                                                     const XR::OpenXRInternal::NativeSessionCensus &session,
+                                                                     const Render::RenderCapabilitySnapshot &renderer) const;
         /** @brief Validates the same selected profile and static capacity required by Play. */
         [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 

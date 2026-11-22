@@ -147,13 +147,15 @@ namespace Horo::Tests::OpenXRApplication {
 
             enum class ProjectionFixture {
                 Quad,
-                QuadPlay
+                QuadPlay,
+                QuadPlayStereoRenderer
             };
 
             explicit ApplicationFixture(ProjectionFixture mode)
                 : ApplicationFixture(true, 5, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
                                      XR::XRProjectFeaturePolicy::Unrequested, false, std::nullopt, XR::XRProjectFeaturePolicy::Unrequested,
-                                     false, {}, nullptr, false, false, false, 4, mode == ProjectionFixture::QuadPlay) {}
+                                     false, {}, nullptr, false, false, false, mode == ProjectionFixture::QuadPlayStereoRenderer ? 2U : 4U,
+                                     mode != ProjectionFixture::Quad) {}
 
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
@@ -748,7 +750,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(row.eyeGaze == XR::XRCapabilityState::Unsupported);
         CHECK(row.extensionRoutes[time].discoveredVersion > 0);
         CHECK(fixture.script.native.liveSessions == 0);
-        REQUIRE(fixture.session->ValidateDeviceQualification(admitted).HasValue());
+        REQUIRE(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasValue());
 
         SECTION("a cancelled replacement keeps the last qualified result current") {
             const auto created = std::ranges::count(fixture.script.native.calls, "session");
@@ -760,8 +762,8 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.play->ReadSetup().test == Cancelled);
             CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
             const auto retained = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
-            CHECK(fixture.session->ValidateDeviceQualification(retained).HasValue());
-            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(retained, fixture.frontend->Capabilities().support).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasValue());
         }
         SECTION("a changed native device invalidates the retained report") {
             fixture.graphics.deviceIdentity = 9;
@@ -775,15 +777,15 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Failed);
             CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
-            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasError());
             CHECK(fixture.script.native.liveSessions == 0);
             CHECK(fixture.script.native.liveInstances == 1);
             fixture.script.native.instanceDispatchAbsent = {};
             RequireValue(fixture.play->RequestSetupTest());
             fixture.play->PumpSetupTest();
             const auto replacement = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
-            CHECK(fixture.session->ValidateDeviceQualification(replacement).HasValue());
-            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+            CHECK(fixture.session->ValidateDeviceQualification(replacement, fixture.frontend->Capabilities().support).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasError());
         }
         SECTION("changing installed-host admission invalidates the prerequisite") {
             fixture.admission = false;
@@ -793,7 +795,7 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
         fixture.play.reset();
         RequireValue(fixture.session->Close());
-        CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+        CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasError());
     }
 
     TEST_CASE("XR setup rejects unsupported or invalid swapchain formats and withdraws prior qualification", "[xr][application][setup]") {
@@ -830,14 +832,14 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->ReadSetup().test == Failed);
         CHECK(fixture.play->ReadSetup().issue == issue);
         CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
-        CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+        CHECK(fixture.session->ValidateDeviceQualification(prior, fixture.frontend->Capabilities().support).HasError());
         CHECK(fixture.script.native.liveSessions == 0);
         CHECK(fixture.script.native.liveInstances == 1);
 
         const auto &row = prior.Compatibility();
         const Host::OpenXRDesktopProbeTarget target{row.platform.operatingSystem, "Actual scripted runtime", "Observed native system",
                                                     row.installDigest};
-        const auto rejected = fixture.session->ProbeDesktopTarget(*fixture.bindings, target);
+        const auto rejected = fixture.session->ProbeDesktopTarget(*fixture.bindings, target, fixture.frontend->Capabilities().support);
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == reason->code.Value());
         CHECK(fixture.script.native.liveSessions == 0);
@@ -849,8 +851,8 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(fixture.play->ReadSetup().test == Passed);
         const auto recovered = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
         CHECK(recovered.Compatibility().runtimeSwapchainFormatCount == supportedFormats.size());
-        CHECK(fixture.session->ValidateDeviceQualification(recovered).HasValue());
-        CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+        CHECK(fixture.session->ValidateDeviceQualification(recovered, fixture.frontend->Capabilities().support).HasValue());
+        CHECK(fixture.session->ValidateDeviceQualification(prior, fixture.frontend->Capabilities().support).HasError());
         CHECK(fixture.script.native.liveSessions == 0);
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
@@ -884,15 +886,15 @@ namespace Horo::Tests::OpenXRApplication {
             error = &XR::XRErrors::LoaderPreflightStale;
         }
         const auto created = std::ranges::count(fixture.script.native.calls, "session");
-        const auto probed = fixture.session->ProbeDesktopTarget(*fixture.bindings, target);
+        const auto probed = fixture.session->ProbeDesktopTarget(*fixture.bindings, target, fixture.frontend->Capabilities().support);
         if (error) {
             REQUIRE(probed.HasError());
             CHECK(probed.ErrorValue().code.Value() == error->code.Value());
             CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
         } else {
             REQUIRE(probed.HasValue());
-            REQUIRE(fixture.session->ValidateDeviceQualification(probed.Value()).HasValue());
-            CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+            REQUIRE(fixture.session->ValidateDeviceQualification(probed.Value(), fixture.frontend->Capabilities().support).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(prior, fixture.frontend->Capabilities().support).HasError());
             CHECK(std::ranges::count(fixture.script.native.calls, "session") == created + 1);
         }
         CHECK(fixture.script.native.liveSessions == 0);
@@ -1117,6 +1119,54 @@ namespace Horo::Tests::OpenXRApplication {
         }
     }  // namespace
 
+    TEST_CASE("XR Setup qualifies only the selected quad target and current renderer", "[xr][application][setup][selected-quad]") {
+        using enum Editor::EditorXrSetupTestState;
+        using enum Editor::EditorXrSetupIssue;
+        using Mode = ApplicationFixture::ProjectionFixture;
+        enum class Case {
+            Supported,
+            MissingRuntime,
+            IncompleteRuntime,
+            InvalidBaseline,
+            StereoRenderer
+        };
+        const auto mode =
+            GENERATE(Case::Supported, Case::MissingRuntime, Case::IncompleteRuntime, Case::InvalidBaseline, Case::StereoRenderer);
+        ApplicationFixture fixture{mode == Case::StereoRenderer ? Mode::QuadPlayStereoRenderer : Mode::QuadPlay};
+        auto &script = fixture.script;
+        if (mode == Case::MissingRuntime)
+            script.census.advertisesQuad = false;
+        if (mode == Case::IncompleteRuntime)
+            script.census.quadViews = 3;
+        if (mode == Case::InvalidBaseline)
+            script.census.views = 1;
+        fixture.CreatePlay();
+        RequireValue(fixture.play->RequestSetupTest());
+        fixture.play->PumpSetupTest();
+        CHECK(script.events.begins == 0);
+        CHECK(script.swapchain.creates == 0);
+        CHECK(script.native.liveSessions == 0);
+
+        const auto setup = fixture.play->ReadSetup();
+        const auto receipt = fixture.play->ReadDeviceQualificationPreflight();
+        if (mode == Case::Supported) {
+            CHECK(setup.test == Passed);
+            REQUIRE(receipt.HasValue());
+            CHECK(receipt.Value().Compatibility().profile == XR::XRFeatureProfile::FoveatedInsetProjection);
+            auto renderer = fixture.frontend->Capabilities().support;
+            CHECK(fixture.session->ValidateDeviceQualification(receipt.Value(), renderer).HasValue());
+            ++renderer.capabilityRevision;
+            const auto stale = fixture.session->ValidateDeviceQualification(receipt.Value(), renderer);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::CapabilityStale.code.Value());
+        } else {
+            CHECK(setup.test == Failed);
+            CHECK(setup.issue == (mode == Case::StereoRenderer ? Renderer : Unsupported));
+            CHECK(receipt.HasError());
+        }
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Selected quad Play renders and submits every native view with the same layout", "[xr][application][play][selected-quad]") {
         ApplicationFixture fixture{ApplicationFixture::ProjectionFixture::QuadPlay};
         auto scene = PublishPlay(fixture);
@@ -1176,7 +1226,7 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(RequireValue(fixture.ClosePlay()));
             fixture.play.reset();
             REQUIRE(fixture.session->Close().HasValue());
-            CHECK(fixture.session->ValidateDeviceQualification(receipt).HasError());
+            CHECK(fixture.session->ValidateDeviceQualification(receipt, fixture.frontend->Capabilities().support).HasError());
         }
         SECTION("normal Play never prepares a gaze action") {
             auto scene = PublishPlay(fixture);

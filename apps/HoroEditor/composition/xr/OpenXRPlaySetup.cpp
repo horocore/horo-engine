@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRPlayHost.h"
 
@@ -746,7 +747,7 @@ namespace Horo::Application::Internal {
             }
             setupCleanupPending_ = false;
         }
-        auto result = composition_.session.RunPackagedPreflight(*composition_.bindings);
+        auto result = composition_.session.RunPackagedPreflight(*composition_.bindings, composition_.frontend.Capabilities().support);
         if (result.HasError()) {
             setup_.issue = SetupIssue(result.ErrorValue());
             setupCleanupPending_ = setup_.issue == Editor::EditorXrSetupIssue::Cleanup;
@@ -764,7 +765,9 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         if (!setupPreflight_)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-        if (const auto allowed = composition_.session.ValidateDeviceQualification(*setupPreflight_); allowed.HasError())
+        if (const auto allowed =
+                composition_.session.ValidateDeviceQualification(*setupPreflight_, composition_.frontend.Capabilities().support);
+            allowed.HasError())
             return Outcome::Failure(allowed.ErrorValue());
         return Outcome::Success(*setupPreflight_);
     }

@@ -1,6 +1,7 @@
 #include "OpenXRApplicationSession.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRInputClock.h"
 
@@ -257,7 +258,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::CollectPackagedCompatibility */
-    Result<OpenXRPackagedCompatibility> OpenXRApplicationSession::CollectPackagedCompatibility(const NativeSessionCensus &session) {
+    Result<OpenXRPackagedCompatibility> OpenXRApplicationSession::CollectPackagedCompatibility(
+        const NativeSessionCensus &session, const Render::RenderCapabilitySnapshot &renderer) {
         using Outcome = Result<OpenXRPackagedCompatibility>;
         const auto preparedSystem = native_->PreparedSystem({*preflight_, selection_.attempt});
         if (preparedSystem.HasError())
@@ -267,7 +269,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(discovery.ErrorValue());
 
         const auto &observed = *system_;
-        if (const auto targets = ValidatePackagedProjectionTargets(observed, session); targets.HasError())
+        if (const auto targets = ValidatePackagedProjectionTargets(observed, session, renderer); targets.HasError())
             return Outcome::Failure(targets.ErrorValue());
         const auto spaces = std::span{session.spaces}.first(session.spaceCount);
         if (std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_VIEW) == spaces.end() ||
@@ -303,15 +305,31 @@ namespace Horo::Application::Internal {
         const auto &component = loader_->Component();
         const auto &manifest = component.Manifest();
         const auto &deployment = loader_->Deployment();
-        return Outcome::Success({*preflight_, selection_.admittedLoaderVersions, runtime, preparedSystem.Value(), manifest.platform,
-                                 manifest.identity, settings_.Profile(), component.IdentityDigest(), manifest.loader.digest,
-                                 deployment.Evidence().ArtifactDigest(), manifest.licenses, device.Value(), observed.handTracking,
-                                 extensions, session.spaceCount, session.formatCount, deployment.OsAbiDependencyCount(),
-                                 EyeGazeAvailability()});
+        return Outcome::Success({*preflight_,
+                                 selection_.admittedLoaderVersions,
+                                 runtime,
+                                 preparedSystem.Value(),
+                                 manifest.platform,
+                                 manifest.identity,
+                                 settings_.Profile(),
+                                 component.IdentityDigest(),
+                                 manifest.loader.digest,
+                                 deployment.Evidence().ArtifactDigest(),
+                                 manifest.licenses,
+                                 device.Value(),
+                                 observed.handTracking,
+                                 extensions,
+                                 session.spaceCount,
+                                 session.formatCount,
+                                 deployment.OsAbiDependencyCount(),
+                                 EyeGazeAvailability(),
+                                 renderer.deviceIncarnation,
+                                 renderer.capabilityRevision});
     }
 
     /** @copydoc OpenXRApplicationSession::RunPackagedPreflight */
-    Result<OpenXRPackagedPreflight> OpenXRApplicationSession::RunPackagedPreflight(const OpenXRApplicationBindings &bindings) {
+    Result<OpenXRPackagedPreflight> OpenXRApplicationSession::RunPackagedPreflight(const OpenXRApplicationBindings &bindings,
+                                                                                   const Render::RenderCapabilitySnapshot &renderer) {
         using Outcome = Result<OpenXRPackagedPreflight>;
         if (auto current = Current(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
@@ -327,7 +345,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
         const auto prepared = PrepareSession(NativeSessionPreparationScope::Session);
         auto observed = prepared.HasError() ? Result<OpenXRPackagedCompatibility>::Failure(prepared.ErrorValue())
-                                            : CollectPackagedCompatibility(prepared.Value());
+                                            : CollectPackagedCompatibility(prepared.Value(), renderer);
         if (auto retired = RetirePreparation(); retired.HasError())
             return Outcome::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
         if (observed.HasError())
@@ -342,7 +360,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::ProbeDesktopTarget */
     Result<OpenXRPackagedPreflight> OpenXRApplicationSession::ProbeDesktopTarget(const OpenXRApplicationBindings &bindings,
-                                                                                 const OpenXRDesktopProbeTarget &target) {
+                                                                                 const OpenXRDesktopProbeTarget &target,
+                                                                                 const Render::RenderCapabilitySnapshot &renderer) {
         using Outcome = Result<OpenXRPackagedPreflight>;
         if (auto current = Current(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
@@ -361,16 +380,17 @@ namespace Horo::Application::Internal {
         if (target.runtimeName != system_->runtime.runtimeName || target.systemName != system_->system.systemName)
             return Outcome::Failure(
                 MakeError(XRErrors::RuntimeRejected, "Default OpenXR runtime or HMD does not match the selected target."));
-        auto result = RunPackagedPreflight(bindings);
+        auto result = RunPackagedPreflight(bindings, renderer);
         if (result.HasError())
             return result;
-        if (auto current = ValidateDeviceQualification(result.Value()); current.HasError())
+        if (auto current = ValidateDeviceQualification(result.Value(), renderer); current.HasError())
             return Outcome::Failure(current.ErrorValue());
         return result;
     }
 
     /** @copydoc OpenXRApplicationSession::ValidateDeviceQualification */
-    Result<void> OpenXRApplicationSession::ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const {
+    Result<void> OpenXRApplicationSession::ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence,
+                                                                       const Render::RenderCapabilitySnapshot &renderer) const {
         const auto &observed = evidence.Compatibility();
         if (auto selected = ValidatePreparation(observed.loader, observed.loader.Attempt()); selected.HasError())
             return selected;
@@ -378,6 +398,9 @@ namespace Horo::Application::Internal {
             evidence.lease_.owner_before(loader_) || loader_.owner_before(evidence.lease_) ||
             observed.installDigest != loader_->Component().IdentityDigest())
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
+        if (renderer.deviceIncarnation != observed.renderDeviceIncarnation ||
+            renderer.capabilityRevision != observed.renderCapabilityRevision)
+            return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
         return graphics_.ValidateCompatibilityDevice();
     }
 

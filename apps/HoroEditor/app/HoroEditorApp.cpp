@@ -5440,8 +5440,9 @@ namespace Horo::Editor {
         using namespace Application::Internal;
         std::optional<OpenXRPackagedPreflight> evidence;
         auto failure = OpenXRProbeWire::FailureReason::RuntimeUnavailable;
-        if (startup.xrNative && startup.xrHost && startup.xrHost->bindings) {
-            auto observed = startup.xrNative->ProbeDesktopTarget(*startup.xrHost->bindings, target);
+        if (startup.xrNative && startup.xrHost && startup.xrHost->bindings && presentation.composition.frontend) {
+            const auto &renderer = presentation.composition.frontend->Capabilities().support;
+            auto observed = startup.xrNative->ProbeDesktopTarget(*startup.xrHost->bindings, target, renderer);
             if (observed.HasValue())
                 evidence.emplace(std::move(observed).Value());
             else

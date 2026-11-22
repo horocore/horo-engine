@@ -95,12 +95,11 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Checks the exact owned depth and imported color allocation on the selected renderer. */
-        bool SupportsProjectionTargets(const Render::RenderFrontend &frontend, const Render::RenderTextureDescriptor &color) {
+        bool SupportsProjectionTargets(const Render::RenderCapabilitySnapshot &support, const Render::RenderTextureDescriptor &color) {
             const Render::RenderTextureDescriptor depth{.extent = color.extent,
                                                         .format = Render::RenderTextureFormat::Depth32Float,
                                                         .layerCount = color.layerCount,
                                                         .usage = Render::RenderTextureUsage::RenderAttachment};
-            const auto &support = frontend.Capabilities().support;
             const auto multiview = Render::ResolveMultiviewCapabilities(support);
             return support.Supports(color) && support.Supports(depth) && multiview.multipass && multiview.indexedShaders &&
                    multiview.maximumViews >= color.layerCount;
@@ -113,24 +112,26 @@ namespace Horo::Application::Internal {
             if (native.HasError())
                 return Result<ProjectionTargets>::Failure(native.ErrorValue());
             const auto &[color, stereo, colorAvailable] = native.Value();
-            return Result<ProjectionTargets>::Success({color, stereo, colorAvailable && SupportsProjectionTargets(frontend, color)});
+            return Result<ProjectionTargets>::Success(
+                {color, stereo, colorAvailable && SupportsProjectionTargets(frontend.Capabilities().support, color)});
         }
 
-        /** @brief Admits all four views against one shared color allocation or preserves the rejection reason. */
-        XRCapabilityState PrepareQuadTargets(OpenXRProjectionDraft &draft, const Render::RenderFrontend &frontend,
-                                             const NativeQuadViewCensus &quad, const NativeSessionCensus &session) {
-            using enum XRCapabilityState;
-            if (quad.state != Available)
-                return quad.state;
+        /** @brief Resolves the common optional native quad allocation for the exact published view set. */
+        std::optional<Render::RenderTextureDescriptor> ObserveQuadColor(const NativeQuadViewCensus &quad,
+                                                                        const NativeSessionCensus &session) {
+            if (quad.state != XRCapabilityState::Available || quad.blendModeCount > quad.blendModes.size() ||
+                session.formatCount > session.formats.size())
+                return std::nullopt;
             const auto blends = std::span{quad.blendModes}.first(quad.blendModeCount);
             const auto formats = std::span{session.formats}.first(session.formatCount);
             if (std::ranges::find(blends, XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == blends.end() ||
                 std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) == formats.end())
-                return Incompatible;
+                return std::nullopt;
 
-            auto color = draft.color;
-            color.extent = {};
-            color.layerCount = MaximumProjectionViews;
+            Render::RenderTextureDescriptor color{.format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                  .layerCount = MaximumProjectionViews,
+                                                  .usage =
+                                                      Render::RenderTextureUsage::RenderAttachment | Render::RenderTextureUsage::Sampled};
             for (const auto &view : quad.views) {
                 color.extent.width = std::max(color.extent.width, view.recommendedExtent.width);
                 color.extent.height = std::max(color.extent.height, view.recommendedExtent.height);
@@ -138,12 +139,22 @@ namespace Horo::Application::Internal {
             const auto fits = [&color](const NativeQuadView &view) {
                 return color.extent.width <= view.maximumExtent.width && color.extent.height <= view.maximumExtent.height;
             };
-            if (!std::ranges::all_of(quad.views, fits))
+            return std::ranges::all_of(quad.views, fits) ? std::optional{color} : std::nullopt;
+        }
+
+        /** @brief Publishes quad capability only after the selected renderer and runtime agree on its allocation. */
+        XRCapabilityState PrepareQuadTargets(OpenXRProjectionDraft &draft, const Render::RenderCapabilitySnapshot &renderer,
+                                             const NativeQuadViewCensus &quad, const NativeSessionCensus &session) {
+            using enum XRCapabilityState;
+            if (quad.state != Available)
+                return quad.state;
+            const auto color = ObserveQuadColor(quad, session);
+            if (!color)
                 return Incompatible;
-            if (!SupportsProjectionTargets(frontend, color))
+            if (!SupportsProjectionTargets(renderer, *color))
                 return DependencyMissing;
 
-            draft.color = color;
+            draft.color = *color;
             draft.capabilities.limits.maximumViews = MaximumProjectionViews;
             draft.capabilities.states[static_cast<std::size_t>(XRCapability::Projection)] = Available;
             draft.capabilities.states[static_cast<std::size_t>(XRCapability::ExternalColorTargets)] = Available;
@@ -253,10 +264,24 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::ValidatePackagedProjectionTargets */
     Result<void> OpenXRApplicationSession::ValidatePackagedProjectionTargets(const NativeSystemCensus &system,
-                                                                             const NativeSessionCensus &session) {
+                                                                             const NativeSessionCensus &session,
+                                                                             const Render::RenderCapabilitySnapshot &renderer) const {
         const auto targets = ObserveNativeProjectionTargets(system, session);
         if (targets.HasError())
             return Result<void>::Failure(targets.ErrorValue());
+        if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
+            const auto quad = native_->DiscoverQuadViews(selection_.attempt, system);
+            if (quad.HasError())
+                return Result<void>::Failure(quad.ErrorValue());
+            const auto color = ObserveQuadColor(quad.Value(), session);
+            if (!color)
+                return Result<void>::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "The selected runtime cannot provide an opaque four-view target."));
+            if (!SupportsProjectionTargets(renderer, *color))
+                return Result<void>::Failure(
+                    MakeError(XRErrors::OperationIncompatible, "The selected renderer cannot render the four-view projection target."));
+            return Result<void>::Success();
+        }
         if (!targets.Value().stereo)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo."));
         if (!targets.Value().colorAvailable)
@@ -351,7 +376,7 @@ namespace Horo::Application::Internal {
         const auto quadState = quad.Value().state;
         auto &quadCapability = output.capabilities.states[static_cast<std::size_t>(XRCapability::QuadViews)];
         if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
-            quadCapability = PrepareQuadTargets(output, frontend, quad.Value(), session);
+            quadCapability = PrepareQuadTargets(output, frontend.Capabilities().support, quad.Value(), session);
             return Outcome::Success(std::move(output));
         }
         quadCapability = quadState == XRCapabilityState::Available ? XRCapabilityState::DependencyMissing : quadState;
