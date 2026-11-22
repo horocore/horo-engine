@@ -556,7 +556,10 @@ namespace Horo::Application::Internal {
             return Result<NativePresentationViews>::Failure(current.ErrorValue());
         if (!input_.native || !system_)
             return Result<NativePresentationViews>::Failure(MakeError(XRErrors::OperationUnavailable));
-        return input_.native->LocatePresentation(candidate, time, system_->primaryViewCount);
+        const auto projection = native_->ProjectionConfiguration(candidate);
+        if (projection.HasError())
+            return Result<NativePresentationViews>::Failure(projection.ErrorValue());
+        return input_.native->LocatePresentation(candidate, time, projection.Value().viewCount);
     }
 
     /** @copydoc OpenXRApplicationSession::MayArmPlaneCapture */

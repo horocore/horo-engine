@@ -92,9 +92,7 @@ namespace Horo::Application::Internal {
                 return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
             });
 
-            const bool quadViews = std::ranges::any_of(settings.Features(), [](const XRFeatureRequest &feature) {
-                return feature.capability == XRCapability::QuadViews;
-            });
+            const bool quadViews = settings.Profile() == XRFeatureProfile::FoveatedInsetProjection;
 
             struct Selection final {
                 NativeExtensionRequest request;
@@ -176,6 +174,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::MayArmPassthrough */
     bool OpenXRApplicationSession::MayArmPassthrough() const {
+        if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection)
+            return false;
         const auto provider = NativePassthroughExtensionRequest();
         if (!provider || !policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction() || !native_)
             return false;

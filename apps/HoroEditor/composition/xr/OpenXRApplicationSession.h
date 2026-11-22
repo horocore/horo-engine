@@ -86,12 +86,15 @@ namespace Horo::Application::Internal {
         Render::RenderTextureDescriptor depth;
     };
 
+    /** @brief Editor Play admits complete stereo and quad projection configurations. */
+    inline constexpr std::uint32_t MaximumProjectionViews = 4;
+
     /** @brief Private projection facts awaiting the selected renderer and auxiliary allocation transaction. */
     struct OpenXRProjectionDraft final {
         XR::XRCapabilityDescriptor capabilities;
         Render::RenderTextureDescriptor color;
-        std::array<Render::FramebufferExtent, 2> recommended;
-        std::array<Render::FramebufferExtent, 2> maximum;
+        std::array<Render::FramebufferExtent, MaximumProjectionViews> recommended;
+        std::array<Render::FramebufferExtent, MaximumProjectionViews> maximum;
         std::optional<OpenXRProjectionWriter> writer;
     };
 
@@ -103,8 +106,8 @@ namespace Horo::Application::Internal {
         XR::XRCapabilitySnapshot capabilities;
         XR::XRFeaturePlan plan;
         Render::RenderTextureDescriptor color;
-        std::array<Render::FramebufferExtent, 2> recommended;
-        std::array<Render::FramebufferExtent, 2> maximum;
+        std::array<Render::FramebufferExtent, MaximumProjectionViews> recommended;
+        std::array<Render::FramebufferExtent, MaximumProjectionViews> maximum;
         std::optional<OpenXRProjectionWriter> writer;
         std::uint32_t worldCanvasMinimumSpanPixels; /**< Per-eye minimum from the admitted immutable project settings. */
     };

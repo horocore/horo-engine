@@ -51,11 +51,11 @@ namespace Horo::XR {
                 return result.Value();
             }
 
-            XRCapabilitySnapshot Capabilities() const {
+            XRCapabilitySnapshot Capabilities(std::uint32_t viewCount = 2) const {
                 XRCapabilityDescriptor descriptor{
                     .system = {.runtime = Identity<XRRuntimeGeneration>(), .slot = {.index = 1, .generation = 1}},
                     .revision = Identity<XRCapabilityRevision>(),
-                    .limits = {2, 8, 16, 4},
+                    .limits = {viewCount, 8, 16, 4},
                 };
                 descriptor.states.fill(XRCapabilityState::Available);
                 descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Unsupported;
@@ -186,7 +186,7 @@ namespace Horo::XR {
             const std::array invalid{
                 std::pair{"xr.schema_version", std::int64_t{2}},
                 std::pair{"xr.runtime_selection", std::int64_t{-1}},
-                std::pair{"xr.capability_profile", std::int64_t{2}},
+                std::pair{"xr.capability_profile", static_cast<std::int64_t>(XRFeatureProfile::Count)},
                 std::pair{"xr.limits.views", std::int64_t{3}},
                 std::pair{"xr.limits.spaces", std::int64_t{0}},
                 std::pair{"xr.limits.actions", std::int64_t{513}},
@@ -305,6 +305,24 @@ namespace Horo::XR {
                 REQUIRE(result.Value().Profile() == settings.Profile());
                 REQUIRE(result.Value().Decision(XRCapability::DepthComposition).state == XRFeatureDecisionState::OptionalEnabled);
             }
+        }
+
+        TEST_CASE("XR project quad selection requires exact four-view settings and capabilities", "[unit][xr][settings][quad]") {
+            constexpr auto quad = XRFeatureProfile::FoveatedInsetProjection;
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.capability_profile", static_cast<std::int64_t>(quad));
+            REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());
+            Project(request, "xr.limits.views", std::int64_t{4});
+            const auto settings = Enabled(request);
+            REQUIRE(settings.Profile() == quad);
+
+            Evidence evidence;
+            CHECK(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
+            evidence.capabilities = evidence.Capabilities(4);
+            const auto admitted = AdmitXRProjectSettings(settings, evidence.Admission());
+            REQUIRE(admitted.HasValue());
+            CHECK(admitted.Value().Limits().maximumViews == 4);
+            CHECK(admitted.Value().Decision(XRCapability::QuadViews).state == XRFeatureDecisionState::Required);
         }
 
         TEST_CASE("XR retained settings reject replacement, owner shutdown and incompatible renderer", "[unit][xr][settings]") {

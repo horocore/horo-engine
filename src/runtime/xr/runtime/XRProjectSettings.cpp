@@ -337,7 +337,7 @@ namespace Horo::XR {
             return Result<XRProjectSettings>::Failure(runtime.ErrorValue());
         settings.runtimeSelection_ = static_cast<XRRuntimeSelectionPolicy>(runtime.Value());
         const auto profile =
-            Integer(source, "xr.capability_profile", 0, static_cast<std::int64_t>(XRFeatureProfile::TrackedInteraction1_0));
+            Integer(source, "xr.capability_profile", 0, static_cast<std::int64_t>(XRFeatureProfile::FoveatedInsetProjection));
         if (profile.HasError())
             return Result<XRProjectSettings>::Failure(profile.ErrorValue());
         settings.profile_ = static_cast<XRFeatureProfile>(profile.Value());
@@ -349,8 +349,9 @@ namespace Horo::XR {
             std::uint32_t *output;
         };
 
+        const auto viewCount = settings.profile_ == XRFeatureProfile::FoveatedInsetProjection ? 4U : 2U;
         const std::array limits{
-            LimitSetting{"xr.limits.views", 2, 2, &settings.limits_.maximumViews},
+            LimitSetting{"xr.limits.views", viewCount, viewCount, &settings.limits_.maximumViews},
             LimitSetting{"xr.limits.spaces", 1, XRHardLimits::MaximumSpaces, &settings.limits_.maximumSpaces},
             LimitSetting{"xr.limits.actions", 1, XRHardLimits::MaximumActions, &settings.limits_.maximumActions},
             LimitSetting{"xr.limits.devices", settings.profile_ == XRFeatureProfile::TrackedInteraction1_0 ? 2U : 1U,

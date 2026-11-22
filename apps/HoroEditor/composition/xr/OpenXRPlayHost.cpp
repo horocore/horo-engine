@@ -775,7 +775,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ReadFrameComfort */
     float OpenXRPlayHost::ReadFrameComfort(const Runtime::FrameContext &frame) const {
-        if (!input_.comfortHint || locomotionComfort_.reducedMotion ||
+        if (!input_.comfortHint || locomotionComfort_.reducedMotion || !scene_ || !scene_->projection ||
+            scene_->projection->plan.Profile() == XRFeatureProfile::FoveatedInsetProjection ||
             !Editor::EditorVulkanXrViewportAccess::SupportsComfort(composition_.viewport))
             return 0.0F;
         const auto &[scope, hint] = *input_.comfortHint;

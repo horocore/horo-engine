@@ -91,7 +91,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<WriterPair> writer;
         Render::RenderTextureDescriptor allocation;
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
-        std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
+        std::array<Render::RenderTextureViewHandle, MaximumProjectionViews> eyeViews{};
         std::optional<XR::XRViewRenderPlan> plan;
 
         /** @brief Exact renderer alpha intent and installed World mapping for the bound native prediction. */
@@ -246,8 +246,9 @@ namespace Horo::Application::Internal {
             const auto imported = WaitAndImport(color, acquisition);
             if (imported.HasError() || !imported.Value())
                 return imported;
+            const auto activeViews = std::span{eyeViews}.first(allocation.layerCount);
             if (auto ready =
-                    PrepareEyeViews(host.composition_.frontend, *acquisition, allocation, Render::RenderTextureAspect::Color, eyeViews);
+                    PrepareEyeViews(host.composition_.frontend, *acquisition, allocation, Render::RenderTextureAspect::Color, activeViews);
                 ready.HasError())
                 return Output::Failure(ready.ErrorValue());
             // Keep the sole native view locate beside render binding, after the zero-time image retry path.
@@ -287,18 +288,23 @@ namespace Horo::Application::Internal {
                                                   const Render::MultiviewPublication &publication) const {
             const auto &support = host.composition_.frontend.Capabilities().support;
             const std::array acquiredImages{acquisition->image};
-            const std::array references{reference, reference};
+            const std::array references{reference, reference, reference, reference};
+            const auto viewCount = static_cast<std::uint32_t>(viewPlan.Views().size());
+            constexpr auto maximumInstances = Render::MultiviewExtractionLimits::HardMaximumInstances;
+            const Render::MultiviewExtractionLimits limits{.maximumViews = viewCount,
+                                                           .maximumCullTests = maximumInstances * viewCount,
+                                                           .maximumExpandedDraws = maximumInstances * viewCount};
             const XR::XRMultiviewOwnerState
                 owner{session, configuration, revision, origin, acquiredImages, publication, Render::ResolveMultiviewCapabilities(support)};
             return XR::XRMultiviewScene::Create({viewPlan,
-                                                 references,
+                                                 std::span{references}.first(viewCount),
                                                  {},
                                                  publication,
                                                  Math::ClipDepthRange::ZeroToOne,
                                                  ProjectionDepth.nearMeters,
                                                  ProjectionDepth.farMeters,
                                                  Render::MultiviewExecutionPolicy::Multipass,
-                                                 {}},
+                                                 limits},
                                                 owner);
         }
 

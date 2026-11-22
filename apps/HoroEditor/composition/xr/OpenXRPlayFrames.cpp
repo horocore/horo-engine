@@ -17,20 +17,19 @@ namespace Horo::Application::Internal {
     using namespace XR::OpenXRInternal;
 
     namespace {
-        /** @brief Maps one actual ordered native eye observation into existing typed view evidence; no identity is issued. */
-        XRViewDescriptor DescribeEye(const NativePresentationViews &observed, const XRSessionId &session, std::uint32_t eye,
-                                     const OpenXRApplicationProjection &projection) {
-            const auto &native = observed.views[eye];
+        constexpr std::array ProjectionRoles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
+                                             XRViewRole::FoveatedInsetRight};
+
+        /** @brief Maps each native view to its exact configuration ordinal and corresponding physical eye. */
+        XRViewDescriptor DescribeView(const NativePresentationViews &observed, const XRSessionId &session, std::uint32_t index,
+                                      const OpenXRApplicationProjection &projection) {
+            const auto &native = observed.views[index];
+            const auto &eye = observed.eyes[index % observed.eyes.size()];
             XRViewDescriptor view;
-            view.id = {session, {.index = eye, .generation = observed.eyes[eye].id.slot.generation}};
-            view.order = eye;
-            view.role = eye == 0 ? XRViewRole::PrimaryLeft : XRViewRole::PrimaryRight;
-            view.pose = {session,
-                         observed.eyes[eye],
-                         observed.reference,
-                         XRPosePurpose::PresentationPrediction,
-                         observed.referenceToWorld.time,
-                         {}};
+            view.id = {session, {.index = index, .generation = eye.id.slot.generation}};
+            view.order = index;
+            view.role = ProjectionRoles[index];
+            view.pose = {session, eye, observed.reference, XRPosePurpose::PresentationPrediction, observed.referenceToWorld.time, {}};
             auto &components = view.pose.components;
             const bool position = (observed.flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
             const bool orientation = (observed.flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
@@ -57,8 +56,8 @@ namespace Horo::Application::Internal {
                 components.loss = XRTrackingLossState::PositionLost;
             view.projection = {std::tan(native.fov.angleLeft), std::tan(native.fov.angleRight), std::tan(native.fov.angleDown),
                                std::tan(native.fov.angleUp)};
-            view.recommendedExtent = projection.recommended[eye];
-            view.maximumExtent = projection.maximum[eye];
+            view.recommendedExtent = projection.recommended[index];
+            view.maximumExtent = projection.maximum[index];
             return view;
         }
 
@@ -75,34 +74,39 @@ namespace Horo::Application::Internal {
                     allocation.extent,
                     NativeProjectionResolution::Rectangle(view.recommendedExtent, scale),
                     eye,
-                    2,
-                    1};
+                    allocation.layerCount,
+                    allocation.sampleCount};
         }
 
-        /** @brief Assembles the complete frame-scoped stereo plan from the same acquired color image and native ordered views. */
-        Result<XRViewRenderPlan> PlanStereoProjection(const XRViewConfigurationId &id, XRViewConfigurationRevision revision,
-                                                      XRRenderPredictionTime displayTime, XRWorldOriginRevision origin,
-                                                      const NativePresentationViews &observed,
-                                                      const OpenXRApplicationProjection &projection,
-                                                      const NativeSwapchainAcquisition &acquisition,
-                                                      const Render::RenderTextureDescriptor &allocation, const std::uint32_t scale) {
-            constexpr std::uint32_t viewCount = 2;
-            const XRViewConfigurationDescriptor configuration{CurrentXRContractVersion,
-                                                              id.session,
-                                                              id,
-                                                              revision,
-                                                              XRViewConfigurationType::PrimaryStereo,
-                                                              XREnvironmentBlendMode::Opaque,
-                                                              viewCount};
-            std::array<XRViewDescriptor, viewCount> views{};
-            std::array<XRExternalRenderTargetDescriptor, viewCount> targets{};
-            for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
-                views[eye] = DescribeEye(observed, configuration.session, eye, projection);
+        /** @brief Assembles the complete frame plan from the acquired array image and retained native view configuration. */
+        Result<XRViewRenderPlan> PlanProjection(const XRViewConfigurationId &id, XRViewConfigurationRevision revision,
+                                                XRRenderPredictionTime displayTime, XRWorldOriginRevision origin,
+                                                const NativePresentationViews &observed, const OpenXRApplicationProjection &projection,
+                                                const NativeSwapchainAcquisition &acquisition,
+                                                const Render::RenderTextureDescriptor &allocation, const std::uint32_t scale) {
+            const auto viewCount = projection.plan.Limits().maximumViews;
+            const bool quad = projection.plan.Profile() == XRFeatureProfile::FoveatedInsetProjection;
+            if (viewCount != (quad ? MaximumProjectionViews : 2U) || observed.count != viewCount || allocation.layerCount != viewCount)
+                return Result<XRViewRenderPlan>::Failure(MakeError(XRErrors::ViewPlanInvalid));
+            const XRViewConfigurationDescriptor
+                configuration{CurrentXRContractVersion,
+                              id.session,
+                              id,
+                              revision,
+                              quad ? XRViewConfigurationType::QuadView : XRViewConfigurationType::PrimaryStereo,
+                              XREnvironmentBlendMode::Opaque,
+                              viewCount};
+            std::array<XRViewDescriptor, MaximumProjectionViews> views{};
+            std::array<XRExternalRenderTargetDescriptor, MaximumProjectionViews> targets{};
+            for (std::uint32_t eye = 0; eye < viewCount; ++eye) {
+                views[eye] = DescribeView(observed, configuration.session, eye, projection);
                 targets[eye] = DescribeEyeTarget(views[eye], acquisition, allocation, eye, scale);
             }
             const std::array images{acquisition.image};
-            return XRViewRenderPlan::Create({configuration, displayTime, views, targets, images}, configuration.session, configuration.id,
-                                            configuration.revision, origin, viewCount, {});
+            const XRViewAdmissionPolicy admission{quad ? XRViewAdmissionMode::BoundedNView : XRViewAdmissionMode::PrimaryStereo, viewCount};
+            return XRViewRenderPlan::Create({configuration, displayTime, std::span{views}.first(viewCount),
+                                             std::span{targets}.first(viewCount), images},
+                                            configuration.session, configuration.id, configuration.revision, origin, viewCount, admission);
         }
 
         /** @brief Real device/view dispatch selected by this exact native binding. */
@@ -502,7 +506,7 @@ namespace Horo::Application::Internal {
         if (auto bound = preparedColor->images.Bind(preparedColor->owner); bound.HasError())
             return bound;
         const auto staged = preparedColor->owner.StageFixedProjection(prepared.session, draft.color, VK_FORMAT_R8G8B8A8_UNORM,
-                                                                      draft.recommended, host.getProc_);
+                                                                      {draft.recommended[0], draft.recommended[1]}, host.getProc_);
         if (staged.HasError())
             return Result<void>::Failure(staged.ErrorValue());
         if (staged.Value())
@@ -516,6 +520,8 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::PrepareFrameResources(const XRSessionId &candidate, const Render::RenderTextureDescriptor &color) {
         if (render_ || !candidate.IsValid() || frames_.Snapshot().phase != XRFramePhase::Idle)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (color.layerCount != 2 && color.layerCount != MaximumProjectionViews)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         auto graphics = composition_.session.BorrowGraphics(candidate);
         if (graphics.HasError())
             return Result<void>::Failure(graphics.ErrorValue());
@@ -579,10 +585,11 @@ namespace Horo::Application::Internal {
                                                       .cadence = XRReprojectionCadenceMode::ObservedNativePeriods});
             std::ranges::copy(writer.selection.eyeExtents, reprojection->viewExtents.begin());
         }
-        if (const auto configured =
-                frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
-                                          {.maximumViews = 2, .maximumImages = reprojection ? 3U : 1U, .maximumLayers = layerLimit},
-                                          reprojection);
+        if (const auto configured = frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
+                                                              {.maximumViews = render_->allocation.layerCount,
+                                                               .maximumImages = reprojection ? 3U : 1U,
+                                                               .maximumLayers = layerLimit},
+                                                              reprojection);
             configured != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto bound = render_->compositor.Bind({getProc_}, {}, NativeCompositorColorSpace::RuntimeDefault, composition_.metrics);
@@ -862,8 +869,8 @@ namespace Horo::Application::Internal {
         const bool adaptive = !support.synthetic && fixed != XRFeatureDecisionState::OptionalEnabled &&
                               fixed != XRFeatureDecisionState::Required && !WantsMotionHistory(scene_->projection->plan);
         const auto scale = render_->resolution.BeginFrame(frame.frame, adaptive, support.deviceIncarnation, support.capabilityRevision);
-        auto plan = PlanStereoProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
-                                         *scene_->projection, *render_->acquisition, render_->allocation, scale);
+        auto plan = PlanProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
+                                   *scene_->projection, *render_->acquisition, render_->allocation, scale);
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
@@ -912,15 +919,18 @@ namespace Horo::Application::Internal {
         const bool prepareMotion = !ordinaryOnly && WantsMotionHistory(scene_->projection->plan);
         if (!ordinaryOnly && render_->writer && render_->writer->coordinated)
             static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
-        std::array<Render::MultiviewRenderRectangle, 2> rectangles;
+        std::array<Render::MultiviewRenderRectangle, MaximumProjectionViews> rectangles;
+        const auto viewCount = plan.Value().Views().size();
+        const auto activeViews = std::span{render_->eyeViews}.first(viewCount);
         std::ranges::transform(plan.Value().Targets(), rectangles.begin(), [](const XRExternalRenderTargetDescriptor &target) {
             const auto &region = target.renderRectangle;
             return Render::MultiviewRenderRectangle{region.x, region.y, region.width, region.height};
         });
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
-            return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
+            return Viewport::Bind(composition_.viewport, render_->acquisition->texture, activeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary, environmentInput, rectangles, placement ? &*placement : nullptr, vignette);
+                                  alpha, auxiliary, environmentInput, std::span{rectangles}.first(viewCount),
+                                  placement ? &*placement : nullptr, vignette);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;

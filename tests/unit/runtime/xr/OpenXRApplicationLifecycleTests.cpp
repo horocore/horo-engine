@@ -146,13 +146,14 @@ namespace Horo::Tests::OpenXRApplication {
             std::function<void()> onCheckAdmission;
 
             enum class ProjectionFixture {
-                Quad
+                Quad,
+                QuadPlay
             };
 
-            explicit ApplicationFixture(ProjectionFixture)
+            explicit ApplicationFixture(ProjectionFixture mode)
                 : ApplicationFixture(true, 5, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
                                      XR::XRProjectFeaturePolicy::Unrequested, false, std::nullopt, XR::XRProjectFeaturePolicy::Unrequested,
-                                     false, {}, nullptr, false, false, false, 4) {}
+                                     false, {}, nullptr, false, false, false, 4, mode == ProjectionFixture::QuadPlay) {}
 
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
@@ -164,10 +165,22 @@ namespace Horo::Tests::OpenXRApplication {
                                         std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
                                         const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false,
                                         const bool anchorPersistence = false, const bool fixedFoveation = false,
-                                        const std::uint32_t maximumProjectionViews = 2)
+                                        const std::uint32_t maximumProjectionViews = 2, const bool quadPlay = false)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
+                if (quadPlay) {
+                    request.invocation.emplace(SettingKey{"xr.capability_profile"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(
+                                                                           XR::XRFeatureProfile::FoveatedInsetProjection),
+                                                                       std::nullopt});
+                    request.invocation.emplace(SettingKey{"xr.limits.views"}, ConfigurationInputValue{std::int64_t{4}, std::nullopt});
+                    script.census.advertisesQuad = true;
+                    script.events.expectedViewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+                    script.presentation.quad = true;
+                    script.presentation.count = 4;
+                    script.frames.expectedViews = 4;
+                }
                 if (planePreview)
                     request.invocation.emplace(SettingKey{"xr.preview.spatial_planes"}, ConfigurationInputValue{true, std::nullopt});
                 if (anchorPreview)
@@ -1103,6 +1116,43 @@ namespace Horo::Tests::OpenXRApplication {
             return ActivatePlay(fixture, player);
         }
     }  // namespace
+
+    TEST_CASE("Selected quad Play renders and submits every native view with the same layout", "[xr][application][play][selected-quad]") {
+        ApplicationFixture fixture{ApplicationFixture::ProjectionFixture::QuadPlay};
+        auto scene = PublishPlay(fixture);
+        auto &script = fixture.script;
+        REQUIRE(script.swapchain.created.arraySize == 4);
+        CHECK(std::ranges::count(script.census.calls, "quad-views") == 2);
+        CHECK(fixture.play->ReadSetup().requestedProfile == XR::XRFeatureProfile::FoveatedInsetProjection);
+        script.clock.sample = 1;
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+
+        auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
+        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+        RequireValue(frame.Present());
+        RequireValue(fixture.play->FinishGui(true));
+        auto &vulkan = fixture.vulkan->native;
+        vulkan.commandState.state.Complete();
+        RequireValue(fixture.play->ProgressRenderTail());
+
+        CHECK(script.swapchain.releases == 1);
+        CHECK(script.frames.ends == 1);
+        CHECK(script.frames.layers == 1);
+        REQUIRE(script.frames.views == 4);
+        REQUIRE(vulkan.encoded.scissors.size() == 4);
+        for (std::size_t view = 0; view < script.frames.views; ++view) {
+            const auto &subImage = script.frames.encoded[view].subImage;
+            CHECK(subImage.imageArrayIndex == view);
+            CHECK(subImage.imageRect.extent.width == 1024 - static_cast<std::int32_t>(view) * 128);
+            CHECK(subImage.imageRect.extent.width == vulkan.encoded.scissors[view].extent.width);
+            CHECK(subImage.imageRect.extent.height == vulkan.encoded.scissors[view].extent.height);
+            CHECK(script.frames.encoded[view].next == nullptr);
+        }
+        CHECK(vulkan.encoded.drawCalls.size() == 4);
+        CHECK_FALSE(Editor::EditorVulkanXrViewportAccess::PreviousDepth(*fixture.viewport));
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
 
     TEST_CASE("Signed XR Setup can observe gaze hardware while Play creates only ordinary tracking actions",
               "[xr][application][setup][gaze]") {

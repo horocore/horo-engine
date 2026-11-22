@@ -94,6 +94,18 @@ namespace Horo::Application::Internal {
             return Outcome::Success({color, hasStereo, colorAvailable});
         }
 
+        /** @brief Checks the exact owned depth and imported color allocation on the selected renderer. */
+        bool SupportsProjectionTargets(const Render::RenderFrontend &frontend, const Render::RenderTextureDescriptor &color) {
+            const Render::RenderTextureDescriptor depth{.extent = color.extent,
+                                                        .format = Render::RenderTextureFormat::Depth32Float,
+                                                        .layerCount = color.layerCount,
+                                                        .usage = Render::RenderTextureUsage::RenderAttachment};
+            const auto &support = frontend.Capabilities().support;
+            const auto multiview = Render::ResolveMultiviewCapabilities(support);
+            return support.Supports(color) && support.Supports(depth) && multiview.multipass && multiview.indexedShaders &&
+                   multiview.maximumViews >= color.layerCount;
+        }
+
         /** @brief Checks the selected render device's baseline raster requirements against the same native target. */
         Result<ProjectionTargets> PrepareProjectionTargets(const Render::RenderFrontend &frontend, const NativeSystemCensus &observed,
                                                            const NativeSessionCensus &session) {
@@ -101,15 +113,43 @@ namespace Horo::Application::Internal {
             if (native.HasError())
                 return Result<ProjectionTargets>::Failure(native.ErrorValue());
             const auto &[color, stereo, colorAvailable] = native.Value();
-            const Render::RenderTextureDescriptor depth{.extent = color.extent,
-                                                        .format = Render::RenderTextureFormat::Depth32Float,
-                                                        .layerCount = 2,
-                                                        .usage = Render::RenderTextureUsage::RenderAttachment};
-            const auto &support = frontend.Capabilities().support;
-            const auto multiview = Render::ResolveMultiviewCapabilities(support);
-            const bool exactImages = colorAvailable && support.Supports(color) && support.Supports(depth) && multiview.multipass &&
-                                     multiview.indexedShaders && multiview.maximumViews >= 2;
-            return Result<ProjectionTargets>::Success({color, stereo, exactImages});
+            return Result<ProjectionTargets>::Success({color, stereo, colorAvailable && SupportsProjectionTargets(frontend, color)});
+        }
+
+        /** @brief Admits all four views against one shared color allocation or preserves the rejection reason. */
+        XRCapabilityState PrepareQuadTargets(OpenXRProjectionDraft &draft, const Render::RenderFrontend &frontend,
+                                             const NativeQuadViewCensus &quad, const NativeSessionCensus &session) {
+            using enum XRCapabilityState;
+            if (quad.state != Available)
+                return quad.state;
+            const auto blends = std::span{quad.blendModes}.first(quad.blendModeCount);
+            const auto formats = std::span{session.formats}.first(session.formatCount);
+            if (std::ranges::find(blends, XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == blends.end() ||
+                std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) == formats.end())
+                return Incompatible;
+
+            auto color = draft.color;
+            color.extent = {};
+            color.layerCount = MaximumProjectionViews;
+            for (const auto &view : quad.views) {
+                color.extent.width = std::max(color.extent.width, view.recommendedExtent.width);
+                color.extent.height = std::max(color.extent.height, view.recommendedExtent.height);
+            }
+            const auto fits = [&color](const NativeQuadView &view) {
+                return color.extent.width <= view.maximumExtent.width && color.extent.height <= view.maximumExtent.height;
+            };
+            if (!std::ranges::all_of(quad.views, fits))
+                return Incompatible;
+            if (!SupportsProjectionTargets(frontend, color))
+                return DependencyMissing;
+
+            draft.color = color;
+            draft.capabilities.limits.maximumViews = MaximumProjectionViews;
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::Projection)] = Available;
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::ExternalColorTargets)] = Available;
+            std::ranges::transform(quad.views, draft.recommended.begin(), &NativeQuadView::recommendedExtent);
+            std::ranges::transform(quad.views, draft.maximum.begin(), &NativeQuadView::maximumExtent);
+            return Available;
         }
 
         struct ReprojectionEvidence final {
@@ -227,8 +267,9 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */
     Result<void> OpenXRApplicationSession::ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const {
-        if (settings_.Profile() != XRFeatureProfile::Projection1_0)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto profile = settings_.Profile();
+        if (profile != XRFeatureProfile::Projection1_0 && profile != XRFeatureProfile::FoveatedInsetProjection)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Editor Play cannot execute the selected XR profile."));
         const auto &budget = settings_.Limits();
         if (bindings.locomotion && std::holds_alternative<OpenXRArmSwingBinding>(bindings.locomotion->translation) &&
             budget.maximumDevices < 3)
@@ -308,14 +349,18 @@ namespace Horo::Application::Internal {
         if (quad.HasError())
             return Outcome::Failure(quad.ErrorValue());
         const auto quadState = quad.Value().state;
-        output.capabilities.states[static_cast<std::size_t>(XRCapability::QuadViews)] =
-            quadState == XRCapabilityState::Available ? XRCapabilityState::DependencyMissing : quadState;
+        auto &quadCapability = output.capabilities.states[static_cast<std::size_t>(XRCapability::QuadViews)];
+        if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
+            quadCapability = PrepareQuadTargets(output, frontend, quad.Value(), session);
+            return Outcome::Success(std::move(output));
+        }
+        quadCapability = quadState == XRCapabilityState::Available ? XRCapabilityState::DependencyMissing : quadState;
         const auto foveation = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
         if (foveation.HasError())
             return Outcome::Failure(foveation.ErrorValue());
         if (targets.Value().stereo && targets.Value().exactImages && foveation.Value().state == NativeExtensionState::Enabled)
             output.capabilities.states[static_cast<std::size_t>(XRCapability::FixedFoveation)] = XRCapabilityState::DependencyMissing;
-        for (std::size_t eye = 0; eye < output.recommended.size(); ++eye) {
+        for (std::size_t eye = 0; eye < observed.primaryViewCount; ++eye) {
             output.recommended[eye] = {observed.primaryViews[eye].recommendedImageRectWidth,
                                        observed.primaryViews[eye].recommendedImageRectHeight};
             output.maximum[eye] = {observed.primaryViews[eye].maxImageRectWidth, observed.primaryViews[eye].maxImageRectHeight};
