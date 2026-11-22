@@ -462,7 +462,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         /** @brief Adds the canonical Character geometry and the authored decision closure to the real cooked Navigation project. */
         Assets::AssetId PublishDecisionMotionProject(NavigationProductFixture &navigation, DecisionFixture::Fixture &decision,
                                                      const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller,
-                                                     std::optional<Animation::GraphParameterId> trigger, bool addSecondAgent = false) {
+                                                     std::optional<Animation::GraphParameterId> trigger, std::uint64_t agentCount = 1) {
             Fixture character;
             auto &project = navigation.project;
             const auto root = project.project.dir.path;
@@ -499,15 +499,35 @@ namespace Horo::Application::CharacterSceneProductTest {
                 auto &floor = scene.objects[1].components;
                 floor.rigidBody = character.source.objects[1].components.rigidBody;
                 floor.colliders = character.source.objects[1].components.colliders;
-                if (addSecondAgent) {
+                const auto aiController = actor.components.aiController;
+                for (std::uint64_t index = 1; index < agentCount; ++index) {
                     scene.objects.push_back(
-                        {.id = {4},
-                         .name = "Second decision agent",
-                         .components = {.aiAgent = AI::AiAgentComponent{.agent = DecisionFixture::MakeIdentity<AI::AgentId>(51)},
-                                        .aiController = actor.components.aiController}});
+                        {.id = {3 + index},
+                         .name = "Decision agent",
+                         .components = {.aiAgent = AI::AiAgentComponent{.agent = DecisionFixture::MakeIdentity<AI::AgentId>(50 + index)},
+                                        .aiController = aiController}});
                 }
             });
             return asset;
+        }
+
+        /** @brief Starts the same cooked decision fixture through the selected product authority. */
+        Result<void> StartDecisionQualificationWorld(NativeNavigationProductWorld &world, const NavigationProductFixture &fixture,
+                                                     const DecisionFixture::Fixture &decision, const AI::AiControllerDescriptor &controller,
+                                                     Assets::AssetId asset, const AI::AiTaskSchedulerSettings &scheduler,
+                                                     Network::NetworkProjectRole role) {
+            const auto simulationAssets = role == Network::NetworkProjectRole::DedicatedServer
+                                              ? std::optional{Internal::HeadlessSimulationAssets{.decisions = {asset}}}
+                                              : std::nullopt;
+            return world.Start(fixture, NavigationGameplay(), {}, Physics::PhysicsRuntimeMode::Canonical,
+                               [&controller, &decision, &scheduler, asset](auto &input, auto &assets) {
+                input.aiControllers = std::span{&controller, 1};
+                input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
+                    Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
+                                                          .environment = decision.Environment(),
+                                                          .bindings = {{controller.controller, asset}},
+                                                          .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, scheduler, {}}});
+            }, role, simulationAssets);
         }
     }  // namespace
 
@@ -925,21 +945,13 @@ namespace Horo::Application::CharacterSceneProductTest {
         SECTION("Deterministic budget overload rejects the entire Scene") {
             overload = true;
         }
-        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt, overload);
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt, overload ? 2 : 1);
         AI::AiTaskSchedulerSettings scheduler;
         if (overload)
             scheduler.evaluationsPerTick = 1;
 
         NativeNavigationProductWorld product;
-        const auto started =
-            product.Start(fixture, NavigationGameplay(), {}, Physics::PhysicsRuntimeMode::Canonical, [&](auto &input, auto &assets) {
-            input.aiControllers = catalog;
-            input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
-                Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
-                                                      .environment = decision.Environment(),
-                                                      .bindings = {{catalog.front().controller, asset}},
-                                                      .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, scheduler, {}}});
-        }, role, role == Role::DedicatedServer ? std::optional{Internal::HeadlessSimulationAssets{.decisions = {asset}}} : std::nullopt);
+        const auto started = StartDecisionQualificationWorld(product, fixture, decision, catalog.front(), asset, scheduler, role);
         if (overload) {
             REQUIRE(started.HasError());
             CHECK(started.ErrorValue().code.Value() == AI::AIErrors::SchedulerBudgetExhausted.code.Value());
@@ -954,6 +966,26 @@ namespace Horo::Application::CharacterSceneProductTest {
             }
             product.Stop();
             CHECK(decision.probe.cleanups == 0);
+            if (product.composition) {
+                const auto drained = product.composition->pollRetirement(64);
+                REQUIRE(drained.HasValue());
+                REQUIRE(drained.Value());
+            }
+
+            scheduler.evaluationsPerTick = 2;
+            NativeNavigationProductWorld recovered;
+            const auto restarted = StartDecisionQualificationWorld(recovered, fixture, decision, catalog.front(), asset, scheduler, role);
+            if (restarted.HasError())
+                UNSCOPED_INFO(restarted.ErrorValue().message);
+            REQUIRE(restarted.HasValue());
+            REQUIRE(Internal::InspectHeadlessScene(recovered.SceneService()));
+            recovered.RunFrame();
+            REQUIRE(decision.probe.tasks.size() == 2);
+            CHECK(decision.probe.tasks.front() != decision.probe.tasks.back());
+            CHECK(decision.probe.cleanups == 0);
+            recovered.Stop();
+            CHECK(decision.probe.cleanups == 2);
+            CHECK(std::ranges::is_permutation(decision.probe.tasks, decision.probe.abortedTasks));
             return;
         }
         if (started.HasError())
@@ -974,6 +1006,53 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
         AI::AiTaskTerminalResult late{.state = AI::AiTaskState::Succeeded};
         REQUIRE(continuation.PublishTerminal(late).Value() == AI::AiTaskPublicationDisposition::Stale);
+    }
+
+    TEST_CASE("Cooked AI fills the same deterministic tick allowance on both product authorities",
+              "[ai][qualification][character][product][scale]") {
+        using Role = Network::NetworkProjectRole;
+        const auto role = GENERATE(Role::Standalone, Role::DedicatedServer);
+        NavigationProductFixture fixture;
+        DecisionFixture::Fixture decision;
+        decision.probe.succeedTick = 1;
+        auto source = DecisionFixture::TaskTree(11);
+        source.executionTask = DecisionFixture::MakeIdentity<AI::TaskId>(9000);
+        const AI::AiControllerDescriptor controller{.controller = DecisionFixture::MakeIdentity<AI::ControllerTypeId>(49),
+                                                    .decisionAsset = source.asset,
+                                                    .decisionKind = AI::DecisionPlanKind::BehaviorTree,
+                                                    .blackboardSchema = decision.schema};
+        const AI::AiTaskSchedulerSettings scheduler;
+        const auto population = static_cast<std::uint64_t>(scheduler.evaluationsPerTick);
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, controller, std::nullopt, population);
+        NativeNavigationProductWorld product;
+        const auto started = StartDecisionQualificationWorld(product, fixture, decision, controller, asset, scheduler, role);
+        if (started.HasError())
+            UNSCOPED_INFO(started.ErrorValue().message);
+        REQUIRE(started.HasValue());
+        product.RunFrame();
+        CHECK(decision.probe.starts == population);
+        CHECK(decision.probe.cleanups == population);
+        CHECK(decision.probe.lastTerminal == AI::AiTaskState::Succeeded);
+        if (product.scheduled) {
+            const auto health = product.scheduled->AiHealth({Network::NetworkModeWorldKind::AuthorityServer, {31}});
+            REQUIRE(health);
+            CHECK(health->decisionTick == 1);
+            CHECK(health->evaluated == population);
+            CHECK(health->workUnits <= scheduler.workUnitsPerTick);
+            CHECK(health->deferred == 0);
+            CHECK(health->failed == 0);
+        }
+        const auto &key = decision.schema->Keys().front();
+        for (std::uint64_t index = 0; index < population; ++index) {
+            const auto agent = DecisionFixture::MakeIdentity<AI::AgentId>(50 + index);
+            const auto value = Internal::InspectHeadlessDecisionValue(product.SceneService(), agent, key.key);
+            REQUIRE(value.HasValue());
+            CHECK(value.Value() == key.defaultValue);
+        }
+        product.Stop();
+        CHECK(decision.probe.aborts == 0);
+        CHECK(decision.probe.cleanups == population);
+        CHECK_FALSE(decision.probe.continuation.IsCurrent());
     }
 
     TEST_CASE("Cooked AI decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {
