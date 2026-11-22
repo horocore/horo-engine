@@ -128,3 +128,5 @@ Add `--require haptics` or `--require optionalMR` when the release claims the
 capability. Keep any limited optional results visible in the matrix. The release
 owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).
+Use the [release matrix and example procedures](xr-release-qualification.md)
+to verify all claims together.

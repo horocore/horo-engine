@@ -42,11 +42,14 @@ def unique_members(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
-def load_record(path: Path) -> object:
-    with path.open("rb") as source:
-        data = source.read(MAX_RECORD_BYTES + 1)
+def decode_record(data: bytes) -> object:
     require(len(data) <= MAX_RECORD_BYTES, "Record exceeds the size limit")
     return json.loads(data.decode("utf-8"), object_pairs_hook=unique_members)
+
+
+def load_record(path: Path) -> object:
+    with path.open("rb") as source:
+        return decode_record(source.read(MAX_RECORD_BYTES + 1))
 
 
 def fields(value: object, required: set[str], name: str) -> dict:

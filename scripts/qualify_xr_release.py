@@ -1,0 +1,155 @@
+"""Verify an XR 1.0 matrix against the declared release evidence."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+from pathlib import Path
+import re
+
+from qualify_xr_device import (
+    CATEGORIES, LEVELS, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES, check_physical_gate, decode_record,
+    fields, in_set, is_digest, is_token, load_record, require, validate_identity, validate_record,
+)
+
+
+REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
+MAX_TUPLES = 64
+MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+
+
+class Evidence:
+    """Verifies the local content-addressed artifacts required by the matrix."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.verified: set[str] = set()
+
+    def path(self, digest: str) -> Path:
+        require(is_digest(digest), "Missing or invalid artifact digest")
+        path = self.root / digest
+        require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
+        return path
+
+    def verify(self, digest: str) -> None:
+        if digest in self.verified:
+            return
+        hasher = hashlib.sha256()
+        size = 0
+        with self.path(digest).open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                size += len(chunk)
+                require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
+                hasher.update(chunk)
+        require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
+        self.verified.add(digest)
+
+    def smoke_record(self, digest: str) -> dict:
+        with self.path(digest).open("rb") as source:
+            data = source.read(MAX_RECORD_BYTES + 1)
+        require(hashlib.sha256(data).hexdigest() == digest, f"Smoke record content does not match {digest}")
+        return validate_record(decode_record(data))
+
+
+def validate_row(value: object) -> dict:
+    row = fields(value, {"id", "category", "owner", "releaseClaim", "declaration",
+                         "requiredOptionalChecks", "recordSha256"}, "matrix row")
+    require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
+    require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
+    require(type(row["releaseClaim"]) is bool, "Release claim must be explicit")
+    if row["releaseClaim"]:
+        require(row["category"] not in {"Conditional", "Future"}, "Conditional and Future rows are planning only")
+        require(row["declaration"] is not None, "Claimed tuple requires a release declaration")
+    if row["declaration"] is not None:
+        declaration = fields(row["declaration"], {"tuple", "testPlan"}, "release declaration")
+        validate_identity(declaration["tuple"], complete=True)
+        require(is_token(declaration["testPlan"]), "Invalid release test-plan revision")
+    optional = row["requiredOptionalChecks"]
+    require(isinstance(optional, list) and all(in_set(name, OPTIONAL_CHECKS) for name in optional),
+            "Invalid optional physical checks")
+    require(len(optional) == len(set(optional)), "Duplicate optional physical checks")
+    require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
+    return row
+
+
+def verify_review(value: object, evidence: Evidence, revision: str) -> None:
+    review = fields(value, {"owner", "status", "sourceRevision", "evidenceLevel", "artifactSha256"}, "subsystem review")
+    require(is_token(review["owner"]), "Subsystem review needs an owner")
+    require(in_set(review["status"], STATUSES), "Invalid subsystem review status")
+    require(review["status"] == "Passed", f"Subsystem review {review['status']}")
+    require(review["sourceRevision"] == revision, "Subsystem review is from another source revision")
+    require(in_set(review["evidenceLevel"], LEVELS), "Invalid subsystem evidence level")
+    evidence.verify(review["artifactSha256"])
+
+
+def verify_claim(row: dict, evidence: Evidence) -> str:
+    record = evidence.smoke_record(row["recordSha256"])
+    require(record["category"] == row["category"], "Evidence category does not match the matrix row")
+    check_physical_gate(record, row["declaration"], set(row["requiredOptionalChecks"]))
+    evidence.verify(record["tuple"]["buildSha256"])
+    evidence.verify(record["tuple"]["packageReceiptSha256"])
+    for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None}:
+        evidence.verify(digest)
+    return record["status"]
+
+
+def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
+    matrix = fields(value, {"schemaVersion", "sourceRevision", "reviews", "tuples"}, "release matrix")
+    require(type(matrix["schemaVersion"]) is int and matrix["schemaVersion"] == 1, "Unsupported release matrix schema")
+    revision = matrix["sourceRevision"]
+    require(isinstance(revision, str) and REVISION.fullmatch(revision) is not None, "Missing exact release source revision")
+    reviews = fields(matrix["reviews"], REVIEWS, "subsystem reviews")
+    raw_rows = matrix["tuples"]
+    require(isinstance(raw_rows, list) and len(raw_rows) <= MAX_TUPLES, "Invalid matrix tuple inventory")
+    rows = [validate_row(row) for row in raw_rows]
+    require(len({row["id"] for row in rows}) == len(rows), "Duplicate matrix row IDs")
+    claims = [row for row in rows if row["releaseClaim"]]
+    identities = [row["declaration"]["tuple"] for row in claims]
+    require(all(identity not in identities[:position] for position, identity in enumerate(identities)),
+            "Duplicate claimed product tuple")
+    messages = []
+    failures = []
+    reference_modes = {row["declaration"]["tuple"]["connectionMode"] for row in claims if row["category"] == "Reference"}
+    if "Standalone" not in reference_modes:
+        failures.append("Missing declared standalone reference tuple")
+    if not reference_modes.intersection({"Tethered", "WirelessStreaming"}):
+        failures.append("Missing declared PCVR reference tuple")
+    for name, review in sorted(reviews.items()):
+        try:
+            verify_review(review, evidence, revision)
+        except (OSError, ValueError) as error:
+            owner = review.get("owner") if isinstance(review, dict) else None
+            label = f"{name} ({owner})" if is_token(owner) else name
+            failures.append(f"{label}: {error}")
+    for row in rows:
+        label = f"{row['id']} ({row['owner']})"
+        if not row["releaseClaim"]:
+            messages.append(f"{label}: {row['category']} planning")
+            continue
+        try:
+            messages.append(f"{label}: {verify_claim(row, evidence)}")
+        except (OSError, ValueError, RecursionError) as error:
+            failures.append(f"{label}: {error}")
+    return messages, failures
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("matrix", type=Path)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        messages, failures = assess(load_record(args.matrix), Evidence(args.evidence_dir))
+    except (OSError, ValueError, RecursionError) as error:
+        parser.exit(1, f"XR matrix rejected: {error}\n")
+    for message in messages:
+        print(message)
+    if failures:
+        parser.exit(1, "\n".join(failures) + "\n")
+    print("XR 1.0 matrix evidence passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
