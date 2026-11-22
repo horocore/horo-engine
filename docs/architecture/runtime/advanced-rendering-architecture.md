@@ -410,6 +410,12 @@ for inspection and other native consumers. Each inventory entry records the
 exact file size and SHA-256. The independently cooked `--scene-linear` route
 uses the same compile request as the combined stage.
 
+Add `--temporal-input-source assets/shaders/editor/viewport_temporal_inputs.hlsl`
+after the scene-linear source to include both temporal guide programs. The
+12-file inventory adds the verified linear-depth and jitter-free motion
+payload/reflection pairs under `assets/shaders/editor/`. Both pass the runtime
+interface validator before the stage is published.
+
 Release assembly incorporates the returned records into the complete Editor
 product manifest and verifies the assembled bytes before the existing detached
 signing boundary. A spatial startup fixture needs the combined stage, the actual

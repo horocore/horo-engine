@@ -394,10 +394,17 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     const auto repeat = temporary.Path() / "repeat stage";
     const ReleaseCandidateId candidate{24};
 
-    const auto withScene = GENERATE(false, true);
+    const auto packageFiles = GENERATE(6U, 8U, 12U);
+    const bool withScene = packageFiles >= 8U;
     const auto scene = withScene ? Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl")
                                  : std::vector<std::uint8_t>{};
+    const auto temporal = packageFiles == 12U
+                              ? Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport_temporal_inputs.hlsl")
+                              : std::vector<std::uint8_t>{};
     const auto cook = [&](const std::filesystem::path &stage, const CancellationToken &cancel = {}) {
+        if (!temporal.empty())
+            return Horo::Editor::Offline::CookVulkanTemporalReconstructionRelease(stage, scratch, candidate, source, scene, temporal, tools,
+                                                                                  adapter.Value(), cancel);
         if (withScene)
             return CookVulkanSpatialReconstructionRelease(stage, scratch, candidate, source, scene, tools, adapter.Value(), cancel);
         return CookVulkanReconstructionRelease(stage, scratch, candidate, source, tools, adapter.Value(), cancel);
@@ -408,7 +415,7 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     REQUIRE(cooked.HasValue());
     const auto &inventory = cooked.Value();
     CHECK(inventory.Candidate() == candidate);
-    REQUIRE(inventory.Artifacts().size() == (withScene ? 8 : 6));
+    REQUIRE(inventory.Artifacts().size() == packageFiles);
     CHECK(VerifyReleaseStagedTree(destination, inventory).HasValue());
     const auto parsed = ReleasePreSignInventory::ParseCanonical(inventory.CanonicalJson());
     REQUIRE(parsed.HasValue());
@@ -431,6 +438,16 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     }
     for (const auto &record : inventory.Artifacts())
         CHECK(record.role == ReleaseArtifactRole::AssetArchive);
+    if (!temporal.empty()) {
+        using Horo::Editor::EditorVulkanTemporalInput;
+        const std::array guides{std::pair{EditorVulkanTemporalInput::LinearDepth, Layout::TemporalDepthPrefix},
+                                std::pair{EditorVulkanTemporalInput::Motion, Layout::TemporalMotionPrefix}};
+        for (const auto &[guide, prefix] : guides) {
+            const auto payload = Read(destination / (std::string{prefix} + ".horoshdr"));
+            const auto reflection = Read(destination / (std::string{prefix} + ".reflection.json"));
+            CHECK(Horo::Editor::ValidateEditorVulkanTemporalInputCook(guide, payload, reflection).HasValue());
+        }
+    }
 
     const auto duplicate = cook(repeat);
     REQUIRE(duplicate.HasValue());
@@ -440,6 +457,12 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     const auto invalid = temporary.Path() / "failed stage";
     CHECK(CookVulkanReconstructionRelease(invalid, scratch, candidate, {0x3f}, tools, adapter.Value()).HasError());
     CHECK_FALSE(std::filesystem::exists(invalid));
+    if (!temporal.empty()) {
+        const auto failedGuide = Horo::Editor::Offline::CookVulkanTemporalReconstructionRelease(invalid, scratch, candidate, source, scene,
+                                                                                                {0x3f}, tools, adapter.Value());
+        CHECK(failedGuide.HasError());
+        CHECK_FALSE(std::filesystem::exists(invalid));
+    }
     CancellationSource stopped;
     stopped.RequestCancellation();
     const auto cancelled = cook(invalid, stopped.Token());

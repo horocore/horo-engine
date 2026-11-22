@@ -27,6 +27,8 @@ namespace Horo::Editor::NativeReconstructionRelease {
 
     /** @brief Exact scene-linear material files consumed by explicit signed spatial startup. */
     inline constexpr std::string_view SceneLinearPayloadPath = "assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr";
+    inline constexpr std::string_view TemporalDepthPrefix = "assets/shaders/editor/viewport-linear-depth-vulkan";
+    inline constexpr std::string_view TemporalMotionPrefix = "assets/shaders/editor/viewport-motion-vulkan";
     inline constexpr std::string_view SceneLinearReflectionPath = "assets/shaders/editor/viewport-scene-linear-vulkan.reflection.json";
 
     /** @brief Exact portable target contract shared by the release cook and signed editor. */

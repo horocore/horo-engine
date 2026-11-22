@@ -285,6 +285,7 @@ namespace {
     struct ReconstructionReleaseRequest final {
         Release::ReleaseCandidateId candidate;
         const char *sceneLinearSource{};
+        const char *temporalInputSource{};
     };
 
     /** @brief Cooks the optional scene pair before the existing atomic release stage fence. */
@@ -300,6 +301,13 @@ namespace {
         auto scene = Read(release.sceneLinearSource, 16U * 1024U * 1024U);
         if (scene.HasError())
             return Outcome::Failure(scene.ErrorValue());
+        if (release.temporalInputSource) {
+            const auto temporal = Read(release.temporalInputSource, 16U * 1024U * 1024U);
+            if (temporal.HasError())
+                return Outcome::Failure(temporal.ErrorValue());
+            return Editor::Offline::CookVulkanTemporalReconstructionRelease(argv[2], scratch, release.candidate, source, scene.Value(),
+                                                                            temporal.Value(), identities, adapter);
+        }
         return Editor::Offline::CookVulkanSpatialReconstructionRelease(argv[2], scratch, release.candidate, source, scene.Value(),
                                                                        identities, adapter);
     }
@@ -375,10 +383,13 @@ namespace {
 
     /** @brief Takes only the explicit release job's positive decimal identity. */
     std::optional<ReconstructionReleaseRequest> ParseReconstruction(int argc, char **argv) {
-        const bool withScene = argc == 11;
+        const bool withTemporal = argc == 13;
+        const bool withScene = argc == 11 || withTemporal;
         if ((argc != 9 && !withScene) || std::string_view{argv[7]} != "--native-reconstruction")
             return std::nullopt;
         if (withScene && (std::string_view{argv[9]} != "--scene-linear-source" || std::string_view{argv[10]}.empty()))
+            return std::nullopt;
+        if (withTemporal && (std::string_view{argv[11]} != "--temporal-input-source" || std::string_view{argv[12]}.empty()))
             return std::nullopt;
         const std::string_view token{argv[8]};
         Horo::Release::ReleaseCandidateId id;
@@ -386,7 +397,7 @@ namespace {
         const auto converted = std::from_chars(token.data(), end, id.value);
         if (converted.ec != std::errc{} || converted.ptr != end || id.value == 0)
             return std::nullopt;
-        return ReconstructionReleaseRequest{id, withScene ? argv[10] : nullptr};
+        return ReconstructionReleaseRequest{id, withScene ? argv[10] : nullptr, withTemporal ? argv[12] : nullptr};
     }
 
     std::optional<CookMode> ParseMode(int argc, char **argv) {
@@ -419,7 +430,8 @@ int main(int argc, char **argv) {
                      "temporal-linear-depth|"
                      "--temporal-motion|--camera-cross-fade|--xr-comfort|--world-canvas|--runtime-ui-paint]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
-                     "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
+                     "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl "
+                     "[--temporal-input-source viewport_temporal_inputs.hlsl]]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--color-output-manual analytic-root\n";
         return 2;

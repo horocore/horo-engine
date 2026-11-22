@@ -93,6 +93,37 @@ namespace Horo::Editor::Offline {
                                   std::move(reflection).Value()});
         }
 
+        /** @brief Cooks one reflected Vulkan temporal guide using the runtime interface validator. */
+        Result<CookedPair> CookTemporalInput(const EditorVulkanTemporalInput input, const std::vector<std::uint8_t> &source,
+                                             std::span<const ShaderCompilerToolIdentity, 3> tools, const IShaderCompilerAdapter &compiler,
+                                             const CancellationToken &cancellation) {
+            using Pair = Result<CookedPair>;
+            const bool motion = input == EditorVulkanTemporalInput::Motion;
+            const ShaderCompilationRequest request{.manifest = EditorVulkanTemporalInputShaderManifest(input),
+                                                   .source = source,
+                                                   .defines = {{"HORO_VIEWPORT_TEMPORAL_MOTION", motion ? "1" : "0"}},
+                                                   .targets = {{.requirement = EditorVulkanViewportShaderTarget(),
+                                                                .platformTriple = "linux-x86_64",
+                                                                .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
+                                                                .tools = {tools[0], tools[1]}}},
+                                                   .reflection =
+                                                       ShaderCompilerReflectionRequest{tools[2],
+                                                                                       EditorVulkanTemporalInputReflectionNames(input)}};
+            auto compiled = CompileOne(request, compiler, cancellation);
+            if (compiled.HasError())
+                return Pair::Failure(compiled.ErrorValue());
+            auto &artifact = compiled.Value();
+            auto reflection = EncodeCookReflection(artifact);
+            if (reflection.HasError())
+                return Pair::Failure(reflection.ErrorValue());
+            if (const auto admitted = ValidateEditorVulkanTemporalInputCook(input, artifact.payload, reflection.Value());
+                admitted.HasError())
+                return Pair::Failure(admitted.ErrorValue());
+            const std::string prefix{motion ? TemporalMotionPrefix : TemporalDepthPrefix};
+            return Pair::Success(
+                {prefix + ".horoshdr", prefix + ".reflection.json", std::move(artifact.payload), std::move(reflection).Value()});
+        }
+
         /** @brief Projects explicitly owned exact bytes into the existing canonical release schema. */
         ReleaseArtifactRecord Record(const AtomicShaderCookAuxiliaryFile &file) {
             return {std::string{file.relativePath}, ReleaseArtifactRole::AssetArchive, file.bytes.size(),
@@ -123,14 +154,15 @@ namespace Horo::Editor::Offline {
         /** @brief Validates and publishes the exact selected owned family through one stage and verification fence. */
         Outcome CookRelease(const std::filesystem::path &destination, const std::filesystem::path &scratch, ReleaseCandidateId candidate,
                             const std::vector<std::uint8_t> &source, const std::vector<std::uint8_t> *scene,
-                            std::span<const ShaderCompilerToolIdentity, 3> tools, const IShaderCompilerAdapter &compiler,
-                            const CancellationToken &cancellation) {
-            if (candidate.value == 0 || !ValidSource(source) || (scene && !ValidSource(*scene)))
+                            const std::vector<std::uint8_t> *temporal, std::span<const ShaderCompilerToolIdentity, 3> tools,
+                            const IShaderCompilerAdapter &compiler, const CancellationToken &cancellation) {
+            if (candidate.value == 0 || !ValidSource(source) || (scene && !ValidSource(*scene)) || (temporal && !ValidSource(*temporal)))
                 return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
             if (auto valid = ValidateAtomicShaderCookPaths(destination, scratch, CandidatePrefix); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
 
-            constexpr auto maximumPairs = Entries.size() + 1;
+            constexpr std::array guides{EditorVulkanTemporalInput::LinearDepth, EditorVulkanTemporalInput::Motion};
+            constexpr auto maximumPairs = Entries.size() + 1 + guides.size();
             std::array<CookedPair, maximumPairs> shaders;
             std::size_t count{};
             for (const auto entry : Entries) {
@@ -146,6 +178,14 @@ namespace Horo::Editor::Offline {
                 shaders[count++] = std::move(material).Value();
             }
 
+            if (temporal) {
+                for (const auto guide : guides) {
+                    auto artifact = CookTemporalInput(guide, *temporal, tools, compiler, cancellation);
+                    if (artifact.HasError())
+                        return Outcome::Failure(artifact.ErrorValue());
+                    shaders[count++] = std::move(artifact).Value();
+                }
+            }
             std::array<AtomicShaderCookAuxiliaryFile, maximumPairs * 2> files;
             const auto owned = std::span{files}.first(count * 2);
             std::vector<ReleaseArtifactRecord> records;
@@ -186,7 +226,7 @@ namespace Horo::Editor::Offline {
         const std::filesystem::path &destination, const std::filesystem::path &scratch, Release::ReleaseCandidateId candidate,
         const std::vector<std::uint8_t> &source, std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
         const Render::IShaderCompilerAdapter &compiler, const CancellationToken &cancellation) {
-        return CookRelease(destination, scratch, candidate, source, nullptr, tools, compiler, cancellation);
+        return CookRelease(destination, scratch, candidate, source, nullptr, nullptr, tools, compiler, cancellation);
     }
 
     /** @copydoc CookVulkanSpatialReconstructionRelease */
@@ -195,6 +235,15 @@ namespace Horo::Editor::Offline {
         const std::vector<std::uint8_t> &reconstruction, const std::vector<std::uint8_t> &sceneLinear,
         std::span<const Render::ShaderCompilerToolIdentity, 3> tools, const Render::IShaderCompilerAdapter &compiler,
         const CancellationToken &cancellation) {
-        return CookRelease(destination, scratch, candidate, reconstruction, &sceneLinear, tools, compiler, cancellation);
+        return CookRelease(destination, scratch, candidate, reconstruction, &sceneLinear, nullptr, tools, compiler, cancellation);
+    }
+
+    /** @copydoc CookVulkanTemporalReconstructionRelease */
+    Result<Release::ReleasePreSignInventory> CookVulkanTemporalReconstructionRelease(
+        const std::filesystem::path &destination, const std::filesystem::path &scratch, Release::ReleaseCandidateId candidate,
+        const std::vector<std::uint8_t> &reconstruction, const std::vector<std::uint8_t> &sceneLinear,
+        const std::vector<std::uint8_t> &temporalInput, std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
+        const Render::IShaderCompilerAdapter &compiler, const CancellationToken &cancellation) {
+        return CookRelease(destination, scratch, candidate, reconstruction, &sceneLinear, &temporalInput, tools, compiler, cancellation);
     }
 }  // namespace Horo::Editor::Offline

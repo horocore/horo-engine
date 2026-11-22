@@ -44,4 +44,18 @@ namespace Horo::Editor::Offline {
         const std::vector<std::uint8_t> &reconstruction, const std::vector<std::uint8_t> &sceneLinear,
         std::span<const Render::ShaderCompilerToolIdentity, 3> tools, const Render::IShaderCompilerAdapter &compiler,
         const CancellationToken &cancellation = {});
+    /**
+     * @brief Cooks the atomic release slice with both Vulkan temporal guides.
+     * @param destination New absolute stage directory. @param scratch Independent compiler scratch root.
+     * @param candidate Exact release inventory identity. @param reconstruction Native reconstruction source.
+     * @param sceneLinear Scene-linear viewport source. @param temporalInput Source for both temporal guide programs.
+     * @param tools Reviewed DXC, SPIR-V Tools, and SPIRV-Cross identities.
+     * @param compiler Approved offline compiler. @param cancellation Parent cancellation.
+     * @return Verified inventory of all twelve files or typed failure without partial publication.
+     */
+    [[nodiscard]] Result<Release::ReleasePreSignInventory> CookVulkanTemporalReconstructionRelease(
+        const std::filesystem::path &destination, const std::filesystem::path &scratch, Release::ReleaseCandidateId candidate,
+        const std::vector<std::uint8_t> &reconstruction, const std::vector<std::uint8_t> &sceneLinear,
+        const std::vector<std::uint8_t> &temporalInput, std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
+        const Render::IShaderCompilerAdapter &compiler, const CancellationToken &cancellation = {});
 }  // namespace Horo::Editor::Offline
