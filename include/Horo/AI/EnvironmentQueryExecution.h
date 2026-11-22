@@ -186,6 +186,23 @@ namespace Horo::AI {
         QueryCandidateScore score;
     };
 
+    /** @brief The operation that supplied the bounded failure evidence. */
+    enum class QueryFailurePhase : std::uint8_t {
+        Generation,
+        TestStart,
+        TestCompletion,
+        Scoring
+    };
+
+    /** @brief Stable attribution without provider payloads or diagnostic text. */
+    struct QueryFailureDiagnostic final {
+        QueryStageId stage;
+        QueryProviderId provider;
+        std::optional<std::uint32_t> candidateIndex;
+        QueryScoreStatus reason;
+        QueryFailurePhase phase;
+    };
+
     /** @brief Owned terminal snapshot. Failed, stale and cancelled results carry no winners. */
     struct QueryExecutionResult final {
         QueryExecutionStatus status{};
@@ -201,6 +218,7 @@ namespace Horo::AI {
         std::size_t invalidCoordinates{};
         std::vector<QueryExecutionWinner> winners;
         std::optional<Error> error;
+        std::optional<QueryFailureDiagnostic> failure; /**< One representative fault or rejection when no winner was published. */
     };
 
     /** @brief One sampled candidate, without a live actor reference or custom provider state. */
@@ -333,6 +351,9 @@ namespace Horo::AI {
         /** @brief Enforces the consecutive owner-tick contract before any deterministic completion can be consumed. */
         void ValidateTickSequence(std::uint64_t tick);
         void Generate();
+        void RecordGenerationFailure(Error error);
+        void RecordTestFailure(std::size_t slot, QueryFailurePhase phase, Error error);
+        void StartCandidateTest();
         /** @brief Samples the generated list in stable index order using the admitted preview capacity. */
         void CaptureDebugCandidates();
         /** @brief Returns the active sample slot when the next candidate being scored was sampled. */

@@ -312,16 +312,33 @@ namespace Horo::AI {
             source_->CancelTest();
     }
 
+    void QueryExecution::RecordGenerationFailure(Error error) {
+        result_.failure = QueryFailureDiagnostic{.stage = result_.generator.stage,
+                                                 .provider = result_.generator.provider,
+                                                 .reason = QueryScoreStatus::ProviderFailed,
+                                                 .phase = QueryFailurePhase::Generation};
+        result_.error = std::move(error);
+    }
+
+    void QueryExecution::RecordTestFailure(const std::size_t slot, const QueryFailurePhase phase, Error error) {
+        const auto &stage = scoring_.stages_[slot];
+        const auto reason = error.code.Value() == AIErrors::CapabilityUnavailable.code.Value() ? QueryScoreStatus::ProviderUnavailable
+                                                                                               : QueryScoreStatus::ProviderFailed;
+        result_.failure =
+            QueryFailureDiagnostic{stage.rule.stage, stage.provider, static_cast<std::uint32_t>(scores_.size()), reason, phase};
+        result_.error = std::move(error);
+    }
+
     /** @brief Captures candidates once into preallocated storage. */
     void QueryExecution::Generate() {
         const QueryGeneratorOutput output{result_.generator, items_.size(), items_};
         auto generation = source_->Generate(inputs_, output);
         if (generation.HasError()) {
-            result_.error = std::move(generation).ErrorValue();
+            RecordGenerationFailure(std::move(generation).ErrorValue());
             return;
         }
         if (!MatchesGeneration(generation.Value(), output)) {
-            result_.error = MakeError(AIErrors::EnvironmentQuerySchemaInvalid);
+            RecordGenerationFailure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
             return;
         }
         result_.generated = generation.Value().itemCount;
@@ -359,6 +376,12 @@ namespace Horo::AI {
             candidate->score = score;
             ++debugSample_;
         }
+        if (score.failedProvider.IsValid() &&
+            (!result_.failure || (result_.failure->reason == QueryScoreStatus::Filtered && score.status != QueryScoreStatus::Filtered) ||
+             (result_.failure->reason != QueryScoreStatus::InvalidScore && score.status == QueryScoreStatus::InvalidScore))) {
+            result_.failure =
+                QueryFailureDiagnostic{score.failedStage, score.failedProvider, score.itemIndex, score.status, QueryFailurePhase::Scoring};
+        }
         scores_.push_back(score);
         nextTest_ = 0;
         scoringReserved_ = false;
@@ -384,7 +407,10 @@ namespace Horo::AI {
             }
         } catch (...) {
             StopTest();
-            result_.error = ProviderFailure();
+            if (!generated_)
+                RecordGenerationFailure(ProviderFailure());
+            else
+                result_.error = ProviderFailure();
         }
     }
 
@@ -430,31 +456,40 @@ namespace Horo::AI {
             }
             if (!Charge(budget, testWorkUnits_))
                 return;
-            auto admitted = source_->StartTest(inputs_, scoring_.stages_[testOrder_[nextTest_]].rule.stage, items_[scores_.size()]);
+            StartCandidateTest();
+            return;
+        }
+    }
+
+    void QueryExecution::StartCandidateTest() {
+        const auto slot = testOrder_[nextTest_];
+        try {
+            auto admitted = source_->StartTest(inputs_, scoring_.stages_[slot].rule.stage, items_[scores_.size()]);
             if (admitted.HasError())
-                result_.error = std::move(admitted).ErrorValue();
+                RecordTestFailure(slot, QueryFailurePhase::TestStart, std::move(admitted).ErrorValue());
             else
                 pending_ = admitted.Value();
-            return;
+        } catch (...) {
+            RecordTestFailure(slot, QueryFailurePhase::TestStart, ProviderFailure());
         }
     }
 
     /** @brief Drains one provider result and rejects facts for a different stage. */
     void QueryExecution::Poll() {
+        const auto slot = testOrder_[nextTest_];
         try {
             auto completion = source_->PollTest();
             if (completion.HasError()) {
                 pending_ = false;
-                result_.error = std::move(completion).ErrorValue();
+                RecordTestFailure(slot, QueryFailurePhase::TestCompletion, std::move(completion).ErrorValue());
                 return;
             }
             if (!completion.Value())
                 return;
             pending_ = false;
             const auto &sample = *completion.Value();
-            const auto slot = testOrder_[nextTest_];
             if (sample.stage != scoring_.stages_[slot].rule.stage) {
-                result_.error = MakeError(AIErrors::EnvironmentQuerySchemaInvalid);
+                RecordTestFailure(slot, QueryFailurePhase::TestCompletion, MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
                 return;
             }
             samples_[slot] = sample;
@@ -464,7 +499,7 @@ namespace Horo::AI {
                 ScoreCandidate();
         } catch (...) {
             StopTest();
-            result_.error = ProviderFailure();
+            RecordTestFailure(slot, QueryFailurePhase::TestCompletion, ProviderFailure());
         }
     }
 
@@ -499,6 +534,7 @@ namespace Horo::AI {
         result_.generated = retained->generated;
         result_.evaluated = retained->evaluated;
         result_.invalidCoordinates = retained->invalidCoordinates;
+        result_.failure = retained->failure;
         result_.winners.assign(retained->winners.begin(), retained->winners.end());
         result_.status = QueryExecutionStatus::Completed;
         result_.publicationTick = lastSync_;
@@ -513,6 +549,7 @@ namespace Horo::AI {
         const bool skippedDecision = lastSync_ > settings_.submittedTick && lastAdvance_ != lastSync_;
         if (result_.mode == QueryExecutionMode::DeterministicWorkUnits && (skippedSync || skippedDecision)) {
             StopTest();
+            result_.failure.reset();
             result_.error = MakeError(AIErrors::SchedulerPhaseInvalid);
         }
     }
@@ -540,6 +577,7 @@ namespace Horo::AI {
     QueryExecutionStatus QueryExecution::ReduceWinners(const QueryExecutionStatus status) {
         auto selected = scoring_.SelectBest(scores_, settings_.bestCount);
         if (selected.HasError()) {
+            result_.failure.reset();
             result_.error = std::move(selected).ErrorValue();
             return QueryExecutionStatus::Failed;
         }
@@ -563,6 +601,8 @@ namespace Horo::AI {
             status = ReduceWinners(status);
         if (status != QueryExecutionStatus::Failed)
             result_.error.reset();
+        if (!result_.winners.empty() || (status != QueryExecutionStatus::Completed && status != QueryExecutionStatus::Failed))
+            result_.failure.reset();
         result_.status = status;
         result_.publicationTick = lastSync_;
         published_ = true;

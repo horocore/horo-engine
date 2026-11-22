@@ -82,7 +82,9 @@ namespace Horo::AI {
                     result.generated,
                     result.evaluated,
                     result.invalidCoordinates,
-                    result.winners.empty() ? std::nullopt : std::optional{result.winners.front()}};
+                    result.winners.empty() ? std::nullopt : std::optional{result.winners.front()},
+                    false,
+                    result.failure};
         }
 
         Result<BlackboardScalarValue> WinnerValue(const QueryGeneratedItem &item, const Runtime::RuntimeSceneView &scene,

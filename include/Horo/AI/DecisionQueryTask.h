@@ -36,6 +36,7 @@ namespace Horo::AI {
         std::size_t invalidCoordinates{};
         std::optional<QueryExecutionWinner> winner;
         bool blackboardCommitted{};
+        std::optional<QueryFailureDiagnostic> failure; /**< Redacted terminal attribution copied for replay. */
     };
 
     /** @brief Explicit host boundary for admitting existing staged query executions. */

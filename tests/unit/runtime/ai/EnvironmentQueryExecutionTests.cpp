@@ -204,6 +204,10 @@ namespace Horo::AI {
             QueryExecution &query_;
         };
 
+        QueryProviderId ExecutionTestProvider() {
+            return MakeIdentity<QueryProviderId>(103);
+        }
+
         [[nodiscard]] std::unique_ptr<QueryExecution> MakeExecution(ExecutionProbe &probe, Runtime::RuntimeScene &scene,
                                                                     bool reverseStages = false, bool deterministic = false,
                                                                     QueryExecutionInputs *capturedInputs = nullptr,
@@ -212,7 +216,9 @@ namespace Horo::AI {
             QueryFixture fixture;
             if (probe.actor)
                 fixture.items.front().kind = QueryItemKind::Actor;
-            const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17), fixture.generator.origin, fixture.items[0].id, {1, 1}, {}, {}};
+            auto testOrigin = fixture.generator.origin;
+            testOrigin.provider = ExecutionTestProvider();
+            const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17), testOrigin, fixture.items[0].id, {1, 1}, {}, {}};
             const auto registry = fixture.Registry(std::span{&test, 1});
             const auto plan = fixture.Plan(registry, test.id, reverseStages);
             std::vector<QueryScoreRule> rules;
@@ -522,6 +528,33 @@ namespace Horo::AI {
             CHECK_FALSE(executor.ActiveAgent().IsValid());
             CHECK(executor.Resume(context(8), operation).Value() == AiTaskState::Cancelled);
             CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value().has_value());
+        }
+
+        TEST_CASE("Behavior tree publishes bounded EQS failure evidence when mandatory tests reject every candidate",
+                  "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            fixture.host.probe.filter = false;
+            fixture.host.probe.nextAvailability = QueryTestAvailability::Incomparable;
+            const auto tree = fixture.Start();
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            std::optional<DecisionQueryPublication> observed;
+            for (std::uint64_t tick = 5; tick <= 7 && !observed; ++tick) {
+                fixture.executor->SyncQuery(tick, &observed);
+                if (!observed) {
+                    AiWorkBudget budget{64};
+                    fixture.executor->AdvanceQuery(tick, {budget, budget, budget});
+                }
+            }
+            REQUIRE(observed);
+            CHECK(observed->status == QueryExecutionStatus::Completed);
+            CHECK_FALSE(observed->winner);
+            CHECK_FALSE(observed->blackboardCommitted);
+            REQUIRE(observed->failure);
+            CHECK(observed->failure->reason == QueryScoreStatus::Incomparable);
+            CHECK(observed->failure->phase == QueryFailurePhase::Scoring);
+            CHECK(observed->failure->candidateIndex == 0);
+            CHECK(observed->failure->stage == MakeIdentity<QueryStageId>(16));
+            CHECK(observed->failure->provider == ExecutionTestProvider());
         }
 
         TEST_CASE("Behavior tree EQS task awaits owner phases and commits the winner once", "[unit][ai][eqs][task]") {
@@ -1584,6 +1617,18 @@ namespace Horo::AI {
                     point == SourceFailure::TypedAdmission ? AIErrors::CapabilityUnavailable : AIErrors::EnvironmentQueryProviderFailed;
                 CHECK(rejected->Published()->error->code.Value() == expected.code.Value());
                 CHECK(rejected->Published()->error->domain.Value() == expected.domain.Value());
+                REQUIRE(rejected->Published()->failure);
+                const auto &diagnostic = *rejected->Published()->failure;
+                const bool generating = point == SourceFailure::Generation;
+                const bool starting = point == SourceFailure::TypedAdmission || point == SourceFailure::Admission;
+                CHECK(diagnostic.phase == (generating ? QueryFailurePhase::Generation
+                                           : starting ? QueryFailurePhase::TestStart
+                                                      : QueryFailurePhase::TestCompletion));
+                CHECK(diagnostic.candidateIndex == (generating ? std::nullopt : std::optional<std::uint32_t>{0}));
+                CHECK(diagnostic.provider == (generating ? rejected->Published()->generator.provider : ExecutionTestProvider()));
+                CHECK(diagnostic.stage == (generating ? rejected->Published()->generator.stage : MakeIdentity<QueryStageId>(16)));
+                CHECK(diagnostic.reason ==
+                      (point == SourceFailure::TypedAdmission ? QueryScoreStatus::ProviderUnavailable : QueryScoreStatus::ProviderFailed));
                 CHECK(failing.cancelled == ((point == SourceFailure::Poll || point == SourceFailure::UnknownPoll) ? 1 : 0));
                 REQUIRE_FALSE(accepted->Sync(6));
                 accepted->Advance(6, {secondHealthy, secondHealthy, secondHealthy});

@@ -34,6 +34,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -779,6 +780,39 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(Internal::CompareHeadlessReplayCaptures(data, changed).HasError());
         const auto incompatible = publish(root / "nav-incompatible", changed);
         CHECK(Internal::CompareHeadlessReplayArtifacts(recorded, incompatible).HasError());
+
+        auto failed = data;
+        const auto failure = AI::QueryFailureDiagnostic{DecisionFixture::MakeIdentity<AI::QueryStageId>(17),
+                                                        DecisionFixture::MakeIdentity<AI::QueryProviderId>(23), 0,
+                                                        AI::QueryScoreStatus::ProviderUnavailable, AI::QueryFailurePhase::TestStart};
+        AI::DecisionQueryPublication publication{.descriptor = {.node = DecisionFixture::MakeIdentity<AI::DecisionNodeId>(1),
+                                                                .query = DecisionFixture::MakeIdentity<AI::QueryId>(2),
+                                                                .resultSchema = DecisionFixture::MakeIdentity<AI::QueryResultSchemaId>(3),
+                                                                .resultVersion = 1,
+                                                                .output = DecisionFixture::MakeIdentity<AI::BlackboardKeyId>(4)},
+                                                 .status = AI::QueryExecutionStatus::Failed,
+                                                 .mode = AI::QueryExecutionMode::DeterministicWorkUnits,
+                                                 .publicationTick = 2,
+                                                 .failure = failure};
+        failed.queries = Internal::HeadlessReplayQueries{failed.sceneInput, {publication}};
+        const auto queryArtifact = publish(root / "query-failed", failed);
+        std::ifstream queryEvidence{queryArtifact, std::ios::binary};
+        REQUIRE(queryEvidence.is_open());
+        const auto json = nlohmann::json::parse(queryEvidence);
+        const auto &failureRecord = json.at("queryPublication").at("records").at(0).at("failure");
+        CHECK(failureRecord == nlohmann::json{{"stageId", "17"},
+                                              {"providerId", "23"},
+                                              {"candidateIndex", 0},
+                                              {"reason", static_cast<std::uint8_t>(failure.reason)},
+                                              {"phase", static_cast<std::uint8_t>(failure.phase)}});
+        CHECK(json.at("blackboardSync").at("records").empty());
+        auto differentFault = failed;
+        differentFault.queries->publications.front().failure->reason = AI::QueryScoreStatus::ProviderFailed;
+        const auto changedFault = publish(root / "query-failed-differently", differentFault);
+        const auto replayComparison = Internal::CompareHeadlessReplayArtifacts(queryArtifact, changedFault);
+        REQUIRE(replayComparison.HasValue());
+        REQUIRE(replayComparison.Value());
+        CHECK(replayComparison.Value()->boundary == AI::AiReplayBoundary::QueryPublication);
     }
 
     TEST_CASE("Cooked AI decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {

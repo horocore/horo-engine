@@ -99,6 +99,16 @@ namespace Horo::Application::Internal {
                             {"generated", result.generated},
                             {"evaluated", result.evaluated},
                             {"invalidCoordinates", result.invalidCoordinates}};
+                if (result.failure) {
+                    const auto &failure = *result.failure;
+                    auto &diagnostic = record["failure"];
+                    diagnostic = {{"stageId", std::to_string(failure.stage.Value())},
+                                  {"providerId", std::to_string(failure.provider.Value())},
+                                  {"reason", static_cast<std::uint8_t>(failure.reason)},
+                                  {"phase", static_cast<std::uint8_t>(failure.phase)}};
+                    if (failure.candidateIndex)
+                        diagnostic["candidateIndex"] = *failure.candidateIndex;
+                }
                 if (result.winner) {
                     const auto &winner = *result.winner;
                     if (const auto *point = std::get_if<Math::WorldCoordinate64>(&winner.item))
