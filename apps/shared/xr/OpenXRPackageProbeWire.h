@@ -13,6 +13,9 @@ namespace Horo::Application::Internal::OpenXRProbeWire {
     inline constexpr std::string_view Route = "system-default";
     inline constexpr std::string_view Renderer = "vulkan";
     inline constexpr unsigned PackagedRouteCount = 4;
+    inline constexpr unsigned GraphicsRouteBit = 1U << 0;
+    inline constexpr unsigned PlatformTimeRouteBit = 1U << 1;
+    inline constexpr unsigned RequiredRouteMask = GraphicsRouteBit | PlatformTimeRouteBit;
 
     /** @brief Closed redacted reasons allowed through the Desktop process pipe. */
     enum class FailureReason : std::uint8_t {

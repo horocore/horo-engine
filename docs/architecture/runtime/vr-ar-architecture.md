@@ -1255,7 +1255,10 @@ With `--connection desktop-local`, the terminal emits one
 digest, expected executable digest, host, loader route, renderer, digest of the
 explicit runtime/HMD pair, connection, and outcome. The `preflight` outcome on
 stdout appends runtime and graphics versions, reference-space and swapchain
-format counts, and the admitted provider route mask. Typed outcomes on stderr
+format counts, and the admitted provider route mask. The launcher requires
+nonzero runtime and graphics version majors, at least two reference spaces,
+at least one swapchain format, and the graphics and platform time routes.
+Hand tracking and eye gaze remain optional. Typed outcomes on stderr
 cover stale or busy packages, timeouts, unavailable runtime and rejected receipts.
 The timeout defaults to 90 seconds. Omit both options to keep the existing
 child-receipt format. This is packaged Desktop preflight evidence. Per-unit

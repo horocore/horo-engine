@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
 
 
 MAX_RECORD_BYTES = 64 * 1024
+MAX_DESKTOP_PREFLIGHT_BYTES = 512
+DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v1"
+DESKTOP_PREFLIGHT_MAXIMA = (65535, 65535, 4294967295, 4294967295, 4294967295, 4294967295, 16, 128, 15)
+DESKTOP_REQUIRED_ROUTES = 0b0011
 CATEGORIES = {"Reference", "Compatibility", "Enterprise", "Conditional", "Future"}
 LEVELS = {"StaticContract", "DeterministicFake", "SimulatorReplay",
           "RuntimeCompatibility", "PhysicalDeviceQualification"}
@@ -164,18 +169,62 @@ def check_physical_gate(record: dict, declaration: object, optional: set[str]) -
         require(record["checks"][name]["status"] == "Passed", f"Required physical check {name} did not pass")
 
 
+def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
+    require(len(words) == len(DESKTOP_PREFLIGHT_MAXIMA), "Invalid Desktop preflight facts")
+    require(all(re.fullmatch(r"[0-9]{1,10}", word) for word in words), "Invalid Desktop preflight fact")
+    facts = tuple(map(int, words))
+    require(all(value <= maximum for value, maximum in zip(facts, DESKTOP_PREFLIGHT_MAXIMA)),
+            "Desktop preflight fact exceeds the supported range")
+    runtime_major, _, _, graphics_major, _, _, spaces, formats, routes = facts
+    require(runtime_major > 0 and graphics_major > 0 and spaces >= 2 and formats > 0,
+            "Desktop preflight lacks required runtime or renderer evidence")
+    require(routes & DESKTOP_REQUIRED_ROUTES == DESKTOP_REQUIRED_ROUTES,
+            "Desktop preflight lacks a required provider route")
+    return facts
+
+
+def check_desktop_preflight(data: bytes, identity: dict) -> None:
+    """Match a retired Desktop package probe to the physical tuple it can inform."""
+    require(0 < len(data) <= MAX_DESKTOP_PREFLIGHT_BYTES, "Desktop preflight exceeds the size limit")
+    require(hashlib.sha256(data).hexdigest() == identity["packageReceiptSha256"],
+            "Desktop preflight does not match the declared package receipt digest")
+    require(data.endswith(b"\n"), "Invalid Desktop preflight line ending")
+    columns = data[:-1].removesuffix(b"\r").decode("ascii").split(" ")
+    require(len(columns) == 18, "Invalid Desktop preflight receipt")
+    record, install, executable, host, route, renderer, target, connection, outcome, *facts = columns
+    require(record == DESKTOP_PREFLIGHT_RECORD and outcome == "preflight", "Expected a successful Desktop preflight")
+    require(install.startswith("sha256:") and is_digest(install[7:]), "Invalid Desktop preflight installation digest")
+    require(executable == f"sha256:{identity['buildSha256']}", "Desktop preflight uses a different executable")
+    require(host in {"windows", "linux"} and host == identity["hostPlatform"].lower(), "Desktop preflight uses a different host")
+    require(route == "system-default" and renderer == "vulkan" and renderer == identity["renderer"].lower(),
+            "Desktop preflight uses a different runtime route or renderer")
+    require(connection == "desktop-local" and identity["connectionMode"] in {"Tethered", "WirelessStreaming"},
+            "Desktop preflight requires a PCVR declaration")
+    labels = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
+    target_digest = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + labels).hexdigest()
+    require(target == f"sha256:{target_digest}", "Desktop preflight uses a different runtime or system")
+    runtime_version = ".".join(map(str, desktop_preflight_facts(facts)[:3]))
+    require(runtime_version == identity["runtimeVersion"], "Desktop preflight uses a different runtime version")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("record", type=Path)
     parser.add_argument("--expect", type=Path, help="Exact release tuple and test-plan declaration")
+    parser.add_argument("--desktop-preflight", type=Path, help="Exact packaged Desktop preflight receipt for the declared tuple")
     parser.add_argument("--require", choices=sorted(OPTIONAL_CHECKS), action="append", default=[])
     options = parser.parse_args()
     if options.require and options.expect is None:
         parser.error("--require needs --expect")
+    if options.desktop_preflight is not None and options.expect is None:
+        parser.error("--desktop-preflight needs --expect")
     try:
         record = validate_record(load_record(options.record))
         if options.expect is not None:
             check_physical_gate(record, load_record(options.expect), set(options.require))
+        if options.desktop_preflight is not None:
+            with options.desktop_preflight.open("rb") as receipt:
+                check_desktop_preflight(receipt.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), record["tuple"])
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")

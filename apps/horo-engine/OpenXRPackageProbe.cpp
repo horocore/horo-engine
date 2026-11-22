@@ -38,6 +38,7 @@ namespace Horo::Application::Internal {
 
         constexpr std::size_t MaximumReceiptBytes = 512;
         constexpr std::size_t ReceiptIdentityColumns = 6;
+        constexpr std::size_t ReceiptCompatibilityColumns = 9;
         constexpr std::string_view Usage =
             "Usage: horo-engine --probe-xr-package <windows|linux> system-default <runtime-name> <hmd-system-name> "
             "<install-sha256> <editor-executable> <editor-sha256> <installation-root> <project> <trust-roots> <catalog> "
@@ -127,13 +128,30 @@ namespace Horo::Application::Internal {
             Failure
         };
 
+        /** @brief Validates a successful row against the packaged projection profile's bounded evidence. */
+        bool ValidCompatibilityFacts(const std::span<const std::string_view, ReceiptCompatibilityColumns> fields) noexcept {
+            constexpr std::uint32_t maximumRoutes = (1U << OpenXRProbeWire::PackagedRouteCount) - 1U;
+            constexpr std::array<std::uint32_t, ReceiptCompatibilityColumns> maxima{65'535,     65'535,     UINT32_MAX,
+                                                                                    UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                                                                    16,         128,        maximumRoutes};
+            std::array<std::uint32_t, maxima.size()> values{};
+            for (std::size_t index = 0; index < maxima.size(); ++index) {
+                const auto field = fields[index];
+                auto &value = values[index];
+                const auto parsed = std::from_chars(field.data(), field.data() + field.size(), value);
+                if (parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || value > maxima[index])
+                    return false;
+            }
+            const auto [runtimeMajor, runtimeMinor, runtimePatch, graphicsMajor, graphicsMinor, graphicsPatch, spaces, formats, routes] =
+                values;
+            constexpr auto required = OpenXRProbeWire::RequiredRouteMask;
+            return runtimeMajor != 0 && graphicsMajor != 0 && spaces >= 2 && formats != 0 && (routes & required) == required;
+        }
+
         /** @brief Validates one process-owned record and rejects any extra strings or keys. */
         ReceiptKind ReadReceipt(const std::string_view line, const std::string_view digest, const std::string_view host,
                                 const std::string_view target) {
-            constexpr std::array<std::uint32_t, 9> maxima{65'535,     65'535,     UINT32_MAX,
-                                                          UINT32_MAX, UINT32_MAX, UINT32_MAX,
-                                                          16,         128,        (1U << OpenXRProbeWire::PackagedRouteCount) - 1U};
-            std::array<std::string_view, ReceiptIdentityColumns + maxima.size()> columns{};
+            std::array<std::string_view, ReceiptIdentityColumns + ReceiptCompatibilityColumns> columns{};
             std::size_t count{};
             for (auto word : std::views::split(line, ' ')) {
                 if (count == columns.size() || word.empty())
@@ -152,14 +170,8 @@ namespace Horo::Application::Internal {
             }
             if (count != columns.size() || columns[0] != OpenXRProbeWire::Record)
                 return ReceiptKind::Invalid;
-            for (std::size_t index = 0; index < maxima.size(); ++index) {
-                const auto field = columns[index + ReceiptIdentityColumns];
-                std::uint32_t value{};
-                const auto parsed = std::from_chars(field.data(), field.data() + field.size(), value);
-                if (parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || value > maxima[index])
-                    return ReceiptKind::Invalid;
-            }
-            return ReceiptKind::Success;
+            return ValidCompatibilityFacts(std::span{columns}.last<ReceiptCompatibilityColumns>()) ? ReceiptKind::Success
+                                                                                                   : ReceiptKind::Invalid;
         }
 
         /** @brief Retains at most one well-formed receipt from the supervised child's standard output. */

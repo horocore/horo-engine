@@ -5475,6 +5475,8 @@ namespace Horo::Editor {
             const auto &runtime = observed.runtimeVersion;
             const auto &graphics = observed.graphicsApi;
             static_assert(static_cast<unsigned>(OpenXRPackagedRoute::Count) == OpenXRProbeWire::PackagedRouteCount);
+            static_assert((1U << static_cast<unsigned>(OpenXRPackagedRoute::Graphics)) == OpenXRProbeWire::GraphicsRouteBit);
+            static_assert((1U << static_cast<unsigned>(OpenXRPackagedRoute::PlatformTime)) == OpenXRProbeWire::PlatformTimeRouteBit);
             unsigned admittedRoutes{};
             for (std::size_t index = 0; index < observed.extensionRoutes.size(); ++index) {
                 using enum XR::OpenXRInternal::NativeExtensionState;

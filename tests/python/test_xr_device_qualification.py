@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -104,3 +105,71 @@ def test_cli_rejects_duplicate_record_members(tmp_path, smoke):
     failed = subprocess.run(argv, capture_output=True, check=False)
     assert failed.returncode == 1
     assert b"Duplicate JSON field" in failed.stderr
+
+
+def desktop_preflight_receipt(identity):
+    labels = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
+    target = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + labels).hexdigest()
+    return (f"horo-xr-desktop-qualification-v1 sha256:{'2' * 64} sha256:{identity['buildSha256']} "
+            f"linux system-default vulkan sha256:{target} desktop-local preflight 9 8 7 1 3 0 2 2 3\n").encode()
+
+
+@pytest.fixture
+def desktop_identity(smoke):
+    identity = smoke["tuple"]
+    identity.update(hostPlatform="Linux", renderer="Vulkan", runtime="Test Runtime",
+                    headsetModel="Test HMD", runtimeVersion="9.8.7")
+    return identity
+
+
+@pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"])
+def test_desktop_preflight_cli_checks_exact_receipt_and_physical_gate(tmp_path, smoke, desktop_identity, line_ending):
+    receipt = tmp_path / "receipt.txt"
+    receipt.write_bytes(desktop_preflight_receipt(desktop_identity).removesuffix(b"\n") + line_ending)
+    desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    record = tmp_path / "smoke.json"
+    expected = tmp_path / "expected.json"
+    record.write_text(json.dumps(smoke), encoding="utf-8")
+    expected.write_text(json.dumps(declared(smoke)), encoding="utf-8")
+    command = [sys.executable, str(SCRIPT), str(record), "--expect", str(expected), "--desktop-preflight", str(receipt)]
+    assert subprocess.run(command, capture_output=True, check=False).returncode == 0
+    smoke["evidenceLevel"] = "RuntimeCompatibility"
+    record.write_text(json.dumps(smoke), encoding="utf-8")
+    rejected = subprocess.run(command, capture_output=True, check=False)
+    assert rejected.returncode == 1
+    assert b"Physical headset evidence is required" in rejected.stderr
+
+
+@pytest.mark.parametrize(("field", "different", "message"), [
+    ("buildSha256", "a" * 64, "different executable"),
+    ("runtime", "Other Runtime", "different runtime or system"),
+    ("headsetModel", "Other HMD", "different runtime or system"),
+    ("runtimeVersion", "9.8.6", "different runtime version"),
+    ("hostPlatform", "Windows", "different host"),
+    ("renderer", "Metal", "different runtime route or renderer"),
+    ("connectionMode", "Standalone", "PCVR declaration"),
+    ("packageReceiptSha256", "b" * 64, "declared package receipt digest"),
+])
+def test_desktop_preflight_rejects_foreign_tuple(desktop_identity, field, different, message):
+    receipt = desktop_preflight_receipt(desktop_identity)
+    desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt).hexdigest()
+    desktop_identity[field] = different
+    with pytest.raises(ValueError, match=message):
+        xr.check_desktop_preflight(receipt, desktop_identity)
+
+
+@pytest.mark.parametrize(("index", "value", "message"), [
+    (-1, b"2", "required provider route"),
+    (-1, b"16", "supported range"),
+    (-9, b"0", "required runtime or renderer"),
+    (-2, b"0", "required runtime or renderer"),
+    (-5, b"-1", "Invalid Desktop preflight fact"),
+    (-10, b"permission-denied", "Expected a successful Desktop preflight"),
+])
+def test_desktop_preflight_rejects_incompatible_receipt(desktop_identity, index, value, message):
+    fields = desktop_preflight_receipt(desktop_identity).rstrip().split(b" ")
+    fields[index] = value
+    receipt = b" ".join(fields) + b"\r\n"
+    desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt).hexdigest()
+    with pytest.raises(ValueError, match=message):
+        xr.check_desktop_preflight(receipt, desktop_identity)

@@ -30,8 +30,18 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
     success_variants = ("accepted", "foreign", "malformed", "duplicate", "failed", "stale-executable", "surviving-child", "interrupted")
     failure_variants = ("failure-receipt", "foreign-failure", "malformed-failure", "failure-exit-mismatch", "mixed-receipts",
                         "stale-after-failure", "wrong-connection", "failure-on-stderr")
-    qualified_variants = ("accepted", "failure-receipt", "foreign", "duplicate", "stale-executable", "stale-after-failure",
-                          "surviving-child", "interrupted", "timed-out", "unsupported-route-mask", "invalid-connection", "invalid-timeout")
+    incompatible_facts = {
+        "unsupported-route-mask": (-1, "16"),
+        "missing-graphics-route": (-1, "10"),
+        "missing-time-route": (-1, "9"),
+        "missing-runtime-version": (-9, "0"),
+        "missing-graphics-version": (-6, "0"),
+        "insufficient-reference-spaces": (-3, "1"),
+        "missing-swapchain-format": (-2, "0"),
+    }
+    qualified_variants = ("accepted", "required-routes-only", "failure-receipt", "foreign", "duplicate", "stale-executable",
+                          "stale-after-failure", "surviving-child", "interrupted", "timed-out", *incompatible_facts,
+                          "invalid-connection", "invalid-timeout")
     cases = [(variant, False) for variant in (*success_variants, *failure_variants)]
     cases.extend((variant, True) for variant in qualified_variants)
     for variant, qualified in cases:
@@ -51,8 +61,13 @@ if variant == "foreign":
     record = record.replace({target!r}, {digest(b"different target")!r})
 elif variant == "malformed":
     record += " /root/a-sensitive-path"
-elif variant == "unsupported-route-mask":
-    record = record.rsplit(" ", 1)[0] + " 16"
+if variant in {incompatible_facts!r}:
+    columns = record.split(" ")
+    index, value = {incompatible_facts!r}[variant]
+    columns[index] = value
+    record = " ".join(columns)
+elif variant == "required-routes-only":
+    record = record.rsplit(" ", 1)[0] + " 3"
 if variant == 'foreign-failure':
     failure = failure.replace({target!r}, {digest(b"different target")!r})
 if variant == 'malformed-failure':
@@ -105,18 +120,20 @@ sys.exit(7 if variant == "failed" else 0)
         else:
             run = subprocess.run(args, env=env, timeout=8, capture_output=True, text=True, check=False)
         invalid_options = variant in ("invalid-connection", "invalid-timeout")
-        assert run.returncode == (0 if variant == "accepted" else 2 if invalid_options else 1), (variant, run)
+        accepted = variant in ("accepted", "required-routes-only")
+        assert run.returncode == (0 if accepted else 2 if invalid_options else 1), (variant, run)
         assert "private" not in run.stderr and "/root/" not in run.stderr, (variant, run)
         assert (root / "ran").exists() == (not invalid_options and variant != "stale-executable"), (variant, run)
         if qualified and not invalid_options:
             identity = f"horo-xr-desktop-qualification-v1 {install} {executable_digest} linux system-default vulkan {target} desktop-local"
-            if variant == "accepted":
-                assert run.stdout == identity + " preflight 9 8 7 1 3 0 2 2 11\n" and not run.stderr, (variant, run)
+            if accepted:
+                admitted_routes = 3 if variant == "required-routes-only" else 11
+                assert run.stdout == f"{identity} preflight 9 8 7 1 3 0 2 2 {admitted_routes}\n" and not run.stderr, (variant, run)
             else:
                 outcomes = {"failure-receipt": "permission-denied", "foreign": "unattributed-receipt", "duplicate": "unattributed-receipt",
                             "stale-executable": "stale-or-busy-package", "stale-after-failure": "stale-package", "timed-out": "timed-out",
                             "surviving-child": "interrupted-or-retired", "interrupted": "interrupted-or-retired",
-                            "unsupported-route-mask": "unattributed-receipt"}
+                            **dict.fromkeys(incompatible_facts, "unattributed-receipt")}
                 assert run.stderr == f"{identity} {outcomes[variant]}\n" and not run.stdout, (variant, run)
             assert runtime not in run.stderr + run.stdout and headset not in run.stderr + run.stdout
         else:

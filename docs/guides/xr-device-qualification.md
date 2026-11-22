@@ -118,6 +118,7 @@ failed observation has a digest and a stable `issue`.
 ```sh
 python scripts/qualify_xr_device.py smoke.json
 python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json --require haptics
+python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json --desktop-preflight desktop-preflight.txt
 ```
 
 The release declaration is an object with a complete `tuple` and exact
@@ -125,7 +126,14 @@ The release declaration is an object with a complete `tuple` and exact
 second invocation requires a passing physical record and passing checks
 for setup, input, display enumeration, timing, comfort, lifecycle and recovery.
 Add `--require haptics` or `--require optionalMR` when the release claims the
-capability. Keep any limited optional results visible in the matrix. The release
+capability. Keep any limited optional results visible in the matrix.
+For PCVR, `--desktop-preflight` validates the exact stdout receipt from
+`horo-engine --probe-xr-package ... --connection desktop-local`. Save the
+receipt bytes directly and use their SHA-256 for `packageReceiptSha256`.
+Use the runtime-reported labels from the probe in `runtime` and `headsetModel`,
+and record `runtimeVersion` as `major.minor.patch`. The checker also confirms
+the executable digest, host, and renderer. The same physical checks still apply
+to tethered and wireless-streaming declarations. The release
 owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).
 Use the [release matrix and example procedures](xr-release-qualification.md)
