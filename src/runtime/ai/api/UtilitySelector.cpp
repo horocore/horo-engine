@@ -164,6 +164,12 @@ namespace Horo::AI {
     Result<UtilityEvaluation> UtilitySelector::Evaluate(const BlackboardSnapshot &snapshot, const AgentHandle agent,
                                                         AiWorkBudget &agentBudget, AiWorkBudget &globalBudget,
                                                         const std::span<UtilityScoreRecord> evidence) const {
+        return Evaluate(snapshot, agent, agentBudget, globalBudget, evidence, {});
+    }
+
+    Result<UtilityEvaluation> UtilitySelector::Evaluate(const BlackboardSnapshot &snapshot, const AgentHandle agent,
+                                                        AiWorkBudget &agentBudget, AiWorkBudget &globalBudget,
+                                                        const std::span<UtilityScoreRecord> evidence, const TaskId preferred) const {
         using Evaluation = Result<UtilityEvaluation>;
         if (!agent.IsValid() || snapshot.Binding().agent != agent || snapshot.Schema() != schema_)
             return Evaluation::Failure(MakeError(AIErrors::BlackboardInstanceStale));
@@ -176,6 +182,7 @@ namespace Horo::AI {
             return Evaluation::Success(result);
         }
         const EvidenceWriter writer{evidence, result};
+        std::optional<UtilitySelection> preference;
         auto slots = std::span<const std::size_t>{slots_};
         for (const auto &option : options_) {
             const auto count = option.considerations.size();
@@ -186,7 +193,11 @@ namespace Horo::AI {
             writer.Append({option.id, {}, score.Value()});
             if (IsBetterScore(score.Value(), result.selection))
                 result.selection = UtilitySelection{option.id, option.action, *score.Value()};
+            if (option.action == preferred && IsBetterScore(score.Value(), preference))
+                preference = UtilitySelection{option.id, option.action, *score.Value()};
         }
+        if (preference)
+            result.selection = preference;
         return Evaluation::Success(result);
     }
 

@@ -6,6 +6,7 @@ namespace Horo::AI {
     struct DecisionGraphInstance::StepObservation final {
         const DecisionGraphStepInput &values;
         std::optional<DecisionProviderFailure> *providerFailure;
+        const LocalPolicyUtilityInput *localPolicy;
     };
 
     struct DecisionGraphInstance::OccurrenceState final {

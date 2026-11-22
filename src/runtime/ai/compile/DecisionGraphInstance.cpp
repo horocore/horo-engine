@@ -354,6 +354,13 @@ namespace Horo::AI {
         return StepImpl(input, nullptr);
     }
 
+    Result<AiTaskState> DecisionGraphInstance::StepWithLocalPolicy(const DecisionGraphStepInput &input,
+                                                                   const LocalPolicyUtilityInput &policy) {
+        if (auto valid = ValidateStep(input); valid.HasError())
+            return Result<AiTaskState>::Failure(std::move(valid).ErrorValue());
+        return StepRecorded(input, nullptr, nullptr, &policy);
+    }
+
     /** @copydoc DecisionGraphInstance::StepBudgeted */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
         return StepBudgeted(input, budget, nullptr);
@@ -415,7 +422,8 @@ namespace Horo::AI {
 
     /** @copydoc DecisionGraphInstance::StepRecorded */
     Result<AiTaskState> DecisionGraphInstance::StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
-                                                            std::optional<DecisionProviderFailure> *providerFailure) {
+                                                            std::optional<DecisionProviderFailure> *providerFailure,
+                                                            const LocalPolicyUtilityInput *policy) {
         if (trace) {
             trace->header_ = {.root = plan_->Root(),
                               .planDigest = plan_->Digest(),
@@ -425,7 +433,7 @@ namespace Horo::AI {
             trace->count_ = 0;
             trace->dropped_ = 0;
         }
-        auto result = StepValidated(input, trace, providerFailure);
+        auto result = StepValidated(input, trace, providerFailure, policy);
         if (trace)
             trace->header_.outcome = result.HasValue() ? result.Value() : AiTaskState::Failed;
         return result;
@@ -433,13 +441,14 @@ namespace Horo::AI {
 
     /** @copydoc DecisionGraphInstance::StepValidated */
     Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
-                                                             std::optional<DecisionProviderFailure> *providerFailure) {
+                                                             std::optional<DecisionProviderFailure> *providerFailure,
+                                                             const LocalPolicyUtilityInput *policy) {
         if (!Available()) {
             const auto previous = occurrences_[0]->outcome;
             static_cast<void>(Cancel(AiTaskCancellationReason::ContextCancelled));
             return Result<AiTaskState>::Success(Terminal(previous) ? previous : AiTaskState::Cancelled);
         }
-        StepScope scope(*this, {input, providerFailure}, trace);
+        StepScope scope(*this, {input, providerFailure, policy}, trace);
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {

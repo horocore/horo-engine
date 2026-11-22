@@ -2662,7 +2662,11 @@ Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model
 digest, deadline and current task declarations before returning a task to the
 existing decision path. Typed inference failures leave fallback selection with
-the owner.
+the owner. An explicitly fed root Utility decision accepts a model preference
+only for an eligible authored action in its current Blackboard snapshot.
+Inference uses a separate work allowance, and missing, stale, cancelled or
+ineligible proposals leave normal Utility scoring in charge. A running action
+retains its existing task lifecycle.
 
 ### Runtime Task & Lifecycle Alignment
 

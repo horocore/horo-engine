@@ -146,6 +146,11 @@ namespace Horo::AI {
             return digest_;
         }
 
+        /** @brief A model without a schema is usable with any explicitly supplied tensor. */
+        [[nodiscard]] bool SupportsBlackboard(BlackboardSchemaId schema) const noexcept {
+            return !blackboard_ || blackboard_ == schema;
+        }
+
         [[nodiscard]] std::size_t RequiredWork() const noexcept;
         /** @brief Runs the bounded inference against exact typed features. Fall back at the caller on a typed failure. */
         [[nodiscard]] LocalPolicyProposal Infer(const LocalPolicyRequestIdentity &identity, LocalPolicyTargetId target,

@@ -89,6 +89,10 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<UtilityEvaluation> Evaluate(const BlackboardSnapshot &snapshot, AgentHandle agent, AiWorkBudget &agentBudget,
                                                          AiWorkBudget &globalBudget, std::span<UtilityScoreRecord> evidence = {}) const;
+        /** @brief Selects an eligible option for the preferred task, or applies normal scoring when it is unavailable. */
+        [[nodiscard]] Result<UtilityEvaluation> Evaluate(const BlackboardSnapshot &snapshot, AgentHandle agent, AiWorkBudget &agentBudget,
+                                                         AiWorkBudget &globalBudget, std::span<UtilityScoreRecord> evidence,
+                                                         TaskId preferred) const;
 
         /** @brief Returns validated options in the declared stable order. @return Immutable policies. */
         [[nodiscard]] std::span<const UtilityOption> Options() const noexcept;

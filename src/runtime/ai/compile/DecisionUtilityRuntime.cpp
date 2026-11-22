@@ -31,6 +31,28 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    TaskId DecisionGraphInstance::InferUtilityPreference(const LocalPolicyUtilityInput &policy,
+                                                         const DecisionGraphStepInput &input) const noexcept {
+        if (&policy.work == input.utilityAgentBudget || &policy.work == input.utilityGlobalBudget ||
+            policy.blackboardRevision != input.blackboard.CapturedRevision() || !policy.model.SupportsBlackboard(input.current.schema))
+            return {};
+        const auto &agent = input.current.agent;
+        // Inference runs within one synchronous step under this instance's pinned provider and operation leases.
+        const LocalPolicyRequestIdentity request{agent,
+                                                 agent.incarnation.Value(),
+                                                 plan_->Root(),
+                                                 binding_.operation.task.slot.generation,
+                                                 policy.blackboardRevision,
+                                                 input.tick,
+                                                 input.tick};
+        auto proposal = policy.model.Infer(request, policy.target, policy.expectedModel, policy.tensorSchemaVersion, policy.features,
+                                           input.tick, policy.work, policy.cancellation);
+        if (!Available())
+            return {};
+        LocalPolicyRequestSlot owner{request};
+        return owner.Consume(proposal, request, policy.model, policy.tasks, input.tick, policy.cancellation).task;
+    }
+
     /** @copydoc DecisionGraphInstance::AdvanceUtility */
     Result<AiTaskState> DecisionGraphInstance::AdvanceUtility(const std::size_t index) {
         auto &state = *occurrences_[index];
@@ -40,8 +62,10 @@ namespace Horo::AI {
             *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
         if (!runtime.selected) {
             const auto evidence = trace_ ? std::span<UtilityScoreRecord>{runtime.evidence} : std::span<UtilityScoreRecord>{};
+            const auto *policy = index == 0 ? input_->localPolicy : nullptr;
+            const auto preferred = policy ? InferUtilityPreference(*policy, input) : TaskId{};
             auto evaluated = utility.Selector().Evaluate(input.blackboard, input.current.agent, *input.utilityAgentBudget,
-                                                         *input.utilityGlobalBudget, evidence);
+                                                         *input.utilityGlobalBudget, evidence, preferred);
             if (evaluated.HasError())
                 return Result<AiTaskState>::Failure(evaluated.ErrorValue());
             const auto &result = evaluated.Value();

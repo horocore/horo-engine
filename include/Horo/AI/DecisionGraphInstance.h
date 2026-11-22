@@ -5,6 +5,7 @@
 #include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/AI/DecisionStepTrace.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
 
 namespace Horo::AI {
     class IDecisionQueryTaskBinder;
@@ -30,6 +31,19 @@ namespace Horo::AI {
         AiWorkBudget *utilityAgentBudget{};  /**< Required for closures containing Utility. Borrowed for this Step only. */
         AiWorkBudget *utilityGlobalBudget{}; /**< Host-issued global allowance, shared across all evaluated occurrences. */
         AiTaskResumeReason treeResumeReason{AiTaskResumeReason::FixedTick}; /**< Frozen scheduler wake for Behavior Tree tasks. */
+    };
+
+    /** @brief One revision-scoped feature tensor and the host's exact model, target and task admission. */
+    struct LocalPolicyUtilityInput final {
+        const LocalLearnedPolicy &model;
+        const AiCapabilityDescriptorSet &tasks;
+        std::span<const LocalPolicyFeature> features;
+        Sha256Digest expectedModel;
+        LocalPolicyTargetId target;
+        std::uint32_t tensorSchemaVersion{};
+        std::uint64_t blackboardRevision{};
+        AiWorkBudget &work;
+        CancellationToken cancellation;
     };
 
     /** @brief One complete executable allocation; actual decision kernels own their existing traversal/task semantics.
@@ -82,6 +96,11 @@ namespace Horo::AI {
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
+        /** @brief Prefer the model's proposal only among eligible actions of a root Utility selector.
+         * @details Tensors are borrowed for one owner-lane step. Inference is bounded by the separate host allowance.
+         * The existing selector handles an unavailable, stale or ineligible proposal, and live actions keep their lease.
+         */
+        [[nodiscard]] Result<AiTaskState> StepWithLocalPolicy(const DecisionGraphStepInput &input, const LocalPolicyUtilityInput &policy);
         /** @brief Advances one fully admitted scheduler slice without partially evaluating a tick.
          * @param input Exact committed observation for the requested tick.
          * @param budget Scheduler-owned allowance for the current slice.
@@ -148,10 +167,12 @@ namespace Horo::AI {
                                                                           std::optional<DecisionProviderFailure> *providerFailure);
         /** @brief Initializes and seals optional evidence around an already admitted execution. */
         [[nodiscard]] Result<AiTaskState> StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
-                                                       std::optional<DecisionProviderFailure> *providerFailure = nullptr);
+                                                       std::optional<DecisionProviderFailure> *providerFailure = nullptr,
+                                                       const LocalPolicyUtilityInput *policy = nullptr);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
         [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
-                                                        std::optional<DecisionProviderFailure> *providerFailure = nullptr);
+                                                        std::optional<DecisionProviderFailure> *providerFailure,
+                                                        const LocalPolicyUtilityInput *policy);
         /** @brief Correlates a record to the exact compiled call and its stable caller. */
         [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
         /** @brief Copies exact active task identities, without advancing or calling any Decision providers. */
@@ -171,6 +192,8 @@ namespace Horo::AI {
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
         /** @brief Advances one Utility occurrence using its canonical task kernel and host allowances. */
         [[nodiscard]] Result<AiTaskState> AdvanceUtility(std::size_t index);
+        [[nodiscard]] TaskId InferUtilityPreference(const LocalPolicyUtilityInput &policy,
+                                                    const DecisionGraphStepInput &input) const noexcept;
         /** @brief Prepares Utility action runners with disjoint owner-issued task slots. */
         [[nodiscard]] Result<void> BuildUtility(std::size_t index);
         /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
