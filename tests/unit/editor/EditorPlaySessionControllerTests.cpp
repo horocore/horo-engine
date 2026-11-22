@@ -1984,6 +1984,12 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
             CHECK(visibility->score.status == QueryScoreStatus::Filtered);
         }
     }
+    if (nativeQuery) {
+        const auto reload = play.QuiesceForReload();
+        REQUIRE(reload.HasError());
+        CHECK(play.State() == Editor::EditorPlaySessionState::Playing);
+        CHECK(play.ResolveQueryInspectionSource(query.Value()) == resolved);
+    }
     CHECK_FALSE(play.InspectQuery(mismatch).snapshot);
     CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     play.Stop();

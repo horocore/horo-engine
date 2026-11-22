@@ -1,5 +1,6 @@
 #include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameplayAiContext.h"
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/NativeBehavior.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
 #include "Horo/Gameplay/NativePerceptionSense.h"
@@ -36,6 +37,12 @@ namespace {
         Result<GameModuleReloadSnapshot> PrepareReload(GameRuntimeContext &) override {
             const bool revoked = !retained_ || retained_->ResolveAgent(AI::AgentId::Create(1).Value()).HasError();
             return Result<GameModuleReloadSnapshot>::Success({1, {revoked ? std::byte{1} : std::byte{0}}});
+        }
+
+        Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot, GameRuntimeContext &) override {
+            if (snapshot.schemaVersion != GameModuleReloadSnapshotSchemaVersion || snapshot.payload != std::vector{std::byte{1}})
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestoreFailed));
+            return Result<void>::Success();
         }
 
         void Stop(GameRuntimeContext &) noexcept override {

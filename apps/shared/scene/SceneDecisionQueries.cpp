@@ -110,9 +110,12 @@ namespace Horo::Application::Internal {
             return Created::Failure(contexts.ErrorValue());
         try {
             auto owner = std::make_shared<SceneDecisionQueries>();
+            if (gameplayTests && std::ranges::any_of(plans, [&](const auto &entry) {
+                return gameplayTests->UsesTests(*entry.second.plan);
+            }))
+                owner->gameplayTests_ = std::move(gameplayTests);
             owner->plans_ = std::move(plans);
             owner->registry_ = std::move(registry);
-            owner->gameplayTests_ = std::move(gameplayTests);
             owner->contexts_.emplace(std::move(contexts).Value());
             owner->maximumActive_ = settings.evaluationsPerTick;
             owner->workUnitsLimit_ = workUnitsLimit;
@@ -141,6 +144,8 @@ namespace Horo::Application::Internal {
         if (plan == plans_.end())
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         const bool usesGameplay = gameplayTests_ && gameplayTests_->UsesTests(*plan->second.plan);
+        if (usesGameplay && !gameplayTests_->IsCurrent())
+            return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
         if (!bestEffort_ &&
             (usesGameplay || AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));

@@ -1,4 +1,5 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -8,6 +9,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace Horo::AI {
     namespace {
@@ -97,6 +99,63 @@ namespace Horo::AI {
             module->RequestRetirement();
             CHECK_FALSE(generation->CanUse());
             CHECK(fixture.Step(*created.Value(), 2) == AiTaskState::Cancelled);
+        }
+
+        TEST_CASE("Native EQS leases revoke before replacement and never acquire the new generation", "[ai][eqs][native]") {
+            Horo::Tests::OwnedTestDirectory shadows{"native-query-generation"};
+            auto active = NativeModule(shadows.Path());
+            const auto oldPath = active->LoadedArtifactPath();
+            auto acquired = active->AcquireGameplayQueryTests();
+            REQUIRE(acquired.HasValue());
+            auto old = std::move(acquired).Value();
+            const auto test = MakeIdentity<QueryTestId>(90);
+            REQUIRE(old.tests);
+            REQUIRE(old.tests->Contains(test));
+            CHECK(old.tests->CanEvaluate());
+
+            std::optional<Result<Gameplay::GameModuleReloadSnapshot>> foreignPrepare;
+            std::jthread foreign([&] {
+                foreignPrepare = active->PrepareReload();
+            });
+            foreign.join();
+            REQUIRE(foreignPrepare);
+            TestSupport::ExpectError(*foreignPrepare, Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            CHECK(old.tests->CanEvaluate());
+
+            TestSupport::ExpectError(active->PrepareReload(), Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            CHECK_FALSE(old.tests->IsCurrent());
+            CHECK_FALSE(old.tests->CanEvaluate());
+            CHECK(active->AcquireGameplayQueryTests().HasError());
+            CHECK(std::filesystem::exists(oldPath));
+
+            auto replacement = NativeModule(shadows.Path());
+            CHECK(replacement->LoadedArtifactPath() != oldPath);
+            const auto fresh = replacement->AcquireGameplayQueryTests();
+            REQUIRE(fresh.HasValue());
+            REQUIRE(fresh.Value().tests);
+            CHECK(fresh.Value().tests != old.tests);
+            CHECK(fresh.Value().tests->CanEvaluate());
+            CHECK_FALSE(old.tests->CanEvaluate());
+
+            const std::weak_ptr<const GameplayQueryTestRegistry> oldLease = old.tests;
+            old.tests.reset();
+            CHECK(oldLease.expired());
+            const auto snapshot = active->PrepareReload();
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(active->TryRetire().HasValue());
+            active.reset();
+            CHECK_FALSE(std::filesystem::exists(oldPath));
+            CHECK(old.schema->Find(test));
+
+            std::optional<Result<void>> foreignRestore;
+            std::jthread restorer([&] {
+                foreignRestore = replacement->RestoreReload(snapshot.Value());
+            });
+            restorer.join();
+            REQUIRE(foreignRestore);
+            TestSupport::ExpectError(*foreignRestore, Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            REQUIRE(replacement->RestoreReload(snapshot.Value()).HasValue());
+            CHECK(fresh.Value().tests->CanEvaluate());
         }
 
         TEST_CASE("A compiled authored call closure executes actual generated native nodes and pins their code image",

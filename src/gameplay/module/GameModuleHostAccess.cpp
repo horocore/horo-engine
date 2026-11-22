@@ -371,6 +371,9 @@ namespace Horo::Gameplay {
 
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Result<GameModuleReloadSnapshot>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Reload preparation belongs to the gameplay module owner lane."));
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
         if (impl_ && impl_->runtimeUi)
             impl_->runtimeUi->Revoke();
@@ -427,6 +430,9 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::RestoreReload */
     Result<void> LoadedGameModule::RestoreReload(  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         const GameModuleReloadSnapshot &snapshot) {
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Reload restoration belongs to the gameplay module owner lane."));
         return impl_->RestoreReload(snapshot);
     }
 
