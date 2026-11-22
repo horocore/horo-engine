@@ -229,4 +229,29 @@ namespace Horo::Packages {
                 return Result<void>::Failure(MakeError(Stale));
         return Result<void>::Success();
     }
+
+    /** @copydoc PackageRemovalPlan::Prepare */
+    Result<PackageRemovalPlan> PackageRemovalPlan::Prepare(const ValidatedPackageRequest &current, const ValidatedPackageLockfileV1 &locked,
+                                                           const HoroPackageId &package) {
+        using Output = Result<PackageRemovalPlan>;
+        if (const auto valid = current.ValidateLock(locked); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        auto document = Json::parse(current.SerializeCanonical());
+        if (document.at("dependencies").erase(package.Value()) == 0)
+            return Output::Failure(MakeError(Invalid, "Only a direct package request can be withdrawn."));
+        auto replacement = ValidatedPackageRequest::Parse(document.dump());
+        if (replacement.HasError())
+            return Output::Failure(replacement.ErrorValue());
+        PackageRemovalGraphPreview graph;
+        if (std::ranges::find(locked.Packages(), package, &LockedPackage::package) != locked.Packages().end()) {
+            auto preview = locked.PreviewRemoval(package);
+            if (preview.HasError())
+                return Output::Failure(preview.ErrorValue());
+            graph = std::move(preview).Value();
+        }
+        auto newLock = locked.WithRootWithdrawn(package, replacement.Value().Digest(), graph.removed);
+        if (const auto valid = replacement.Value().ValidateLock(newLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        return Output::Success({std::move(replacement).Value(), std::move(newLock), std::move(graph)});
+    }
 }  // namespace Horo::Packages

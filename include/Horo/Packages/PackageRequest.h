@@ -50,4 +50,20 @@ namespace Horo::Packages {
         std::string canonical_;
         Sha256Digest digest_;
     };
+
+    /** @brief Inert replacement documents for withdrawing one explicit package request from a verified plan. */
+    struct PackageRemovalPlan final {
+        ValidatedPackageRequest request;
+        ValidatedPackageLockfileV1 lock;
+        PackageRemovalGraphPreview graph;
+
+        /** @brief Removes only the selected declaration and its unreachable lock entries.
+         * @param current Current validated portable request.
+         * @param locked Exact lockfile corresponding to the current request.
+         * @param package Package explicitly declared in the current request.
+         * @return A validated replacement pair or the original typed mismatch. A transitive-only or unknown request is rejected.
+         * @post No files, cached artifacts, or native modules change. Approval and reference checks remain transaction-owned. */
+        [[nodiscard]] static Result<PackageRemovalPlan> Prepare(const ValidatedPackageRequest &current,
+                                                                const ValidatedPackageLockfileV1 &locked, const HoroPackageId &package);
+    };
 }  // namespace Horo::Packages

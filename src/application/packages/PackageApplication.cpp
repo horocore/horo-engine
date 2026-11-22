@@ -83,6 +83,13 @@ namespace Horo::Application {
             if (valid.HasError())
                 return Result<std::unique_ptr<PackageApplication>>::Failure(valid.ErrorValue());
         }
+        if (configuration.portableRequest) {
+            if (!configuration.lockedPlan)
+                return Result<std::unique_ptr<PackageApplication>>::Failure(Failure("packages.application.plan_unavailable"));
+            const auto valid = configuration.portableRequest->ValidateLock(*configuration.lockedPlan);
+            if (valid.HasError())
+                return Result<std::unique_ptr<PackageApplication>>::Failure(valid.ErrorValue());
+        }
         auto owner = std::make_unique<PackageApplication>(ConstructionKey{}, std::make_unique<Impl>(jobs, restore, install, lifecycle,
                                                                                                     std::move(configuration)));
         if (owner->impl_->configuration.lockedPlan) {

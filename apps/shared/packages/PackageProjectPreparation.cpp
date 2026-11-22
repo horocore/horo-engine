@@ -76,6 +76,7 @@ namespace Horo::Application::Internal {
                                         .mode = policy.mode,
                                         .requirePublisherVerification = policy.requirePublisherVerification};
         prepared.application.lockedPlan = std::move(lock).Value();
+        prepared.application.portableRequest = std::move(request).Value();
         prepared.lockDigest = ComputeSha256(std::as_bytes(std::span{prepared.application.restore.lockfileJson}));
         return Result<PreparedPackageProject>::Success(std::move(prepared));
     }

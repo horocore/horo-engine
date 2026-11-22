@@ -4,6 +4,7 @@
  * @brief One project-bound application operation owner shared by package presentation adapters.
  */
 #include "Horo/Packages/PackageLifecycle.h"
+#include "Horo/Packages/PackageRequest.h"
 
 #include <functional>
 #include <thread>
@@ -83,7 +84,8 @@ namespace Horo::Application {
     /** @brief Exact host policy; no portable package request can approve execution or select a native loader. */
     struct PackageApplicationConfiguration final {
         Packages::PackageRestoreRequest restore;
-        std::optional<Packages::ValidatedPackageLockfileV1> lockedPlan; /**< Already validated host project snapshot, when available. */
+        std::optional<Packages::ValidatedPackageLockfileV1> lockedPlan;   /**< Already validated host project snapshot, when available. */
+        std::optional<Packages::ValidatedPackageRequest> portableRequest; /**< Exact request for the same locked snapshot. */
         std::function<Result<void>()> validateAdmission; /**< Owner-lane current metadata/policy check; retained through Close. */
         const WallClock *wallClock{};                    /**< Host clock retained through Close; mandatory for publisher verification. */
         std::size_t maximumEnabledDescriptors{64};       /**< Application bound for descriptor or module selections. */

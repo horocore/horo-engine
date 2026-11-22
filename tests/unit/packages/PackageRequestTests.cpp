@@ -1,5 +1,6 @@
 #include "Horo/Packages/PackageRequest.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
@@ -47,6 +48,60 @@ TEST_CASE("Portable package intent canonicalizes order and semantic defaults", "
     const auto changed = ValidatedPackageRequest::Parse(reordered.dump());
     REQUIRE(changed.HasValue());
     CHECK(changed.Value().ValidateLock(Lock(first.Value().Digest())).HasError());
+}
+
+TEST_CASE("Package removal prepares a matching request and lock without replacing surviving artifacts", "[packages][request][removal]") {
+    auto document = Intent();
+    const auto selected = HoroPackageId::Parse("com.horo.assets").Value();
+    const auto sibling = HoroPackageId::Parse("com.horo.sibling").Value();
+    document["dependencies"][sibling.Value()] = {{"source", "horo.public"}, {"version", "^1.0.0"}};
+    const auto request = ValidatedPackageRequest::Parse(document.dump());
+    REQUIRE(request.HasValue());
+    const auto version = PackageVersion::Parse("1.2.0").Value();
+    const auto source = HoroPackageSourceId::Parse("horo.public").Value();
+    const auto selectedDigest = ComputeSha256(std::as_bytes(std::span{std::string_view{"selected"}}));
+    const auto siblingDigest = ComputeSha256(std::as_bytes(std::span{std::string_view{"sibling"}}));
+    const PackageResolutionPlan graph{{{selected, version, source, selectedDigest, {}}, {sibling, version, source, siblingDigest, {}}}};
+    const std::array roots{selected, sibling};
+    const std::array artifacts{PackageLockArtifact{selected, version, source, selectedDigest, selectedDigest, selectedDigest},
+                               PackageLockArtifact{sibling, version, source, siblingDigest, siblingDigest, siblingDigest}};
+    const auto lock = ValidatedPackageLockfileV1::Generate(graph, roots, request.Value().Digest(), artifacts);
+    REQUIRE(lock.HasValue());
+    const auto removal = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
+    REQUIRE(removal.HasValue());
+    const auto &replacement = removal.Value();
+    CHECK(replacement.request.ValidateLock(replacement.lock).HasValue());
+    REQUIRE(replacement.lock.Packages().size() == 1);
+    CHECK(replacement.lock.Packages().front().artifactDigest == siblingDigest);
+    CHECK(replacement.lock.Packages().front().source == source);
+    CHECK(replacement.lock.Packages().front().version == version);
+    CHECK(request.Value().Dependencies().size() == 2);
+    CHECK(lock.Value().Packages().size() == 2);
+    CHECK(PackageRemovalPlan::Prepare(request.Value(), replacement.lock, sibling).HasError());
+    CHECK(PackageRemovalPlan::Prepare(replacement.request, replacement.lock, selected).HasError());
+
+    const auto last = PackageRemovalPlan::Prepare(replacement.request, replacement.lock, sibling);
+    REQUIRE(last.HasValue());
+    CHECK(last.Value().request.Dependencies().empty());
+    const auto parsed = ValidatedPackageLockfileV1::Parse(last.Value().lock.SerializeCanonical());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Roots().empty());
+    CHECK(parsed.Value().Packages().empty());
+    CHECK(last.Value().request.ValidateLock(parsed.Value()).HasValue());
+}
+
+TEST_CASE("Package removal can withdraw an unselected optional root", "[packages][request][removal]") {
+    auto document = Intent();
+    const auto optional = HoroPackageId::Parse("com.horo.optional").Value();
+    document["dependencies"][optional.Value()] = {{"source", "horo.public"}, {"version", "^1.0.0"}, {"optional", true}};
+    const auto request = ValidatedPackageRequest::Parse(document.dump());
+    REQUIRE(request.HasValue());
+    const auto lock = Lock(request.Value().Digest());
+    const auto removal = PackageRemovalPlan::Prepare(request.Value(), lock, optional);
+    REQUIRE(removal.HasValue());
+    CHECK(removal.Value().request.ValidateLock(removal.Value().lock).HasValue());
+    REQUIRE(removal.Value().lock.Packages().size() == 1);
+    CHECK(removal.Value().lock.Packages().front().artifactDigest == lock.Packages().front().artifactDigest);
 }
 
 TEST_CASE("Portable request independently checks lock source version and roots", "[packages][request]") {

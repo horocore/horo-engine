@@ -98,6 +98,13 @@ namespace Horo::Application {
             return Output::Failure(PackageOperations::Failure("packages.application.plan_unavailable"));
         if (const auto current = impl_->configuration.validateAdmission(); current.HasError())
             return Output::Failure(current.ErrorValue());
-        return impl_->configuration.lockedPlan->PreviewRemoval(package);
+        const auto &lock = *impl_->configuration.lockedPlan;
+        const auto &request = impl_->configuration.portableRequest;
+        if (!request || std::ranges::find(lock.Roots(), package, &Packages::LockedPackageReference::package) == lock.Roots().end())
+            return lock.PreviewRemoval(package);
+        auto replacement = Packages::PackageRemovalPlan::Prepare(*request, lock, package);
+        if (replacement.HasError())
+            return Output::Failure(replacement.ErrorValue());
+        return Output::Success(std::move(replacement).Value().graph);
     }
 }  // namespace Horo::Application

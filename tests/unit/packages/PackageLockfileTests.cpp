@@ -179,6 +179,12 @@ TEST_CASE("Package lock parser rejects noncanonical schema and portable identity
     REQUIRE(generated.HasValue());
     const Json valid = Json::parse(generated.Value().SerializeCanonical());
 
+    SECTION("a nonempty graph requires roots") {
+        Json changed = valid;
+        changed["roots"] = Json::array();
+        CheckFailure(ValidatedPackageLockfileV1::Parse(changed.dump()), "packages.lockfile.invalid");
+    }
+
     SECTION("unknown root field") {
         Json changed = valid;
         changed["workspace"] = "local";

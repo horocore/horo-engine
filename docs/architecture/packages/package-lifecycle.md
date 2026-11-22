@@ -379,6 +379,13 @@ If required references remain, policy may:
 
 Silent dangling references are forbidden.
 
+A removal preview can prepare a matching portable request and lockfile without
+resolving new versions or changing either project document. The lock drops only
+entries unreachable from the remaining roots. Withdrawing the last root produces
+a schema-v1 lock with empty `roots` and `packages` arrays. The preview preserves
+the artifact and source identities of every retained entry. Reference checks,
+approval, and durable publication belong to the uninstall transaction.
+
 ## Rollback Contract
 
 Package lifecycle operations write a transaction journal before mutating project

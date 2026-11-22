@@ -117,6 +117,16 @@ namespace Horo::Packages {
         [[nodiscard]] Result<PackageRemovalGraphPreview> PreviewRemoval(const HoroPackageId &package) const;
 
     private:
+        friend struct PackageRemovalPlan;
+
+        /** @brief Projects retained lock entries after withdrawing a direct request without resolving or fetching new artifacts.
+         * @param package Withdrawn request identity. A missing locked root leaves the graph intact.
+         * @param requestHash Canonical digest of the amended portable request.
+         * @param removed Exact removals from the current graph preview in package-ID order.
+         * @return Exact retained lock graph. Callers must bind it to the amended request before publication. */
+        [[nodiscard]] ValidatedPackageLockfileV1 WithRootWithdrawn(const HoroPackageId &package, const Sha256Digest &requestHash,
+                                                                   std::span<const LockedPackageReference> removed) const;
+
         ValidatedPackageLockfileV1(const Sha256Digest &requestHash, std::vector<LockedPackageReference> roots,
                                    std::vector<LockedPackage> packages);
 

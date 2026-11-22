@@ -24,6 +24,20 @@ namespace {
         CHECK_FALSE(graph->packages.front().publisher.has_value());
     }
 
+    TEST_CASE("Package restore admits a canonical empty graph without fetching packages", "[packages][restore][removal]") {
+        RestoreFixture fixture;
+        ServiceFixture service(fixture.bytes);
+        auto request = fixture.Request(PackageRestoreMode::Offline);
+        const auto lock = ValidatedPackageLockfileV1::Generate({}, {}, request.expectedRequestHash, {});
+        REQUIRE(lock.HasValue());
+        request.lockfileJson = lock.Value().SerializeCanonical();
+        const auto restored = RestoreReady(service, std::move(request));
+        CHECK(restored.totalPackages == 0);
+        CHECK(service.source.calls == 0);
+        REQUIRE(service.service->ActiveGraph());
+        CHECK(service.service->ActiveGraph()->packages.empty());
+    }
+
     TEST_CASE("Package restore fails closed when release requires unavailable publisher evidence", "[packages][restore][release]") {
         RestoreFixture fixture;
         ServiceFixture service(fixture.bytes);

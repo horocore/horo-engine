@@ -177,6 +177,13 @@ namespace {
         const auto empty = fixture.host->InstalledRecord(root, generation);
         REQUIRE(empty.HasValue());
         CHECK_FALSE(empty.Value());
+        const auto plan = application->Plan();
+        REQUIRE(plan.HasValue());
+        REQUIRE(plan.Value()->packages.size() == 1);
+        const auto &locked = plan.Value()->packages.front().locked;
+        const auto removal = application->PreviewRemoval(locked.package);
+        REQUIRE(removal.HasValue());
+        CHECK(removal.Value().removed == std::vector<Packages::LockedPackageReference>{{locked.package, locked.version}});
         CHECK(fixture.source.calls == 0);
         CHECK(fixture.host->InstalledRecord(root, 0).HasError());
         CHECK(fixture.host->InstalledRecord(root, generation + 1).HasError());
@@ -189,6 +196,7 @@ namespace {
         CHECK(foreignRejected);
         fixture.clock.now = Duration::FromMilliseconds(1001);
         CHECK(fixture.host->InstalledRecord(root, generation).HasError());
+        CHECK(application->PreviewRemoval(locked.package).HasError());
         CHECK(fixture.source.calls == 0);
     }
 
