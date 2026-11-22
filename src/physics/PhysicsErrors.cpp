@@ -298,6 +298,18 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor StaticTileDuplicate{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.static_tile.duplicate"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The static collision tile already has an active submission or pending update.",
+    };
+    const ErrorCodeDescriptor StaticTileOwnerConflict{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.static_tile.owner_conflict"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Another producer owns the static collision tile.",
+    };
     const ErrorCodeDescriptor MaterialDescriptorInvalid{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.material.descriptor_invalid"},
@@ -320,40 +332,15 @@ namespace Horo::Physics::PhysicsErrors {
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static const std::array descriptors{
-            &WorldInvalid,
-            &HandleMalformed,
-            &HandleWorldMismatch,
-            &HandleStale,
-            &GenerationExhausted,
-            &CapabilityUnavailable,
-            &OperationUnsupported,
-            &TransformAuthorityViolation,
-            &InvalidState,
-            &ThreadAffinityViolation,
-            &SolverDeadlineExceeded,
-            &SolverValidationMessage,
-            &SolverAssertionFailed,
-            &SolverFatalCondition,
-            &BodyStateNonFinite,
-            &DescriptorInvalid,
-            &CommandOrderInvalid,
-            &SeedPolicyInvalid,
-            &ProfileUnsupported,
-            &CapacityExceeded,
-            &CapabilityStale,
-            &CapabilityRevoked,
-            &QuerySnapshotStale,
-            &QueryCancelled,
-            &StateCancelled,
-            &InitializationFailed,
-            &ShapeCookSourceInvalid,
-            &ShapeCookImporterFailed,
-            &ShapeCookLimitExceeded,
-            &ShapeCookCancelled,
-            &ShapeMotionUnsupported,
-            &ShapeArtifactInvalid,
-            &MaterialDescriptorInvalid,
-            &MaterialCombineUnsupported,
+            &WorldInvalid,           &HandleMalformed,         &HandleWorldMismatch,       &HandleStale,
+            &GenerationExhausted,    &CapabilityUnavailable,   &OperationUnsupported,      &TransformAuthorityViolation,
+            &InvalidState,           &ThreadAffinityViolation, &SolverDeadlineExceeded,    &SolverValidationMessage,
+            &SolverAssertionFailed,  &SolverFatalCondition,    &BodyStateNonFinite,        &DescriptorInvalid,
+            &CommandOrderInvalid,    &SeedPolicyInvalid,       &ProfileUnsupported,        &CapacityExceeded,
+            &CapabilityStale,        &CapabilityRevoked,       &QuerySnapshotStale,        &QueryCancelled,
+            &StateCancelled,         &InitializationFailed,    &ShapeCookSourceInvalid,    &ShapeCookImporterFailed,
+            &ShapeCookLimitExceeded, &ShapeCookCancelled,      &ShapeMotionUnsupported,    &ShapeArtifactInvalid,
+            &StaticTileDuplicate,    &StaticTileOwnerConflict, &MaterialDescriptorInvalid, &MaterialCombineUnsupported,
         };
         return descriptors;
     }

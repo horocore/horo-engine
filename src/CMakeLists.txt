@@ -1669,6 +1669,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsHeightFieldArtifact.cpp
         physics/PhysicsCookedShapeCache.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
+        physics/PhysicsStaticTileAdmission.cpp
         physics/PhysicsDiagnostics.cpp
         physics/PhysicsDebugSnapshot.cpp
         physics/PhysicsDeterminismPolicy.cpp

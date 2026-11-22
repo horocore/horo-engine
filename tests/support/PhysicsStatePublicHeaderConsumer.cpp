@@ -1,5 +1,6 @@
 #include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsStateSnapshot.h"
+#include "Horo/Physics/PhysicsStaticTileAdmission.h"
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <type_traits>
@@ -13,6 +14,8 @@ static_assert(!std::is_copy_constructible_v<Horo::Physics::PhysicsStateRestoreCa
 static_assert(!std::is_default_constructible_v<Horo::Physics::PhysicsStateRestoreCandidate>);
 static_assert(std::is_nothrow_move_constructible_v<Horo::Physics::PhysicsStateRestoreCandidate>);
 static_assert(!std::is_copy_constructible_v<Horo::Physics::PhysicsRuntimeRetirement>);
+static_assert(!std::is_copy_constructible_v<Horo::Physics::PhysicsStaticTileAdmission>);
+static_assert(std::is_nothrow_move_constructible_v<Horo::Physics::PhysicsStaticTileAdmission>);
 
 int main() {
     const Horo::Physics::PhysicsStateSnapshotLease empty;

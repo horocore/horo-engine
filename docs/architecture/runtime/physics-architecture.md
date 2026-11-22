@@ -464,6 +464,21 @@ A stale snapshot/receipt or required Physics failure rolls back the candidate, n
 old collision world. Physics alone acknowledges retirement after steps, queries and shape/
 body readers drain.
 
+`PhysicsStaticTileAdmission` is the producer-side boundary for static collision tiles.
+Terrain and World Streaming submit stable asset/subresource identities, a generation-scoped
+producer token, an expected content version, an exact cooked shape reference, and finite
+authored bounds. One tile admits one pending request. The owner reserves metadata capacity
+before accepting, then returns an `Accepted` receipt that carries no collision readiness.
+The execution owner rechecks that exact receipt and acknowledges activation, retirement,
+failure, or cancellation separately. The admission object schedules no world or solver work.
+
+A failed or cancelled replacement preserves the applied version. Retirement retains its
+version fence until the producer closes, so a late submission cannot resurrect an old tile.
+Producer close requires prior acknowledged retirement of active tiles and invalidates
+remaining unactivated requests. A recycled producer slot has a new generation. This
+producer contract complements the aggregate cell receipt. Native resource reclamation and
+safe-point scheduling remain with the Physics execution owner.
+
 [ADR-144](../../adr/144-destruction-ownership-authority-state-and-runtime-geometry-boundary.md)
 keeps fracture semantics outside Physics. Contacts are bounded tick/generation evidence;
 they cannot mutate health, chunk membership or Scene structure from a solver callback.

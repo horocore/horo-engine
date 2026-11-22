@@ -1055,6 +1055,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsSurfaceTests.cpp
         unit/runtime/physics/CharacterMovementEventTests.cpp
         unit/runtime/physics/PhysicsCellAttachmentsTests.cpp
+        unit/runtime/physics/PhysicsStaticTileAdmissionTests.cpp
         support/AllocationProbe.cpp
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp

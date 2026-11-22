@@ -811,6 +811,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsCookedShapeCache.h
     Horo/Physics/PhysicsHeightFieldCook.h
     Horo/Physics/PhysicsCookedShapeDescriptor.h
+    Horo/Physics/PhysicsStaticTileAdmission.h
     Horo/Physics/PhysicsDebugSnapshot.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
