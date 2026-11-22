@@ -93,6 +93,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RevokeWorkspaceCommands */
     void EditorWorkspaceController::RevokeWorkspaceCommands() noexcept {
+        if (m_agentSceneTransformReview)
+            m_agentSceneTransformReview->lifetime.RequestCancellation();
         m_sourceCommandEndpoint.reset();
         m_inspectionCommandEndpoint.reset();
         m_debugCaptureEndpoint.reset();

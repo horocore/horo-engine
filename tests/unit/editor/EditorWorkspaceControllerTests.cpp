@@ -10,6 +10,7 @@
 #include "OwnedTestDirectory.h"
 #include "ProjectReplicationTestSupport.h"
 #include "editor/document/SceneDocumentPersistence.h"
+#include "editor/screens/workspace/EditorInspectionCommandEndpoint.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
 
@@ -349,6 +350,68 @@ namespace {
         REQUIRE((!controller.ViewModel().isDirty));
         REQUIRE((events.size() == 2 && events.back().kind == DocumentChangeKind::Undone));
         static_cast<void>(subscription);
+    }
+
+    TEST_CASE("Authored viewport shows agent transforms until local review is resolved", "[unit][editor][scene-review]") {
+        Runtime::RuntimeSceneService scenes;
+        CancellationSource process;
+        EditorWorkspaceDependencies dependencies;
+        dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+        EditorWorkspaceController controller{"scene-review-project", scenes, {}, dependencies};
+        REQUIRE(scenes.Startup(process.Token()).HasValue());
+        const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, process.Token()};
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+
+        REQUIRE(controller.ViewModel().objects.size() == 1);
+        const auto object = controller.ViewModel().objects.front();
+        const auto fence = controller.ViewModel().assetDropFence;
+        const InspectionSceneRevision revision{fence.replacementEpoch, fence.revision.value};
+        const auto origin = [&] {
+            return Math::TransformPoint(controller.ViewportScene().instances.front().localToWorld, {});
+        };
+        REQUIRE(controller.ViewportScene().instances.size() == 1);
+        const auto baseline = origin();
+        auto desired = object.localTransform;
+        desired.translation.x += 3.0F;
+        const std::array updates{SceneObjectTransformUpdate{object.id, desired}};
+        std::vector<SceneDocumentChangedEvent> events;
+        const auto subscription = controller.DataBus().Subscribe<SceneDocumentChangedEvent>([&](const auto &event) {
+            events.push_back(event);
+        });
+        CancellationSource proposal;
+        const auto preview = controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token());
+        REQUIRE(preview.HasValue());
+        CHECK(origin() != baseline);
+        CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
+        CHECK_FALSE(controller.ViewModel().isDirty);
+        CHECK(events.empty());
+        CHECK(controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token()).HasError());
+
+        SECTION("approval uses canonical history and consumes the review") {
+            REQUIRE(controller.ApproveAgentSceneTransforms(preview.Value()).HasValue());
+            CHECK(controller.ViewModel().objects.front().localTransform == desired);
+            REQUIRE(events.size() == 1);
+            CHECK(events.front().affectedObjects == std::vector{object.id});
+            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
+            CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
+            CHECK_FALSE(controller.ViewModel().isDirty);
+        }
+        SECTION("cancellation removes the overlay without a document event") {
+            CHECK_FALSE(controller.CancelAgentSceneTransforms(preview.Value() + 1));
+            CHECK(controller.CancelAgentSceneTransforms(preview.Value()));
+            CHECK(origin() == baseline);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            CHECK(events.empty());
+        }
+        SECTION("closing command authority retires the overlay on the owner tick") {
+            controller.RevokeWorkspaceCommands();
+            controller.UpdatePlayPresentation(0.0F);
+            CHECK(origin() == baseline);
+            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            CHECK(events.empty());
+        }
     }
 
     TEST_CASE("Viewport Navigation Updates Only The Editor Camera Authority", "[unit][editor]") {

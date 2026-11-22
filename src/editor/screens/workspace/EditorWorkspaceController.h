@@ -335,6 +335,28 @@ namespace Horo::Editor {
         /** @brief Captures the currently authored camera and selection for one explicit local review. */
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport(AgentViewportComponents components);
 
+        /** @brief Displays a validated batch in the authored viewport while leaving the scene unchanged.
+         * @param revision Exact scene opening and revision captured by the proposing client.
+         * @param updates Bounded list of proposed object-local transforms.
+         * @param cancellation Revocable proposal lifetime.
+         * @return Owner-issued review identity or a zero-mutation rejection.
+         */
+        [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneTransforms(InspectionSceneRevision revision,
+                                                                        std::span<const SceneObjectTransformUpdate> updates,
+                                                                        CancellationToken cancellation);
+
+        /** @brief Applies the displayed proposal after an explicit local approval.
+         * @param review Exact owner-issued review identity.
+         * @return Success or the scene admission error; the matched review is consumed.
+         */
+        [[nodiscard]] Result<void> ApproveAgentSceneTransforms(std::uint64_t review);
+
+        /** @brief Cancels the displayed proposal only if its identity still matches.
+         * @param review Exact owner-issued review identity.
+         * @return Whether a matching review was retired.
+         */
+        bool CancelAgentSceneTransforms(std::uint64_t review);
+
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
@@ -1060,6 +1082,17 @@ namespace Horo::Editor {
         std::optional<CancellationSource> m_agentSceneSelectionLifetime;
         std::optional<CancellationSource> m_agentViewportLifetime;
         std::uint64_t m_agentViewportRevision{};
+
+        struct AgentSceneTransformReview final {
+            std::uint64_t id;
+            CancellationSource lifetime;
+            SceneTransactionContext context;
+            SceneDocumentTransactions owner;
+            SceneDocumentTransactions::ReplacementPreview preview;
+        };
+
+        std::optional<AgentSceneTransformReview> m_agentSceneTransformReview;
+        std::uint64_t m_agentSceneTransformReviewSerial{};
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
@@ -1580,6 +1613,10 @@ namespace Horo::Editor {
         void PreviewObjectTransform(SceneObjectId object, const Math::Transform &transform);
         void PreviewObjectTransforms(std::span<const SceneObjectTransformUpdate> updates);
         void CancelObjectTransformPreview();
+        /** @brief Retires a displayed agent proposal once its authored viewport or authorization becomes stale. */
+        void ReconcileAgentSceneTransformReview();
+        /** @brief Checks whether the current authored viewport can safely display or approve a review. */
+        [[nodiscard]] bool CanReviewAgentSceneTransforms() const;
         void PreviewLightComponent(SceneObjectId object, const Runtime::LightComponent &light);
         void CancelLightComponentPreview();
         void RefreshViewportLightProjection();

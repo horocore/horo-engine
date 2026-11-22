@@ -201,6 +201,7 @@ namespace Horo::Editor {
         if (started.HasError())
             LOG_ERROR("editor.play_mode", "Play Mode failed to start: %s", started.ErrorValue().message.c_str());
         RefreshPlayStateProjection();
+        ReconcileAgentSceneTransformReview();
         ExtractPlayViewportScene();
     }
 
@@ -387,6 +388,7 @@ namespace Horo::Editor {
         FinishStoppedGameplayRegistry();
         ResumePlaySceneReplacement();
         RefreshPlayStateProjection();
+        ReconcileAgentSceneTransformReview();
         ExtractPlayViewportScene();
     }
 
