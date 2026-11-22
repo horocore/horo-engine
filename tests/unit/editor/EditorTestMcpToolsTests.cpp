@@ -305,6 +305,45 @@ namespace {
         CHECK(row["sample"]["originFramePositionMeters"] == Json::array({1, 2, 3}));
     }
 
+    TEST_CASE("Oriented inspection bounds contain reflected scaled and sheared geometry", "[unit][editor][mcp][inspection]") {
+        const std::array<InspectionVector, 3> columns{{{0, 2, 0}, {-3, 1, 0}, {0, 0, -4}}};
+        const auto box = MeasureInspectionOrientedBounds({0, 0, 0}, {2, 4, 6}, columns, {10, 20, 30});
+        REQUIRE(box);
+        CHECK((box->center == InspectionVector{4, 24, 18}));
+        CHECK((box->axes == std::array<InspectionVector, 3>{{{0, 1, 0}, {-1, 0, 0}, {0, 0, 1}}}));
+        CHECK((box->halfExtents == InspectionVector{4, 6, 12}));
+        CHECK(box->volume == 2304);
+        auto singular = columns;
+        singular[1] = singular[0];
+        CHECK_FALSE(MeasureInspectionOrientedBounds({0, 0, 0}, {2, 4, 6}, singular, {}));
+    }
+
+    TEST_CASE("A full bounds page includes both enclosures within the MCP result budget", "[unit][editor][mcp][inspection]") {
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readBounds = [](const ObjectInspectionRequest &request) {
+            const std::array<InspectionVector, 3> identity{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+            BoundsInspectionPage page{.scene = {7, 19}};
+            for (const auto id : request.objects)
+                page.records.push_back({id, {-1, 0, 2}, {1, 4, 6}, MeasureInspectionOrientedBounds({-1, 0, 2}, {1, 4, 6}, identity, {})});
+            return Result<BoundsInspectionPage>::Success(std::move(page));
+        }});
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        std::vector<std::uint64_t> ids(ObjectInspectionRequest::MaximumObjects);
+        std::iota(ids.begin(), ids.end(), std::uint64_t{1});
+        const auto status = Execute(*opened.Value(), Command("full", "inspect.bounds", {{"objects", ids}}));
+        REQUIRE(status.at("status") == "succeeded");
+        const auto &rows = status["result"]["records"];
+        REQUIRE(rows.size() == ids.size());
+        CHECK(rows.back()["center"] == Json::array({0, 2, 4}));
+        CHECK(rows.back()["oriented"]["halfExtents"] == Json::array({1, 2, 2}));
+        CHECK(rows.back()["oriented"]["volume"] == 32);
+    }
+
     TEST_CASE("Bounds pages and explicit unavailable errors match across MCP adapters", "[unit][editor][mcp][inspection]") {
         const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
             EditorInspectionCommandEndpoint{.project = "project-one",
@@ -316,7 +355,10 @@ namespace {
                 return Output::Failure(MakeError(ErrorCodeDescriptor{.domain = ErrorDomainId{"editor.inspection"},
                                                                      .code = ErrorCode{"bounds_unavailable"},
                                                                      .defaultSeverity = ErrorSeverity::Warning}));
-            return Output::Success({.scene = {7, 19}, .records = {{42, {-1, 0, 2}, {1, 4, 6}}}});
+            const std::array<InspectionVector, 3> identity{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+            return Output::Success(
+                {.scene = {7, 19},
+                 .records = {{42, {-1, 0, 2}, {1, 4, 6}, MeasureInspectionOrientedBounds({-1, 0, 2}, {1, 4, 6}, identity, {})}}});
         }});
         const auto policy = Test::Authorization();
         auto registry = std::make_shared<McpToolRegistry>(policy);

@@ -127,14 +127,28 @@ namespace Horo::Editor {
                  {"additionalProperties", false}});
         }
 
-        /** @brief Describes world-space axis-aligned bounds. */
+        /** @brief Describes both committed world-space enclosures. */
         Json BoundsSchema() {
-            return PageSchema(
-                {{"type", "object"},
-                 {"properties",
-                  {{"object", {{"type", "integer"}, {"minimum", 1}}}, {"minimum", VectorSchema(3)}, {"maximum", VectorSchema(3)}}},
-                 {"required", {"object", "minimum", "maximum"}},
-                 {"additionalProperties", false}});
+            const Json volume{{"type", "number"}, {"minimum", 0}};
+            const Json oriented{{"type", "object"},
+                                {"properties",
+                                 {{"center", VectorSchema(3)},
+                                  {"halfExtents", VectorSchema(3)},
+                                  {"volume", volume},
+                                  {"axes", {{"type", "array"}, {"minItems", 3}, {"maxItems", 3}, {"items", VectorSchema(3)}}}}},
+                                {"required", {"center", "halfExtents", "volume", "axes"}},
+                                {"additionalProperties", false}};
+            return PageSchema({{"type", "object"},
+                               {"properties",
+                                {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                                 {"minimum", VectorSchema(3)},
+                                 {"maximum", VectorSchema(3)},
+                                 {"center", VectorSchema(3)},
+                                 {"halfExtents", VectorSchema(3)},
+                                 {"volume", volume},
+                                 {"oriented", oriented}}},
+                               {"required", {"object", "minimum", "maximum", "center", "halfExtents", "volume", "oriented"}},
+                               {"additionalProperties", false}});
         }
 
         /** @brief Enumerates the closed, payload-free set of authored component counts. */
@@ -296,7 +310,21 @@ namespace Horo::Editor {
 
         /** @brief Serializes numeric world-space limits. */
         Json WriteRecord(const InspectedBounds &entry) {
-            return {{"object", entry.object}, {"minimum", entry.minimum}, {"maximum", entry.maximum}};
+            std::array<double, 3> center{};
+            std::array<double, 3> halfExtents{};
+            for (std::size_t axis = 0; axis < center.size(); ++axis) {
+                const double minimum = entry.minimum[axis];
+                halfExtents[axis] = (static_cast<double>(entry.maximum[axis]) - minimum) * 0.5;
+                center[axis] = minimum + halfExtents[axis];
+            }
+            Json record{{"object", entry.object},     {"minimum", entry.minimum},
+                        {"maximum", entry.maximum},   {"center", center},
+                        {"halfExtents", halfExtents}, {"volume", 8.0 * halfExtents[0] * halfExtents[1] * halfExtents[2]}};
+            if (entry.oriented) {
+                const auto &box = *entry.oriented;
+                record["oriented"] = {{"center", box.center}, {"axes", box.axes}, {"halfExtents", box.halfExtents}, {"volume", box.volume}};
+            }
+            return record;
         }
 
         /** @brief Serializes count values using the same closed names as schema admission. */
@@ -434,7 +462,8 @@ namespace Horo::Editor {
         template <auto Read>
         Mcp::McpToolRegistration Registration(const std::weak_ptr<const EditorInspectionCommandEndpoint> &workspace, std::string id,
                                               std::string description, Json input, Json schema) {
-            constexpr bool includesMatrices = std::is_same_v<decltype(Read), decltype(&EditorInspectionCommandEndpoint::readTransforms)>;
+            constexpr bool largePage = std::is_same_v<decltype(Read), decltype(&EditorInspectionCommandEndpoint::readTransforms)> ||
+                                       std::is_same_v<decltype(Read), decltype(&EditorInspectionCommandEndpoint::readBounds)>;
             return {.descriptor = {.id = {std::move(id)},
                                    .description = std::move(description),
                                    .inputSchema = std::move(input),
@@ -442,9 +471,9 @@ namespace Horo::Editor {
                                    .effect = Mcp::McpToolEffect::Query,
                                    .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
                                    .bounds = {.maximumInputBytes = 1024,
-                                              .maximumResultBytes = includesMatrices ? 16384U : 8192U,
+                                              .maximumResultBytes = largePage ? 16384U : 8192U,
                                               .maximumDepth = 6,
-                                              .maximumNodes = includesMatrices ? 1024U : 512U}},
+                                              .maximumNodes = largePage ? 1024U : 512U}},
                     .adapter = std::make_shared<InspectionTool<Read>>(workspace),
                     .owner = Mcp::McpOwnerContext::Editor};
         }
@@ -474,7 +503,7 @@ namespace Horo::Editor {
                                                               TransformSchema);
         AppendInspection<
             &EditorInspectionCommandEndpoint::readBounds>(tools, endpoint, "inspect.bounds",
-                                                          "Read visible authored world-space axis-aligned bounds by exact Scene object ID.",
+                                                          "Read axis-aligned and oriented world-space bounds for visible Scene objects.",
                                                           BoundsSchema);
         AppendInspection<&EditorInspectionCommandEndpoint::readComponents>(tools, endpoint, "inspect.components",
                                                                            "Read counts of authored components by visible Scene object ID.",

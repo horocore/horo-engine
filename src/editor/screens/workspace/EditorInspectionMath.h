@@ -10,6 +10,48 @@
 #include <span>
 
 namespace Horo::Editor {
+    using InspectionVector = std::array<double, 3>;
+
+    /** @brief Scalar projection in inspection's double-precision coordinate space. */
+    inline double InspectionDot(const InspectionVector &lhs, const InspectionVector &rhs) {
+        return lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
+    }
+
+    /** @brief Right-handed cross product in inspection's double-precision coordinate space. */
+    inline InspectionVector InspectionCross(const InspectionVector &lhs, const InspectionVector &rhs) {
+        return {lhs[1] * rhs[2] - lhs[2] * rhs[1], lhs[2] * rhs[0] - lhs[0] * rhs[2], lhs[0] * rhs[1] - lhs[1] * rhs[0]};
+    }
+
+    /** @brief Encloses a local AABB in a right-handed frame built from the first two affine columns.
+     * @details Projections include every local column, retaining containment under shear and reflection.
+     */
+    inline std::optional<InspectedOrientedBounds> MeasureInspectionOrientedBounds(const InspectionVector &minimum,
+                                                                                  const InspectionVector &maximum,
+                                                                                  const std::array<InspectionVector, 3> &columns,
+                                                                                  const InspectionVector &translation) {
+        const auto normal = InspectionCross(columns[0], columns[1]);
+        const double width = std::hypot(columns[0][0], columns[0][1], columns[0][2]);
+        const double area = std::hypot(normal[0], normal[1], normal[2]);
+        if (width == 0.0 || area == 0.0 || !std::isfinite(width) || !std::isfinite(area))
+            return std::nullopt;
+        InspectedOrientedBounds result{.center = translation};
+        for (std::size_t axis = 0; axis < translation.size(); ++axis) {
+            result.axes[0][axis] = columns[0][axis] / width;
+            result.axes[2][axis] = normal[axis] / area;
+        }
+        result.axes[1] = InspectionCross(result.axes[2], result.axes[0]);
+        for (std::size_t column = 0; column < columns.size(); ++column) {
+            const double half = (maximum[column] - minimum[column]) * 0.5;
+            const double midpoint = minimum[column] + half;
+            for (std::size_t axis = 0; axis < translation.size(); ++axis) {
+                result.center[axis] += columns[column][axis] * midpoint;
+                result.halfExtents[axis] += std::abs(InspectionDot(result.axes[axis], columns[column])) * half;
+            }
+        }
+        result.volume = 8.0 * result.halfExtents[0] * result.halfExtents[1] * result.halfExtents[2];
+        return result;
+    }
+
     /** @brief Measures finite world AABBs. For an overlapping axis, both nearest points use the same shared coordinate. */
     inline InspectedDistance MeasureInspectionDistance(const InspectedBounds &reference, const InspectedBounds &target,
                                                        const double forwardAngleRadians) {
@@ -61,28 +103,22 @@ namespace Horo::Editor {
         const auto subtract = [](const Vec &lhs, const Vec &rhs) -> Vec {
             return {lhs[0] - rhs[0], lhs[1] - rhs[1], lhs[2] - rhs[2]};
         };
-        const auto dot = [](const Vec &lhs, const Vec &rhs) {
-            return lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
-        };
-        const auto cross = [](const Vec &lhs, const Vec &rhs) -> Vec {
-            return {lhs[1] * rhs[2] - lhs[2] * rhs[1], lhs[2] * rhs[0] - lhs[0] * rhs[2], lhs[0] * rhs[1] - lhs[1] * rhs[0]};
-        };
         const Vec edge1 = subtract(b, a);
         const Vec edge2 = subtract(c, a);
-        const Vec normal = cross(edge1, edge2);
+        const Vec normal = InspectionCross(edge1, edge2);
         const double area = std::hypot(normal[0], normal[1], normal[2]);
-        const Vec transverse = cross(ray.direction, edge2);
-        const double determinant = dot(edge1, transverse);
+        const Vec transverse = InspectionCross(ray.direction, edge2);
+        const double determinant = InspectionDot(edge1, transverse);
         // Relative tolerance keeps the same grazing-angle rule at every mesh scale.
         if (std::abs(determinant) <= std::numeric_limits<double>::epsilon() * area)
             return std::nullopt;
         const Vec fromVertex = subtract(ray.origin, a);
-        const double u = dot(fromVertex, transverse) / determinant;
-        const Vec barycentric = cross(fromVertex, edge1);
-        const double v = dot(ray.direction, barycentric) / determinant;
+        const double u = InspectionDot(fromVertex, transverse) / determinant;
+        const Vec barycentric = InspectionCross(fromVertex, edge1);
+        const double v = InspectionDot(ray.direction, barycentric) / determinant;
         if (u < 0.0 || v < 0.0 || u + v > 1.0)
             return std::nullopt;
-        const double distance = dot(edge2, barycentric) / determinant;
+        const double distance = InspectionDot(edge2, barycentric) / determinant;
         if (distance < 0.0 || distance > ray.maximumDistance)
             return std::nullopt;
         const Vec position{ray.origin[0] + ray.direction[0] * distance, ray.origin[1] + ray.direction[1] * distance,

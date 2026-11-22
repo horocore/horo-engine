@@ -466,8 +466,12 @@ request is bounded to 16 IDs and continuations repeat the exact Scene epoch
 and revision from the previous result. Play copies, retired workspaces and
 missing or hidden objects fail closed.
 The same grant exposes `inspect.bounds`, which applies committed authored
-world transforms to matching published mesh bounds. Missing or stale geometry
-produces an explicit unavailable result. Gizmo previews are excluded.
+world transforms to matching published mesh bounds. It reports the axis-aligned
+minimum and maximum and both boxes' centers, half-extents, and volumes. The
+oriented box includes three orthonormal world-space axes aligned to the object's
+affine frame. The enclosure remains conservative under non-uniform scale,
+reflection, and shear. Missing or stale geometry produces an explicit
+unavailable result. Gizmo previews are excluded.
 The same object and page contract applies to `inspect.components` and
 `inspect.rendering`. Component inspection reports authored presence and counts
 without component payloads. Rendering inspection reports per-object committed

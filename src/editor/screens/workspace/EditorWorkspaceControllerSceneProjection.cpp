@@ -327,32 +327,54 @@ namespace Horo::Editor {
             return Output::Success(std::move(page));
         }
 
-        /** @brief Unions local mesh bounds transformed by the committed authored pose, ignoring gizmo preview transforms. */
+        /** @brief Extends a bounding union, with the first valid part supplying its origin. */
+        void MergeInspectionBounds(std::optional<Math::Aabb> &bounds, const Math::Aabb &part) {
+            if (!bounds) {
+                bounds = part;
+                return;
+            }
+            bounds->minimum = {std::min(bounds->minimum.x, part.minimum.x), std::min(bounds->minimum.y, part.minimum.y),
+                               std::min(bounds->minimum.z, part.minimum.z)};
+            bounds->maximum = {std::max(bounds->maximum.x, part.maximum.x), std::max(bounds->maximum.y, part.maximum.y),
+                               std::max(bounds->maximum.z, part.maximum.z)};
+        }
+
+        /** @brief Converts the committed affine frame and mesh bounds into the numeric oriented enclosure. */
+        std::optional<InspectedOrientedBounds> OrientInspectionBounds(const Math::Aabb &local, const Math::Mat4 &world) {
+            const auto column = [&world](const int index) -> InspectionVector {
+                return {world.At(0, index), world.At(1, index), world.At(2, index)};
+            };
+            return MeasureInspectionOrientedBounds({local.minimum.x, local.minimum.y, local.minimum.z},
+                                                   {local.maximum.x, local.maximum.y, local.maximum.z}, {column(0), column(1), column(2)},
+                                                   column(3));
+        }
+
+        /** @brief Unions mesh bounds transformed by the committed authored pose, ignoring gizmo preview transforms. */
         Result<InspectedBounds> BoundsAtPose(const EditorViewportSceneSnapshot &geometry, const SceneObjectId object,
-                                             const Math::Mat4 &world) {
+                                             const Math::Mat4 &world, const bool includeOriented) {
             using Output = Result<InspectedBounds>;
             std::optional<Math::Aabb> merged;
+            std::optional<Math::Aabb> localMerged;
             for (std::size_t i = 0; i < geometry.instanceObjects.size(); ++i) {
                 if (geometry.instanceObjects[i] != object)
                     continue;
-                const auto bounds = Math::TransformAabb(geometry.instances[i].localBounds, world);
+                const auto &local = geometry.instances[i].localBounds;
+                const auto bounds = Math::TransformAabb(local, world);
                 if (bounds.HasError())
                     return Output::Failure(MakeError(InspectionBoundsUnavailable));
-                const auto &part = bounds.Value();
-                if (!merged) {
-                    merged = part;
-                    continue;
-                }
-                merged->minimum = {std::min(merged->minimum.x, part.minimum.x), std::min(merged->minimum.y, part.minimum.y),
-                                   std::min(merged->minimum.z, part.minimum.z)};
-                merged->maximum = {std::max(merged->maximum.x, part.maximum.x), std::max(merged->maximum.y, part.maximum.y),
-                                   std::max(merged->maximum.z, part.maximum.z)};
+                MergeInspectionBounds(merged, bounds.Value());
+                if (includeOriented)
+                    MergeInspectionBounds(localMerged, local);
             }
             if (!merged)
                 return Output::Failure(MakeError(InspectionBoundsUnavailable));
+            const auto oriented = localMerged ? OrientInspectionBounds(*localMerged, world) : std::nullopt;
+            if (includeOriented && !oriented)
+                return Output::Failure(MakeError(InspectionBoundsUnavailable));
             return Output::Success({object.value,
                                     {merged->minimum.x, merged->minimum.y, merged->minimum.z},
-                                    {merged->maximum.x, merged->maximum.y, merged->maximum.z}});
+                                    {merged->maximum.x, merged->maximum.y, merged->maximum.z},
+                                    oriented});
         }
 
         /** @brief Computes bounds from committed object transforms. */
@@ -361,7 +383,7 @@ namespace Horo::Editor {
             const auto world = ResolveSceneObjectWorldTransforms(active, object.id);
             if (world.HasError())
                 return Result<InspectedBounds>::Failure(MakeError(InspectionBoundsUnavailable));
-            return BoundsAtPose(geometry, object.id, world.Value().localToWorld);
+            return BoundsAtPose(geometry, object.id, world.Value().localToWorld, true);
         }
 
         struct DistanceSample {
@@ -377,7 +399,7 @@ namespace Horo::Editor {
             if (world.HasError())
                 return Output::Failure(MakeError(InspectionBoundsUnavailable));
             const auto &pose = world.Value().localToWorld;
-            auto bounds = BoundsAtPose(geometry, object.id, pose);
+            auto bounds = BoundsAtPose(geometry, object.id, pose, false);
             if (bounds.HasError())
                 return Output::Failure(bounds.ErrorValue());
             const auto forward = Math::TryNormalize(Math::TransformDirection(pose, {0.0F, 0.0F, -1.0F}));

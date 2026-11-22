@@ -59,11 +59,20 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief Conservative world-space box in an orthonormal frame derived from the authored object. */
+    struct InspectedOrientedBounds {
+        std::array<double, 3> center{};
+        std::array<std::array<double, 3>, 3> axes{};
+        std::array<double, 3> halfExtents{};
+        double volume{};
+    };
+
     /** @brief Axis-aligned bounds of an authored object's viewport geometry in world space. */
     struct InspectedBounds {
         std::uint64_t object{};
         std::array<float, 3> minimum{};
         std::array<float, 3> maximum{};
+        std::optional<InspectedOrientedBounds> oriented;
     };
 
     /** @brief One page from the ordered bounds request. */
