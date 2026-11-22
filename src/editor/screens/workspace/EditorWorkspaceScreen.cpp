@@ -36,6 +36,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
               .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
               .buildOutputQuery = services.TryGetConst<IBuildOutputQuery>(),
               .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
+              .gameplayTests = services.TryGet<Application::GameplayTestService>(),
               .operationQuery = services.TryGetConst<IOperationQuery>(),
               .operationControl = services.TryGet<IOperationControl>(),
               .networkDebuggerQuery = services.TryGetConst<Application::INetworkDebuggerQuery>(),
@@ -122,6 +123,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
+        if (panelServices_.gameplayTests)
+            panelServices_.gameplayTests->Poll();
         if (controller_) {
             while (const auto destination = view_.UpdateExtensionActivities())
                 controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,

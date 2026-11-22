@@ -1280,6 +1280,7 @@ add_library(HoroGameplayBuild STATIC
         application/gameplay/GameplayBuildInputs.cpp
         application/gameplay/GameplayBuildInvocation.cpp
         application/gameplay/GameplayBuildService.cpp
+        application/gameplay/GameplayTestService.cpp
 )
 add_library(HoroEngine::GameplayBuild ALIAS HoroGameplayBuild)
 target_compile_features(HoroGameplayBuild PUBLIC cxx_std_20)

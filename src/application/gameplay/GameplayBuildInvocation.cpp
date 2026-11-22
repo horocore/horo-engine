@@ -12,6 +12,11 @@ namespace Horo::Application {
 }  // namespace Horo::Application
 
 namespace Horo::Application::Detail {
+    /** @copydoc GameplayBuildLockPath */
+    std::filesystem::path GameplayBuildLockPath(const std::filesystem::path &projectRoot) {
+        return projectRoot / ".horo/local/locks/gameplay-build.lock";
+    }
+
     /** @copydoc BuildEnvironment */
     [[nodiscard]] ProcessEnvironment BuildEnvironment() {
         ProcessEnvironment environment;

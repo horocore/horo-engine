@@ -6,6 +6,7 @@
 #include "EditorPlayXrHost.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -45,6 +46,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const Log::IStructuredLogQuery *logQuery{nullptr};
         const IBuildOutputQuery *buildOutputQuery{nullptr};
         const Application::GameplayBuildService *gameplayBuilds{nullptr};
+        Application::GameplayTestService *gameplayTests{};
         const IOperationQuery *operationQuery{nullptr};
         IOperationControl *operationControl{nullptr};
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};

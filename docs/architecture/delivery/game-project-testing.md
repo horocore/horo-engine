@@ -246,6 +246,14 @@ Tests
 The editor reads result snapshots from the test service. It does not own test
 execution semantics and does not make a test pass or fail based on widget state.
 
+The native gameplay test service runs CTest from the project's existing
+configured gameplay build. The host supplies the CTest executable and the
+same configuration as the gameplay build. The service holds the gameplay
+build lock while CTest uses those artifacts and reports progress, output,
+cancellation, and terminal status through the shared native operation and
+Build Output stores. An unavailable inventory or an empty CTest suite produces
+a failed operation.
+
 ## Data Flow
 
 ```mermaid

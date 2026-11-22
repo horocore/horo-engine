@@ -4716,6 +4716,14 @@ target_link_libraries(HoroPlatformFriendsPublicConsumer PRIVATE HoroEngine::Plat
 add_test(NAME HoroPlatformFriendsPublicConsumer COMMAND HoroPlatformFriendsPublicConsumer)
 set_tests_properties(HoroPlatformFriendsPublicConsumer PROPERTIES LABELS "unit;platform-services;headless;public_headers")
 set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless;ci-windows")
+add_executable(HoroGameplayTestServiceTests unit/application/GameplayTestServiceTests.cpp)
+target_compile_features(HoroGameplayTestServiceTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroGameplayTestServiceTests PRIVATE
+    HORO_GAMEPLAY_TEST_CTEST="${CMAKE_CTEST_COMMAND}"
+    HORO_GAMEPLAY_TEST_CMAKE="${CMAKE_COMMAND}")
+target_link_libraries(HoroGameplayTestServiceTests PRIVATE HoroEngine::GameplayBuild HoroEngine::Platform)
+horo_register_catch_test(HoroGameplayTestServiceTests LABELS "unit;gameplay;headless")
+
 add_executable(HoroGameplayBuildServiceTests
         unit/application/GameplayLibraryBuildTests.cpp
         unit/application/CompilerDiagnosticParserTests.cpp

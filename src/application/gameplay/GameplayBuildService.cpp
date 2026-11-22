@@ -542,7 +542,7 @@ namespace Horo::Application {
                                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session) {
             Update(session, GameplayBuildState::AcquiringLock, "lock");
             UpdateOperation(state, session, OperationState::Running, "lock", "Acquiring gameplay build lock.", 0.05F);
-            const std::filesystem::path lockPath = session->request.projectRoot / ".horo/local/locks/gameplay-build.lock";
+            const auto lockPath = Detail::GameplayBuildLockPath(session->request.projectRoot);
             const auto waitStarted = std::chrono::steady_clock::now();
             {
                 std::lock_guard lock(session->Mutex());

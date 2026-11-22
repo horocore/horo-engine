@@ -57,6 +57,7 @@
 #include "EditorWindowChrome.h"
 #include "EditorWorkerShutdown.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
@@ -4175,6 +4176,10 @@ namespace Horo::Editor {
                 .cmakeExecutable = HORO_GAMEPLAY_CMAKE_EXECUTABLE,
                 .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
             };
+            Application::GameplayTestService gameplayTestService{externalProcesses, p.background.jobs, durableFiles,
+                                                                 p.operationServices.operationStore, p.operationServices.buildOutputStore};
+            Application::GameplayTestEnvironment gameplayTestEnvironment{HORO_GAMEPLAY_CTEST_EXECUTABLE,
+                                                                         gameplayBuildEnvironment.configuration};
             SystemWallClock wallClock;
             SteadyClock packageClock;
             Application::Internal::UnconfiguredPackageTrust packageTrust;
@@ -4458,6 +4463,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
+            screenHost.Services().Register<Application::GameplayTestService>(gameplayTestService);
+            screenHost.Services().RegisterConst<Application::GameplayTestEnvironment>(gameplayTestEnvironment);
             screenHost.Services().Register<IExternalProcessRunner>(externalProcesses);
             screenHost.Services().Register<Application::GameplayBuildEnvironment>(gameplayBuildEnvironment);
             screenHost.Services().Register<ProjectOpenService>(projectOpenService);
