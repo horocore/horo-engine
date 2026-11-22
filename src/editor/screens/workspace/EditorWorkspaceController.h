@@ -77,6 +77,7 @@ namespace Horo::Application {
 
 namespace Horo::Editor {
     struct EditorSourceCommandEndpoint;
+    struct EditorBuildCommandEndpoint;
     struct CapturedDecisionExternal;
     struct EnvironmentQueryPreviewPhysics;
 
@@ -199,8 +200,14 @@ namespace Horo::Editor {
          */
         [[nodiscard]] std::weak_ptr<const EditorSourceCommandEndpoint> BindSourcePresentation(std::string project,
                                                                                               std::uint64_t authorizationRevision);
-        /** @brief Revokes current source commands before workspace or project retirement. */
-        void RevokeSourcePresentation() noexcept;
+        /** @brief Binds approved gameplay builds to this workspace's native build environment.
+         * @param project Host-issued project identity. @param authorizationRevision Exact active trust revision.
+         * @return Borrowed endpoint, or an empty lease when the project has no gameplay build capability.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorBuildCommandEndpoint> BindGameplayBuildCommands(std::string project,
+                                                                                                std::uint64_t authorizationRevision);
+        /** @brief Revokes workspace command leases and cancels their isolated build before project retirement. */
+        void RevokeWorkspaceCommands() noexcept;
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -786,6 +793,8 @@ namespace Horo::Editor {
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
+        std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;
+        std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;
         Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
         std::uint64_t m_scriptLanguageApiRevision{};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
@@ -1316,6 +1325,8 @@ namespace Horo::Editor {
         void ApplySourceCompletion(const SourceCompletionIntent &intent);
         /** @brief Opens an in-project definition and publishes its exact selection. */
         [[nodiscard]] bool FocusSourceDefinition(const Language::LanguageLocation &target);
+        /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
+        [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
         /** @brief Opens embedded source and publishes a validated optional text location on the editor lane. */
         [[nodiscard]] Result<void> PresentSourceCommand(const SourceDocumentId &path, std::optional<Language::LanguageLocation> target,
                                                         const std::function<bool()> &stop);

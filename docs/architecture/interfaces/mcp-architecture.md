@@ -678,6 +678,21 @@ retain their current buffers. Cancellation, closed workspaces, and
 project or authorization replacement prevent the old registration from
 opening a source.
 
+## Editor gameplay build commands
+
+The editor command pack offers `editor.build.start`, `editor.build.status`,
+and `editor.build.cancel` over the existing Gameplay Build service. Start
+and cancel require the execution grant and exact approval. Status has a
+separate observation grant and only reads the last build started by the
+same authenticated session. The host fixes the project, SDK, generator,
+and configuration. An approval cannot supply a command or native path.
+
+An approved build uses the same operation and output stores as an ordinary
+editor build. The status response carries the native operation identity
+and bounded error identities for correlation. The build cannot coalesce
+with a different caller's ordinary Play or editor build. Workspace
+retirement cancels only the isolated build it admitted.
+
 ## Related Documents
 
 - [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,

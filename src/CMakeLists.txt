@@ -4781,14 +4781,17 @@ add_library(HoroEngine::McpNavigationAdapters ALIAS HoroMcpNavigationAdapters)
 target_compile_features(HoroMcpNavigationAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::NavigationBakeAutomation)
 
-add_library(HoroMcpEditorSourceCommandsInternal STATIC mcp/EditorSourceMcpTools.cpp)
-target_compile_features(HoroMcpEditorSourceCommandsInternal PUBLIC cxx_std_20)
-set(_horo_mcp_editor_source_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_source_headers")
-configure_file(mcp/EditorSourceMcpTools.h "${_horo_mcp_editor_source_headers}/EditorSourceMcpTools.h" COPYONLY)
-configure_file(editor/screens/workspace/EditorSourceCommandEndpoint.h
-    "${_horo_mcp_editor_source_headers}/EditorSourceCommandEndpoint.h" COPYONLY)
-target_include_directories(HoroMcpEditorSourceCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_source_headers}>")
-target_link_libraries(HoroMcpEditorSourceCommandsInternal PUBLIC HoroEngine::McpRegistry HoroEngine::EditorServices)
+add_library(HoroMcpEditorCommandsInternal STATIC mcp/EditorSourceMcpTools.cpp mcp/EditorBuildMcpTools.cpp)
+target_compile_features(HoroMcpEditorCommandsInternal PUBLIC cxx_std_20)
+set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_command_headers")
+foreach(command IN ITEMS Source Build)
+    configure_file("mcp/Editor${command}McpTools.h"
+        "${_horo_mcp_editor_command_headers}/Editor${command}McpTools.h" COPYONLY)
+    configure_file("editor/screens/workspace/Editor${command}CommandEndpoint.h"
+        "${_horo_mcp_editor_command_headers}/Editor${command}CommandEndpoint.h" COPYONLY)
+endforeach ()
+target_include_directories(HoroMcpEditorCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_command_headers}>")
+target_link_libraries(HoroMcpEditorCommandsInternal PUBLIC HoroEngine::McpRegistry HoroEngine::EditorServices HoroEngine::GameplayBuild)
 
 add_library(HoroCliPackageAdapters STATIC cli/PackageCommands.cpp)
 add_library(HoroEngine::CliPackageAdapters ALIAS HoroCliPackageAdapters)

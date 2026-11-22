@@ -56,7 +56,7 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
-        RevokeSourcePresentation();
+        RevokeWorkspaceCommands();
         InvalidateAgentSceneSelection();
         StopBlackboardUsageReview();
         StopEnvironmentQueryPreview();

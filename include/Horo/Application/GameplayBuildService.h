@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -111,6 +112,13 @@ namespace Horo::Application {
 
         /** @brief Starts, joins, or coalesces a project build. */
         [[nodiscard]] Result<GameplayBuildSessionId> Start(GameplayBuildRequest request) const;
+        /** @brief Starts a build whose cancellation belongs to one explicit caller.
+         * @param request Same trusted inputs used by the editor's ordinary build.
+         * @param stop Synchronous admission check after preparing inputs and before publishing the operation.
+         * @return An isolated session, or a typed refusal if the project already has a live build.
+         * @details Ordinary builds cannot coalesce into this session. Native output and operation stores still observe it.
+         */
+        [[nodiscard]] Result<GameplayBuildSessionId> StartIsolated(GameplayBuildRequest request, const std::function<bool()> &stop) const;
         /** @brief Returns the latest session snapshot. */
         [[nodiscard]] std::optional<GameplayBuildSnapshot> Query(GameplayBuildSessionId id) const;
         /**
@@ -133,6 +141,9 @@ namespace Horo::Application {
         void Shutdown() const noexcept;
 
     private:
+        /** @brief Shares project admission, publication, and job submission for both start policies. */
+        [[nodiscard]] Result<GameplayBuildSessionId> StartImpl(GameplayBuildRequest request, bool isolated,
+                                                               const std::function<bool()> &stop) const;
         std::shared_ptr<State> state_;
     };
 }  // namespace Horo::Application

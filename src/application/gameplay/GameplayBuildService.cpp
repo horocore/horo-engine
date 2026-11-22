@@ -88,6 +88,13 @@ namespace Horo::Application {
                                                      "The build will be retried with the latest inputs.",
                                                      true,
                                                      false};
+        const ErrorCodeDescriptor BuildAlreadyActive{Domain,
+                                                     ErrorCode{"active_build"},
+                                                     ErrorSeverity::Info,
+                                                     "A build already owns this project.",
+                                                     "Wait for the current build to finish.",
+                                                     true,
+                                                     true};
 
         [[nodiscard]] bool IsTerminal(const GameplayBuildState state) noexcept {
             using enum GameplayBuildState;
@@ -116,6 +123,7 @@ namespace Horo::Application {
             }
 
             GameplayBuildSnapshot snapshot;
+            bool isolated{};
             std::optional<BuildOutputSessionId> outputSessionId;
             GameplayBuildRequest request;
             std::optional<GameplayBuildRequest> pendingRequest;
@@ -719,7 +727,7 @@ namespace Horo::Application {
 
         [[nodiscard]] Result<SessionPreparation> PrepareSession(const std::shared_ptr<GameplayBuildService::State> &state,
                                                                 GameplayBuildRequest &request, const std::string_view inputHash,
-                                                                const std::string_view projectKey) {
+                                                                const std::string_view projectKey, const bool isolated) {
             std::lock_guard lock(state->Mutex());
             if (state->shutdown)
                 return Result<SessionPreparation>::Failure(MakeError(CancelledDescriptor, "Gameplay build service is shut down."));
@@ -727,6 +735,8 @@ namespace Horo::Application {
                 std::shared_ptr<GameplayBuildService::State::Session> session = state->sessions.at(active->second);
                 std::lock_guard sessionLock(session->Mutex());
                 if (!IsTerminal(session->snapshot.state)) {
+                    if (isolated || session->isolated)
+                        return Result<SessionPreparation>::Failure(MakeError(BuildAlreadyActive));
                     ++session->snapshot.coalescedRequestCount;
                     if (session->snapshot.desiredInputHash != inputHash) {
                         session->pendingRequest = request;
@@ -740,6 +750,7 @@ namespace Horo::Application {
             }
 
             auto session = std::make_shared<GameplayBuildService::State::Session>();
+            session->isolated = isolated;
             session->snapshot.id = state->nextId++;
             session->snapshot.startedAt = std::chrono::steady_clock::now();
             if (state->output != nullptr) {
@@ -930,6 +941,31 @@ namespace Horo::Application {
             RemoveUnsubmittedSession(state, session, projectKey);
             return Result<GameplayBuildSessionId>::Failure(error);
         }
+
+        /** @brief Publishes and queues a new session or removes its reservation on admission failure. */
+        Result<GameplayBuildSessionId> SubmitNewBuild(const std::shared_ptr<GameplayBuildService::State> &state,
+                                                      const std::shared_ptr<GameplayBuildService::State::Session> &session,
+                                                      const std::string &projectKey) {
+            if (auto admitted = BeginBuildOperation(*state, session, state); admitted.HasError()) {
+                RemoveUnsubmittedSession(state, session, projectKey);
+                return Result<GameplayBuildSessionId>::Failure(admitted.ErrorValue());
+            }
+            PublishStage(*state, session, "started", "gameplay.build.started", "Gameplay build started.");
+            auto submitted = state->jobs->SubmitResult({}, [state, session, projectKey](const CancellationToken &) {
+                return CompleteBuild(state, session, projectKey);
+            });
+            if (submitted.HasError())
+                return FailJobSubmission(state, session, projectKey, submitted.ErrorValue());
+            std::lock_guard lock(session->Mutex());
+            session->jobId = submitted.Value().Id();
+            session->job = std::make_shared<JobHandle>(std::move(submitted).Value());
+            return Result<GameplayBuildSessionId>::Success(session->snapshot.id);
+        }
+
+        /** @brief Ordinary builds have no additional requester gate. */
+        bool AdmissionStopped(const std::function<bool()> &stop) {
+            return stop && stop();
+        }
     }  // namespace
 
     GameplayBuildService::GameplayBuildService(IExternalProcessRunner &processes, JobSystem &jobs, DurableFileSystem &files,
@@ -946,7 +982,22 @@ namespace Horo::Application {
         Shutdown();
     }
 
+    /** @copydoc GameplayBuildService::Start */
     Result<GameplayBuildSessionId> GameplayBuildService::Start(GameplayBuildRequest request) const {
+        return StartImpl(std::move(request), false, {});
+    }
+
+    /** @copydoc GameplayBuildService::StartIsolated */
+    Result<GameplayBuildSessionId> GameplayBuildService::StartIsolated(GameplayBuildRequest request,
+                                                                       const std::function<bool()> &stop) const {
+        return StartImpl(std::move(request), true, stop);
+    }
+
+    /** @copydoc GameplayBuildService::StartImpl */
+    Result<GameplayBuildSessionId> GameplayBuildService::StartImpl(GameplayBuildRequest request, const bool isolated,
+                                                                   const std::function<bool()> &stop) const {
+        if (AdmissionStopped(stop))
+            return Result<GameplayBuildSessionId>::Failure(MakeError(CancelledDescriptor));
         Result<std::string> hash = ComputeInputHash(request);
         if (hash.HasError())
             return Result<GameplayBuildSessionId>::Failure(hash.ErrorValue());
@@ -977,29 +1028,14 @@ namespace Horo::Application {
         AdmissionGuard admission{*state_};
 
         const std::string projectKey = std::filesystem::absolute(request.projectRoot).lexically_normal().generic_string();
-        Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey);
+        if (AdmissionStopped(stop))
+            return Result<GameplayBuildSessionId>::Failure(MakeError(CancelledDescriptor));
+        Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey, isolated);
         if (prepared.HasError())
             return Result<GameplayBuildSessionId>::Failure(prepared.ErrorValue());
         if (prepared.Value().joinedSessionId.has_value())
             return Result<GameplayBuildSessionId>::Success(*prepared.Value().joinedSessionId);
-        const std::shared_ptr<State::Session> session = prepared.Value().session;
-        if (Result<void> admitted = BeginBuildOperation(*state_, session, state_); admitted.HasError()) {
-            RemoveUnsubmittedSession(state_, session, projectKey);
-            return Result<GameplayBuildSessionId>::Failure(admitted.ErrorValue());
-        }
-        PublishStage(*state_, session, "started", "gameplay.build.started", "Gameplay build started.");
-
-        Result<JobHandle> submitted = state_->jobs->SubmitResult({}, [state = state_, session, projectKey](const CancellationToken &) {
-            return CompleteBuild(state, session, projectKey);
-        });
-        if (submitted.HasError())
-            return FailJobSubmission(state_, session, projectKey, submitted.ErrorValue());
-        {
-            std::lock_guard lock(session->Mutex());
-            session->jobId = submitted.Value().Id();
-            session->job = std::make_shared<JobHandle>(std::move(submitted).Value());
-        }
-        return Result<GameplayBuildSessionId>::Success(session->snapshot.id);
+        return SubmitNewBuild(state_, prepared.Value().session, projectKey);
     }
 
     std::optional<GameplayBuildSnapshot> GameplayBuildService::Query(const GameplayBuildSessionId id) const {

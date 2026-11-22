@@ -454,6 +454,38 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
     REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
 }
 
+TEST_CASE("Isolated editor builds never take over or coalesce with a native build", "[unit][gameplay][build][isolation]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto live = [] {
+        return false;
+    };
+    const auto native = fixture.service.Start(fixture.Request());
+    REQUIRE(native.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+    CHECK(fixture.service.StartIsolated(fixture.Request(), live).HasError());
+    REQUIRE(fixture.service.RequestCancel(native.Value()));
+    CHECK(AwaitTerminal(fixture.service, native.Value()).state == GameplayBuildState::Cancelled);
+
+    unsigned checkpoints{};
+    CHECK(fixture.service
+              .StartIsolated(fixture.Request(), [&] {
+        return ++checkpoints == 2;
+    }).HasError());
+    CHECK_FALSE(fixture.service.QueryActiveProject(fixture.project.root));
+    const auto isolated = fixture.service.StartIsolated(fixture.Request(), live);
+    REQUIRE(isolated.HasValue());
+    CHECK(fixture.service.Start(fixture.Request()).HasError());
+    CHECK(fixture.service.StartIsolated(fixture.Request(), live).HasError());
+    REQUIRE(fixture.service.RequestCancel(isolated.Value()));
+    const auto terminal = AwaitTerminal(fixture.service, isolated.Value());
+    CHECK(terminal.state == GameplayBuildState::Cancelled);
+    REQUIRE(terminal.operationId);
+    const auto output = AwaitTerminalOutput(fixture.output, terminal);
+    REQUIRE(output);
+    AssertTerminalOutput(*output, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+}
+
 TEST_CASE("Gameplay build shutdown joins active work and publishes terminal output before returning", "[unit][gameplay][build][shutdown]") {
     CancellationWaitingProcessRunner processes;
     GameplayBuildFixture fixture{processes};
