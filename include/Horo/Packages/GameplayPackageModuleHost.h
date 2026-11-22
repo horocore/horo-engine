@@ -85,6 +85,25 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<std::vector<PackageDecisionNodeGeneration>> AcquireActiveDecisionNodes(
             const PackageLifecycleService &lifecycle) const;
+
+        /** @brief Owned, non-executable inventory copied from one published package module.
+         * @details Artifact and generation attribute registrations to the exact admitted native image. */
+        struct RegistrationInventory final {
+            HoroPackageId package;
+            PackageVersion version;
+            Sha256Digest artifact;
+            std::uint64_t activationGeneration;
+            std::string module;
+            std::vector<Gameplay::BehaviorTypeId> behaviors;
+            std::vector<Gameplay::GameplayServiceDescriptor> services;
+        };
+
+        /** @brief Copies behavior IDs and service requirements from frozen registries of exact published runtime roles.
+         * @param lifecycle The package lifecycle which published those roles.
+         * @return Owned metadata or typed owner/generation failure. An empty result means no active SDK roles.
+         * @details Must run on the owner lane. No factories are called or retained. The result describes active roles only
+         * and grants no proof of registration completeness for disabled packages. */
+        [[nodiscard]] Result<std::vector<RegistrationInventory>> CaptureActiveRegistrations(const PackageLifecycleService &lifecycle) const;
         /** @brief Acquires custom senses from the selected verified native role, retaining actual owner revocation.
          * @param package Exact installed package. @param module Selected gameplay module. @param generation Current role generation.
          * @return Locked package attribution and native sense lease, or typed stale/unavailable failure.

@@ -1,5 +1,7 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 
+#include "Horo/Gameplay/BehaviorRegistry.h"
+#include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageContentStaging.h"
@@ -113,6 +115,22 @@ namespace Horo::Packages {
                     return state;
             }
             return {};
+        }
+
+        /** @brief Selects only the runtime roles published for this concrete host and generation. */
+        bool IsPublishedRole(const PackageActivationSnapshot &active, const PackageModuleReport &report, std::string_view host) {
+            return report.role == Extensions::ExtensionModuleRole::RuntimeParticipant && report.outcome == PackageModuleOutcome::Active &&
+                   report.host == host && report.generation == active.generation;
+        }
+
+        /** @brief Matches the actual lease rather than relying on a coincidentally equal generation number. */
+        bool OwnsPublishedActivation(const GameplayRoleState &state, const PackageActivationSnapshot &active) {
+            if (state.verified.Install() != active.install)
+                return false;
+            const auto &proof = state.verified.Activation().Activation();
+            return std::ranges::any_of(active.activations, [&proof](const auto &lease) {
+                return lease.IsUsable() && &lease.Activation() == &proof;
+            });
         }
 
         /** @brief Stages and verifies an immutable artifact under the host's private owner-only root. */
@@ -293,16 +311,10 @@ namespace Horo::Packages {
             return Contributions::Success(std::move(contributions));
         try {
             for (const auto &report : active->modules) {
-                if (report.role != Extensions::ExtensionModuleRole::RuntimeParticipant || report.outcome != PackageModuleOutcome::Active ||
-                    report.host != Identity() || report.generation != active->generation)
+                if (!IsPublishedRole(*active, report, Identity()))
                     continue;
                 const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
-                if (!state || state->verified.Install() != active->install)
-                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
-                const auto &proof = state->verified.Activation().Activation();
-                if (!std::ranges::any_of(active->activations, [&proof](const auto &lease) {
-                    return lease.IsUsable() && &lease.Activation() == &proof;
-                }))
+                if (!state || !OwnsPublishedActivation(*state, *active))
                     return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
                 auto nodes = state->selectedModule->AcquireDecisionNodes();
                 if (nodes.HasError())
@@ -316,6 +328,38 @@ namespace Horo::Packages {
             return Contributions::Success(std::move(contributions));
         } catch (const std::bad_alloc &) {
             return Contributions::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+        }
+    }
+
+    /** @copydoc GameplayPackageModuleHost::CaptureActiveRegistrations */
+    Result<std::vector<GameplayPackageModuleHost::RegistrationInventory>> GameplayPackageModuleHost::CaptureActiveRegistrations(
+        const PackageLifecycleService &lifecycle) const {
+        using Inventory = Result<std::vector<RegistrationInventory>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Inventory::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        const auto active = lifecycle.Active();
+        if (!active)
+            return Inventory::Success({});
+        try {
+            std::vector<RegistrationInventory> registrations;
+            for (const auto &report : active->modules) {
+                if (!IsPublishedRole(*active, report, Identity()))
+                    continue;
+                const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
+                if (!state || !OwnsPublishedActivation(*state, *active))
+                    return Inventory::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                const auto &module = *state->selectedModule;
+                const auto &locked = state->verified.Package().lock;
+                auto &inventory = registrations.emplace_back(
+                    RegistrationInventory{locked.package, locked.version, locked.artifactDigest, report.generation, report.module});
+                for (const auto &behavior : module.Registry().Registrations())
+                    inventory.behaviors.push_back(behavior.descriptor.typeId);
+                for (const auto &service : module.Services().Registrations())
+                    inventory.services.push_back(service.descriptor);
+            }
+            return Inventory::Success(std::move(registrations));
+        } catch (const std::bad_alloc &) {
+            return Inventory::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
         }
     }
 

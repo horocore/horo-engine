@@ -259,6 +259,38 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     CHECK(decisionNodes.Value().empty());
 }
 
+TEST_CASE("Verified package registrations copy behavior and service ownership without retaining native execution", "[packages][gameplay]") {
+    GameplayFixture fixture;
+    const auto before = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(before.HasValue());
+    CHECK(before.Value().empty());
+    REQUIRE(fixture.Activate().HasValue());
+    const auto snapshot = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(snapshot.HasValue());
+    REQUIRE(snapshot.Value().size() == 1);
+    const auto &module = snapshot.Value().front();
+    const auto &locked = fixture.base.install.ActiveGraph()->packages.front().lock;
+    CHECK(module.package == locked.package);
+    CHECK(module.version == locked.version);
+    CHECK(module.artifact == locked.artifactDigest);
+    CHECK(module.activationGeneration == fixture.base.service->Active()->generation);
+    CHECK(module.module == "game.tests");
+    REQUIRE(module.behaviors.size() == 1);
+    CHECK(module.behaviors.front().Value() == "game.tests.package_behavior");
+    REQUIRE(module.services.size() == 1);
+    CHECK(module.services.front().id.Value() == "game.tests.package_service");
+
+    GameplayFixture foreign;
+    REQUIRE(foreign.Activate().HasValue());
+    CHECK(fixture.gameplay->CaptureActiveRegistrations(*foreign.base.service).HasError());
+    REQUIRE(fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    REQUIRE(fixture.retirement->Close().HasValue());
+    CHECK(module.behaviors.front().Value() == "game.tests.package_behavior");
+    const auto withdrawn = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(withdrawn.HasValue());
+    CHECK(withdrawn.Value().empty());
+}
+
 TEST_CASE("Verified package decision nodes retain exact locked version and real generated factories", "[packages][decision-node]") {
     GameplayFixture fixture;
     const auto installed = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);

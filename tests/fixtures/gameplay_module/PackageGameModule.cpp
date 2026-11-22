@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
+#include "Horo/Gameplay/NativeBehavior.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
 #include "Horo/Gameplay/NativePerceptionSense.h"
 
@@ -64,6 +65,20 @@ namespace {
         }
     };
 }  // namespace
+
+namespace {
+    /** @brief Inert authored behavior for package registration attribution tests. */
+    class PackageBehavior final : public Horo::Gameplay::IBehaviorInstance {
+    public:
+        static Horo::Gameplay::BehaviorDescriptor DescribeBehavior() {
+            Horo::Gameplay::BehaviorDescriptor descriptor;
+            descriptor.displayName = "Package Behavior";
+            descriptor.phases.push_back({Horo::Gameplay::BehaviorPhase::Gameplay, "game.tests.package_behavior", {}, {}, {}});
+            return descriptor;
+        }
+    };
+}  // namespace
+HORO_BEHAVIOR(PackageBehavior, "game.tests.package_behavior")
 
 namespace {
     class PackageDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
