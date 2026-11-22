@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
@@ -17,6 +18,23 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Offers an exact local decision next to the preview without exposing the operation to MCP. */
+        void DrawAgentSceneReview(const EditorWorkspaceViewModel::AgentSceneReviewView &review, const bool canApply,
+                                  EditorWorkspaceViewCommandData &command, const ILocalizationService &localization) {
+            const auto summary = std::vformat(localization.Get("editor", "workspace.viewport.agent_review.summary"),
+                                              std::make_format_args(review.objectCount));
+            ImGui::TextWrapped("%s", summary.c_str());
+            const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
+            const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");
+            const bool approved =
+                Ui::Button({.label = apply.c_str(), .enabled = canApply, .style = {.width = Ui::StyleWidth::FillAvailable}});
+            const bool rejected = Ui::Button({.label = discard.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
+            if (approved || rejected) {
+                command.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
+                command.agentSceneReviewDecision = {review.id, approved};
+            }
+        }
+
         [[nodiscard]] std::optional<AssetSceneDragPayload> ReadAssetPayload(const ImGuiPayload *payload) {
             if (payload == nullptr || !payload->IsDataType(AssetSceneDragPayloadType) || payload->Data == nullptr ||
                 payload->DataSize != sizeof(AssetSceneDragPayload))
@@ -149,10 +167,13 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##Content", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
+        if (viewModel.agentSceneReview)
+            DrawAgentSceneReview(*viewModel.agentSceneReview, viewportRenderer_ && viewportRenderer_->IsReady(), command,
+                                 context.localization);
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y;
+        const float height = viewModel.agentSceneReview ? std::max(0.0F, ImGui::GetContentRegionAvail().y) : size.y;
         const float centerX = origin.x + width * 0.5F;
         const float horizon = origin.y + height * 0.38F;
         const float ground = origin.y + height;

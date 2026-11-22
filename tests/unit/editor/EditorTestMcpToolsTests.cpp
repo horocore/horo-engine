@@ -84,6 +84,53 @@ namespace {
         CHECK_FALSE(store.Read(*second, now + 31s));
     }
 
+    TEST_CASE("MCP transform proposal stages only an approved review for a live client", "[unit][editor][mcp][scene-review]") {
+        std::function<bool()> retained;
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .proposeTransforms = [&](InspectionSceneRevision revision,
+                                                                     std::span<const AgentViewportTransform> transforms,
+                                                                     std::function<bool()> active) {
+            CHECK((revision == InspectionSceneRevision{6, 19}));
+            REQUIRE(transforms.size() == 1);
+            CHECK(transforms.front().object == 42);
+            CHECK((transforms.front().translation == std::array<float, 3>{1, -2, 3}));
+            retained = std::move(active);
+            return Result<std::uint64_t>::Success(71);
+        }});
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint},
+                                                      {"preview-client", "project-one", 3, {std::string{EditorSceneProposalGrant}}},
+                                                      Test::Authorization());
+        REQUIRE(opened.HasValue());
+        auto &session = *opened.Value();
+        const auto effect = session.ToolEffect("scene.propose_transforms");
+        REQUIRE(effect.HasValue());
+        CHECK(effect.Value() == McpToolEffect::PresentationSideEffect);
+        const Json transform{{"object", 42}, {"translation", {1, -2, 3}}, {"rotationXYZW", {0, 0, 0, 1}}, {"scale", {1, 1, 1}}};
+        const Json arguments{{"scene", {{"epoch", 6}, {"revision", 19}}}, {"transforms", Json::array({transform})}};
+        const auto request = Command("proposal", "scene.propose_transforms", arguments);
+        CHECK(session.Client()->Call(request).HasError());
+        CHECK_FALSE(retained);
+        auto invalid = arguments;
+        invalid["transforms"][0]["translation"][0] = 1.0e100;
+        const auto tooLarge = Command("overflow", "scene.propose_transforms", invalid);
+        if (const auto challenge = session.RequestApproval(tooLarge); challenge.HasValue()) {
+            REQUIRE(session.Decide(challenge.Value(), true).HasValue());
+            CHECK(Execute(session, tooLarge).at("status") == "failed");
+        }
+        CHECK_FALSE(retained);
+        Approve(session, request);
+        const auto response = Execute(session, request);
+        REQUIRE(response.at("status") == "succeeded");
+        CHECK(response.at("result") == Json{{"reviewId", "71"}});
+        REQUIRE(retained);
+        CHECK(retained());
+        REQUIRE(session.Close().HasValue());
+        CHECK_FALSE(retained());
+    }
+
     TEST_CASE("Debug capture requires exact approval and returns only numeric evidence", "[unit][editor][mcp][debug-capture]") {
         EditorDebugCaptureStorage store;
         const auto now = EditorDebugCaptureStorage::Clock::time_point{};

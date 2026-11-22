@@ -1,6 +1,7 @@
 #include "EditorInspectionMcpTools.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 
 #include <limits>
@@ -79,6 +80,32 @@ namespace Horo::Editor {
         /** @brief Describes numeric records without names, free text, or runtime handles. */
         Json VectorSchema(const std::size_t count) {
             return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
+        }
+
+        /** @brief Checks float representability before the adapter narrows JSON numbers. */
+        Json LocalTransformVectorSchema(const std::size_t count) {
+            auto result = VectorSchema(count);
+            constexpr auto maximum = static_cast<double>(std::numeric_limits<float>::max());
+            result["items"].update({{"minimum", -maximum}, {"maximum", maximum}});
+            return result;
+        }
+
+        /** @brief Describes a whole bounded named batch on one exact authored Scene revision. */
+        Json ProposalInputSchema() {
+            Json entry{{"type", "object"},
+                       {"properties",
+                        {{"object", {{"type", "integer"}, {"minimum", 1}}},
+                         {"translation", LocalTransformVectorSchema(3)},
+                         {"rotationXYZW", LocalTransformVectorSchema(4)},
+                         {"scale", LocalTransformVectorSchema(3)}}},
+                       {"required", {"object", "translation", "rotationXYZW", "scale"}},
+                       {"additionalProperties", false}};
+            return {{"type", "object"},
+                    {"properties",
+                     {{"scene", SceneSchema()},
+                      {"transforms", {{"type", "array"}, {"minItems", 1}, {"maxItems", MaximumObjects}, {"items", std::move(entry)}}}}},
+                    {"required", {"scene", "transforms"}},
+                    {"additionalProperties", false}};
         }
 
         /** @brief Describes a top-left-origin normalized viewport rectangle. */
@@ -516,6 +543,58 @@ namespace Horo::Editor {
             std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint_;
         };
 
+        /** @brief Stages the exact proposal on the editor lane and retains a revocable, weak principal lease. */
+        class SceneProposalTool final : public Mcp::IMcpToolAdapter {
+        public:
+            explicit SceneProposalTool(std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint) : endpoint_(std::move(endpoint)) {}
+
+            JsonResult Invoke(const Json &arguments, const Mcp::McpRequestContext &context) override {
+                const auto endpoint = endpoint_.lock();
+                if (!endpoint || endpoint->owner != std::this_thread::get_id() || !endpoint->proposeTransforms)
+                    return JsonResult::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
+                if (!context.authority || context.projectIdentity != endpoint->project ||
+                    context.authorizationRevision != endpoint->authorizationRevision)
+                    return JsonResult::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
+                if (context.IsStopRequested())
+                    return JsonResult::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
+                const auto &scene = arguments.at("scene");
+                const InspectionSceneRevision revision{scene.at("epoch").get<std::uint64_t>(), scene.at("revision").get<std::uint64_t>()};
+                std::vector<AgentViewportTransform> transforms;
+                transforms.reserve(arguments.at("transforms").size());
+                for (const auto &row : arguments.at("transforms"))
+                    transforms.push_back({row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
+                                          row.at("rotationXYZW").get<std::array<float, 4>>(), row.at("scale").get<std::array<float, 3>>()});
+                auto authorized = [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
+                    const auto active = principal.lock();
+                    return active && !active->IsStopRequested();
+                };
+                const auto result = endpoint->proposeTransforms(revision, transforms, std::move(authorized));
+                if (result.HasError())
+                    return JsonResult::Failure(result.ErrorValue());
+                return JsonResult::Success({{"reviewId", std::to_string(result.Value())}});
+            }
+
+        private:
+            std::weak_ptr<const EditorInspectionCommandEndpoint> endpoint_;
+        };
+
+        /** @brief Publishes a review-only tool under its own capability. */
+        Mcp::McpToolRegistration ProposalRegistration(const std::shared_ptr<const EditorInspectionCommandEndpoint> &endpoint) {
+            return {.descriptor =
+                        {.id = {"scene.propose_transforms"},
+                         .description = "Preview authored local transforms in the viewport for local operator review.",
+                         .inputSchema = ProposalInputSchema(),
+                         .outputSchema = {{"type", "object"},
+                                          {"properties", {{"reviewId", {{"type", "string"}, {"minLength", 1}, {"maxLength", 20}}}}},
+                                          {"required", {"reviewId"}},
+                                          {"additionalProperties", false}},
+                         .effect = Mcp::McpToolEffect::PresentationSideEffect,
+                         .requiredCapabilities = {std::string{EditorSceneProposalGrant}},
+                         .bounds = {.maximumInputBytes = 8192, .maximumResultBytes = 128, .maximumDepth = 6, .maximumNodes = 384}},
+                    .adapter = std::make_shared<SceneProposalTool>(endpoint),
+                    .owner = Mcp::McpOwnerContext::Editor};
+        }
+
         /** @brief Publishes a read-only query under the shared inspection capability and bounds. */
         template <auto Read>
         Mcp::McpToolRegistration Registration(const std::weak_ptr<const EditorInspectionCommandEndpoint> &workspace, std::string id,
@@ -594,6 +673,8 @@ namespace Horo::Editor {
                              readVisualIssues>(tools, endpoint, "inspect.visual_issues",
                                                "Read projected bounds clipping and overlap within a normalized viewport region.",
                                                VisualSchema, VisualInputSchema);
+        if (endpoint->proposeTransforms)
+            tools.push_back(ProposalRegistration(endpoint));
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

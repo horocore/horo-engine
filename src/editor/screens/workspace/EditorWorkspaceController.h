@@ -339,11 +339,13 @@ namespace Horo::Editor {
          * @param revision Exact scene opening and revision captured by the proposing client.
          * @param updates Bounded list of proposed object-local transforms.
          * @param cancellation Revocable proposal lifetime.
+         * @param authorized Optional live client authority for an embedded request.
          * @return Owner-issued review identity or a zero-mutation rejection.
          */
         [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneTransforms(InspectionSceneRevision revision,
                                                                         std::span<const SceneObjectTransformUpdate> updates,
-                                                                        CancellationToken cancellation);
+                                                                        CancellationToken cancellation,
+                                                                        std::function<bool()> authorized = {});
 
         /** @brief Applies the displayed proposal after an explicit local approval.
          * @param review Exact owner-issued review identity.
@@ -1089,6 +1091,7 @@ namespace Horo::Editor {
             SceneTransactionContext context;
             SceneDocumentTransactions owner;
             SceneDocumentTransactions::ReplacementPreview preview;
+            std::function<bool()> authorized;
         };
 
         std::optional<AgentSceneTransformReview> m_agentSceneTransformReview;

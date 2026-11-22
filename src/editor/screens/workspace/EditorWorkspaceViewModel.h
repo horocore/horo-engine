@@ -232,6 +232,7 @@ namespace Horo::Editor {
         PreviewObjectTransform,
         CommitObjectTransform,
         CancelObjectTransformPreview,
+        ResolveAgentSceneReview,
         PreviewLightComponent,
         CancelLightComponentPreview,
         UpdateObjectName,
@@ -894,6 +895,14 @@ namespace Horo::Editor {
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
         std::optional<Math::Transform> transformPayload = std::nullopt;
         std::optional<std::vector<SceneObjectTransformUpdate>> transformUpdates = std::nullopt;
+
+        /** @brief Explicit local decision for the exact currently displayed review. */
+        struct AgentSceneReviewDecision final {
+            std::uint64_t id{};
+            bool approve{};
+        };
+
+        std::optional<AgentSceneReviewDecision> agentSceneReviewDecision;
         std::optional<ViewportPickRequest> viewportPickPayload = std::nullopt;
         std::optional<EditorViewportNavigationDelta> viewportNavigationPayload = std::nullopt;
         std::optional<EditorViewportAxisView> viewportAxisPayload = std::nullopt;
@@ -1109,6 +1118,14 @@ namespace Horo::Editor {
         std::optional<SceneObjectId> primarySelection;
         std::vector<SceneObjectId> selectedObjects;
         EditorTransformTool activeTransformTool{EditorTransformTool::Select};
+
+        /** @brief Bounded impact shown beside the transient authored viewport. */
+        struct AgentSceneReviewView final {
+            std::uint64_t id{};
+            std::size_t objectCount{};
+        };
+
+        std::optional<AgentSceneReviewView> agentSceneReview;
         EditorTransformSpace activeTransformSpace{EditorTransformSpace::Local};
         EditorViewportCamera viewportCamera;
         std::optional<Math::Mat4> primarySelectionWorldTransform;

@@ -14,6 +14,7 @@ namespace Horo::Editor {
         if (!m_viewport.Current().transformPreviews.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewObjectTransform &&
             cmd.command != EditorWorkspaceViewCommand::CommitObjectTransform &&
+            cmd.command != EditorWorkspaceViewCommand::ResolveAgentSceneReview &&
             cmd.command != EditorWorkspaceViewCommand::CancelObjectTransformPreview) {
             CancelObjectTransformPreview();
         }

@@ -92,6 +92,16 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::CancelObjectTransformPreview:
                 CancelObjectTransformPreview();
                 break;
+            case EditorWorkspaceViewCommand::ResolveAgentSceneReview:
+                if (const auto decision = cmd.agentSceneReviewDecision) {
+                    if (!decision->approve)
+                        static_cast<void>(CancelAgentSceneTransforms(decision->id));
+                    else if (const auto result = ApproveAgentSceneTransforms(decision->id); result.HasError())
+                        m_notifications.Publish("scene", NotificationSeverity::Warning,
+                                                Localized("workspace.viewport.agent_review.invalid",
+                                                          "This scene proposal is no longer current."));
+                }
+                break;
             case EditorWorkspaceViewCommand::PreviewLightComponent:
                 if (cmd.objectPayload.has_value() && cmd.lightPayload.has_value())
                     PreviewLightComponent(*cmd.objectPayload, *cmd.lightPayload);

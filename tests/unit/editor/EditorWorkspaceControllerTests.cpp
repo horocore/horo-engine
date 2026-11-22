@@ -382,6 +382,8 @@ namespace {
         CancellationSource proposal;
         const auto preview = controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token());
         REQUIRE(preview.HasValue());
+        REQUIRE(controller.ViewModel().agentSceneReview);
+        CHECK(controller.ViewModel().agentSceneReview->objectCount == 1);
         CHECK(origin() != baseline);
         CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
         CHECK_FALSE(controller.ViewModel().isDirty);
@@ -389,8 +391,12 @@ namespace {
         CHECK(controller.PreviewAgentSceneTransforms(revision, updates, proposal.Token()).HasError());
 
         SECTION("approval uses canonical history and consumes the review") {
-            REQUIRE(controller.ApproveAgentSceneTransforms(preview.Value()).HasValue());
+            EditorWorkspaceViewCommandData approval;
+            approval.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
+            approval.agentSceneReviewDecision = {preview.Value(), true};
+            controller.ProcessCommand(approval);
             CHECK(controller.ViewModel().objects.front().localTransform == desired);
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
             REQUIRE(events.size() == 1);
             CHECK(events.front().affectedObjects == std::vector{object.id});
             CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());

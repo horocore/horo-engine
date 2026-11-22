@@ -32,11 +32,14 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::PreviewAgentSceneTransforms */
     Result<std::uint64_t> EditorWorkspaceController::PreviewAgentSceneTransforms(const InspectionSceneRevision revision,
                                                                                  std::span<const SceneObjectTransformUpdate> updates,
-                                                                                 CancellationToken cancellation) {
+                                                                                 CancellationToken cancellation,
+                                                                                 std::function<bool()> authorized) {
         using Output = Result<std::uint64_t>;
         ReconcileAgentSceneTransformReview();
         if (updates.empty() || updates.size() > MaximumProposalObjects)
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
+        if (authorized && !authorized())
+            return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
         const auto current = InspectSceneRevision();
         if (current.HasError() || current.Value() != revision || !CanReviewAgentSceneTransforms())
             return Output::Failure(RejectReview(SceneTransactionFailure::Stale));
@@ -58,7 +61,8 @@ namespace Horo::Editor {
         changes.reserve(updates.size());
         for (const auto &update : updates) {
             const auto object = std::ranges::find(objects, update.object, &SceneObjectSnapshot::id);
-            if (object == objects.end() || object->generated)
+            const auto visible = std::ranges::find(m_viewModel.objects, update.object, &SceneObject::id);
+            if (object == objects.end() || object->generated || visible == m_viewModel.objects.end() || !visible->effectivelyVisible)
                 return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
             const auto fingerprint = FingerprintSceneObjectContent(*object, MaximumSceneObjectFingerprintBytes);
             if (fingerprint.HasError())
@@ -79,7 +83,9 @@ namespace Horo::Editor {
         if (m_viewport.Current().transformPreviews.size() != effective.size())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
         const auto id = ++m_agentSceneTransformReviewSerial;
-        m_agentSceneTransformReview.emplace(id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value());
+        m_agentSceneTransformReview.emplace(id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
+                                            std::move(authorized));
+        m_viewModel.agentSceneReview = {id, effective.size()};
         return Output::Success(id);
     }
 
@@ -96,7 +102,7 @@ namespace Horo::Editor {
         const SceneTransactionContext approval{proposal.context.session,
                                                m_document.Revision().value,
                                                m_document.State().value,
-                                               CanReviewAgentSceneTransforms(),
+                                               CanReviewAgentSceneTransforms() && (!proposal.authorized || proposal.authorized()),
                                                {}};
         const auto result = proposal.owner.ApplyReviewedReplacements(approval, std::move(proposal.preview));
         if (result.HasError())
@@ -124,13 +130,15 @@ namespace Horo::Editor {
         if (!m_agentSceneTransformReview)
             return;
         const auto &review = *m_agentSceneTransformReview;
-        if (review.context.cancellation.IsCancellationRequested() || review.owner.CheckCurrent().HasError() ||
-            review.context.revision != m_document.Revision().value || !CanReviewAgentSceneTransforms())
+        if ((review.authorized && !review.authorized()) || review.context.cancellation.IsCancellationRequested() ||
+            review.owner.CheckCurrent().HasError() || review.context.revision != m_document.Revision().value ||
+            !CanReviewAgentSceneTransforms())
             CancelObjectTransformPreview();
     }
 
     void EditorWorkspaceController::HandleDocumentCommandResult(const Result<SceneCommandResult> &result, const char *operation) {
         m_agentSceneTransformReview.reset();
+        m_viewModel.agentSceneReview.reset();
         if (result.HasError()) {
             LOG_ERROR("editor.scene_document", "%s failed: %s", operation, result.ErrorValue().message.c_str());
             if (result.ErrorValue().code.Value() == SceneDocumentErrors::ObjectLocked.code.Value()) {
@@ -206,6 +214,7 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::CancelObjectTransformPreview() {
         m_agentSceneTransformReview.reset();
+        m_viewModel.agentSceneReview.reset();
         if (m_viewport.Current().transformPreviews.empty()) {
             return;
         }

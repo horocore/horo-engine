@@ -10,6 +10,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -302,5 +303,8 @@ namespace Horo::Editor {
         std::function<Result<CollisionInspectionPage>(const ObjectInspectionRequest &)> readCollisions;
         std::function<Result<PenetrationInspectionPage>(const ObjectInspectionRequest &)> readPenetrations;
         std::function<Result<VisualInspectionPage>(const ObjectInspectionRequest &)> readVisualIssues;
+        /** @brief Stages a review while the originating principal is live. The result confers no mutation authority. */
+        std::function<Result<std::uint64_t>(InspectionSceneRevision, std::span<const AgentViewportTransform>, std::function<bool()>)>
+            proposeTransforms;
     };
 }  // namespace Horo::Editor

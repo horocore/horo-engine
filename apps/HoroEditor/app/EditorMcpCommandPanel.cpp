@@ -30,6 +30,7 @@ namespace Horo::Editor {
             CommandPack{"open_build", {EditorBuildExecutionGrant, EditorBuildObservationGrant}},
             CommandPack{"open_tests", {EditorTestExecutionGrant, EditorTestObservationGrant}},
             CommandPack{"open_inspection", {EditorSceneInspectionGrant, {}}},
+            CommandPack{"open_scene_proposals", {EditorSceneInspectionGrant, EditorSceneProposalGrant}},
             CommandPack{"open_debug_capture", {EditorDebugCaptureGrant, {}}},
         };
 

@@ -630,6 +630,12 @@ revision. After approval, the owner calls `ApplyReviewedReplacements` with fresh
 edit admission. It revalidates the reviewed batch against the live document and
 records one canonical history entry.
 
+`scene.propose_transforms` accepts a bounded batch of local transforms for
+visible authored objects on the exact Scene revision returned by inspection.
+The MCP proposal grant admits the preview. Apply and discard are local viewport
+controls. The preview is retired when the originating authority expires or the
+authored Scene is replaced.
+
 ### Communication Flow
 
 ```text
