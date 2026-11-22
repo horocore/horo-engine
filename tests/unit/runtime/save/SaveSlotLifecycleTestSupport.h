@@ -56,6 +56,10 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
     class Host final : public ISaveSlotLifecycleHost {
     public:
         Result<std::unique_ptr<ISaveSlotOperationLease>> AcquireBinding(const SaveNamespaceAccessRequest &access) override {
+            if (onBinding) {
+                if (auto observed = onBinding(); observed.HasError())
+                    return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(std::move(observed).ErrorValue());
+            }
             if (auto valid = ValidateSaveNamespaceAccess(access, binding); valid.HasError())
                 return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(valid.ErrorValue());
             return Result<std::unique_ptr<ISaveSlotOperationLease>>::Success(std::make_unique<Lease>(leases));
@@ -72,6 +76,8 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
             CHECK(leases == 1);
             if (onSemantics)
                 onSemantics();
+            if (semanticDiagnostic)
+                return Result<void>::Failure(*semanticDiagnostic);
             if (semanticFailure)
                 return Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
             for (const auto &participant : archive.Manifest().participants) {
@@ -128,7 +134,9 @@ namespace Horo::Runtime::SaveSlotLifecycleTest {
         std::size_t signCalls{};
         std::size_t recycleCalls{};
         SaveArchiveSignatureProvider *verifier{};
+        std::function<Result<void>()> onBinding;
         std::function<void()> onSemantics;
+        std::optional<Error> semanticDiagnostic;
         std::function<Result<void>()> onRecycle;
         std::function<Result<std::vector<std::byte>>(std::vector<std::byte>)> signer;
         std::map<SlotGenerationId, std::vector<std::byte>> recycled;

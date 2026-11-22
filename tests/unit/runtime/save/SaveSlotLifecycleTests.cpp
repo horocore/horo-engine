@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "SaveSlotLifecycleTestSupport.h"
 
 using namespace Horo::Runtime::SaveSlotLifecycleTest;
@@ -194,6 +195,59 @@ TEST_CASE("Export owns an immutable independent snapshot and publishes only comp
     fixture.Import(10, MakeArchive("1.2.4-preview.1").bytes);
     CHECK(*snapshot.exported.bytes == bytes);
     CHECK(fixture.ExportBytes(10) != bytes);
+}
+
+TEST_CASE("Save export withholds private host diagnostics and publishes only after admission", "[runtime][save][lifecycle]") {
+    Fixture fixture;
+    fixture.Import(10);
+    const auto source = fixture.ExportBytes(10);
+    const auto request = fixture.Export(10);
+    auto external = Namespace();
+    external.environment = Id<EnvironmentStorageId>(50);
+    auto opened = SaveFilesystemStorage::Open(fixture.root, external);
+    REQUIRE(opened.HasValue());
+    const auto destination = std::move(opened).Value();
+    const auto slot = Id<SaveGameSlotId>(60);
+
+    const Error cause{ErrorCode{"private.slot_id"}, ErrorDomainId{"private.profile"}, ErrorSeverity::Error, "private player"};
+    const auto privateError = [&cause](const ErrorCodeDescriptor &descriptor) {
+        auto error = MakeError(descriptor, "private slot title");
+        error.diagnostics.emplace_back(DiagnosticCode{"private.payload"}, DiagnosticSeverity::Error, "private progress",
+                                       SourceLocation{"private path"}, "private field");
+        return WithCause(std::move(error), cause);
+    };
+    const auto *expected = &SaveErrors::NamespaceStale;
+    SECTION("profile binding rejects before opening an archive") {
+        fixture.host.onBinding = [&expected, &privateError] {
+            CHECK(Log::DiagnosticsSuppressed());
+            return Result<void>::Failure(privateError(*expected));
+        };
+    }
+    SECTION("semantic validation rejects private payload details") {
+        expected = &SaveErrors::RestoreParticipantInvalid;
+        fixture.host.onSemantics = [] {
+            CHECK(Log::DiagnosticsSuppressed());
+        };
+        fixture.host.semanticDiagnostic = privateError(*expected);
+    }
+
+    const auto denied = fixture.owner->ExportTo(request, destination, slot);
+    REQUIRE(denied.HasError());
+    const auto &error = denied.ErrorValue();
+    CHECK(error.code.Value() == expected->code.Value());
+    CHECK(error.message == expected->summary);
+    CHECK(error.diagnostics.empty());
+    REQUIRE(error.cause.Get());
+    CHECK(error.cause.Get()->code.Value() == SaveErrors::DiagnosticUnsupported.code.Value());
+    CHECK(error.cause.Get()->message == SaveErrors::DiagnosticUnsupported.summary);
+    CHECK_FALSE(Log::DiagnosticsSuppressed());
+    CHECK(destination.Read(slot, source.size()).HasError());
+    CHECK(fixture.host.leases == 0);
+
+    fixture.host.onBinding = {};
+    fixture.host.semanticDiagnostic.reset();
+    REQUIRE(fixture.owner->ExportTo(request, destination, slot).HasValue());
+    CHECK(destination.Read(slot, source.size()).Value() == source);
 }
 
 TEST_CASE("Lifecycle repack preserves unknown optional stored compressed records exactly", "[runtime][save][lifecycle]") {

@@ -84,7 +84,10 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::VersionUnsupportedNewer));
         if (auto unknown = archive.InspectUnknownData(policy.compatibility, policy.archiveLimits.maximumArchiveBytes); unknown.HasError())
             return Result<ValidatedSaveArchive>::Failure(unknown.ErrorValue());
-        if (auto semantics = host.ValidateSemantics(archive); semantics.HasError())
+        if (auto semantics = InvokeSaveSlotHost([&host, &archive] {
+            return host.ValidateSemantics(archive);
+        });
+            semantics.HasError())
             return Result<ValidatedSaveArchive>::Failure(semantics.ErrorValue());
         return admitted;
     }

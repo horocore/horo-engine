@@ -64,6 +64,7 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::CaptureAlreadySealed, Lifecycle},
             DiagnosticPolicy{&SaveErrors::CaptureAllocationFailed, Quota},
             DiagnosticPolicy{&SaveErrors::CaptureAdapterContractInvalid, Participant},
+            DiagnosticPolicy{&SaveErrors::RestoreParticipantInvalid, Participant},
             DiagnosticPolicy{&SaveErrors::ArchiveHeaderInvalid, Corruption},
             DiagnosticPolicy{&SaveErrors::ArchiveManifestInvalid, Corruption},
             DiagnosticPolicy{&SaveErrors::ArchiveEnvelopeInvalid, Corruption},

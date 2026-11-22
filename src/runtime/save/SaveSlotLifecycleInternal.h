@@ -1,10 +1,22 @@
 #pragma once
 
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "Horo/Runtime/Save/SaveSlotLifecycle.h"
 
 #include <mutex>
+#include <utility>
 
 namespace Horo::Runtime::SaveSlotLifecycleDetail {
+    /** @brief Prevents Save provider diagnostics from publishing private archive or profile content. */
+    template <typename Callback> [[nodiscard]] auto InvokeSaveSlotHost(Callback &&callback) {
+        const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+        auto result = std::forward<Callback>(callback)();
+        if (result.HasError())
+            return decltype(result)::Failure(RedactSaveDiagnosticError(result.ErrorValue()));
+        return result;
+    }
+
     /** @brief One selected generation; deletion is explicit catalog state, never inferred from missing bytes. */
     struct Record final {
         SaveSlotCatalogEntry entry;

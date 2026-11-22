@@ -130,7 +130,9 @@ namespace Horo::Runtime {
             Operation operation{*state_};
             if (access.expected != state_->policy.destination.name)
                 return Result<SaveSlotIndex>::Failure(MakeError(SaveErrors::NamespaceStale));
-            auto lease = state_->host->AcquireBinding(access);
+            auto lease = InvokeSaveSlotHost([this, &access] {
+                return state_->host->AcquireBinding(access);
+            });
             if (lease.HasError())
                 return Result<SaveSlotIndex>::Failure(lease.ErrorValue());
             if (!lease.Value())
@@ -157,7 +159,9 @@ namespace Horo::Runtime {
             Operation operation{*state_};
             if (access.expected != state_->policy.destination.name)
                 return Result<bool>::Failure(MakeError(SaveErrors::NamespaceStale));
-            auto lease = state_->host->AcquireBinding(access);
+            auto lease = InvokeSaveSlotHost([this, &access] {
+                return state_->host->AcquireBinding(access);
+            });
             if (lease.HasError())
                 return Result<bool>::Failure(lease.ErrorValue());
             if (!lease.Value())
@@ -180,7 +184,9 @@ namespace Horo::Runtime {
             if (auto cancelled = CheckCancellation(cancellation); cancelled.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(cancelled.ErrorValue());
             Operation operation{*state_};
-            auto lease = state_->host->AcquireBinding(request.source.address.namespaceAccess);
+            auto lease = InvokeSaveSlotHost([this, &request] {
+                return state_->host->AcquireBinding(request.source.address.namespaceAccess);
+            });
             if (lease.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(lease.ErrorValue());
             if (!lease.Value())
