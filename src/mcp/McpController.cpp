@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "McpAuditTelemetry.h"
 
 #include <algorithm>
 #include <array>
@@ -70,7 +71,20 @@ namespace Horo::Mcp {
             std::optional<Error> error;
             std::optional<double> progress;
             std::string phase;
+            std::chrono::steady_clock::time_point auditStarted;
         };
+
+        /** @brief Reports a registered operation without serializing any wire or application payload. */
+        void AuditOperation(const std::string_view event, const Operation &operation) noexcept {
+            EmitMcpAudit({.event = event,
+                          .principal = operation.context.authority->AuditIdentity(),
+                          .session = operation.session,
+                          .operation = operation.id,
+                          .tool = operation.tool.value,
+                          .status = Name(operation.state),
+                          .elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                                           operation.auditStarted)});
+        }
 
         [[nodiscard]] nlohmann::json View(const Operation &operation) {
             nlohmann::json value = {{"schemaVersion", 1},
@@ -149,6 +163,7 @@ namespace Horo::Mcp {
             if (prune)
                 PruneRecent();
             drained.notify_all();
+            AuditOperation("operation.finished", *operation);
         }
 
         /** @brief Makes deadline and cancellation priority explicit at every state boundary. */
@@ -202,6 +217,7 @@ namespace Horo::Mcp {
             }
             auto operation = std::make_shared<Operation>();
             operation->id = nextId++;
+            operation->auditStarted = std::chrono::steady_clock::now();
             operation->requestId = request.id;
             operation->session = context.session;
             operation->tool = std::move(tool);
@@ -220,6 +236,7 @@ namespace Horo::Mcp {
             queues[Index(owner)].push_back(operation);
             ++pending;
             ++active;
+            AuditOperation("operation.queued", *operation);
             StopIfRequested(operation);
             return Result<nlohmann::json>::Success(View(*operation));
         }
@@ -340,8 +357,14 @@ namespace Horo::Mcp {
         if (effect.HasError())
             return Result<nlohmann::json>::Failure(effect.ErrorValue());
         if (const auto approval = state_->authorization->Authorize(context, request, effect.Value() != McpToolEffect::Query, false);
-            approval.HasError())
+            approval.HasError()) {
+            EmitMcpAudit({.event = "operation.rejected",
+                          .principal = context.authority->AuditIdentity(),
+                          .session = context.session,
+                          .tool = tool.value,
+                          .status = "authorization_denied"});
             return Result<nlohmann::json>::Failure(approval.ErrorValue());
+        }
         return state_->QueueCall(request, context, tool, owner.Value(), snapshot);
     }
 
@@ -432,6 +455,7 @@ namespace Horo::Mcp {
             queue.pop_front();
             --state->pending;
             operation->state = OperationState::Running;
+            AuditOperation("operation.started", *operation);
             ++state->callbacks;
         }
         auto complete = [state, weakOperation = std::weak_ptr<Operation>{operation}, completed](Result<nlohmann::json> outcome) {

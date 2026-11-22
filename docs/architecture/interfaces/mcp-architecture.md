@@ -464,17 +464,24 @@ bounded chunk size.
 
 The store records:
 
-- request ID
+- host-generated request and operation correlation
 - tool name
 - timing
 - status
-- operation ID
 - safe diagnostics summary
 
 Tool arguments and results are redacted according to the tool descriptor.
 Secrets, credentials, raw file contents, and large payloads are never retained
 in history by default. History retention is policy-bounded by count, age, and
 storage budget.
+
+Session, approval, and dispatch owners publish schema-versioned `mcp.audit`
+records to the process's bounded asynchronous JSONL log. Numeric principal,
+session, approval, and operation identities correlate related records without
+retaining caller-supplied request IDs or names. Operation records identify
+registered tools and include status and elapsed time. Arguments, application
+results and messages, credentials, and ambient context stay outside the audit
+projection. A full or disabled log queue never gates command execution.
 
 ## Save Tool Boundary
 

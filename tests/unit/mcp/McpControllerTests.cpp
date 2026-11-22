@@ -1,3 +1,5 @@
+#include "../../support/OwnedTestDirectory.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Mcp/McpController.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
@@ -8,15 +10,86 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <mutex>
+#include <semaphore>
 #include <string>
 #include <thread>
+#include <utility>
 
 using namespace Horo;
 using namespace Horo::Mcp;
 
 namespace {
+#if HORO_ENABLE_TELEMETRY
+    /** @brief Holds the consumer outside the queue lock while the fixture submits audit events. */
+    class AuditDispatchGate final : public Telemetry::ISink {
+    public:
+        void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *) override {
+            if (record.subsystem == "fixture.mcp_audit") {
+                entered.release();
+                resume.acquire();
+            }
+        }
+
+        void Flush() override {}
+
+        std::binary_semaphore entered{0};
+        std::binary_semaphore resume{0};
+    };
+
+    struct AuditLog final {
+        Horo::Tests::OwnedTestDirectory directory{"horo-mcp-audit"};
+        std::shared_ptr<AuditDispatchGate> gate{std::make_shared<AuditDispatchGate>()};
+        bool held{};
+
+        AuditLog() {
+            REQUIRE(Log::Logger::Init(Log::LoggerConfiguration{.logDirectory = directory.Path(),
+                                                               .baseName = "mcp-test",
+                                                               .queueCapacity = 64,
+                                                               .additionalSinks = {gate},
+                                                               .writeSessionMarkers = false,
+                                                               .echoToStderr = false}));
+        }
+
+        ~AuditLog() {
+            Release();
+            Log::Logger::Shutdown();
+        }
+
+        void Hold() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            do {
+                held = Telemetry::Runtime::EmitEvent("fixture.mcp_audit", "hold", Log::Level::Info, "Hold dispatcher for audit fixture");
+                if (!held)
+                    std::this_thread::yield();
+            } while (!held && std::chrono::steady_clock::now() < deadline);
+            REQUIRE(held);
+            REQUIRE(gate->entered.try_acquire_until(deadline));
+        }
+
+        void Release() {
+            if (std::exchange(held, false))
+                gate->resume.release();
+        }
+
+        std::vector<nlohmann::json> Read() {
+            Release();
+            REQUIRE(Log::Logger::Flush());
+            std::ifstream input(directory.Path() / "mcp-test.jsonl");
+            REQUIRE(input.is_open());
+            std::vector<nlohmann::json> rows;
+            for (std::string line; std::getline(input, line);) {
+                auto row = nlohmann::json::parse(line);
+                if (row.at("category") == "mcp.audit")
+                    rows.push_back(std::move(row));
+            }
+            return rows;
+        }
+    };
+#endif
+
     class Adapter final : public IMcpToolAdapter {
     public:
         std::atomic<unsigned> calls{};
@@ -167,6 +240,95 @@ TEST_CASE("MCP calls execute only when their bound owner pumps and retain correl
     CHECK(final["result"] == nlohmann::json{{"ok", true}});
     CHECK(final["requestId"] == "corr-7");
 }
+
+#if HORO_ENABLE_TELEMETRY
+TEST_CASE("MCP audit persists only generated identities and registered operation metadata", "[mcp][controller][audit]") {
+    AuditLog log;
+    log.Hold();
+    const auto policy = Test::Authorization();
+    auto adapter = std::make_shared<Adapter>();
+    adapter->action = [](const McpRequestContext &) {
+        return Result<nlohmann::json>::Success({{"detail", "private-result-marker"}});
+    };
+    auto registration = Tool(adapter);
+    registration.descriptor.effect = McpToolEffect::Mutation;
+    registration.descriptor.inputSchema["properties"] = {{"detail", {{"type", "string"}, {"maxLength", 64}}}};
+    registration.descriptor.outputSchema = {{"type", "object"},
+                                            {"properties", {{"detail", {{"type", "string"}, {"maxLength", 64}}}}},
+                                            {"additionalProperties", false}};
+    const auto registry = std::make_shared<McpToolRegistry>(policy);
+    auto revision = registry->Publish({std::move(registration)});
+    REQUIRE(revision.HasValue());
+    auto controller = McpController::Create(registry, {}, policy);
+    REQUIRE(controller.HasValue());
+    REQUIRE(controller.Value()->BindOwner(McpOwnerContext::Editor).HasValue());
+    auto manager = McpSessionManager::Create(controller.Value(), {}, policy);
+    REQUIRE(manager.HasValue());
+    const auto admission = Test::Authenticate({.clientIdentity = "private-client-marker", .registryRevision = revision.Value()}, policy);
+    {
+        Log::LogContext ambient{"ambient.note", "private-context-marker"};
+        auto client = McpInProcessAdapter::Start(manager.Value(), admission);
+        REQUIRE(client.HasValue());
+        const McpRequestContext context{.session = client.Value()->Session(),
+                                        .clientIdentity = admission.clientIdentity,
+                                        .authorizationRevision = admission.authorizationRevision,
+                                        .registryRevision = admission.registryRevision,
+                                        .deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1},
+                                        .authority = admission.authority,
+                                        .authorization = policy};
+        auto request = Call("private-request-marker");
+        request.params["arguments"]["detail"] = "private-argument-marker";
+        CHECK(client.Value()->Call(request).HasError());
+        const auto challenge = policy->Challenge(context, request, std::chrono::minutes{1});
+        REQUIRE(challenge.HasValue());
+        REQUIRE(policy->Decide(challenge.Value(), true).HasValue());
+        const auto accepted = client.Value()->Call(request);
+        REQUIRE(accepted.HasValue());
+        REQUIRE(controller.Value()->Pump(McpOwnerContext::Editor).HasValue());
+        CHECK(Get(*controller.Value(), context, accepted.Value().at("operationId").get<std::uint64_t>())["result"]["detail"] ==
+              "private-result-marker");
+        client.Value()->Disconnect();
+    }
+
+    const auto rows = log.Read();
+    const auto find = [&](const std::string_view name) -> const nlohmann::json & {
+        const auto row = std::ranges::find_if(rows, [name](const nlohmann::json &entry) {
+            return entry.at("message").get_ref<const std::string &>() == name;
+        });
+        REQUIRE(row != rows.end());
+        return row->at("fields");
+    };
+    CHECK(find("session.opened").at("principal_id") == admission.authority->AuditIdentity());
+    CHECK(find("operation.rejected").at("status") == "authorization_denied");
+    CHECK(find("approval.requested").at("approval_id") == find("approval.decided").at("approval_id"));
+    CHECK(find("approval.decided").at("status") == "approved");
+    CHECK(find("operation.queued").at("operation_id") == find("operation.finished").at("operation_id"));
+    CHECK(find("operation.finished").at("tool") == "test.call");
+    CHECK(find("operation.finished").at("status") == "succeeded");
+    CHECK(find("operation.finished").at("elapsed_ms").is_number_integer());
+    CHECK(find("session.retired").at("status") == "closed");
+    const nlohmann::json persisted = rows;
+    CHECK(persisted.dump().find("private-") == std::string::npos);
+}
+
+TEST_CASE("An overflowing MCP audit queue cannot stop command execution or shutdown", "[mcp][controller][audit]") {
+    AuditLog log;
+    log.Hold();
+    for (int index = 0; index < 128; ++index)
+        static_cast<void>(Telemetry::Runtime::EmitEvent("fixture.queue", "fill", Log::Level::Info, "Fill the audit test queue"));
+    CHECK_FALSE(Telemetry::Runtime::EmitEvent("fixture.queue", "overflow", Log::Level::Info, "Verify queue saturation"));
+    auto adapter = std::make_shared<Adapter>();
+    auto controller = Controller(adapter);
+    const auto context = Context();
+    REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
+    const auto accepted = controller->Dispatch(Call(), context);
+    REQUIRE(accepted.HasValue());
+    REQUIRE(controller->Pump(McpOwnerContext::Editor).HasValue());
+    CHECK(Get(*controller, context, accepted.Value().at("operationId").get<std::uint64_t>())["status"] == "succeeded");
+    CHECK(adapter->calls == 1);
+    CHECK(controller->Shutdown().HasValue());
+}
+#endif
 
 TEST_CASE("MCP pending and active budgets reject excess without invoking adapters", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();

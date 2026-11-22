@@ -33,6 +33,8 @@ namespace Horo::Mcp {
          * @return Stop token for derived work.
          * @note Jobs must retain the request context and observe IsStopRequested, not use this token as an authority lease. */
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
+        /** @brief Returns the process-unique audit correlation ID. @return Opaque numeric identity with no authorization power. */
+        [[nodiscard]] std::uint64_t AuditIdentity() const noexcept;
         /** @brief Returns the immutable credential expiry on the monotonic clock.
          * @return Latest permissible cooperative execution deadline. */
         [[nodiscard]] std::chrono::steady_clock::time_point ExpiresAt() const noexcept;

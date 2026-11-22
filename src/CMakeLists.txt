@@ -94,6 +94,7 @@ target_link_libraries(HoroCliHost
 )
 
 add_library(HoroMcpSession STATIC
+        mcp/McpAuditTelemetry.cpp
         mcp/McpAuthorization.cpp
         mcp/McpErrors.cpp
         mcp/McpJsonBounds.cpp
