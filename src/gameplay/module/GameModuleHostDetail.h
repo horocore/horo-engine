@@ -119,6 +119,7 @@ namespace Horo::Gameplay {
         std::vector<AI::PerceptionSenseRegistration> perceptionSenses;
         std::shared_ptr<const AI::QuerySchemaRegistry> querySchema;
         std::vector<AI::GameplayQueryPointBinding> queryBindings;
+        std::vector<AI::QueryTestId> deterministicQueryTests;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};

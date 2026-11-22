@@ -468,6 +468,26 @@ namespace Horo::AI {
             REQUIRE(removed.HasValue());
             CHECK(removed.Value().Stages().size() + 1 == updated.Value().Stages().size());
             CHECK(std::ranges::find(removed.Value().Stages(), append, &QueryAssetStage::id) == removed.Value().Stages().end());
+
+            const auto generation = std::make_shared<const int>(7);
+            GameplayQueryPointBinding point{.test = custom.id,
+                                            .origin = custom.origin,
+                                            .requiredFilter = true,
+                                            .workUnits = 1,
+                                            .state = generation.get(),
+                                            .evaluate = [](const void *, const GameplayQueryPointInput &input, AiWorkBudget &) noexcept {
+                return QueryTestSample{.stage = input.stage, .filter = true};
+            }};
+            const std::array qualified{custom.id};
+            const auto invalid = GameplayQueryTestRegistry::Capture(registry.Value(), std::span{&point, 1}, generation, {}, {}, qualified);
+            ExpectError(invalid, AIErrors::EnvironmentQueryStageUnsupported);
+            point.state = nullptr;
+            const auto capturedTests =
+                GameplayQueryTestRegistry::Capture(registry.Value(), std::span{&point, 1}, generation, {}, {}, qualified);
+            REQUIRE(capturedTests.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(removed.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            CHECK(capturedTests.Value().SupportsDeterministic(plan.Value()));
         }
 
         TEST_CASE("EQS authored point generation rejects incomplete position lists before writing", "[unit][ai][eqs][generator]") {

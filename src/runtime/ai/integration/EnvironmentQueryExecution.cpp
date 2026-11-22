@@ -144,6 +144,54 @@ namespace Horo::AI {
             IQueryExecutionSource *pending_{};
         };
 
+        /** @brief Runs only certified synchronous providers within one owner-phase reservation. */
+        class OwnerPointProviderSource final : public IOwnerQueryExecutionSource {
+        public:
+            OwnerPointProviderSource(std::span<PreparedPointQueryTest> tests, QueryOwnerWorkLimits limits)
+                : IOwnerQueryExecutionSource(limits), providers_(tests) {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return providers_.IsCurrent(inputs);
+            }
+
+        private:
+            template <typename Value> static Result<Value> Fail(const ErrorCodeDescriptor &error) noexcept {
+                return Result<Value>::Failure({.code = error.code, .domain = error.domain, .severity = error.defaultSeverity});
+            }
+
+            Result<QueryGenerationResult> GenerateAtOwner(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output,
+                                                          AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume(WorkLimits().generationUnits))
+                    return Fail<QueryGenerationResult>(AIErrors::SchedulerBudgetExhausted);
+                try {
+                    return providers_.Generate(inputs, output);
+                } catch (const std::bad_alloc &) {
+                    return Fail<QueryGenerationResult>(AIErrors::EnvironmentQueryLimitExceeded);
+                }
+            }
+
+            Result<QueryTestSample> TestAtOwner(const QueryExecutionInputs &inputs, QueryStageId stage, const QueryGeneratedItem &item,
+                                                AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume(WorkLimits().testUnits))
+                    return Fail<QueryTestSample>(AIErrors::SchedulerBudgetExhausted);
+                try {
+                    const auto started = providers_.StartTest(inputs, stage, item);
+                    if (started.HasError())
+                        return Result<QueryTestSample>::Failure(started.ErrorValue());
+                    const auto completed = providers_.PollTest();
+                    if (completed.HasError())
+                        return Result<QueryTestSample>::Failure(completed.ErrorValue());
+                    return completed.Value() ? Result<QueryTestSample>::Success(*completed.Value())
+                                             : Fail<QueryTestSample>(AIErrors::EnvironmentQueryProviderFailed);
+                } catch (const std::bad_alloc &) {
+                    providers_.CancelTest();
+                    return Fail<QueryTestSample>(AIErrors::EnvironmentQueryLimitExceeded);
+                }
+            }
+
+            PointProviderSource providers_;
+        };
+
         /** @brief Checks only the exact captured generation. Replacement actors cannot satisfy this read. */
         [[nodiscard]] bool RetiredActor(const QueryGeneratedItem &item, const Runtime::RuntimeSceneView &scene) {
             const auto *actor = std::get_if<Runtime::EntityRef>(&item);
@@ -207,7 +255,7 @@ namespace Horo::AI {
     /** @copydoc AdmitPreparedPointQuery */
     Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
                                                                     QueryExecutionInputs inputs, QueryExecutionSettings settings,
-                                                                    std::span<PreparedPointQueryTest> tests) {
+                                                                    std::span<PreparedPointQueryTest> tests, QueryExecutionMode mode) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (tests.empty() || tests.size() >= EnvironmentQuerySchemaLimits::Stages)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
@@ -227,6 +275,18 @@ namespace Horo::AI {
         auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{rules}.first(tests.size()), QueryScoreTieBreak::StableIndex);
         if (scoring.HasError())
             return Admission::Failure(scoring.ErrorValue());
+        if (mode == QueryExecutionMode::DeterministicWorkUnits) {
+            for (const auto &test : tests) {
+                const auto *owned = dynamic_cast<const IOwnerQueryExecutionSource *>(test.source.get());
+                if (!owned || owned->WorkLimits().generationUnits != settings.generatorWorkUnits ||
+                    owned->WorkLimits().testUnits != test.testWorkUnits)
+                    return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+            }
+            const QueryOwnerWorkLimits limits{settings.generatorWorkUnits, settings.testWorkUnits + tests.size()};
+            auto source = std::make_unique<OwnerPointProviderSource>(tests, limits);
+            return QueryExecution::AdmitDeterministic(std::move(inputs), generator, std::move(scoring).Value(), settings,
+                                                      std::move(source));
+        }
         auto source = tests.size() == 1 ? std::move(tests.front().source) : std::make_unique<PointProviderSource>(tests);
         return QueryExecution::Admit(std::move(inputs), generator, std::move(scoring).Value(), settings, std::move(source));
     }

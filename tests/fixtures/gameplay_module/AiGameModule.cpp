@@ -250,19 +250,28 @@ extern "C" HORO_GAME_EXPORT const Horo::AI::NativeGameplayQueryTestRegistration 
     using namespace Horo::AI;
     static const auto identity = QueryTestId::Create(90).Value();
     static const QueryDescriptorOrigin origin{QueryDescriptorSourceKind::Native, QueryProviderId::Create(91).Value(), 1};
-    static const std::array tests{NativeGameplayQueryTestRegistration{.descriptor = {.id = identity,
-                                                                                     .origin = origin,
-                                                                                     .inputItemType = BuiltinQueryPointItemType(),
-                                                                                     .inputItemVersion = {1, 1},
-                                                                                     .properties = {{QueryPropertyId::Create(93).Value(),
-                                                                                                     QueryPropertyKind::Unsigned64, true}}},
-                                                                      .binding = {.test = identity,
-                                                                                  .origin = origin,
-                                                                                  .requiredFilter = true,
-                                                                                  .workUnits = 1,
-                                                                                  .evaluate = FilterTacticalPoint}}};
+    static const NativeGameplayQueryTestRegistration
+        qualified{.descriptor = {.id = identity,
+                                 .origin = origin,
+                                 .inputItemType = BuiltinQueryPointItemType(),
+                                 .inputItemVersion = {1, 1},
+                                 .properties = {{QueryPropertyId::Create(93).Value(), QueryPropertyKind::Unsigned64, true}}},
+                  .binding = {.test = identity, .origin = origin, .requiredFilter = true, .workUnits = 1, .evaluate = FilterTacticalPoint}};
+    static const auto tests = [] {
+        auto unqualified = qualified;
+        unqualified.descriptor.id = QueryTestId::Create(94).Value();
+        unqualified.binding.test = unqualified.descriptor.id;
+        return std::array{qualified, std::move(unqualified)};
+    }();
     count = tests.size();
     return tests.data();
+}
+
+/** @brief Qualifies the stateless integer-only filter for deterministic owner scheduling. */
+extern "C" HORO_GAME_EXPORT const Horo::AI::QueryTestId *GetHoroDeterministicGameplayQueryTestsV1(std::size_t &count) noexcept {
+    static const auto id = Horo::AI::QueryTestId::Create(90).Value();
+    count = 1;
+    return &id;
 }
 
 /** @brief Installs caller-owned test counters before descriptor capture or native provider invocation. */

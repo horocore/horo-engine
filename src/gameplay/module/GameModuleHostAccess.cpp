@@ -27,7 +27,8 @@ namespace Horo::Gameplay {
             return Output::Success({});
         AI::NativeGameplayQueryAdmission admission{.current = {impl_, &impl_->runtimeLeaseAdmission},
                                                    .active = {impl_, &impl_->decisionFactoryAdmission}};
-        auto captured = AI::GameplayQueryTestRegistry::Capture(*impl_->querySchema, impl_->queryBindings, impl_, {}, std::move(admission));
+        auto captured = AI::GameplayQueryTestRegistry::Capture(*impl_->querySchema, impl_->queryBindings, impl_, {}, std::move(admission),
+                                                               impl_->deterministicQueryTests);
         if (captured.HasError())
             return Output::Failure(captured.ErrorValue());
         return Output::Success({impl_->querySchema, std::make_shared<const AI::GameplayQueryTestRegistry>(std::move(captured).Value())});

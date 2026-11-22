@@ -1246,10 +1246,10 @@ namespace Horo::AI {
     Result<GameplayQueryTestRegistry> GameplayQueryTestRegistry::Capture(const QuerySchemaRegistry &schema,
                                                                          const std::span<const GameplayQueryPointBinding> bindings,
                                                                          std::shared_ptr<const void> generation,
-                                                                         CancellationToken retirement,
-                                                                         NativeGameplayQueryAdmission native) {
+                                                                         CancellationToken retirement, NativeGameplayQueryAdmission native,
+                                                                         const std::span<const QueryTestId> deterministic) {
         using Registry = Result<GameplayQueryTestRegistry>;
-        if (bindings.size() > EnvironmentQuerySchemaLimits::Tests)
+        if (bindings.size() > EnvironmentQuerySchemaLimits::Tests || deterministic.size() > bindings.size())
             return Registry::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         if (!generation || retirement.IsCancellationRequested())
             return Registry::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
@@ -1271,6 +1271,15 @@ namespace Horo::AI {
         std::ranges::sort(captured.bindings_, {}, &GameplayQueryPointBinding::test);
         if (std::ranges::adjacent_find(captured.bindings_, {}, &GameplayQueryPointBinding::test) != captured.bindings_.end())
             return Registry::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+        captured.deterministic_.assign(deterministic.begin(), deterministic.end());
+        std::ranges::sort(captured.deterministic_);
+        if (std::ranges::adjacent_find(captured.deterministic_) != captured.deterministic_.end())
+            return Registry::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+        for (const auto test : captured.deterministic_) {
+            const auto *binding = captured.Find(test);
+            if (!binding || binding->state)
+                return Registry::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+        }
         return Registry::Success(std::move(captured));
     }
 
@@ -1295,6 +1304,12 @@ namespace Horo::AI {
     bool GameplayQueryTestRegistry::UsesTests(const EnvironmentQueryPlan &plan) const noexcept {
         return std::ranges::any_of(plan.Stages(), [this](const auto &stage) {
             return Find(stage.test) != nullptr;
+        });
+    }
+
+    bool GameplayQueryTestRegistry::SupportsDeterministic(const EnvironmentQueryPlan &plan) const noexcept {
+        return std::ranges::all_of(plan.Stages(), [this](const auto &stage) {
+            return !Contains(stage.test) || std::ranges::binary_search(deterministic_, stage.test);
         });
     }
 
@@ -1331,7 +1346,7 @@ namespace Horo::AI {
                                                                            const Runtime::RuntimeSceneView &scene,
                                                                            QueryExecutionInputs inputs, QueryExecutionSettings settings,
                                                                            std::span<PreparedPointQueryTest> providers,
-                                                                           const LivePointQueryGenerator *live) {
+                                                                           const LivePointQueryGenerator *live, QueryExecutionMode mode) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || inputs.contexts->Query() != plan.Id())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
@@ -1340,7 +1355,7 @@ namespace Horo::AI {
             return stage.test.Value() == PointDistanceTest;
         };
         if (std::ranges::none_of(stages, distance))
-            return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, providers);
+            return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, providers, mode);
         if (providers.empty() || providers.size() + std::ranges::count_if(stages, distance) >= EnvironmentQuerySchemaLimits::Stages)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
         const auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, *inputs.contexts, registry, live);
@@ -1361,7 +1376,7 @@ namespace Horo::AI {
             tests.push_back({captured.provenance, prepared.rules.front(), limits.generationUnits, settings.maximumCandidates,
                              limits.testUnits, std::move(source)});
         }
-        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, tests);
+        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, tests, mode);
     }
 
     Result<QueryNavigationSurfaceSettings> ReadBuiltinNavigationSurface(const EnvironmentQueryPlan &plan,

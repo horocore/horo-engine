@@ -146,8 +146,10 @@ namespace Horo::Application::Internal {
         const bool usesGameplay = gameplayTests_ && gameplayTests_->UsesTests(*plan->second.plan);
         if (usesGameplay && !gameplayTests_->IsCurrent())
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
-        if (!bestEffort_ &&
-            (usesGameplay || AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
+        const bool requiresBestEffort = (usesGameplay && !gameplayTests_->SupportsDeterministic(*plan->second.plan)) ||
+                                        AI::UsesBuiltinPointVisibility(*plan->second.plan) ||
+                                        AI::UsesBuiltinPointNavigation(*plan->second.plan);
+        if (!bestEffort_ && requiresBestEffort)
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
             PruneExpiredTasks();
@@ -259,8 +261,9 @@ namespace Horo::Application::Internal {
                 tests[count++] = std::move(gameplay).Value();
             }
         }
+        const auto mode = bestEffort_ ? AI::QueryExecutionMode::AdaptiveRealtime : AI::QueryExecutionMode::DeterministicWorkUnits;
         return AI::AdmitBuiltinPointProviderQuery(plan, *registry_, scope_->scene, std::move(inputs), settings,
-                                                  std::span{tests}.first(count), generator);
+                                                  std::span{tests}.first(count), generator, mode);
     }
 
     /** @copydoc SceneDecisionQueries::PrepareVisibilityCapability */

@@ -519,22 +519,26 @@ namespace Horo::Application::CharacterSceneProductTest {
             SurfaceNavigation,
             SurfaceMixed,
             AuthoredMixed,
-            GameplayMixed
+            GameplayMixed,
+            GameplayDeterministic,
+            GameplayUnqualified
         };
         const auto scenario =
             GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
                      Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface, Scenario::SurfaceVisibility,
-                     Scenario::SurfaceNavigation, Scenario::SurfaceMixed, Scenario::AuthoredMixed, Scenario::GameplayMixed);
+                     Scenario::SurfaceNavigation, Scenario::SurfaceMixed, Scenario::AuthoredMixed, Scenario::GameplayMixed,
+                     Scenario::GameplayDeterministic, Scenario::GameplayUnqualified);
         const bool surfaceVisibility = scenario == Scenario::SurfaceVisibility || scenario == Scenario::SurfaceMixed;
         const bool surfaceNavigation = scenario == Scenario::SurfaceNavigation || scenario == Scenario::SurfaceMixed;
         const bool surface = surfaceVisibility || surfaceNavigation || scenario == Scenario::NavigationSurface;
-        const bool gameplayTest = scenario == Scenario::GameplayMixed;
+        const bool deterministic = scenario == Scenario::GameplayDeterministic || scenario == Scenario::GameplayUnqualified;
+        const bool gameplayTest = deterministic || scenario == Scenario::GameplayMixed;
         const bool authored = gameplayTest || scenario == Scenario::AuthoredMixed;
         const bool scoreCost = scenario != Scenario::Reachability;
         const bool usesDistance =
             authored || scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority || scenario == Scenario::SurfaceMixed;
-        const bool visibility = surfaceVisibility || (!surface && usesDistance) || scenario == Scenario::VisibilityFirst ||
-                                scenario == Scenario::NavigationFirst;
+        const bool visibility = surfaceVisibility || (!surface && usesDistance && !deterministic) ||
+                                scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
         std::optional<Fixture> character;
         if (visibility)
             character.emplace();
@@ -576,7 +580,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             REQUIRE(generator.HasValue());
         }
         const auto weight = scenario == Scenario::CostPriority ? 100u : 1u;
-        auto query = surface && !surfaceNavigation
+        auto query = deterministic ? std::move(generator)
+                     : surface && !surfaceNavigation
                          ? AddBuiltinPointDistanceTest(generator.Value(), MakeIdentity<QueryStageId>(2), {2'000, true})
                          : AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2),
                                                          scoreCost ? std::optional{10.0} : std::nullopt, weight);
@@ -611,12 +616,15 @@ namespace Horo::Application::CharacterSceneProductTest {
             source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
                                      .kind = QueryStageKind::Test,
                                      .executionOrder = 20,
-                                     .test = MakeIdentity<QueryTestId>(90),
+                                     .test = MakeIdentity<QueryTestId>(scenario == Scenario::GameplayUnqualified ? 94 : 90),
                                      .descriptorVersion = {1, 1},
                                      .properties = {{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}}});
             query = EnvironmentQueryAsset::Capture(source);
             REQUIRE(query.HasValue());
         }
+        const auto plan = EnvironmentQueryPlan::Compile(query.Value(), *nativeTests.schema);
+        REQUIRE(plan.HasValue());
+        CHECK(nativeTests.tests->SupportsDeterministic(plan.Value()) == (scenario != Scenario::GameplayUnqualified));
         auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), *nativeTests.schema);
         REQUIRE(queryBytes.HasValue());
 
@@ -692,11 +700,19 @@ namespace Horo::Application::CharacterSceneProductTest {
             input.cookedDecisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
                 Internal::HeadlessCookedDecisionInput{.committed = *project.committed,
                                                       .bindings = {{controller, assets.front().record.id}},
-                                                      .execution = AiSceneCookedDecisionExecution{project.jobs,
-                                                                                                  {.mode = AiSchedulingMode::BestEffort},
-                                                                                                  {}},
+                                                      .execution =
+                                                          AiSceneCookedDecisionExecution{project.jobs,
+                                                                                         {.mode = deterministic
+                                                                                                      ? AiSchedulingMode::Deterministic
+                                                                                                      : AiSchedulingMode::BestEffort},
+                                                                                         {}},
                                                       .provider = Internal::HeadlessDecisionProvider::SelectedNativeGameplay});
         });
+        if (scenario == Scenario::GameplayUnqualified) {
+            REQUIRE(started.HasError());
+            CHECK(started.ErrorValue().code.Value() == AIErrors::EnvironmentQueryStageUnsupported.code.Value());
+            return;
+        }
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
         REQUIRE(started.HasValue());
@@ -705,11 +721,12 @@ namespace Horo::Application::CharacterSceneProductTest {
         auto read = [&] {
             return Internal::InspectHeadlessDecisionValue(product.PhysicsService(), agent, key);
         };
-        if (!surface)
+        if (!surface && !deterministic)
             CHECK_FALSE(read().Value());
         std::optional<BlackboardValue> winner;
         for (std::size_t attempt = 0; attempt < 80 && !winner; ++attempt) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (!deterministic)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             product.RunFrame();
             const auto failure = Internal::InspectHeadlessDecisionFailure(product.PhysicsService());
             REQUIRE(failure.HasValue());

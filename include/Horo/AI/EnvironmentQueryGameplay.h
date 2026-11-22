@@ -58,18 +58,23 @@ namespace Horo::AI {
     /** @brief Returns a static table valid for the lifetime of the exporting native image. */
     using GetNativeGameplayQueryTests = const NativeGameplayQueryTestRegistration *(*)(std::size_t &count) noexcept;
 
+    /** @brief Optional native declaration of tests that read only captured inputs and process input independent constants.
+     * Qualified callbacks must be stateless, bounded and deterministic across supported builds. This augments the V1 test export.
+     */
+    inline constexpr std::string_view GetDeterministicGameplayQueryTestsSymbol = "GetHoroDeterministicGameplayQueryTestsV1";
+    using GetDeterministicGameplayQueryTests = const QueryTestId *(*)(std::size_t &count) noexcept;
+
     /** @brief Freezes exact descriptor bindings and retains the owning code and data generation. */
     class GameplayQueryTestRegistry final {
     public:
-        [[nodiscard]] static Result<GameplayQueryTestRegistry> Capture(const QuerySchemaRegistry &schema,
-                                                                       std::span<const GameplayQueryPointBinding> bindings,
-                                                                       std::shared_ptr<const void> generation,
-                                                                       CancellationToken retirement = {},
-                                                                       NativeGameplayQueryAdmission native = {});
+        [[nodiscard]] static Result<GameplayQueryTestRegistry> Capture(
+            const QuerySchemaRegistry &schema, std::span<const GameplayQueryPointBinding> bindings, std::shared_ptr<const void> generation,
+            CancellationToken retirement = {}, NativeGameplayQueryAdmission native = {}, std::span<const QueryTestId> deterministic = {});
         [[nodiscard]] bool IsCurrent() const noexcept;
         [[nodiscard]] bool CanEvaluate() const noexcept;
         [[nodiscard]] bool Contains(QueryTestId test) const noexcept;
         [[nodiscard]] bool UsesTests(const EnvironmentQueryPlan &plan) const noexcept;
+        [[nodiscard]] bool SupportsDeterministic(const EnvironmentQueryPlan &plan) const noexcept;
 
     private:
         friend Result<PreparedPointQueryTest> PrepareGameplayPointTest(const EnvironmentQueryPlan &, QueryStageId,
@@ -80,6 +85,7 @@ namespace Horo::AI {
 
         [[nodiscard]] const GameplayQueryPointBinding *Find(QueryTestId test) const noexcept;
         std::vector<GameplayQueryPointBinding> bindings_;
+        std::vector<QueryTestId> deterministic_;
         std::shared_ptr<const void> generation_;
         CancellationToken retirement_;
         NativeGameplayQueryAdmission native_;

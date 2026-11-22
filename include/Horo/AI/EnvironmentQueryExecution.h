@@ -142,32 +142,30 @@ namespace Horo::AI {
         std::unique_ptr<IQueryExecutionSource> source;
     };
 
+    /** @brief Explicit timing contract of the admitted source. */
+    enum class QueryExecutionMode : std::uint8_t {
+        AdaptiveRealtime,
+        DeterministicWorkUnits,
+    };
+
     /** @brief Admits one point query using all declared provider tests.
      * @param tests Owned stage preparations. The first source generates the common point batch; later sources only test it.
      */
-    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(const EnvironmentQueryPlan &plan,
-                                                                                  const QuerySchemaRegistry &registry,
-                                                                                  QueryExecutionInputs inputs,
-                                                                                  QueryExecutionSettings settings,
-                                                                                  std::span<PreparedPointQueryTest> tests);
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, QueryExecutionInputs inputs, QueryExecutionSettings settings,
+        std::span<PreparedPointQueryTest> tests, QueryExecutionMode mode = QueryExecutionMode::AdaptiveRealtime);
 
     /** @brief Adds the authored native distance stages to prepared Navigation and Physics stages. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointProviderQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         QueryExecutionInputs inputs, QueryExecutionSettings settings, std::span<PreparedPointQueryTest> providers,
-        const LivePointQueryGenerator *live = nullptr);
+        const LivePointQueryGenerator *live = nullptr, QueryExecutionMode mode = QueryExecutionMode::AdaptiveRealtime);
 
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */
     struct QueryExecutionBudget final {
         AiWorkBudget &query;
         AiWorkBudget &agent;
         AiWorkBudget &global;
-    };
-
-    /** @brief Explicit timing contract of the admitted source. */
-    enum class QueryExecutionMode : std::uint8_t {
-        AdaptiveRealtime,
-        DeterministicWorkUnits,
     };
 
     /** @brief Terminal outcomes published once at BlackboardSync. */

@@ -30,14 +30,37 @@ namespace Horo::Gameplay {
         struct NativeQueryDeclarations final {
             std::shared_ptr<const AI::QuerySchemaRegistry> schema;
             std::vector<AI::GameplayQueryPointBinding> bindings;
+            std::vector<AI::QueryTestId> deterministic;
         };
+
+        [[nodiscard]] Result<std::span<const AI::QueryTestId>> ReadDeterministicQueryTests(const Platform::DynamicLibrary &library,
+                                                                                           const std::filesystem::path &path) {
+            using Output = Result<std::span<const AI::QueryTestId>>;
+            const auto symbol = library.GetSymbol(AI::GetDeterministicGameplayQueryTestsSymbol);
+            if (!symbol)
+                return Output::Success({});
+            if (!library.OwnsSymbolAtPath(symbol, path))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            const auto get = Resolve<AI::GetDeterministicGameplayQueryTests>(library, AI::GetDeterministicGameplayQueryTestsSymbol);
+            std::size_t count{};
+            const auto *tests = get(count);
+            if (!tests || count == 0 || count > AI::EnvironmentQuerySchemaLimits::Tests)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            return Output::Success({tests, count});
+        }
 
         [[nodiscard]] Result<NativeQueryDeclarations> ReadNativeQueryTests(const Platform::DynamicLibrary &library,
                                                                            const std::filesystem::path &path) {
             using Output = Result<NativeQueryDeclarations>;
+            const auto qualified = ReadDeterministicQueryTests(library, path);
+            if (qualified.HasError())
+                return Output::Failure(qualified.ErrorValue());
             const auto symbol = library.GetSymbol(AI::GetNativeGameplayQueryTestsSymbol);
-            if (!symbol)
+            if (!symbol) {
+                if (!qualified.Value().empty())
+                    return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
                 return Output::Success({});
+            }
             if (!library.OwnsSymbolAtPath(symbol, path))
                 return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
             const auto getTests = Resolve<AI::GetNativeGameplayQueryTests>(library, AI::GetNativeGameplayQueryTestsSymbol);
@@ -64,9 +87,10 @@ namespace Horo::Gameplay {
             if (schema.HasError())
                 return Output::Failure(schema.ErrorValue());
             auto owned = std::make_shared<const AI::QuerySchemaRegistry>(std::move(schema).Value());
-            if (const auto validation = AI::GameplayQueryTestRegistry::Capture(*owned, bindings, owned); validation.HasError())
+            if (const auto validation = AI::GameplayQueryTestRegistry::Capture(*owned, bindings, owned, {}, {}, qualified.Value());
+                validation.HasError())
                 return Output::Failure(validation.ErrorValue());
-            return Output::Success({std::move(owned), std::move(bindings)});
+            return Output::Success({std::move(owned), std::move(bindings), {qualified.Value().begin(), qualified.Value().end()}});
         }
 
         struct ValidatedModuleExports {
@@ -251,6 +275,7 @@ namespace Horo::Gameplay {
             return Output::Failure(tests.ErrorValue());
         impl->querySchema = std::move(tests.Value().schema);
         impl->queryBindings = std::move(tests.Value().bindings);
+        impl->deterministicQueryTests = std::move(tests.Value().deterministic);
         const auto &validated = exports.Value();
         impl->moduleId = validated.descriptor->moduleId;
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
