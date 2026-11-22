@@ -274,15 +274,22 @@ namespace Horo::Editor {
             return Output::Success(resolved);
         }
 
+        /** @brief Propagates authoring admission failures and rejects stale continuation revisions. */
+        Result<void> CheckInspectionScene(const Result<InspectionSceneRevision> &scene, const ObjectInspectionRequest &request) {
+            if (scene.HasError())
+                return Result<void>::Failure(scene.ErrorValue());
+            if (request.expected && *request.expected != scene.Value())
+                return Result<void>::Failure(MakeError(InspectionStale));
+            return Result<void>::Success();
+        }
+
         /** @brief Shares revision, ordering, visibility and pagination rules across numeric projections. */
         template <typename Page, typename Project>
         Result<Page> ReadInspectionPage(const Result<InspectionSceneRevision> &scene, const ObjectInspectionRequest &request,
                                         const std::span<const SceneObject> objects, Project project) {
             using Output = Result<Page>;
-            if (scene.HasError())
-                return Output::Failure(scene.ErrorValue());
-            if (request.expected && *request.expected != scene.Value())
-                return Output::Failure(MakeError(InspectionStale));
+            if (const auto admitted = CheckInspectionScene(scene, request); admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
             if (!ValidInspectionPage(request))
                 return Output::Failure(MakeError(InspectionInvalidPage));
             const auto resolved = ResolveInspectionObjects(objects, request.objects);
@@ -604,10 +611,8 @@ namespace Horo::Editor {
     Result<CollisionInspectionPage> EditorWorkspaceController::InspectCollisions(const ObjectInspectionRequest &request) const {
         using Output = Result<CollisionInspectionPage>;
         const auto scene = InspectSceneRevision();
-        if (scene.HasError())
-            return Output::Failure(scene.ErrorValue());
-        if (request.expected && *request.expected != scene.Value())
-            return Output::Failure(MakeError(InspectionStale));
+        if (const auto admitted = CheckInspectionScene(scene, request); admitted.HasError())
+            return Output::Failure(admitted.ErrorValue());
         if (!ValidCollisionPage(request))
             return Output::Failure(MakeError(InspectionInvalidPage));
         const auto resolved = ResolveInspectionObjects(m_viewModel.objects, request.objects);
