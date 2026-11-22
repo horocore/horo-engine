@@ -70,6 +70,11 @@ Result<bool> ReadCompletedColor(std::uint64_t instance, RenderTimelinePoint comp
     return graph_.ReadCompletedColor(instance, completion, destination);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::SupportsColorReadback */
+bool SupportsColorReadback() const noexcept override {
+    return graph_.SupportsStereoCoverageReadback();
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
 bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept override {
     return graph_.SupportsStereoCoverageReduction(queue);

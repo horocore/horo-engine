@@ -20,6 +20,7 @@ namespace Horo::Editor {
         EditorViewportImageResolver resolveImage{nullptr};
         Render::RenderBufferAccess meshBufferAccess{Render::RenderBufferAccess::DeviceLocal};
         bool prepareDirectionalShadow{true}; /**< Allocate only attachments actually consumed by the selected viewport recipe. */
+        bool colorReadback{};                /**< Adds transfer-source usage for the backend's viewport capture path. */
     };
 
     /** @brief Owns frontend-backed viewport resources and atomic replacement state. */

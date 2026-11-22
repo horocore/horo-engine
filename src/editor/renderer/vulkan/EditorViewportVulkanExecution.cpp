@@ -259,7 +259,7 @@ namespace Horo::Editor {
         const auto count = PrepareViewportOverlay(frame.Token(), slot.Value(), pass);
         if (count.HasError())
             return Result<void>::Failure(count.ErrorValue());
-        if (count.Value() == 0 && !color_ && !fade)
+        if (count.Value() == 0 && !color_ && !fade && !imageCapture_.Pending())
             return ExecuteEmptyViewport(frame, pass.clearColor);
         if (auto draws = PrepareViewportDraws(frame.Token(), slot.Value(), pass); draws.HasError())
             return draws;

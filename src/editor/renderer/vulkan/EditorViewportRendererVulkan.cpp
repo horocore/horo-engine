@@ -188,7 +188,8 @@ namespace Horo::Editor {
           crossFadeCook_(std::move(cooked.cameraCrossFade)),
           resources_(frontend, {.resolveImage = &ViewportImage,
                                 .meshBufferAccess = Render::RenderBufferAccess::HostVisible,
-                                .prepareDirectionalShadow = true}) {
+                                .prepareDirectionalShadow = true,
+                                .colorReadback = true}) {
         if (cooked.shadow) {
             shadowShader_.payload = std::move(cooked.shadow->payload);
             shadowShader_.metadata = std::move(cooked.shadow->metadata);
@@ -305,6 +306,7 @@ namespace Horo::Editor {
             std::terminate();
         viewportCanvasGraph_.reset();
         viewportRasterGraphs_.reset();
+        imageCapture_.Shutdown(frontend_);
         preparedCrossFade_.reset();
         if (crossFadeSourceSlots_)
             ProgramResources::ReleaseMaterials(*crossFadeSourceSlots_);
@@ -416,8 +418,12 @@ namespace Horo::Editor {
         if (&frontend != &frontend_ || owner_ != std::this_thread::get_id() || !initialized_)
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         const auto prepared = resources_.Prepare(scene, requestedExtent_);
-        if (prepared.HasError())
+        if (prepared.HasError()) {
+            imageCapture_.Fail();
             return prepared;
+        }
+        if (auto *port = bridge_.Port())
+            imageCapture_.Prepare(frontend_, *port, ImageSource());
         if (prepared.Value() && !color_ && resources_.ColorTexture() != emptyGraphTexture_) {
             if (const auto clear = CreateEmptyGraph(); clear.HasError())
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
@@ -431,6 +437,33 @@ namespace Horo::Editor {
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(budget.ErrorValue());
         }
         return prepared;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ImageSource */
+    VulkanViewportImageCapture::Source EditorViewportRendererVulkan::ImageSource() const noexcept {
+        if (!requestedExtent_.IsValid())
+            return {};
+        const auto extent = resources_.AllocatedExtent();
+        return {resources_.Target(), resources_.PresentationTexture(), {extent.width, extent.height}};
+    }
+
+    /** @copydoc IEditorViewportRenderer::RequestImageCapture */
+    Result<std::uint64_t> EditorViewportRendererVulkan::RequestImageCapture(EditorViewportImageRegion region,
+                                                                            std::function<bool()> authorized) {
+        if (owner_ != std::this_thread::get_id() || !initialized_ || !bridge_.Port() || !bridge_.Port()->SupportsColorReadback() ||
+            !frontend_.Capabilities().supportsMaterialRasterGraph)
+            return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
+        return imageCapture_.Request(ImageSource(), region, std::move(authorized));
+    }
+
+    /** @copydoc IEditorViewportRenderer::ReadImageCapture */
+    std::optional<EditorViewportImageSnapshot> EditorViewportRendererVulkan::ReadImageCapture(std::uint64_t id) {
+        return owner_ == std::this_thread::get_id() ? imageCapture_.Read(id, ImageSource()) : std::nullopt;
+    }
+
+    /** @copydoc IEditorViewportRenderer::CancelImageCapture */
+    bool EditorViewportRendererVulkan::CancelImageCapture(std::uint64_t id) noexcept {
+        return owner_ == std::this_thread::get_id() && imageCapture_.Cancel(id);
     }
 
     void EditorViewportRendererVulkan::RequestExtent(EditorViewportExtent extent) noexcept {

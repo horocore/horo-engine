@@ -16,6 +16,7 @@ namespace Horo::Editor {
         constexpr auto MaximumScenePasses = MaximumDirectionalShadowCascades + 1;
         constexpr auto MaximumSpatialPasses = 1;
         constexpr auto MaximumCanvasPasses = 1;
+        constexpr auto MaximumCapturePasses = 1;
         constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
         constexpr auto MaximumColorImports = 10;  // Two outputs, four analytic table/staging resources and four fullscreen buffers.
         constexpr auto MaximumColorUses = 32;     // Fixed transfer and fullscreen shader reads, including the optional overlay.
@@ -58,7 +59,8 @@ namespace Horo::Editor {
             RasterInputs displayOverlay;
             RasterInputs canvas;
             EditorViewportColorGraph color;
-            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses>
+            std::array<RenderGraphPassWorkload,
+                       MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses + MaximumCapturePasses>
                 workloads;
             std::optional<std::size_t> spatialWork;
             std::size_t count{};
@@ -84,14 +86,14 @@ namespace Horo::Editor {
         class RasterGraphAuthor final {
         public:
             RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color, bool spatial,
-                              bool cameraCrossFade = false)
-                : ownedBuilder(
-                      Take(RenderGraphBuilder::Create({.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0),
-                                                       .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) +
-                                                                       (spatial ? 1 : 0) + (cameraCrossFade ? 5 : 0),
-                                                       .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) +
-                                                                    (spatial ? 2 : 0) + (cameraCrossFade ? 8 : 0),
-                                                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0)}))),
+                              bool cameraCrossFade = false, bool capture = false)
+                : ownedBuilder(Take(RenderGraphBuilder::Create(
+                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + capture,
+                       .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) + (spatial ? 1 : 0) +
+                                       (cameraCrossFade ? 5 : 0) + capture,
+                       .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) + (spatial ? 2 : 0) +
+                                    (cameraCrossFade ? 8 : 0) + (capture ? 2 : 0),
+                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + capture}))),
                   builder(*ownedBuilder), queue(graphics), spatial_(spatial) {}
 
             /** @brief Appends the renderer-owned scene to the paint program's existing sampled canvas graph. */
@@ -114,6 +116,17 @@ namespace Horo::Editor {
                     Take(builder.AddDependency({last, pass, RenderGraphDependencyKind::ExecutionOrder}));
                 last = pass;
                 return pass;
+            }
+
+            /** @brief Copies from the last authored presentation attachment into the exact cold staging buffer. */
+            RenderGraphPassWorkload Capture(RenderGraphResourceId image, const VulkanViewportImageCapture::Copy &capture) {
+                const auto target = Take(builder.ImportBuffer(capture.staging, RenderGraphResourceClass::Persistent));
+                initial.push_back({target, {}, RenderGraphInitialContents::Discarded});
+                const auto pass = Pass(RenderPassKind::Copy);
+                Output(pass, image, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read);
+                Output(pass, target, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
+                const auto &region = capture.region;
+                return {pass, RenderGraphColorReadback{image, target, region.x, region.y, {region.width, region.height}}};
             }
 
             void Output(RenderGraphPassRef pass, RenderGraphResourceId resource, RenderGraphUsageKind kind, RenderGraphAccess access) {
@@ -230,6 +243,9 @@ namespace Horo::Editor {
         std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>> cameraCrossFadeSlots;
         std::optional<EditorViewportResources::CameraCrossFadeAttachments> cameraCrossFadeAttachments;
         std::array<std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>>, EditorViewportColorPipeline::SlotCount> colorSlots;
+        std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>> captureSlots;
+        std::uint64_t captureId{};
+        std::size_t captureColorSlot{};
         RenderTextureHandle display, presentation, spatial;
         RenderTextureViewHandle displayView, presentationView, spatialView;
         std::uint32_t atlasPasses{};
@@ -350,9 +366,10 @@ namespace Horo::Editor {
         }
 
         /** @brief Appends the same acquired viewport output chain for ordinary and canvas-bearing scene variants. */
-        void AppendColorTail(RasterGraphAuthor &author, RasterVariant &variant, const OverlaySlot *overlay, const RasterOutput &scene,
-                             const RenderGraphResourceId atlas, const EditorViewportColorPipeline &pipeline,
-                             const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
+        RenderGraphResourceId AppendColorTail(RasterGraphAuthor &author, RasterVariant &variant, const OverlaySlot *overlay,
+                                              const RasterOutput &scene, const RenderGraphResourceId atlas,
+                                              const EditorViewportColorPipeline &pipeline,
+                                              const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
             const auto displayResource = author.Attach(display);
             const auto output = author.Attach(presentation);
             auto toneMapInput = scene.color;
@@ -372,6 +389,7 @@ namespace Horo::Editor {
             if (overlay)
                 variant.workloads[variant.count++] = std::move(displayOverlay);
             variant.workloads[variant.count++] = work.back();
+            return output;
         }
 
         /** @brief Reuses the opaque, shadow and output owners on the paint program's single combined graph. */
@@ -391,17 +409,21 @@ namespace Horo::Editor {
 
         void Build(RasterVariant &variant, const FrameSlot &slot, RenderQueueId queue, bool overlay,
                    const EditorViewportColorPipeline *pipeline = nullptr,
-                   const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {}) {
+                   const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {},
+                   const VulkanViewportImageCapture::Copy *capture = nullptr) {
             variant.count = atlasPasses + 1;
             const auto draws = std::max<std::size_t>(1, meshes.size() + (overlay ? 1 : 0));
-            RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr};
+            RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr, false, capture != nullptr};
             const auto atlas = author.Attach(attachments.atlas);
             const RasterOutput output{author.Attach(attachments.color), author.Attach(attachments.depth), attachments.colorView,
                                       attachments.depthView};
             AuthorAtlas(author, variant, slot, atlas);
             AuthorScene(author, variant, slot, atlas, output, overlay && !pipeline, atlasPasses);
-            if (pipeline)
-                AppendColorTail(author, variant, overlay ? &slot.overlay : nullptr, output, atlas, *pipeline, kernel);
+            const auto presentation =
+                pipeline ? AppendColorTail(author, variant, overlay ? &slot.overlay : nullptr, output, atlas, *pipeline, kernel)
+                         : output.color;
+            if (capture)
+                variant.workloads[variant.count++] = author.Capture(presentation, *capture);
             variant.graph.emplace(author.Compile());
         }
 
@@ -482,6 +504,25 @@ namespace Horo::Editor {
                 return &slots[slot][index];
             auto &prepared = colorSlots[pipeline->CandidateSlot()];
             return prepared ? &(*prepared)[slot][index] : nullptr;
+        }
+
+        /** @brief Builds exact staging bindings only while an approved copy needs its first native submission. */
+        void PrepareCaptureSlots(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline *pipeline,
+                                 const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel,
+                                 const VulkanViewportImageCapture::Copy &capture) {
+            const std::size_t colorSlot = pipeline ? pipeline->CandidateSlot() : 0;
+            if (captureSlots && captureId == capture.id && captureColorSlot == colorSlot &&
+                (!pipeline || (*captureSlots)[0][0].color.MatchesInitialStates(*pipeline)))
+                return;
+            auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
+            for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
+                Build((*candidate)[index][0], nativeSlots[index], queue, false, pipeline, kernel, &capture);
+                if (meshes.size() < MaximumDraws)
+                    Build((*candidate)[index][1], nativeSlots[index], queue, true, pipeline, kernel, &capture);
+            }
+            captureSlots = std::move(candidate);
+            captureId = capture.id;
+            captureColorSlot = colorSlot;
         }
     };
 
@@ -597,6 +638,8 @@ namespace Horo::Editor {
                                                                      const Render::StaticMeshPassDescriptor &pass,
                                                                      const std::optional<Math::Mat4> &placement,
                                                                      const ViewportCanvasSource &source) {
+        if (imageCapture_.Pending())
+            imageCapture_.Fail();
         using namespace Render;
         if (!viewportCanvasGraph_ || !source || color_ || preparedCrossFade_ || viewportCanvasGraph_->topology != viewportRasterGraphs_)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
@@ -713,6 +756,23 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorViewportRendererVulkan::PrepareImageCaptureGraph */
+    void EditorViewportRendererVulkan::PrepareImageCaptureGraph() {
+        const auto capture = imageCapture_.Pending();
+        if (!capture || preparedCrossFade_) {
+            viewportRasterGraphs_->captureSlots.reset();
+            return;
+        }
+        try {
+            viewportRasterGraphs_->PrepareCaptureSlots(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, color_.get(),
+                                                       spatial_, *capture);
+        } catch (const BuildFailure &) {
+            imageCapture_.Fail();
+        } catch (const std::bad_alloc &) {
+            imageCapture_.Fail();
+        }
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ExecuteViewportRasterGraph */
     Result<void> EditorViewportRendererVulkan::ExecuteViewportRasterGraph(
         Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass, std::uint32_t slot, bool hasOverlay,
@@ -721,6 +781,11 @@ namespace Horo::Editor {
         if (!viewportRasterGraphs_ || slot >= device_.frames || !viewportRasterGraphs_->Matches(resources_, pass.scene, shadow))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
         auto *prepared = viewportRasterGraphs_->Find(slot, hasOverlay, color_.get(), sourceShadow != nullptr);
+        const auto capture = imageCapture_.Pending();
+        const bool withCapture =
+            !sourceShadow && capture && viewportRasterGraphs_->captureSlots && viewportRasterGraphs_->captureId == capture->id;
+        if (withCapture)
+            prepared = &(*viewportRasterGraphs_->captureSlots)[slot][hasOverlay ? 1 : 0];
         if (!prepared || !prepared->graph)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &variant = *prepared;
@@ -760,6 +825,12 @@ namespace Horo::Editor {
         const auto recorded = frame.ExecuteSubmittedGraph(*variant.graph, std::span{variant.workloads}.first(variant.count), submissions);
         if (recorded.HasValue() && color_)
             RecordViewportColor(reserved.Value().signal);
+        if (withCapture) {
+            if (recorded.HasValue())
+                imageCapture_.Recorded(reserved.Value().signal);
+            else
+                imageCapture_.Fail();
+        }
         return recorded;
     }
 }  // namespace Horo::Editor

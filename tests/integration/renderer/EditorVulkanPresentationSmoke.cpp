@@ -911,6 +911,60 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(CountCameraTint(pixels) > 16);
     }
 
+    TEST_CASE("Native Vulkan publishes an authorized viewport crop without interrupting presentation",
+              "[native-smoke][vulkan][gui][viewport][image-capture]") {
+        if (!std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
+            SKIP("Supply the locked Vulkan viewport shader package.");
+        bool authorized = true;
+        Host host;
+        host.CreateViewport();
+        constexpr EditorViewportImageRegion region{7, 5, 2, 2};
+        CHECK(host.viewport->RequestImageCapture({0, 0, 257, 1}).HasError());
+        const auto requested = host.viewport->RequestImageCapture(region, [&] {
+            return authorized;
+        });
+        Check(requested, "request an exact viewport rectangle");
+        CHECK(host.viewport->RequestImageCapture(region).HasError());
+        CHECK_FALSE(host.viewport->ReadImageCapture(requested.Value() + 1));
+        CHECK_FALSE(host.viewport->CancelImageCapture(requested.Value() + 1));
+        REQUIRE(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Pending);
+        host.SynchronizeViewport({});
+        host.PrepareScene();
+        auto pass = host.ViewportPass({});
+        pass.clearColor = {1, 0, 0, 1};
+        auto frame = host.Frame(1);
+        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = pass},
+                                RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        Check(host.viewport->ExecutePreparedFrame(frame, passes), "record viewport and bounded copy");
+        const auto view = host.viewport->TextureView();
+        REQUIRE(view.IsValid());
+        host.ComposeGui(frame, &view);
+        Check(frame.Present(), "present the same attachment after the copy");
+        host.viewport->FinishColorFrame(true);
+
+        std::optional<EditorViewportImageSnapshot> image;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        do {
+            host.SynchronizeViewport({});
+            image = host.viewport->ReadImageCapture(requested.Value());
+            REQUIRE(image);
+            if (image->phase != EditorViewportImagePhase::Pending)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        } while (std::chrono::steady_clock::now() < deadline);
+        REQUIRE(image->phase == EditorViewportImagePhase::Ready);
+        REQUIRE(image->artifact);
+        CHECK(image->artifact->region == region);
+        REQUIRE(image->artifact->rgba.size() == region.Bytes());
+        const std::array red{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{255}};
+        for (std::size_t offset = 0; offset < region.Bytes(); offset += red.size())
+            CHECK(std::ranges::equal(std::span{image->artifact->rgba}.subspan(offset, red.size()), red));
+        authorized = false;
+        CHECK(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Cancelled);
+        CHECK(image->publication.expired());
+        CHECK(host.Drain());
+    }
+
     TEST_CASE("Native Vulkan camera cross-fade composes both real viewport rasters before GUI sampling",
               "[native-smoke][vulkan][gui][viewport][cross-fade]") {
         const auto *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");

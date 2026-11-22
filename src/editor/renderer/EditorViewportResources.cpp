@@ -568,10 +568,10 @@ namespace Horo::Editor {
     /** @brief Describes the actual resident scene texture creation policy. */
     Render::RenderTextureDescriptor EditorViewportResources::SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept {
         using enum Render::RenderTextureUsage;
+        const bool needsCopy = colorPipeline_ || config_.colorReadback || cameraCrossFade_ == CameraCrossFadeOutput::CopySource;
         return {.extent = extent,
                 .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
-                .usage = colorPipeline_ || cameraCrossFade_ == CameraCrossFadeOutput::CopySource ? Sampled | RenderAttachment | CopySource
-                                                                                                 : Sampled | RenderAttachment};
+                .usage = needsCopy ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment};
     }
 
     /** @copydoc EditorViewportResources::SpatialColorDescriptor */

@@ -11,6 +11,7 @@
 #include "Horo/Runtime/Render/UiPaintProgram.h"
 #include "Horo/Runtime/Render/UiRenderComposition.h"
 #include "VulkanEditorGraphicsBridge.h"
+#include "VulkanViewportImageCapture.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
 #include "host/EditorVulkanXrViewportAccess.h"
@@ -36,6 +37,13 @@ namespace Horo::Editor {
                                                       const Render::ExposureSettings &settings,
                                                       const Render::CookedNativeReconstructionKernel *spatial = nullptr);
         ~EditorViewportRendererVulkan() override;
+        /** @copydoc IEditorViewportRenderer::RequestImageCapture */
+        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
+                                                                std::function<bool()> authorized = {}) override;
+        /** @copydoc IEditorViewportRenderer::ReadImageCapture */
+        [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
+        /** @copydoc IEditorViewportRenderer::CancelImageCapture */
+        bool CancelImageCapture(std::uint64_t id) noexcept override;
         /** @copydoc IEditorViewportRenderer::RequestColorSettings */
         [[nodiscard]] Result<void> RequestColorSettings(const Render::ExposureSettings &settings) override;
         /** @copydoc IEditorViewportRenderer::SetColorFrameDelta */
@@ -259,12 +267,17 @@ namespace Horo::Editor {
                                                              const CanvasFrame *canvas);
         /** @brief Compiles owner-slot shadow/scene/overlay graphs only when exact resource topology changes. */
         [[nodiscard]] Result<void> PrepareViewportRasterGraphs(const Render::StaticMeshPassDescriptor &pass);
+        /** @brief Prepares a bounded optional capture variant without disturbing the normal raster graph. */
+        void PrepareImageCaptureGraph();
         /** @brief Records the one cold graph matching this actual native slot and frozen viewport resources. */
         [[nodiscard]] Result<void> ExecuteViewportRasterGraph(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
                                                               std::uint32_t slot, bool hasOverlay,
                                                               const Render::DirectionalShadowFrame *shadow,
                                                               const std::optional<Render::DirectionalShadowFrame> *sourceShadow = nullptr);
         std::shared_ptr<ViewportRasterGraphs> viewportRasterGraphs_;
+        /** @brief Returns the current desktop presentation attachment, including the post-color encode output. */
+        [[nodiscard]] VulkanViewportImageCapture::Source ImageSource() const noexcept;
+        VulkanViewportImageCapture imageCapture_;
         std::shared_ptr<ViewportCanvasGraph> viewportCanvasGraph_;
         struct XrGraph;
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */

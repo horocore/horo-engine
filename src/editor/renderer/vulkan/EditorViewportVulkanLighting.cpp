@@ -21,6 +21,8 @@ namespace Horo::Editor {
             if (const auto ready = PrepareViewportColor(view, pass.extent); ready.HasError())
                 return ready;
         const auto prepared = PrepareViewportRasterGraphs(pass);
+        if (prepared.HasValue())
+            PrepareImageCaptureGraph();
         if (prepared.HasError() && color_)
             FinishColorFrame(false);
         return prepared;

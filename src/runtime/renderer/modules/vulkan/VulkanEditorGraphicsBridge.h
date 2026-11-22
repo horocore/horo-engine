@@ -149,6 +149,11 @@ namespace Horo::Render::Detail {
                                                               [[maybe_unused]] std::span<std::byte> destination) {
             return Result<bool>::Success(false);
         }
+
+        /** @brief Reports the selected device's native image-to-buffer copy route. */
+        [[nodiscard]] virtual bool SupportsColorReadback() const noexcept {
+            return false;
+        }
     };
 
     /** @brief Host-owned borrowed connection; runtime attachment never selects or creates another renderer. */
