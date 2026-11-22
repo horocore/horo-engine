@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 #include <new>
+#include <vector>
 
 namespace Horo::Gameplay {
     namespace {
@@ -104,6 +105,44 @@ namespace Horo::Gameplay {
         adapter.NotifyCommitted(snapshot);
         bus.DispatchQueued();
         REQUIRE(count == 1);
+    }
+
+    TEST_CASE("Gameplay revision hints observe published settings across frame boundaries", "[gameplay][accessibility][bus]") {
+        EngineDataBus bus;
+        ConfigurationService service{Schema(), &bus};
+        GameplayAssistSettingsAdapter adapter{bus};
+        std::vector<ConfigurationRevision> hints;
+        const auto subscription = bus.Subscribe<GameplayAccessibilityStateEvent>([&hints](const auto &event) {
+            hints.push_back(event.revision);
+        });
+
+        const auto initial = service.Snapshot();
+        const SettingKey aim{"accessibility.gameplay.aim_assist"};
+        ConfigurationDraft draft{.baseRevision = initial.Revision(),
+                                 .proposedValues = {{aim, std::int64_t{750}}},
+                                 .source = ConfigurationSource::User};
+        adapter.NotifyCommitted(initial);
+        bus.DispatchQueued();
+        hints.clear();
+
+        {
+            auto prepared = service.Prepare(draft);
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value().Candidate().Revision() > initial.Revision());
+            adapter.NotifyCommitted(service.Snapshot());
+            bus.DispatchQueued();
+            CHECK(hints.empty());
+        }
+
+        REQUIRE(service.Commit(draft).HasValue());
+        const auto committed = service.Snapshot();
+        adapter.NotifyCommitted(committed);
+        adapter.NotifyCommitted(committed);
+        CHECK(hints.empty());
+        bus.DispatchQueued();
+        REQUIRE(hints == std::vector{committed.Revision()});
+        CHECK(GameplayAssistTickSnapshot::Capture(initial).Value().Preferences().aimAssist == 0.0F);
+        CHECK(GameplayAssistTickSnapshot::Capture(committed).Value().Preferences().aimAssist == 0.75F);
     }
 
     TEST_CASE("Gameplay hint adapter emits monotonic revisions with no assist payload or stale replay", "[gameplay][accessibility][bus]") {

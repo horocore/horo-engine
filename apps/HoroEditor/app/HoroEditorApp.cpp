@@ -1930,11 +1930,10 @@ namespace Horo::Editor {
         }
 
         /** @brief Projects one committed revision into each attached presentation owner. */
-        Result<void> RefreshRuntimeVisualAccessibility(const ConfigurationService &configuration,
+        Result<void> RefreshRuntimeVisualAccessibility(const ConfigurationSnapshot &config,
                                                        const Application::Internal::RuntimeUiPaintPort &port,
                                                        ConfigurationRevision &applied, Runtime::RuntimeSceneService *scene = nullptr,
                                                        EditorViewportSceneState *viewport = nullptr) {
-            const auto config = configuration.Snapshot();
             if (config.Revision() == applied)
                 return Result<void>::Success();
             const auto visual = CaptureEditorVisualSettings(config);
@@ -2099,7 +2098,7 @@ namespace Horo::Editor {
                                      Clock &clock, const EditorRuntimeAuthorities &authorities)
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
                   themeReload_(params.background.jobs, params.editorEvents), liveGui_(liveGui), rendererRestart_(&rendererRestart),
-                  authorities_(authorities), pacing_{clock}
+                  authorities_(authorities), pacing_{clock}, gameplayAssistHints_(params.engineEvents)
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -2301,12 +2300,25 @@ namespace Horo::Editor {
                                                                       : DispatchRenderPhase(phase, context);
             }
 
+            /** @brief Samples committed configuration on the frame owner before dispatching queued notification hints. */
+            Result<void> RefreshAccessibility() {
+                const auto snapshot = p_->configuration.Snapshot();
+                if (auto updated = RefreshRuntimeVisualAccessibility(snapshot, authorities_.ui, uiAccessibilityRevision_,
+                                                                     authorities_.scene, viewportSceneState_);
+                    updated.HasError())
+                    return updated;
+                try {
+                    gameplayAssistHints_.NotifyCommitted(snapshot);
+                } catch (const std::bad_alloc &) {
+                    // A hint is optional. The publisher retains the revision for retry on the next frame.
+                }
+                return Result<void>::Success();
+            }
+
             Result<void> DispatchControlPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
-                        if (auto updated = RefreshRuntimeVisualAccessibility(p_->configuration, authorities_.ui, uiAccessibilityRevision_,
-                                                                             authorities_.scene, viewportSceneState_);
-                            updated.HasError())
+                        if (auto updated = RefreshAccessibility(); updated.HasError())
                             return updated;
                         PollShaderReload();
 #if !defined(NDEBUG)
@@ -3518,6 +3530,7 @@ namespace Horo::Editor {
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
+            Gameplay::GameplayAssistSettingsAdapter gameplayAssistHints_;
             ConfigurationRevision uiAccessibilityRevision_{};
             EditorThemeAccessibilityState themeAccessibility_;
             std::unique_ptr<Application::Internal::EditorConsoleExecution> console_;
@@ -4029,7 +4042,8 @@ namespace Horo::Editor {
             if (uiComposition.HasError())
                 return std::nullopt;
             ConfigurationRevision initialAccessibility{};
-            if (auto updated = RefreshRuntimeVisualAccessibility(p.configuration, uiComposition.Value().port, initialAccessibility);
+            if (auto updated =
+                    RefreshRuntimeVisualAccessibility(p.configuration.Snapshot(), uiComposition.Value().port, initialAccessibility);
                 updated.HasError())
                 return std::nullopt;
             auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());

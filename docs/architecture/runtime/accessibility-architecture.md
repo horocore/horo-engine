@@ -492,7 +492,9 @@ cross-domain notification rather than state storage.
   subscription or stale/out-of-order notifications cannot prevent refresh.
 - The Editor composition root registers the gameplay-owned preference descriptors
   in the process configuration schema. Numeric settings use the same bounds at
-  configuration ingress and at tick capture.
+  configuration ingress and at tick capture. The Editor frame owner samples the
+  committed configuration before queued bus dispatch, so a prepared but
+  unpublished setting cannot emit a hint.
 - One snapshot governs the entire tick. No settings callback mutates gameplay
   mid-tick. All local consumers share the tick's captured revision.
 - Desired preferences persist in user settings. Applying an assist still respects
