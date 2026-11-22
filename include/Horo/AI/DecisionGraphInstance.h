@@ -136,9 +136,11 @@ namespace Horo::AI {
          * @return The same lifecycle outcome or original typed failure as Step.
          */
         [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
-        /** @brief Tests the owner-lane mailbox of the flat tree admitted by the scheduler. */
+        /** @brief Tests whether an active tree or Utility action has an outstanding mailbox wake.
+         * @return False off the owner lane or while a step is in progress. */
         [[nodiscard]] bool HasPendingTaskWake() const noexcept;
-        /** @brief Copies the earliest fixed deadline from the active flat tree after evaluation. */
+        /** @brief Copies the earliest fixed deadline across active trees and selected Utility actions.
+         * @return No deadline when the graph cannot be observed or has no active deadline. */
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
@@ -193,7 +195,8 @@ namespace Horo::AI {
         /** @brief Requires host allowances only for closures that contain Utility. */
         [[nodiscard]] bool UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept;
         [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
-        [[nodiscard]] const BehaviorTreeInstance *ActiveFlatAction() const noexcept;
+        /** @brief Borrows the active tree or selected Utility action of one occurrence. */
+        [[nodiscard]] static const BehaviorTreeInstance *ActiveAction(const OccurrenceState &occurrence) noexcept;
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index, IDecisionQueryTaskBinder *queryTasks);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);

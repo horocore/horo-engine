@@ -200,25 +200,37 @@ namespace Horo::AI {
 
     /** @copydoc DecisionGraphInstance::HasPendingTaskWake */
     bool DecisionGraphInstance::HasPendingTaskWake() const noexcept {
-        const auto *action = ActiveFlatAction();
-        return action && action->HasPendingTaskWake();
+        if (!Available() || evaluating_)
+            return false;
+        return std::ranges::any_of(occurrences_, [](const auto &occurrence) {
+            const auto *action = ActiveAction(*occurrence);
+            return action && action->HasPendingTaskWake();
+        });
     }
 
     /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
     std::optional<std::uint64_t> DecisionGraphInstance::NextFixedWakeTick() const noexcept {
-        const auto *action = ActiveFlatAction();
-        return action ? action->NextFixedWakeTick() : std::nullopt;
+        if (!Available() || evaluating_)
+            return std::nullopt;
+        std::optional<std::uint64_t> earliest;
+        for (const auto &occurrence : occurrences_) {
+            const auto *action = ActiveAction(*occurrence);
+            if (!action)
+                continue;
+            const auto deadline = action->NextFixedWakeTick();
+            if (deadline.has_value() && (!earliest.has_value() || *deadline < *earliest))
+                earliest = deadline;
+        }
+        return earliest;
     }
 
-    const BehaviorTreeInstance *DecisionGraphInstance::ActiveFlatAction() const noexcept {
-        if (!Available() || evaluating_ || occurrences_.size() != 1)
+    /** @copydoc DecisionGraphInstance::ActiveAction */
+    const BehaviorTreeInstance *DecisionGraphInstance::ActiveAction(const OccurrenceState &occurrence) noexcept {
+        if (!occurrence.active)
             return nullptr;
-        const auto &root = *occurrences_.front();
-        if (!root.active)
-            return nullptr;
-        if (root.utility && root.utility->selected)
-            return root.utility->actions[*root.utility->selected].get();
-        return root.tree.get();
+        if (occurrence.utility && occurrence.utility->selected.has_value())
+            return occurrence.utility->actions[*occurrence.utility->selected].get();
+        return occurrence.tree.get();
     }
 
     /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */

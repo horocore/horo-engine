@@ -117,6 +117,36 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 2);
         }
 
+        TEST_CASE("Composed decision wakes include the active descendant and expire after retirement", "[ai][decision-graph-runtime]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto timer = TreeNode(2, DecisionControlKind::TimeLimit);
+            timer.kind = BehaviorTreeNodeKind::Decorator;
+            timer.minimumChildren = 1;
+            timer.maximumChildren = 1;
+            timer.control.durationTicks = 4;
+            const auto timedTree = Tree(3, {TreeNode(1, DecisionControlKind::Root), timer, TreeNode(3, DecisionControlKind::Task)},
+                                        {Edge(1, 1, 2), Edge(2, 2, 3)});
+            const std::array sources{CallTree(1, 2, DecisionPlanKind::StateMachine), CallingMachine(2, 3, DecisionPlanKind::BehaviorTree),
+                                     timedTree};
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            CHECK_FALSE(instance->NextFixedWakeTick().has_value());
+            CHECK_FALSE(instance->HasPendingTaskWake());
+            REQUIRE(fixture.Step(*instance, 1) == AiTaskState::Running);
+            CHECK(instance->NextFixedWakeTick() == std::optional<std::uint64_t>{5});
+            CHECK_FALSE(instance->HasPendingTaskWake());
+
+            const auto continuation = fixture.probe.continuation;
+            AiTaskTerminalResult completed{.state = AiTaskState::Succeeded};
+            REQUIRE(continuation.PublishTerminal(completed).Value() == AiTaskPublicationDisposition::Accepted);
+            CHECK(instance->HasPendingTaskWake());
+            REQUIRE(instance->Cancel(AiTaskCancellationReason::PlanReplaced).HasValue());
+            CHECK_FALSE(continuation.IsCurrent());
+            CHECK_FALSE(instance->HasPendingTaskWake());
+            CHECK_FALSE(instance->NextFixedWakeTick().has_value());
+            CHECK(fixture.probe.cleanups == 1);
+        }
+
         TEST_CASE("Traced graph steps preserve independent task order and report actual HSM transitions",
                   "[ai][decision-graph-runtime][trace]") {
             Fixture fixture;

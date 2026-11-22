@@ -2855,6 +2855,9 @@ cancellation to all families and detached continuations. Owner cancellation reti
 existing graph tasks without trying to read an already-revoked snapshot. Workers
 remain cooperative: they check both operation ancestors and the Foundation job
 token at bounded intervals, while image leases pin running callbacks to completion.
+The graph's owner-lane observation covers all active occurrences, including
+mailbox wakes and the earliest fixed deadline in nested Behavior Trees or
+selected Utility actions. Retirement hides the closed occurrence's signals.
 Live migration of a composed decision closure requires a separate admission
 path for its active call frames.
 
