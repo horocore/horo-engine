@@ -299,6 +299,10 @@ namespace Horo::Editor {
                 if (command.sourceCompletionIntent)
                     ApplySourceCompletion(*command.sourceCompletionIntent);
                 return true;
+            case EditorWorkspaceViewCommand::OpenSourceReference:
+                if (command.sourceReferenceIntent)
+                    OpenSourceReference(*command.sourceReferenceIntent);
+                return true;
             case EditorWorkspaceViewCommand::SourceDocumentInteraction:
                 m_viewModel.sourceEditingResult =
                     command.sourceInteraction ? SubmitSourceEditingCommand(m_sourceOpenService.Documents(), *command.sourceInteraction)

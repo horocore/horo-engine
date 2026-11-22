@@ -115,16 +115,16 @@ namespace {
         CHECK(PrepareClangdProvider(sources, settings).HasValue());
     }
 
-    TEST_CASE("Installed Clangd publishes diagnostics, resolves definitions and completes project C++", "[integration][clangd]") {
+    TEST_CASE("Installed Clangd publishes diagnostics, navigates symbols and completes project C++", "[integration][clangd]") {
         const auto *installed = std::getenv("HORO_TEST_CLANGD");
         if (!installed)
             SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
         TestSupport::SourceProject project;
         std::filesystem::create_directory(project.directory / "include");
         project.Put("inline int horo_fixture_symbol() { return 37; }\n", "include/gameplay_api.hpp");
-        constexpr std::string_view code =
-            "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n"
-            "int later() { return horo_fixture_symb; }\n";
+        constexpr std::string_view code = "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\n"
+                                          "int repeat() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n"
+                                          "int later() { return horo_fixture_symb; }\n";
         project.Put(code, "gameplay.cpp");
         const auto sourcePath = Utf8(project.directory / "gameplay.cpp");
         const auto commands = nlohmann::json::array({{{"directory", Utf8(project.directory)},
@@ -144,7 +144,11 @@ namespace {
         auto &owner = *workspace.Value();
         bool diagnosed = false;
         bool navigated = false;
+        bool referencesFound = false;
+        bool described = false;
         std::optional<SourceEditingPlan> completionPlan;
+        const auto firstReference = code.find("horo_fixture_symbol");
+        const auto secondReference = code.find("horo_fixture_symbol", firstReference + 1);
         const auto completionOffset = code.rfind("horo_fixture_symb") + std::string_view{"horo_fixture_symb"}.size();
         const auto observe = [&](const auto now) {
             for (const auto &event : owner.Poll(documents, now)) {
@@ -154,11 +158,24 @@ namespace {
                         return item.severity == LanguageSeverity::Error && item.span.start == code.find("missing_fixture_symbol");
                     });
                 }
-                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload)) {
+                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload);
+                    navigation && event.context.kind == SourceLanguageRequestKind::Definition) {
                     navigated |= std::ranges::any_of(navigation->targets, [](const auto &target) {
                         return target.source.Value() == "include/gameplay_api.hpp";
                     });
                 }
+                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload);
+                    navigation && event.context.kind == SourceLanguageRequestKind::References) {
+                    const auto containsOffset = [&](const std::size_t offset) {
+                        return std::ranges::any_of(navigation->targets, [&](const LanguageLocation &target) {
+                            const auto span = ResolveLanguageLocation(documents.front(), target);
+                            return span && span->start == offset;
+                        });
+                    };
+                    referencesFound = containsOffset(firstReference) && containsOffset(secondReference);
+                }
+                if (const auto *hover = std::get_if<LanguageHover>(&event.payload))
+                    described |= hover->text.find("horo_fixture_symbol") != std::string::npos;
                 if (const auto *completion = std::get_if<LanguageCompletions>(&event.payload)) {
                     const auto item = std::ranges::find_if(completion->items, [](const auto &candidate) {
                         return candidate.label.find("horo_fixture_symbol") != std::string::npos;
@@ -180,6 +197,16 @@ namespace {
         REQUIRE(Await([&](const auto now) {
             observe(now);
             return diagnosed && navigated;
+        }));
+        REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::References, {.offset = firstReference}).HasValue());
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return referencesFound;
+        }));
+        REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Hover, {.offset = firstReference}).HasValue());
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return described;
         }));
         REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Completion, {.offset = completionOffset}).HasValue());
         REQUIRE(Await([&](const auto now) {

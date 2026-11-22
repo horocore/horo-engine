@@ -262,9 +262,11 @@ override, it searches absolute entries in the inherited `PATH`. Each
 project workspace owns its own provider. A successful gameplay build
 retries initial admission if its compile database was missing. Diagnostics
 are displayed only on the exact source publication that received them.
-The C++ source toolbar requests definitions and completions for the active
-selection. Definitions open embedded project sources and select the resolved
-UTF-16 range. Completion acceptance applies the main and additional edits
+The C++ source toolbar requests symbol descriptions, definitions, references,
+and completions for the active selection. Definitions and selected references
+open embedded project sources and select the resolved UTF-16 range. Reference results
+display project paths and positions for the requesting source selection.
+Completion acceptance applies the main and additional edits
 as one revision-fenced undo step. Changes of source publication retire results.
 
 ### Horo Script Language Intelligence (EDT-003.11)

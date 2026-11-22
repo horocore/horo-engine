@@ -87,10 +87,8 @@ namespace Horo::Editor {
         auto result = std::move(queried).Value();
         if (intent.kind == SourceLanguageRequestKind::Completion) {
             AcceptSourceCompletions(result, intent.view, true);
-        } else if (auto *hover = std::get_if<Language::LanguageHover>(&result.payload)) {
-            m_viewModel.sourceScriptHover = {intent.source, intent.view, std::move(hover->text)};
         } else {
-            m_viewModel.sourceLanguageStatus = {intent.source, SourceLanguageStatusKind::NoSymbol};
+            AcceptSourceHover(result, intent.view, true);
         }
     }
 
@@ -112,12 +110,14 @@ namespace Horo::Editor {
             static_cast<void>(m_sourceLanguage->Cancel(m_pendingSourceLanguage->request));
         m_pendingSourceLanguage.reset();
         m_viewModel.sourceCompletions.reset();
-        m_viewModel.sourceScriptHover.reset();
+        m_viewModel.sourceReferences.reset();
+        m_viewModel.sourceLanguageHover.reset();
         if (Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, intent.source.Identity().key.source)) {
             RequestScriptLanguage(intent);
             return;
         }
-        if (!m_sourceLanguage || (intent.kind != Definition && intent.kind != Completion))
+        if (!m_sourceLanguage ||
+            (intent.kind != Definition && intent.kind != Completion && intent.kind != References && intent.kind != Hover))
             return;
         const auto request = m_sourceLanguage->Request(intent.source, intent.kind, {.offset = intent.view.caret});
         if (request.HasError()) {
@@ -146,8 +146,8 @@ namespace Horo::Editor {
         m_pendingSourceLanguage.reset();
     }
 
-    /** @copydoc EditorWorkspaceController::FocusSourceDefinition */
-    bool EditorWorkspaceController::FocusSourceDefinition(const Language::LanguageLocation &target) {
+    /** @copydoc EditorWorkspaceController::FocusSourceLocation */
+    bool EditorWorkspaceController::FocusSourceLocation(const Language::LanguageLocation &target) {
         const auto path = std::filesystem::u8path(target.source.Value());
         if (m_sourceOpenService.Classify(path).kind != SourceFileKind::NativeSource)
             return false;
@@ -172,9 +172,46 @@ namespace Horo::Editor {
             AcceptSourceCompletions(result, view);
             return;
         }
-        const auto *navigation = std::get_if<Language::LanguageNavigation>(&result.payload);
-        if (!navigation || navigation->targets.empty() || !FocusSourceDefinition(navigation->targets.front()))
+        if (result.context.kind == SourceLanguageRequestKind::Hover) {
+            AcceptSourceHover(result, view);
+            return;
+        }
+        auto *navigation = std::get_if<Language::LanguageNavigation>(&result.payload);
+        if (result.context.kind == SourceLanguageRequestKind::References) {
+            if (!navigation || navigation->targets.empty()) {
+                m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoReferences};
+                return;
+            }
+            m_viewModel.sourceReferences = std::make_shared<const SourceLanguageReferences>(
+                SourceLanguageReferences{std::move(result.context.source), view, std::move(*navigation)});
+            return;
+        }
+        if (!navigation || navigation->targets.empty() || !FocusSourceLocation(navigation->targets.front()))
             m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoDefinition};
+    }
+
+    /** @copydoc EditorWorkspaceController::AcceptSourceHover */
+    void EditorWorkspaceController::AcceptSourceHover(Language::LanguageResult &result, const SourceEditingView &view,
+                                                      const bool fromScriptModule) {
+        auto *hover = std::get_if<Language::LanguageHover>(&result.payload);
+        if (!hover || hover->text.empty()) {
+            m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoSymbol};
+            return;
+        }
+        m_viewModel.sourceLanguageHover = {std::move(result.context.source), view, std::move(hover->text), fromScriptModule};
+    }
+
+    /** @copydoc EditorWorkspaceController::OpenSourceReference */
+    void EditorWorkspaceController::OpenSourceReference(const SourceReferenceIntent &intent) {
+        const auto &result = intent.result;
+        if (!result || result != m_viewModel.sourceReferences || !result->source.IsCurrent() ||
+            result->source.Identity().instance != m_viewModel.workspacePanelHost.ActiveDocument() ||
+            intent.index >= result->navigation.targets.size())
+            return;
+        if (!FocusSourceLocation(result->navigation.targets[intent.index]))
+            m_viewModel.sourceLanguageStatus = {result->source, SourceLanguageStatusKind::Refused};
+        else
+            m_viewModel.sourceLanguageStatus.reset();
     }
 
     /** @copydoc EditorWorkspaceController::AcceptSourceCompletions */
@@ -219,8 +256,10 @@ namespace Horo::Editor {
             m_viewModel.sourceLanguageFocus.reset();
         if (m_viewModel.sourceCompletions && !m_viewModel.sourceCompletions->source.IsCurrent())
             m_viewModel.sourceCompletions.reset();
-        if (m_viewModel.sourceScriptHover && !m_viewModel.sourceScriptHover->source.IsCurrent())
-            m_viewModel.sourceScriptHover.reset();
+        if (m_viewModel.sourceReferences && !m_viewModel.sourceReferences->source.IsCurrent())
+            m_viewModel.sourceReferences.reset();
+        if (m_viewModel.sourceLanguageHover && !m_viewModel.sourceLanguageHover->source.IsCurrent())
+            m_viewModel.sourceLanguageHover.reset();
         std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {
             return !entry.second->context.source.IsCurrent();
         });
@@ -258,7 +297,8 @@ namespace Horo::Editor {
         if (revision == m_scriptLanguageApiRevision)
             return;
         m_scriptLanguageApiRevision = revision;
-        m_viewModel.sourceScriptHover.reset();
+        if (m_viewModel.sourceLanguageHover && m_viewModel.sourceLanguageHover->fromScriptModule)
+            m_viewModel.sourceLanguageHover.reset();
         if (m_viewModel.sourceCompletions && m_viewModel.sourceCompletions->fromScriptModule)
             m_viewModel.sourceCompletions.reset();
         std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {

@@ -366,11 +366,12 @@ namespace {
                            std::array{"workspace.source_language.unavailable", "workspace.source_language.definition",
                                       "workspace.source_language.waiting", "workspace.source_language.retry",
                                       "workspace.source_language.no_definition", "workspace.source_language.actions",
-                                      "workspace.source_language.complete", "workspace.source_language.choose_completion",
-                                      "workspace.source_language.no_completion", "workspace.source_language.script_diagnostics",
-                                      "workspace.source_language.unknown_script_member", "workspace.source_language.script_actions",
-                                      "workspace.source_language.describe_symbol", "workspace.source_language.no_symbol",
-                                      "workspace.source_language.script_module_unavailable"});
+                                      "workspace.source_language.references", "workspace.source_language.choose_reference",
+                                      "workspace.source_language.no_references", "workspace.source_language.complete",
+                                      "workspace.source_language.choose_completion", "workspace.source_language.no_completion",
+                                      "workspace.source_language.script_diagnostics", "workspace.source_language.unknown_script_member",
+                                      "workspace.source_language.script_actions", "workspace.source_language.describe_symbol",
+                                      "workspace.source_language.no_symbol", "workspace.source_language.script_module_unavailable"});
         RequireCatalogKeys(service, recoveryKeys);
         RequireCatalogKeys(service, prefabOverrideKeys);
         RequireCatalogKeys(service, projectLoadingKeys);

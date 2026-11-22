@@ -9,6 +9,7 @@
 #include <array>
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <span>
 
@@ -50,6 +51,8 @@ namespace Horo::Editor {
                     return "workspace.source_language.retry";
                 case SourceLanguageStatusKind::NoDefinition:
                     return "workspace.source_language.no_definition";
+                case SourceLanguageStatusKind::NoReferences:
+                    return "workspace.source_language.no_references";
                 case SourceLanguageStatusKind::NoCompletion:
                     return "workspace.source_language.no_completion";
                 case SourceLanguageStatusKind::NoSymbol:
@@ -58,6 +61,31 @@ namespace Horo::Editor {
                     return "workspace.source_language.script_module_unavailable";
             }
             return "workspace.source_language.retry";
+        }
+
+        /** @brief Presents all returned project locations while the originating selection remains current. */
+        void DrawSourceReferences(const EditorGuiContext &context, const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                  const std::shared_ptr<const SourceLanguageReferences> &result, EditorWorkspaceViewCommandData &command) {
+            if (!result || !result->source.SharesStateWith(source) || result->view.viewId != view.viewId ||
+                result->view.anchor != view.anchor || result->view.caret != view.caret)
+                return;
+            const auto &targets = result->navigation.targets;
+            const auto &placeholder = context.localization.Get("editor", "workspace.source_language.choose_reference");
+            std::string label;
+            const Ui::ComboItemSource labels{.label = [&](const int index) {
+                if (index == 0)
+                    return placeholder.c_str();
+                const auto &target = targets[static_cast<std::size_t>(index - 1)];
+                label = std::format("{}:{}:{}", target.source.Value(), std::uint64_t{target.start.line} + 1,
+                                    std::uint64_t{target.start.utf16Column} + 1);
+                return label.c_str();
+            }};
+            int choice = 0;
+            if (Ui::ComboControl("##SourceReferences", &choice, static_cast<int>(targets.size()) + 1, labels, context.theme.fonts) &&
+                choice > 0 && command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::OpenSourceReference;
+                command.sourceReferenceIntent = SourceReferenceIntent{result, static_cast<std::size_t>(choice - 1)};
+            }
         }
 
         /** @brief Displays a typed result set in the shared dropdown at the originating view selection. */
@@ -103,27 +131,36 @@ namespace Horo::Editor {
             if (model.sourceLanguageStatus && model.sourceLanguageStatus->source.SharesStateWith(source))
                 notice(LanguageNotice(model.sourceLanguageStatus->kind));
             const auto view = widget.View();
-            const std::array labels{context.localization
-                                        .Get("editor",
-                                             script ? "workspace.source_language.script_actions" : "workspace.source_language.actions")
-                                        .c_str(),
-                                    context.localization
-                                        .Get("editor",
-                                             script ? "workspace.source_language.describe_symbol" : "workspace.source_language.definition")
-                                        .c_str(),
-                                    context.localization.Get("editor", "workspace.source_language.complete").c_str()};
-            const std::array kinds{script ? SourceLanguageRequestKind::Hover : SourceLanguageRequestKind::Definition,
-                                   SourceLanguageRequestKind::Completion};
+
+            struct LanguageAction final {
+                SourceLanguageRequestKind kind;
+                const char *label;
+            };
+            using enum SourceLanguageRequestKind;
+            constexpr std::array scriptActions{LanguageAction{Hover, "workspace.source_language.describe_symbol"},
+                                               LanguageAction{Completion, "workspace.source_language.complete"}};
+            constexpr std::array cppActions{LanguageAction{Definition, "workspace.source_language.definition"},
+                                            LanguageAction{Completion, "workspace.source_language.complete"},
+                                            LanguageAction{References, "workspace.source_language.references"},
+                                            LanguageAction{Hover, "workspace.source_language.describe_symbol"}};
+            const std::span<const LanguageAction> actions =
+                script ? std::span<const LanguageAction>{scriptActions} : std::span<const LanguageAction>{cppActions};
+            const Ui::ComboItemSource labels{.label = [&](const int index) {
+                const auto *label = index == 0 ? (script ? "workspace.source_language.script_actions" : "workspace.source_language.actions")
+                                               : actions[static_cast<std::size_t>(index - 1)].label;
+                return context.localization.Get("editor", label).c_str();
+            }};
             int action = 0;
-            if (Ui::ComboControl("##SourceLanguageActions", &action, labels.data(), static_cast<int>(labels.size()), context.theme.fonts) &&
+            if (Ui::ComboControl("##SourceLanguageActions", &action, static_cast<int>(actions.size()) + 1, labels, context.theme.fonts) &&
                 action > 0 && command.command == EditorWorkspaceViewCommand::None) {
                 command.command = EditorWorkspaceViewCommand::RequestSourceLanguage;
-                command.sourceLanguageIntent = SourceLanguageIntent{source, kinds[static_cast<std::size_t>(action - 1)], view};
+                command.sourceLanguageIntent = SourceLanguageIntent{source, actions[static_cast<std::size_t>(action - 1)].kind, view};
             }
             DrawSourceCompletions(context, source, view, model.sourceCompletions, command);
-            if (script && model.sourceScriptHover && model.sourceScriptHover->source.SharesStateWith(source) &&
-                model.sourceScriptHover->view.viewId == view.viewId && model.sourceScriptHover->view.caret == view.caret) {
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, model.sourceScriptHover->text, Theme::Muted(), context.theme.fonts);
+            DrawSourceReferences(context, source, view, model.sourceReferences, command);
+            if (const auto &hover = model.sourceLanguageHover;
+                hover && hover->source.SharesStateWith(source) && hover->view.viewId == view.viewId && hover->view.caret == view.caret) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, hover->text, Theme::Muted(), context.theme.fonts);
             }
         }
     }  // namespace

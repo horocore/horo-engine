@@ -1460,10 +1460,14 @@ namespace Horo::Editor {
         void AcceptSourceLanguage(Language::LanguageResult result);
         /** @brief Displays completion choices for their originating view and source lease. */
         void AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view, bool fromScriptModule = false);
+        /** @brief Displays a symbol description for its originating selection. */
+        void AcceptSourceHover(Language::LanguageResult &result, const SourceEditingView &view, bool fromScriptModule = false);
         /** @brief Applies a selected completion using the source document's history authority. */
         void ApplySourceCompletion(const SourceCompletionIntent &intent);
-        /** @brief Opens an in-project definition and publishes its exact selection. */
-        [[nodiscard]] bool FocusSourceDefinition(const Language::LanguageLocation &target);
+        /** @brief Opens an in-project source location and publishes its selection. */
+        [[nodiscard]] bool FocusSourceLocation(const Language::LanguageLocation &target);
+        /** @brief Opens a reference selected from the active source publication. */
+        void OpenSourceReference(const SourceReferenceIntent &intent);
         /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
         /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */

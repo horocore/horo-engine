@@ -173,6 +173,7 @@ namespace Horo::Editor {
         SourceDocumentInteraction,
         RequestSourceLanguage,
         ApplySourceCompletion,
+        OpenSourceReference,
         ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -384,6 +385,7 @@ namespace Horo::Editor {
         SourceDocumentSnapshot source;
         SourceEditingView view;
         std::string text;
+        bool fromScriptModule{};
     };
 
     /** @brief Explicit acceptance of one item from the current presentation. */
@@ -392,10 +394,24 @@ namespace Horo::Editor {
         std::size_t index{};
     };
 
+    /** @brief Project references returned for one exact source publication and selection. */
+    struct SourceLanguageReferences final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageNavigation navigation;
+    };
+
+    /** @brief User selection from the currently presented reference results. */
+    struct SourceReferenceIntent final {
+        std::shared_ptr<const SourceLanguageReferences> result;
+        std::size_t index{};
+    };
+
     enum class SourceLanguageStatusKind : std::uint8_t {
         Waiting,
         Refused,
         NoDefinition,
+        NoReferences,
         NoCompletion,
         NoSymbol,
         ScriptModuleUnavailable
@@ -861,6 +877,7 @@ namespace Horo::Editor {
         std::optional<SourceEditingCommand> sourceInteraction;
         std::optional<SourceLanguageIntent> sourceLanguageIntent;
         std::optional<SourceCompletionIntent> sourceCompletionIntent;
+        std::optional<SourceReferenceIntent> sourceReferenceIntent;
         std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
@@ -1196,8 +1213,9 @@ namespace Horo::Editor {
         std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
         std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
         std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
+        std::shared_ptr<const SourceLanguageReferences> sourceReferences;
         std::vector<Language::ScriptModuleSourceBinding> sourceScriptBindings;
-        std::optional<SourceLanguageHover> sourceScriptHover;
+        std::optional<SourceLanguageHover> sourceLanguageHover;
         std::optional<SourceLanguageStatus> sourceLanguageStatus;
         bool sourceLanguageConfigured{};
         bool sourceLanguageUnavailable{}; /**< Native source editing remains available. */
