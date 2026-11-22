@@ -686,6 +686,23 @@ namespace Horo::AI {
             const auto previous = old.Compile(std::span{&oldSource, 1}, 11);
             auto newSource = Tree(11, {TreeNode(1, DecisionControlKind::Root), TreeNode(3, DecisionControlKind::Task)}, {Edge(1, 1, 3)});
             newSource.executionTask = oldSource.executionTask;
+
+            struct ReloadFactory final {
+                Probe &probe;
+                std::function<void()> beforeCreate;
+            } replacementFactory{next.probe, {}};
+
+            auto registration = Registration(next.probe);
+            registration.factory.userData = &replacementFactory;
+            registration.factory.create = [](void *owner, std::span<const BehaviorTreeProperty> properties) -> IBehaviorTreeExecutor * {
+                auto &factory = *static_cast<ReloadFactory *>(owner);
+                if (factory.beforeCreate)
+                    factory.beforeCreate();
+                return Create(&factory.probe, properties);
+            };
+            auto nextGeneration = DecisionNodeGeneration::Capture({&registration, 1}, next.admission);
+            REQUIRE(nextGeneration.HasValue());
+            next.providers = std::move(nextGeneration).Value();
             const auto replacement = next.Compile(std::span{&newSource, 1}, 11);
 
             auto failing = Registration(failed.probe);
@@ -731,7 +748,7 @@ namespace Horo::AI {
             REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
 
             std::optional<Result<void>> nestedReplacement;
-            next.probe.onCreate = [&nestedReplacement, &runtime, agent, &previous, &replacement] {
+            replacementFactory.beforeCreate = [&nestedReplacement, &runtime, agent, &previous, &replacement] {
                 if (!nestedReplacement.has_value()) {
                     nestedReplacement = Result<void>::Success();
                     nestedReplacement = runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement);

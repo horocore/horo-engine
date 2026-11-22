@@ -49,7 +49,6 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::size_t cleanups{};
         AiTaskState lastTerminal{AiTaskState::Idle};
         std::optional<Error> lastFailure;
-        std::function<void()> onCreate;
         std::function<void()> onStart;
         std::function<void()> onAbort;
         std::optional<Result<AiTaskState>> startOutcome;
@@ -117,8 +116,6 @@ namespace Horo::AI::DecisionGraphTestSupport {
     inline IBehaviorTreeExecutor *Create(void *owner, std::span<const BehaviorTreeProperty>) {
         auto &probe = *static_cast<Probe *>(owner);
         ++probe.factories;
-        if (probe.onCreate)
-            probe.onCreate();
         return new Provider(probe);
     }
 
