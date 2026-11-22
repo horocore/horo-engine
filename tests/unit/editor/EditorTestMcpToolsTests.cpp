@@ -1,6 +1,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorCommandMcpSession.h"
+#include "EditorInspectionDistance.h"
 #include "EditorInspectionMcpTools.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "EditorSourceMcpTools.h"
@@ -199,6 +200,54 @@ namespace {
         const auto rendering = Execute(session, Command("geometry", "inspect.rendering", {{"objects", {42}}}));
         REQUIRE(rendering["status"] == "succeeded");
         CHECK(rendering["result"]["records"][0] == Json({{"object", 42}, {"instances", 2}, {"vertices", 30}, {"triangles", 14}}));
+    }
+
+    TEST_CASE("Bounds measurements distinguish disjoint, intersecting and touching axes", "[unit][editor][mcp][inspection]") {
+        const InspectedBounds reference{17, {0, 0, 0}, {2, 2, 2}};
+        const auto separated = MeasureInspectionDistance(reference, {42, {5, -6, 1}, {6, -4, 3}}, 0.5);
+        CHECK(separated.gap == 5);
+        CHECK((separated.nearestReference == std::array<double, 3>{2, 0, 1}));
+        CHECK((separated.nearestTarget == std::array<double, 3>{5, -4, 1}));
+        CHECK((separated.overlapDepth == std::array<double, 3>{0, 0, 1}));
+        CHECK(separated.forwardAngleRadians == 0.5);
+        const auto overlap = MeasureInspectionDistance(reference, {42, {1, 1, 1}, {3, 3, 3}}, 0);
+        CHECK(overlap.gap == 0);
+        CHECK(overlap.nearestReference == overlap.nearestTarget);
+        CHECK((overlap.overlapDepth == std::array<double, 3>{1, 1, 1}));
+        const auto contact = MeasureInspectionDistance(reference, {42, {2, 2, 2}, {4, 4, 4}}, 0);
+        CHECK(contact.gap == 0);
+        CHECK((contact.overlapDepth == std::array<double, 3>{0, 0, 0}));
+    }
+
+    TEST_CASE("Distance inspection requires an exact reference ID before dispatch", "[unit][editor][mcp][inspection]") {
+        unsigned reads{};
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{.project = "project-one",
+                                            .authorizationRevision = 3,
+                                            .owner = std::this_thread::get_id(),
+                                            .readDistances = [&](const ObjectInspectionRequest &request) {
+            ++reads;
+            REQUIRE(request.referenceObject == 17);
+            const InspectedBounds reference{*request.referenceObject, {0, 0, 0}, {2, 2, 2}};
+            const InspectedBounds target{request.objects.front(), {5, -6, 1}, {6, -4, 3}};
+            return Result<DistanceInspectionPage>::Success(
+                {.scene = {7, 19}, .records = {MeasureInspectionDistance(reference, target, 0.5)}});
+        }});
+        const EditorCommandMcpAdmission admission{"distance-reader", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        const auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        const auto denied = Execute(session, Command("missing-reference", "inspect.distances", {{"objects", {42}}}));
+        CHECK(denied["status"] == "failed");
+        CHECK(reads == 0);
+        const auto result = Execute(session, Command("measure", "inspect.distances", {{"objects", {42}}, {"referenceObject", 17}}));
+        REQUIRE(result["status"] == "succeeded");
+        const auto &record = result["result"]["records"][0];
+        CHECK(record["referenceObject"] == 17);
+        CHECK(record["object"] == 42);
+        CHECK(record["gap"] == 5);
+        CHECK(record["forwardAngleRadians"] == 0.5);
+        CHECK(reads == 1);
     }
 
     TEST_CASE("Configured test commands run through an approved embedded editor session", "[unit][editor][mcp][gameplay-test]") {

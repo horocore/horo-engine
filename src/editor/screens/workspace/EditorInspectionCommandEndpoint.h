@@ -29,6 +29,7 @@ namespace Horo::Editor {
         std::size_t offset{};
         std::size_t limit{MaximumObjects};
         std::optional<InspectionSceneRevision> expected;
+        std::optional<std::uint64_t> referenceObject; /**< Used only by the distance tool. */
     };
 
     /** @brief One page from the caller's ordered set of exact scene object IDs. */
@@ -101,6 +102,24 @@ namespace Horo::Editor {
         std::optional<std::size_t> nextOffset;
     };
 
+    /** @brief World-space separation and orientation between a visible reference and target. */
+    struct InspectedDistance {
+        std::uint64_t object{};
+        std::uint64_t referenceObject{};
+        double gap{};
+        std::array<double, 3> overlapDepth{};
+        std::array<double, 3> nearestReference{};
+        std::array<double, 3> nearestTarget{};
+        double forwardAngleRadians{};
+    };
+
+    /** @brief Requested targets measured against the same exact reference. */
+    struct DistanceInspectionPage {
+        InspectionSceneRevision scene;
+        std::vector<InspectedDistance> records;
+        std::optional<std::size_t> nextOffset;
+    };
+
     /** @brief Synchronous owner-lane query port shared by local and embedded adapters. */
     struct EditorInspectionCommandEndpoint {
         std::string project;
@@ -110,5 +129,6 @@ namespace Horo::Editor {
         std::function<Result<BoundsInspectionPage>(const ObjectInspectionRequest &)> readBounds;
         std::function<Result<ComponentInspectionPage>(const ObjectInspectionRequest &)> readComponents;
         std::function<Result<GeometryInspectionPage>(const ObjectInspectionRequest &)> readGeometry;
+        std::function<Result<DistanceInspectionPage>(const ObjectInspectionRequest &)> readDistances;
     };
 }  // namespace Horo::Editor

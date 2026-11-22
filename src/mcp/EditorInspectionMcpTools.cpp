@@ -33,6 +33,14 @@ namespace Horo::Editor {
                     {"additionalProperties", false}};
         }
 
+        /** @brief Requires a separate visible reference for paginated target measurements. */
+        Json DistanceInputSchema() {
+            auto result = InputSchema();
+            result["properties"]["referenceObject"] = {{"type", "integer"}, {"minimum", 1}};
+            result["required"].push_back("referenceObject");
+            return result;
+        }
+
         /** @brief Describes numeric records without names, free text, or runtime handles. */
         Json VectorSchema(const std::size_t count) {
             return {{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", {{"type", "number"}}}};
@@ -100,6 +108,24 @@ namespace Horo::Editor {
                                {"additionalProperties", false}});
         }
 
+        /** @brief Describes world-space gap, overlap, nearest points and relative orientation. */
+        Json DistanceSchema() {
+            const Json id{{"type", "integer"}, {"minimum", 1}};
+            return PageSchema(
+                {{"type", "object"},
+                 {"properties",
+                  {{"object", id},
+                   {"referenceObject", id},
+                   {"gap", {{"type", "number"}, {"minimum", 0}}},
+                   {"overlapDepth", VectorSchema(3)},
+                   {"nearestReference", VectorSchema(3)},
+                   {"nearestTarget", VectorSchema(3)},
+                   {"forwardAngleRadians", {{"type", "number"}, {"minimum", 0}}}}},
+                 {"required",
+                  {"object", "referenceObject", "gap", "overlapDepth", "nearestReference", "nearestTarget", "forwardAngleRadians"}},
+                 {"additionalProperties", false}});
+        }
+
         /** @brief Maps schema-valid numeric fields onto the owner query. */
         ObjectInspectionRequest ReadRequest(const Json &arguments) {
             ObjectInspectionRequest request{arguments.at("objects").get<std::vector<std::uint64_t>>(),
@@ -107,6 +133,8 @@ namespace Horo::Editor {
             if (const auto scene = arguments.find("scene"); scene != arguments.end())
                 request.expected =
                     InspectionSceneRevision{scene->at("epoch").get<std::uint64_t>(), scene->at("revision").get<std::uint64_t>()};
+            if (const auto reference = arguments.find("referenceObject"); reference != arguments.end())
+                request.referenceObject = reference->get<std::uint64_t>();
             return request;
         }
 
@@ -131,6 +159,17 @@ namespace Horo::Editor {
         /** @brief Serializes per-object committed viewport submission counts. */
         Json WriteRecord(const InspectedGeometry &entry) {
             return {{"object", entry.object}, {"instances", entry.instances}, {"vertices", entry.vertices}, {"triangles", entry.triangles}};
+        }
+
+        /** @brief Serializes the numeric pair measurement and the two exact object identities. */
+        Json WriteRecord(const InspectedDistance &entry) {
+            return {{"object", entry.object},
+                    {"referenceObject", entry.referenceObject},
+                    {"gap", entry.gap},
+                    {"overlapDepth", entry.overlapDepth},
+                    {"nearestReference", entry.nearestReference},
+                    {"nearestTarget", entry.nearestTarget},
+                    {"forwardAngleRadians", entry.forwardAngleRadians}};
         }
 
         /** @brief Exports an owner-produced page with an optional continuation offset. */
@@ -173,11 +212,11 @@ namespace Horo::Editor {
         /** @brief Publishes a read-only query under the shared inspection capability and bounds. */
         template <auto Read>
         Mcp::McpToolRegistration Registration(const std::weak_ptr<const EditorInspectionCommandEndpoint> &workspace, std::string id,
-                                              std::string description, Json schema) {
+                                              std::string description, Json input, Json schema) {
             return {.descriptor =
                         {.id = {std::move(id)},
                          .description = std::move(description),
-                         .inputSchema = InputSchema(),
+                         .inputSchema = std::move(input),
                          .outputSchema = std::move(schema),
                          .effect = Mcp::McpToolEffect::Query,
                          .requiredCapabilities = {std::string{EditorSceneInspectionGrant}},
@@ -190,9 +229,9 @@ namespace Horo::Editor {
         template <auto Read>
         void AppendInspection(std::vector<Mcp::McpToolRegistration> &tools,
                               const std::shared_ptr<const EditorInspectionCommandEndpoint> &endpoint, std::string id,
-                              std::string description, Json (*schema)()) {
+                              std::string description, Json (*schema)(), Json (*input)() = InputSchema) {
             if (endpoint.get()->*Read)
-                tools.push_back(Registration<Read>(endpoint, std::move(id), std::move(description), schema()));
+                tools.push_back(Registration<Read>(endpoint, std::move(id), std::move(description), input(), schema()));
         }
     }  // namespace
 
@@ -220,6 +259,10 @@ namespace Horo::Editor {
                                                                          "Read matching committed viewport instance, vertex and triangle "
                                                                          "counts by visible Scene object ID.",
                                                                          GeometrySchema);
+        AppendInspection<&EditorInspectionCommandEndpoint::readDistances>(tools, endpoint, "inspect.distances",
+                                                                          "Measure world-axis-aligned bounds and forward angles from a "
+                                                                          "visible reference object to visible targets.",
+                                                                          DistanceSchema, DistanceInputSchema);
         if (tools.empty())
             return Output::Failure(MakeError(Mcp::McpErrors::ConfigurationInvalid));
         return Output::Success(std::move(tools));

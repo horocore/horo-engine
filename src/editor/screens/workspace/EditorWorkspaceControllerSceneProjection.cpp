@@ -1,4 +1,5 @@
 #include "EditorInspectionCommandEndpoint.h"
+#include "EditorInspectionDistance.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -152,17 +153,14 @@ namespace Horo::Editor {
         }
 
         /** @brief Unions local mesh bounds transformed by the committed authored pose, ignoring gizmo preview transforms. */
-        Result<InspectedBounds> WorldBounds(const EditorViewportSceneSnapshot &geometry, const Runtime::RuntimeSceneView &active,
-                                            const SceneObject &object) {
+        Result<InspectedBounds> BoundsAtPose(const EditorViewportSceneSnapshot &geometry, const SceneObjectId object,
+                                             const Math::Mat4 &world) {
             using Output = Result<InspectedBounds>;
-            const auto world = ResolveSceneObjectWorldTransforms(active, object.id);
-            if (world.HasError())
-                return Output::Failure(MakeError(InspectionBoundsUnavailable));
             std::optional<Math::Aabb> merged;
             for (std::size_t i = 0; i < geometry.instanceObjects.size(); ++i) {
-                if (geometry.instanceObjects[i] != object.id)
+                if (geometry.instanceObjects[i] != object)
                     continue;
-                const auto bounds = Math::TransformAabb(geometry.instances[i].localBounds, world.Value().localToWorld);
+                const auto bounds = Math::TransformAabb(geometry.instances[i].localBounds, world);
                 if (bounds.HasError())
                     return Output::Failure(MakeError(InspectionBoundsUnavailable));
                 const auto &part = bounds.Value();
@@ -177,9 +175,40 @@ namespace Horo::Editor {
             }
             if (!merged)
                 return Output::Failure(MakeError(InspectionBoundsUnavailable));
-            return Output::Success({object.id.value,
+            return Output::Success({object.value,
                                     {merged->minimum.x, merged->minimum.y, merged->minimum.z},
                                     {merged->maximum.x, merged->maximum.y, merged->maximum.z}});
+        }
+
+        /** @brief Computes bounds from committed object transforms. */
+        Result<InspectedBounds> WorldBounds(const EditorViewportSceneSnapshot &geometry, const Runtime::RuntimeSceneView &active,
+                                            const SceneObject &object) {
+            const auto world = ResolveSceneObjectWorldTransforms(active, object.id);
+            if (world.HasError())
+                return Result<InspectedBounds>::Failure(MakeError(InspectionBoundsUnavailable));
+            return BoundsAtPose(geometry, object.id, world.Value().localToWorld);
+        }
+
+        struct DistanceSample {
+            InspectedBounds bounds;
+            Math::Vec3 forward;
+        };
+
+        /** @brief Uses the exact committed pose for both the target bounds and its authored forward direction. */
+        Result<DistanceSample> SampleDistance(const EditorViewportSceneSnapshot &geometry, const Runtime::RuntimeSceneView &active,
+                                              const SceneObject &object) {
+            using Output = Result<DistanceSample>;
+            const auto world = ResolveSceneObjectWorldTransforms(active, object.id);
+            if (world.HasError())
+                return Output::Failure(MakeError(InspectionBoundsUnavailable));
+            const auto &pose = world.Value().localToWorld;
+            auto bounds = BoundsAtPose(geometry, object.id, pose);
+            if (bounds.HasError())
+                return Output::Failure(bounds.ErrorValue());
+            const auto forward = Math::TryNormalize(Math::TransformDirection(pose, {0.0F, 0.0F, -1.0F}));
+            if (forward.HasError())
+                return Output::Failure(MakeError(InspectionGeometryUnavailable));
+            return Output::Success({std::move(bounds).Value(), forward.Value()});
         }
 
         /** @brief Keeps the public numeric context independent of internal editor interaction enums. */
@@ -289,6 +318,8 @@ namespace Horo::Editor {
             return InspectComponents(request);
         }, [this](const ObjectInspectionRequest &request) {
             return InspectGeometry(request);
+        }, [this](const ObjectInspectionRequest &request) {
+            return InspectDistances(request);
         }});
         return m_inspectionCommandEndpoint;
     }
@@ -329,6 +360,36 @@ namespace Horo::Editor {
                                                           [this, current](const SceneObject &object) {
             return current ? GeometryCounts(m_viewportScene, object.id)
                            : Result<InspectedGeometry>::Failure(MakeError(InspectionGeometryUnavailable));
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectDistances */
+    Result<DistanceInspectionPage> EditorWorkspaceController::InspectDistances(const ObjectInspectionRequest &request) const {
+        const auto active = m_runtimeScene.ActiveScene();
+        const bool current = active && HasCurrentInspectionGeometry(*active);
+        std::optional<DistanceSample> reference;
+        return ReadInspectionPage<DistanceInspectionPage>(InspectSceneRevision(), request, m_viewModel.objects,
+                                                          [this, &active, &request, &reference, current](const SceneObject &object) {
+            using Output = Result<InspectedDistance>;
+            if (!current)
+                return Output::Failure(MakeError(InspectionBoundsUnavailable));
+            if (!request.referenceObject)
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            if (!reference) {
+                const auto owner = ResolveInspectionObjects(m_viewModel.objects, std::span{&*request.referenceObject, 1});
+                if (owner.HasError())
+                    return Output::Failure(owner.ErrorValue());
+                auto sample = SampleDistance(m_viewportScene, *active, *owner.Value().front());
+                if (sample.HasError())
+                    return Output::Failure(sample.ErrorValue());
+                reference = std::move(sample).Value();
+            }
+            const auto target = SampleDistance(m_viewportScene, *active, object);
+            if (target.HasError())
+                return Output::Failure(target.ErrorValue());
+            const double dot = Math::Dot(reference->forward, target.Value().forward);
+            return Output::Success(
+                MeasureInspectionDistance(reference->bounds, target.Value().bounds, std::acos(std::clamp(dot, -1.0, 1.0))));
         });
     }
 

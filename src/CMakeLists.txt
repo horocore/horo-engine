@@ -4800,6 +4800,8 @@ configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers
 configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
 configure_file(editor/screens/workspace/EditorWorkspaceCommandAccess.h
     "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)
+configure_file(editor/screens/workspace/EditorInspectionDistance.h
+    "${_horo_mcp_editor_command_headers}/EditorInspectionDistance.h" COPYONLY)
 target_include_directories(HoroMcpEditorCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_command_headers}>")
 target_link_libraries(HoroMcpEditorCommandsInternal
     PUBLIC HoroEngine::McpRegistry HoroEngine::EditorServices HoroEngine::GameplayBuild

@@ -472,6 +472,10 @@ The same object and page contract applies to `inspect.components` and
 without component payloads. Rendering inspection reports per-object committed
 instance, vertex and triangle counts from retained geometry, with an explicit
 unavailable result when no matching geometry is published.
+`inspect.distances` measures each requested target against an explicit
+visible reference object. It returns the world AABB gap, per-axis overlap
+depths, a deterministic nearest-point pair and the angle between the two
+committed transformed local forward axes.
 
 ## MCP History Retention And Redaction
 
