@@ -4,7 +4,10 @@
 
 #include <array>
 #include <charconv>
+#include <cstdint>
+#include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::Editor::Language {
     namespace {
@@ -32,27 +35,71 @@ namespace Horo::Editor::Language {
             {"textDocument/codeAction", "codeActionProvider", ParameterShape::Selection},
         }};
 
+        /** @brief Reads a bounded wire position for code-action range matching. */
+        std::optional<std::pair<std::int64_t, std::int64_t>> ReadPosition(const nlohmann::json &position) {
+            if (!position.is_object())
+                return std::nullopt;
+            const auto line = position.find("line");
+            const auto column = position.find("character");
+            if (line == position.end() || column == position.end() || !line->is_number_integer() || !column->is_number_integer())
+                return std::nullopt;
+            const auto row = line->get<std::int64_t>();
+            const auto offset = column->get<std::int64_t>();
+            constexpr auto Maximum = (std::numeric_limits<std::int32_t>::max)();
+            if (row < 0 || row > Maximum || offset < 0 || offset > Maximum)
+                return std::nullopt;
+            return std::pair{row, offset};
+        }
+
+        /** @brief Keeps cached diagnostics whose ranges intersect the requested selection. */
+        nlohmann::json SelectionDiagnostics(const nlohmann::json *diagnostics, const nlohmann::json &start, const nlohmann::json &end) {
+            auto result = nlohmann::json::array();
+            if (!diagnostics)
+                return result;
+            const auto first = ReadPosition(start);
+            const auto last = ReadPosition(end);
+            if (!first || !last)
+                return result;
+            for (const auto &entry : *diagnostics) {
+                const auto range = entry.find("range");
+                if (range == entry.end() || !range->is_object())
+                    continue;
+                const auto from = range->find("start");
+                const auto to = range->find("end");
+                if (from == range->end() || to == range->end())
+                    continue;
+                const auto diagnosticStart = ReadPosition(*from);
+                const auto diagnosticEnd = ReadPosition(*to);
+                if (diagnosticStart && diagnosticEnd && *diagnosticStart <= *diagnosticEnd && *diagnosticStart <= *last &&
+                    *first <= *diagnosticEnd)
+                    result.push_back(entry);
+            }
+            return result;
+        }
+
         /** @brief Adds the selection and required context for a code-action request. */
-        bool AddSelection(nlohmann::json &params, const std::string_view text, const LspSourceQuery query, nlohmann::json start) {
+        bool AddSelection(nlohmann::json &params, const std::string_view text, const LspSourceQuery query, nlohmann::json start,
+                          const nlohmann::json *diagnostics) {
             if (query.length > text.size() - query.offset)
                 return false;
             auto end = LspPositionAt(text, query.offset + query.length);
             if (!end)
                 return false;
+            params["context"] = {{"diagnostics", SelectionDiagnostics(diagnostics, start, *end)}};
             params["range"] = {{"start", std::move(start)}, {"end", std::move(*end)}};
-            params["context"] = {{"diagnostics", nlohmann::json::array()}};
             return true;
         }
 
         /** @brief Adds method-specific parameters without letting wire JSON choose a method. */
-        bool AddQuery(nlohmann::json &params, const std::string_view text, const ParameterShape shape, const LspSourceQuery query) {
+        bool AddQuery(nlohmann::json &params, const std::string_view text, const ParameterShape shape, const LspSourceQuery query,
+                      const nlohmann::json *diagnostics) {
             if (shape == ParameterShape::Document)
                 return true;
             auto position = LspPositionAt(text, query.offset);
             if (!position)
                 return false;
             if (shape == ParameterShape::Selection)
-                return AddSelection(params, text, query, std::move(*position));
+                return AddSelection(params, text, query, std::move(*position), diagnostics);
             params["position"] = std::move(*position);
             if (shape == ParameterShape::References)
                 params["context"] = {{"includeDeclaration", query.includeDeclaration}};
@@ -78,14 +125,15 @@ namespace Horo::Editor::Language {
 
     /** @copydoc BuildLspRequest */
     Result<std::string> BuildLspRequest(const std::string_view rootUri, const SourceDocumentSnapshot &source,
-                                        const SourceLanguageRequestKind kind, const std::uint64_t id, const LspSourceQuery query) {
+                                        const SourceLanguageRequestKind kind, const std::uint64_t id, const LspSourceQuery query,
+                                        const nlohmann::json *diagnostics) {
         const auto index = static_cast<std::size_t>(kind);
         if (index >= Requests.size())
             return Result<std::string>::Failure(MakeError(SourceDocumentErrors::Invalid));
         try {
             const auto &descriptor = Requests[index];
             nlohmann::json params{{"textDocument", {{"uri", DocumentUri(rootUri, source.Identity().key.source.Value())}}}};
-            if (!AddQuery(params, source.Text(), descriptor.shape, query))
+            if (!AddQuery(params, source.Text(), descriptor.shape, query, diagnostics))
                 return Result<std::string>::Failure(MakeError(SourceDocumentErrors::Invalid));
             return EncodeLspMessage(
                 {{"jsonrpc", "2.0"}, {"id", std::to_string(id)}, {"method", descriptor.method}, {"params", std::move(params)}});

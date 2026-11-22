@@ -224,16 +224,16 @@ namespace Horo::Editor::Language {
         }
 
         /** @brief Contiguous replacement and caret derived from disjoint source edits. */
-        struct CombinedCompletionEdit final {
+        struct CombinedSourceEdit final {
             LanguageByteSpan span;
             std::string text;
             std::size_t caret{};
         };
 
-        /** @brief Preserves unchanged bytes between edits and tracks the caret after the primary insertion. */
-        std::optional<CombinedCompletionEdit> CombineCompletionEdits(const std::string_view source, std::span<const LanguageTextEdit> edits,
-                                                                     const LanguageByteSpan primary) {
-            CombinedCompletionEdit combined{.span = {edits.front().span.start, edits.back().span.end}};
+        /** @brief Preserves unchanged bytes and puts the caret after the primary edit or the final edit. */
+        std::optional<CombinedSourceEdit> CombineLanguageEdits(const std::string_view source, std::span<const LanguageTextEdit> edits,
+                                                               const std::optional<LanguageByteSpan> primary) {
+            CombinedSourceEdit combined{.span = {edits.front().span.start, edits.back().span.end}};
             auto cursor = combined.span.start;
             bool foundPrimary = false;
             for (const auto &edit : edits) {
@@ -241,7 +241,7 @@ namespace Horo::Editor::Language {
                     return std::nullopt;
                 combined.text.append(source.substr(cursor, edit.span.start - cursor));
                 combined.text.append(edit.replacement);
-                if (edit.span == primary) {
+                if (primary && edit.span == *primary) {
                     if (foundPrimary)
                         return std::nullopt;
                     foundPrimary = true;
@@ -249,7 +249,33 @@ namespace Horo::Editor::Language {
                 }
                 cursor = edit.span.end;
             }
-            return foundPrimary ? std::optional{std::move(combined)} : std::nullopt;
+            if (primary && !foundPrimary)
+                return std::nullopt;
+            if (!primary)
+                combined.caret = combined.span.start + combined.text.size();
+            return combined;
+        }
+
+        /** @brief Plans disjoint replacements through the existing single-edit history contract. */
+        Result<SourceEditingPlan> PlanLanguageEdits(const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                                    std::vector<LanguageTextEdit> edits, std::optional<LanguageByteSpan> primary) {
+            using Output = Result<SourceEditingPlan>;
+            if (edits.empty() || !OrderedEdits(edits))
+                return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+            const auto replacement = CombineLanguageEdits(source.Text(), edits, primary);
+            if (!replacement)
+                return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+            auto range = view;
+            range.anchor = replacement->span.start;
+            range.caret = replacement->span.end;
+            auto plan = PlanSourceReplacement(source, range, replacement->text);
+            if (plan.HasError())
+                return plan;
+            auto resolved = std::move(plan).Value();
+            resolved.before = view;
+            resolved.after.anchor = replacement->caret;
+            resolved.after.caret = replacement->caret;
+            return Output::Success(std::move(resolved));
         }
 
         /** @brief Maps one completion item without granting command or snippet execution. */
@@ -530,23 +556,19 @@ namespace Horo::Editor::Language {
         const auto primary = item.primaryEdit.value_or(LanguageByteSpan{start, end});
         if (!item.primaryEdit)
             edits.push_back({primary, item.insertText});
-        if (edits.empty() || !OrderedEdits(edits))
-            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+        return PlanLanguageEdits(source, view, std::move(edits), primary);
+    }
 
-        const auto replacement = CombineCompletionEdits(source.Text(), edits, primary);
-        if (!replacement)
-            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
-        auto range = view;
-        range.anchor = replacement->span.start;
-        range.caret = replacement->span.end;
-        auto plan = PlanSourceReplacement(source, range, replacement->text);
-        if (plan.HasError())
-            return plan;
-        auto resolved = std::move(plan).Value();
-        resolved.before = view;
-        resolved.after.anchor = replacement->caret;
-        resolved.after.caret = replacement->caret;
-        return Output::Success(std::move(resolved));
+    /** @copydoc PlanLanguageCodeAction */
+    Result<SourceEditingPlan> PlanLanguageCodeAction(const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                                     const LanguageCodeAction &action) {
+        if (!source.IsCurrent())
+            return Result<SourceEditingPlan>::Failure(MakeError(SourceDocumentErrors::Stale));
+        try {
+            return PlanLanguageEdits(source, view, action.edits, std::nullopt);
+        } catch (const std::bad_alloc &) {
+            return Result<SourceEditingPlan>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
     }
 
     /** @copydoc ResolveLanguageLocation */

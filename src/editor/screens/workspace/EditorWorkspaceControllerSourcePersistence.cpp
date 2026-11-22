@@ -307,6 +307,10 @@ namespace Horo::Editor {
                 if (command.sourceSymbolIntent)
                     SelectSourceSymbol(*command.sourceSymbolIntent);
                 return true;
+            case EditorWorkspaceViewCommand::ReviewSourceCodeAction:
+                if (command.sourceCodeActionIntent)
+                    ReviewSourceCodeAction(*command.sourceCodeActionIntent);
+                return true;
             case EditorWorkspaceViewCommand::SourceDocumentInteraction:
                 m_viewModel.sourceEditingResult =
                     command.sourceInteraction ? SubmitSourceEditingCommand(m_sourceOpenService.Documents(), *command.sourceInteraction)

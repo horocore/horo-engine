@@ -134,6 +134,12 @@ namespace Horo::Editor::Language {
         std::vector<LanguageTextEdit> edits;
     };
 
+    /** @brief Plans an explicitly accepted current-document action as one undoable edit.
+     * @param source Exact publication used to project the edits. @param view Captured editor selection.
+     * @param action Inert code-action proposal. @return Owning edit plan or a typed refusal. */
+    [[nodiscard]] Result<SourceEditingPlan> PlanLanguageCodeAction(const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                                                   const LanguageCodeAction &action);
+
     /** @brief Code-action proposals available for explicit review. */
     struct LanguageCodeActions final {
         std::vector<LanguageCodeAction> items;

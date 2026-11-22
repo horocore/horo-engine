@@ -21,10 +21,12 @@ namespace Horo::Editor::Language {
     /** @brief Encodes a bound document request and validates all requested byte positions.
      * @param rootUri Validated file root. @param source Current synchronized snapshot.
      * @param kind Requested feature. @param id Local correlation number. @param query Snapshot selection.
+     * @param diagnostics Most recent correlated diagnostics for code-action context, or null.
      * @return Wire frame or a refusal for an invalid position or unsupported request.
      */
     [[nodiscard]] Result<std::string> BuildLspRequest(std::string_view rootUri, const SourceDocumentSnapshot &source,
-                                                      SourceLanguageRequestKind kind, std::uint64_t id, LspSourceQuery query);
+                                                      SourceLanguageRequestKind kind, std::uint64_t id, LspSourceQuery query,
+                                                      const nlohmann::json *diagnostics = nullptr);
 
     /** @brief Encodes cancellation using the same wire identity as the original request. */
     [[nodiscard]] Result<std::string> BuildLspCancellation(std::uint64_t id);

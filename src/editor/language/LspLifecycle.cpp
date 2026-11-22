@@ -105,11 +105,15 @@ namespace Horo::Editor::Language {
         if (rootUri.size() > MaximumRootUriBytes || rootUri.find('\0') != std::string_view::npos || (processId && *processId <= 0))
             return Result<std::string>::Failure(MakeError(InvalidParameters));
         try {
+            const nlohmann::json kinds{{"valueSet", nlohmann::json::array({"quickfix", "refactor", "source"})}};
+            const nlohmann::json codeActions{{"codeActionLiteralSupport", {{"codeActionKind", kinds}}}};
+            const nlohmann::json textDocument{{"publishDiagnostics", {{"versionSupport", true}, {"dataSupport", true}}},
+                                              {"codeAction", codeActions}};
+            const nlohmann::json capabilities{{"general", {{"positionEncodings", nlohmann::json::array({"utf-16"})}}},
+                                              {"textDocument", textDocument}};
             const nlohmann::json params{{"processId", processId ? nlohmann::json(*processId) : nlohmann::json(nullptr)},
                                         {"rootUri", rootUri.empty() ? nlohmann::json(nullptr) : nlohmann::json(rootUri)},
-                                        {"capabilities",
-                                         {{"general", {{"positionEncodings", nlohmann::json::array({"utf-16"})}}},
-                                          {"textDocument", {{"publishDiagnostics", {{"versionSupport", true}}}}}}}};
+                                        {"capabilities", capabilities}};
             auto frame = EncodeLspMessage({{"jsonrpc", "2.0"}, {"id", InitializeId}, {"method", "initialize"}, {"params", params}});
             if (frame.HasError())
                 return frame;

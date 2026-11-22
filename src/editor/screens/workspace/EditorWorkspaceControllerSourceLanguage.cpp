@@ -112,15 +112,22 @@ namespace Horo::Editor {
         m_viewModel.sourceCompletions.reset();
         m_viewModel.sourceReferences.reset();
         m_viewModel.sourceSymbols.reset();
+        m_viewModel.sourceCodeActions.reset();
+        m_viewModel.sourceCodeActionPreview.reset();
         m_viewModel.sourceLanguageHover.reset();
         if (Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, intent.source.Identity().key.source)) {
             RequestScriptLanguage(intent);
             return;
         }
         if (!m_sourceLanguage || (intent.kind != Definition && intent.kind != Completion && intent.kind != References &&
-                                  intent.kind != Hover && intent.kind != Symbols))
+                                  intent.kind != Hover && intent.kind != Symbols && intent.kind != CodeActions))
             return;
-        const auto request = m_sourceLanguage->Request(intent.source, intent.kind, {.offset = intent.view.caret});
+        Language::LspSourceQuery selection{.offset = intent.view.caret};
+        if (intent.kind == CodeActions) {
+            const auto [start, end] = std::minmax(intent.view.anchor, intent.view.caret);
+            selection = {.offset = start, .length = end - start};
+        }
+        const auto request = m_sourceLanguage->Request(intent.source, intent.kind, selection);
         if (request.HasError()) {
             m_viewModel.sourceLanguageStatus = {intent.source, SourceLanguageStatusKind::Refused};
             return;
@@ -181,6 +188,10 @@ namespace Horo::Editor {
             AcceptSourceSymbols(result);
             return;
         }
+        if (result.context.kind == SourceLanguageRequestKind::CodeActions) {
+            AcceptSourceCodeActions(result, view);
+            return;
+        }
         auto *navigation = std::get_if<Language::LanguageNavigation>(&result.payload);
         if (result.context.kind == SourceLanguageRequestKind::References) {
             if (!navigation || navigation->targets.empty()) {
@@ -193,6 +204,50 @@ namespace Horo::Editor {
         }
         if (!navigation || navigation->targets.empty() || !FocusSourceLocation(navigation->targets.front()))
             m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoDefinition};
+    }
+
+    /** @copydoc EditorWorkspaceController::AcceptSourceCodeActions */
+    void EditorWorkspaceController::AcceptSourceCodeActions(Language::LanguageResult &result, const SourceEditingView &view) {
+        auto *actions = std::get_if<Language::LanguageCodeActions>(&result.payload);
+        if (actions) {
+            std::erase_if(actions->items, [](const Language::LanguageCodeAction &action) {
+                return action.edits.empty();
+            });
+        }
+        if (!actions || actions->items.empty()) {
+            m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoCodeActions};
+            return;
+        }
+        m_viewModel.sourceCodeActions = std::make_shared<const SourceLanguageCodeActions>(
+            SourceLanguageCodeActions{std::move(result.context.source), view, std::move(*actions)});
+    }
+
+    /** @copydoc EditorWorkspaceController::ReviewSourceCodeAction */
+    void EditorWorkspaceController::ReviewSourceCodeAction(const SourceCodeActionIntent &intent) {
+        const auto &result = intent.result;
+        if (!result || result != m_viewModel.sourceCodeActions || !result->source.IsCurrent() ||
+            result->source.Identity().instance != m_viewModel.workspacePanelHost.ActiveDocument() ||
+            intent.index >= result->actions.items.size())
+            return;
+        if (intent.decision == SourceCodeActionDecision::Preview) {
+            m_viewModel.sourceCodeActionPreview = intent;
+            return;
+        }
+        const auto &preview = m_viewModel.sourceCodeActionPreview;
+        if (!preview || preview->result != result || preview->index != intent.index)
+            return;
+        m_viewModel.sourceCodeActionPreview.reset();
+        if (intent.decision != SourceCodeActionDecision::Apply)
+            return;
+        m_viewModel.sourceCodeActions.reset();
+        auto plan = Language::PlanLanguageCodeAction(result->source, result->view, result->actions.items[intent.index]);
+        if (plan.HasError()) {
+            m_viewModel.sourceEditingResult = Result<SourceEditingPublication>::Failure(std::move(plan).ErrorValue());
+            return;
+        }
+        m_viewModel.sourceEditingResult =
+            SubmitSourceEditingCommand(m_sourceOpenService.Documents(),
+                                       SourceEditSubmission{result->source.Identity().instance, std::move(plan).Value()});
     }
 
     /** @copydoc EditorWorkspaceController::AcceptSourceSymbols */
@@ -287,6 +342,10 @@ namespace Horo::Editor {
             m_viewModel.sourceReferences.reset();
         if (m_viewModel.sourceSymbols && !m_viewModel.sourceSymbols->source.IsCurrent())
             m_viewModel.sourceSymbols.reset();
+        if (m_viewModel.sourceCodeActions && !m_viewModel.sourceCodeActions->source.IsCurrent()) {
+            m_viewModel.sourceCodeActionPreview.reset();
+            m_viewModel.sourceCodeActions.reset();
+        }
         if (m_viewModel.sourceLanguageHover && !m_viewModel.sourceLanguageHover->source.IsCurrent())
             m_viewModel.sourceLanguageHover.reset();
         std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {

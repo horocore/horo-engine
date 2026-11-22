@@ -171,6 +171,33 @@ namespace {
         CHECK(fixture.Map(Hover, R"("result":{"contents":"old"})").HasError());
     }
 
+    TEST_CASE("Accepting a code action applies disjoint source edits as one undo step") {
+        SourceFixture fixture;
+        auto &documents = fixture.open.Documents();
+        const auto instance = fixture.source.Identity().instance;
+        const SourceEditingView view{.anchor = 1, .caret = 1};
+        const LanguageCodeAction action{"Rename", {{{0, 3}, "two"}, {{9, 15}, "name"}}};
+        auto plan = PlanLanguageCodeAction(fixture.source, view, action);
+        REQUIRE(plan.HasValue());
+        CHECK(fixture.source.Text().starts_with("one"));
+        const auto applied = SubmitSourceEditingCommand(documents, SourceEditSubmission{instance, std::move(plan).Value()});
+        REQUIRE(applied.HasValue());
+        CHECK(applied.Value().snapshot.Text() == "two\r\n\xF0\x9F\x98\x80"
+                                                 "name");
+        CHECK(PlanLanguageCodeAction(fixture.source, view, action).HasError());
+        const auto undone = SubmitSourceEditingCommand(documents, SourceHistoryRequest{instance, applied.Value().snapshot.Revision()});
+        REQUIRE(undone.HasValue());
+        CHECK(undone.Value().snapshot.Text() == fixture.source.Text());
+    }
+
+    TEST_CASE("Code action preserves server order for insertions at the same position") {
+        SourceFixture fixture;
+        const LanguageCodeAction insertions{"Insert", {{{1, 1}, "a"}, {{1, 1}, "b"}}};
+        const auto insertion = PlanLanguageCodeAction(fixture.source, {.anchor = 1, .caret = 1}, insertions);
+        REQUIRE(insertion.HasValue());
+        CHECK(insertion.Value().insert == "ab");
+    }
+
     TEST_CASE("LSP versioned code actions only expose edits for the exact source revision") {
         SourceFixture fixture;
         const auto revision = fixture.source.Revision();

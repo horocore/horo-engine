@@ -124,6 +124,7 @@ namespace {
         project.Put("inline int horo_fixture_symbol() { return 37; }\n", "include/gameplay_api.hpp");
         constexpr std::string_view code = "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\n"
                                           "int repeat() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n"
+                                          "int repair() { return horo_fixture_symbl(); }\n"
                                           "int later() { return horo_fixture_symb; }\n";
         project.Put(code, "gameplay.cpp");
         const auto sourcePath = Utf8(project.directory / "gameplay.cpp");
@@ -147,6 +148,9 @@ namespace {
         bool referencesFound = false;
         bool described = false;
         bool foundDocumentSymbol = false;
+        bool repairDiagnosed = false;
+        bool repairOffered = false;
+        const auto repairOffset = code.find("horo_fixture_symbl");
         std::optional<SourceEditingPlan> completionPlan;
         const auto firstReference = code.find("horo_fixture_symbol");
         const auto secondReference = code.find("horo_fixture_symbol", firstReference + 1);
@@ -157,6 +161,15 @@ namespace {
                     diagnosed |= event.context.source.SharesStateWith(documents.front()) &&
                                  std::ranges::any_of(diagnostics->items, [&](const auto &item) {
                         return item.severity == LanguageSeverity::Error && item.span.start == code.find("missing_fixture_symbol");
+                    });
+                    repairDiagnosed |= std::ranges::any_of(diagnostics->items, [&](const auto &item) {
+                        return item.span.start == repairOffset;
+                    });
+                }
+                if (const auto *actions = std::get_if<LanguageCodeActions>(&event.payload)) {
+                    repairOffered |= std::ranges::any_of(actions->items, [&](const LanguageCodeAction &action) {
+                        auto plan = PlanLanguageCodeAction(documents.front(), {.anchor = repairOffset, .caret = repairOffset}, action);
+                        return plan.HasValue() && plan.Value().offset == repairOffset && plan.Value().insert == "horo_fixture_symbol";
                     });
                 }
                 if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload);
@@ -221,6 +234,15 @@ namespace {
         REQUIRE(Await([&](const auto now) {
             observe(now);
             return foundDocumentSymbol;
+        }));
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return repairDiagnosed;
+        }));
+        REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::CodeActions, {.offset = repairOffset}).HasValue());
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return repairOffered;
         }));
         REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Completion, {.offset = completionOffset}).HasValue());
         REQUIRE(Await([&](const auto now) {

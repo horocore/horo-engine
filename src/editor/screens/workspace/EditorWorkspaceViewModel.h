@@ -175,6 +175,7 @@ namespace Horo::Editor {
         ApplySourceCompletion,
         OpenSourceReference,
         SelectSourceSymbol,
+        ReviewSourceCodeAction,
         ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -420,12 +421,33 @@ namespace Horo::Editor {
         std::size_t index{};
     };
 
+    /** @brief Inert code actions for an exact source selection. */
+    struct SourceLanguageCodeActions final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageCodeActions actions;
+    };
+
+    enum class SourceCodeActionDecision {
+        Preview,
+        Apply,
+        Dismiss
+    };
+
+    /** @brief User decision on one published code action. */
+    struct SourceCodeActionIntent final {
+        std::shared_ptr<const SourceLanguageCodeActions> result;
+        std::size_t index{};
+        SourceCodeActionDecision decision{};
+    };
+
     enum class SourceLanguageStatusKind : std::uint8_t {
         Waiting,
         Refused,
         NoDefinition,
         NoReferences,
         NoDocumentSymbols,
+        NoCodeActions,
         NoCompletion,
         NoSymbol,
         ScriptModuleUnavailable
@@ -893,6 +915,7 @@ namespace Horo::Editor {
         std::optional<SourceCompletionIntent> sourceCompletionIntent;
         std::optional<SourceReferenceIntent> sourceReferenceIntent;
         std::optional<SourceSymbolIntent> sourceSymbolIntent;
+        std::optional<SourceCodeActionIntent> sourceCodeActionIntent;
         std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
@@ -1230,6 +1253,8 @@ namespace Horo::Editor {
         std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
         std::shared_ptr<const SourceLanguageReferences> sourceReferences;
         std::shared_ptr<const SourceLanguageSymbols> sourceSymbols;
+        std::shared_ptr<const SourceLanguageCodeActions> sourceCodeActions;
+        std::optional<SourceCodeActionIntent> sourceCodeActionPreview;
         std::vector<Language::ScriptModuleSourceBinding> sourceScriptBindings;
         std::optional<SourceLanguageHover> sourceLanguageHover;
         std::optional<SourceLanguageStatus> sourceLanguageStatus;

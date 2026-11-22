@@ -1472,6 +1472,10 @@ namespace Horo::Editor {
         void SelectSourceSymbol(const SourceSymbolIntent &intent);
         /** @brief Publishes the document symbols from a current provider reply. */
         void AcceptSourceSymbols(Language::LanguageResult &result);
+        /** @brief Publishes current-document proposals for explicit user review. */
+        void AcceptSourceCodeActions(Language::LanguageResult &result, const SourceEditingView &view);
+        /** @brief Previews or applies one still-current proposal using the source history owner. */
+        void ReviewSourceCodeAction(const SourceCodeActionIntent &intent);
         /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
         /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */

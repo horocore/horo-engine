@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <format>
 #include <span>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -55,6 +56,8 @@ namespace Horo::Editor {
                     return "workspace.source_language.no_references";
                 case SourceLanguageStatusKind::NoDocumentSymbols:
                     return "workspace.source_language.no_document_symbols";
+                case SourceLanguageStatusKind::NoCodeActions:
+                    return "workspace.source_language.no_code_actions";
                 case SourceLanguageStatusKind::NoCompletion:
                     return "workspace.source_language.no_completion";
                 case SourceLanguageStatusKind::NoSymbol:
@@ -128,6 +131,59 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Sends one user decision without allowing another control to replace a queued command. */
+        void SendCodeActionDecision(EditorWorkspaceViewCommandData &command, SourceCodeActionIntent intent) {
+            if (command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::ReviewSourceCodeAction;
+                command.sourceCodeActionIntent = std::move(intent);
+            }
+        }
+
+        /** @brief Displays the exact replacements before the user confirms an action. */
+        void DrawCodeActionPreview(const EditorGuiContext &context, const SourceCodeActionIntent &preview,
+                                   EditorWorkspaceViewCommandData &command) {
+            const auto &result = *preview.result;
+            const auto &action = result.actions.items[preview.index];
+            const auto text = [&context](const char *key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            const auto show = [&context](const std::string_view value) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, Theme::Text(), context.theme.fonts);
+            };
+            ImGui::BeginChild("##CodeActionPreview", {0, ImGui::GetTextLineHeightWithSpacing() * 8.0F});
+            for (const auto &edit : action.edits) {
+                show(text("workspace.source_language.code_action_before"));
+                show(result.source.Text().substr(edit.span.start, edit.span.end - edit.span.start));
+                show(text("workspace.source_language.code_action_after"));
+                show(edit.replacement);
+            }
+            ImGui::EndChild();
+            if (Ui::Button({.label = text("workspace.source_language.apply_code_action").c_str(), .font = context.theme.fonts.sans}))
+                SendCodeActionDecision(command, {preview.result, preview.index, SourceCodeActionDecision::Apply});
+            if (Ui::Button({.label = text("workspace.source_language.dismiss_code_action").c_str(), .font = context.theme.fonts.sans}))
+                SendCodeActionDecision(command, {preview.result, preview.index, SourceCodeActionDecision::Dismiss});
+        }
+
+        /** @brief Displays actions only for the same source and selection used to request them. */
+        void DrawSourceCodeActions(const EditorGuiContext &context, const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                   const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) {
+            const auto &result = model.sourceCodeActions;
+            if (!result || !result->source.SharesStateWith(source) || result->view.viewId != view.viewId ||
+                result->view.anchor != view.anchor || result->view.caret != view.caret)
+                return;
+            const auto &items = result->actions.items;
+            const auto &placeholder = context.localization.Get("editor", "workspace.source_language.choose_code_action");
+            const Ui::ComboItemSource labels{.label = [&](const int index) {
+                return index == 0 ? placeholder.c_str() : items[static_cast<std::size_t>(index - 1)].title.c_str();
+            }};
+            int choice = 0;
+            if (Ui::ComboControl("##SourceCodeActions", &choice, static_cast<int>(items.size()) + 1, labels, context.theme.fonts) &&
+                choice > 0)
+                SendCodeActionDecision(command, {result, static_cast<std::size_t>(choice - 1), SourceCodeActionDecision::Preview});
+            if (const auto &preview = model.sourceCodeActionPreview; preview && preview->result == result && preview->index < items.size())
+                DrawCodeActionPreview(context, *preview, command);
+        }
+
         /** @brief Offers the actions supported by the exact registered source adapter. */
         void DrawSourceLanguageActions(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
                                        const SourceEditorWidget &widget, const EditorWorkspaceViewModel &model,
@@ -163,7 +219,8 @@ namespace Horo::Editor {
                                             LanguageAction{Completion, "workspace.source_language.complete"},
                                             LanguageAction{References, "workspace.source_language.references"},
                                             LanguageAction{Hover, "workspace.source_language.describe_symbol"},
-                                            LanguageAction{Symbols, "workspace.source_language.document_symbols"}};
+                                            LanguageAction{Symbols, "workspace.source_language.document_symbols"},
+                                            LanguageAction{CodeActions, "workspace.source_language.code_actions"}};
             const std::span<const LanguageAction> actions =
                 script ? std::span<const LanguageAction>{scriptActions} : std::span<const LanguageAction>{cppActions};
             const Ui::ComboItemSource labels{.label = [&](const int index) {
@@ -180,6 +237,7 @@ namespace Horo::Editor {
             DrawSourceCompletions(context, source, view, model.sourceCompletions, command);
             DrawSourceReferences(context, source, view, model.sourceReferences, command);
             DrawSourceSymbols(context, source, model.sourceSymbols, command);
+            DrawSourceCodeActions(context, source, view, model, command);
             if (const auto &hover = model.sourceLanguageHover;
                 hover && hover->source.SharesStateWith(source) && hover->view.viewId == view.viewId && hover->view.caret == view.caret) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, hover->text, Theme::Muted(), context.theme.fonts);

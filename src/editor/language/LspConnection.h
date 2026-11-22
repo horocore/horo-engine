@@ -132,6 +132,7 @@ namespace Horo::Editor::Language {
         LspFeatures features_;
         std::string rootUri_;
         std::map<DocumentInstanceId, std::int32_t> wireVersions_;
+        std::map<DocumentInstanceId, nlohmann::json> codeActionDiagnostics_;
         std::int32_t lastWireVersion_{};
         std::uint64_t stamp_{};
         bool stopped_{};

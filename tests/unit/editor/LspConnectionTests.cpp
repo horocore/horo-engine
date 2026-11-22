@@ -413,12 +413,21 @@ namespace {
         CHECK(projected.Value().context.source.SharesStateWith(first));
         REQUIRE(std::get<LanguageDiagnostics>(projected.Value().payload).items.size() == 1);
 
+        const auto requestContext = [&](const std::size_t offset) {
+            REQUIRE(connection.Request(first, SourceLanguageRequestKind::CodeActions, {.offset = offset}).HasValue());
+            const auto message = Inspect(fixture.transport.writes.back());
+            return message.envelope.Get().at("params").at("context").at("diagnostics");
+        };
+        CHECK(requestContext(1).size() == 1);
+        CHECK(requestContext(5).empty());
+
         const auto cleared = Deliver(connection, Publication(uri, firstVersion, true));
         REQUIRE(cleared.HasValue());
         REQUIRE(cleared.Value().has_value());
         const auto clear = connection.ProjectReply(*cleared.Value());
         REQUIRE(clear.HasValue());
         CHECK(std::get<LanguageDiagnostics>(clear.Value().payload).items.empty());
+        CHECK(requestContext(1).empty());
         REQUIRE(open.Documents().Edit(first.Identity().instance, {first.Revision(), 0, 3, "float"}).HasValue());
         CHECK_FALSE(Deliver(connection, Publication(uri, firstVersion)).Value());
         CHECK(connection.ProjectReply(*routed.Value()).HasError());

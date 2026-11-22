@@ -9,6 +9,8 @@
 
 namespace Horo::Editor::Language {
     namespace {
+        constexpr std::size_t MaximumCodeActionDiagnostics = 128;
+        constexpr std::size_t MaximumCodeActionDiagnosticBytes = 32 * 1024;
         const ErrorCodeDescriptor UnexpectedStop{ErrorDomainId{"editor.language"},
                                                  ErrorCode{"editor.language.unexpected_stop"},
                                                  ErrorSeverity::Error,
@@ -135,6 +137,13 @@ namespace Horo::Editor::Language {
         auto snapshot = source_.SynchronizedSource(stamp_, version->first);
         if (!snapshot || !snapshot->IsCurrent() || snapshot->Identity().key.source != target->source)
             return Incoming::Success(std::nullopt);
+        const auto &params = message.envelope.Get().at("params");
+        const auto diagnostics = params.find("diagnostics");
+        // Only data from this exact source version may return to the same provider as code-action context.
+        codeActionDiagnostics_.erase(version->first);
+        if (diagnostics != params.end() && diagnostics->is_array() && !diagnostics->empty() &&
+            diagnostics->size() <= MaximumCodeActionDiagnostics && diagnostics->dump().size() <= MaximumCodeActionDiagnosticBytes)
+            codeActionDiagnostics_.emplace(version->first, *diagnostics);
         return Incoming::Success(LspIncoming{std::move(message),
                                              SourceLanguageReply{SourceLanguageRequestKind::Diagnostics, std::move(*snapshot)}, stamp_,
                                              target->wireVersion});
@@ -151,6 +160,7 @@ namespace Horo::Editor::Language {
             return Result<void>::Failure(std::move(sync).ErrorValue());
         }
         wire->second = version;
+        codeActionDiagnostics_.erase(instance);
         lastWireVersion_ = version;
         return Result<void>::Success();
     }
@@ -192,6 +202,7 @@ namespace Horo::Editor::Language {
             }
             source_.Close(stamp_, instance);
             wireVersions_.erase(instance);
+            codeActionDiagnostics_.erase(instance);
             return Send(std::move(closing).Value());
         } catch (const std::bad_alloc &) {
             Abort();
@@ -208,7 +219,10 @@ namespace Horo::Editor::Language {
         auto id = source_.Request(stamp_, kind, snapshot);
         if (id.HasError())
             return id;
-        auto frame = BuildLspRequest(rootUri_, snapshot, kind, id.Value().request, query);
+        const auto context = kind == SourceLanguageRequestKind::CodeActions ? codeActionDiagnostics_.find(snapshot.Identity().instance)
+                                                                            : codeActionDiagnostics_.end();
+        auto frame = BuildLspRequest(rootUri_, snapshot, kind, id.Value().request, query,
+                                     context == codeActionDiagnostics_.end() ? nullptr : &context->second);
         if (frame.HasError()) {
             source_.Cancel(id.Value());
             return Output::Failure(std::move(frame).ErrorValue());
@@ -320,6 +334,7 @@ namespace Horo::Editor::Language {
     /** @copydoc LspConnection::RetireSource */
     void LspConnection::RetireSource() noexcept {
         wireVersions_.clear();
+        codeActionDiagnostics_.clear();
         if (stamp_ != 0)
             source_.Stop(std::exchange(stamp_, 0));
     }
