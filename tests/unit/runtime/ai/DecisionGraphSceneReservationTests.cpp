@@ -141,10 +141,10 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == (admitted ? 1 : 0));
         }
 
-        TEST_CASE("Budgeted execution rejects a composed decision graph before consuming its scheduler allowance",
+        TEST_CASE("Budgeted execution rejects a State Machine closure before consuming its scheduler allowance",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;
-            const std::array sources{CallTree(1, 2, DecisionPlanKind::BehaviorTree), TaskTree(2)};
+            const std::array sources{CallingMachine(1, 2, DecisionPlanKind::BehaviorTree), TaskTree(2)};
             const auto plan = fixture.Compile(sources, 1);
             CHECK_FALSE(plan->MaximumDecisionWorkUnits());
             auto graph = DecisionGraphInstance::Create(plan, fixture.providers, fixture.RuntimeBinding());
@@ -156,6 +156,60 @@ namespace Horo::AI {
             TestSupport::ExpectError(result, AIErrors::CapabilityUnavailable);
             CHECK(budget.Remaining() == 32);
             CHECK(fixture.probe.starts == 0);
+        }
+
+        TEST_CASE("Scene admits the entire tree closure and retires its removed callee at a tick boundary",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture old;
+            Fixture next;
+            old.probe.succeedTick = 100;
+            next.probe.succeedTick = 100;
+            next.schema = old.schema;
+            auto root = CallTree(11, 12, DecisionPlanKind::BehaviorTree);
+            root.executionTask = MakeIdentity<TaskId>(9000);
+            const std::array sources{root, TaskTree(12)};
+            const auto previous = old.Compile(sources, 11);
+            auto nextRoot = TaskTree(11);
+            nextRoot.executionTask = root.executionTask;
+            const auto replacement = next.Compile(std::span{&nextRoot, 1}, 11);
+            const auto allowance = previous->MaximumDecisionWorkUnits();
+            REQUIRE(allowance.has_value());
+            REQUIRE(*allowance > replacement->MaximumDecisionWorkUnits().value());
+
+            auto standalone = old.Instance(previous);
+            const auto board = old.blackboard->Snapshot().Value();
+            AiWorkBudget shortBudget{*allowance - 1};
+            const auto denied = standalone->StepBudgeted({1, old.binding, board, {}}, shortBudget);
+            REQUIRE(denied.HasValue());
+            CHECK_FALSE(denied.Value().has_value());
+            CHECK(shortBudget.Remaining() == *allowance - 1);
+            CHECK(old.probe.starts == 0);
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = *allowance}}).Value();
+            auto scene = SceneFixture(old, *previous);
+            scene.descriptor.cookedPlan = previous;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().failed == 0);
+            const auto continuation = old.probe.continuation;
+            REQUIRE(continuation.IsCurrent());
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement),
+                                     AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement).HasValue());
+            CHECK_FALSE(continuation.IsCurrent());
+            REQUIRE(old.probe.abortReasons.size() == 1);
+            CHECK(old.probe.abortReasons.front() == AiTaskCancellationReason::PlanReplaced);
+            CHECK(old.probe.cleanups == 1);
+            CHECK(next.probe.starts == 0);
+            TestSupport::ExpectError(scheduler->EvaluateAtDecision(1), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(next.probe.starts == 1);
+            CHECK(old.probe.resumes == 0);
         }
 
         TEST_CASE("Private Scene activates its cooked scheduler only after scoped host admission",

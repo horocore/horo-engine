@@ -2827,7 +2827,7 @@ invariants do not establish composed BT/HSM/Utility state or schema migration;
 the complete closure replacement transaction remains required by GAI-003.11.
 
 For an active Scene agent in deterministic scheduling, the Scene owner can
-replace a flat cooked decision at a completed tick boundary. Admission checks
+replace a budgeted cooked decision at a completed tick boundary. Admission checks
 the exact previous plan, root identity and decision kind. Compatible trees keep
 the original provider bindings, running task identities and completion mailbox.
 With the same Blackboard schema, values and read leases remain current.
@@ -2858,8 +2858,10 @@ token at bounded intervals, while image leases pin running callbacks to completi
 The graph's owner-lane observation covers all active occurrences, including
 mailbox wakes and the earliest fixed deadline in nested Behavior Trees or
 selected Utility actions. Retirement hides the closed occurrence's signals.
-Live migration of a composed decision closure requires a separate admission
-path for its active call frames.
+The scheduler admits all-tree closures with a complete work allowance and can
+restart them at the replacement boundary, retiring every old occurrence.
+Preserving active call frames across compatible composed revisions requires
+separate migration admission.
 
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.
@@ -3176,8 +3178,8 @@ captured compiler environment. The shared
 initial and structural Scene owners retain the executable closure with its root
 bindings and recheck provider currentness at publication. A missing selected
 artifact rejects startup. An invalid authenticated payload preserves the codec
-error. An additional deterministic execution policy turns admitted flat
-Behavior Trees with an authored execution task into Scene-owned scheduled
+error. An additional deterministic execution policy turns bounded
+Behavior Tree closures and standalone Utility plans with an authored execution task into Scene-owned scheduled
 decisions. Initial activation and prefab creation reserve the exact agent's
 blackboard, task slots, evaluator and slice allowance within the aggregate
 publication. Rollback leaves the live scheduler and task-slot allocator
@@ -3186,10 +3188,11 @@ cancels running work after Scene commit.
 
 The configured authoritative headless owner evaluates and dispatches those
 decisions on its actual fixed clock before Gameplay. A same-tick downstream
-retry does not replay a completed AI slice. The current flat-tree executor
+retry does not replay a completed AI slice. The current cooked executor
 has no Scene command writer, so its dispatch commits no typed gameplay
 intents. Other cooked graph shapes require an execution contract before
-admission.
+admission. The compiler charges graph evaluation, retirement, potential
+ancestor resets, and child dispatch across the closure before the first callback.
 
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,

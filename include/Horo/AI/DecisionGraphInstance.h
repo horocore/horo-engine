@@ -105,7 +105,7 @@ namespace Horo::AI {
          * @param input Exact committed observation for the requested tick.
          * @param budget Scheduler-owned allowance for the current slice.
          * @return Task state, empty on exhaustion, or an original typed error. Unsupported plan shapes fail admission.
-         * @details The complete flat-tree allowance is charged before provider work. Exhaustion leaves the graph
+         * @details The complete graph allowance is charged before provider work. Exhaustion leaves the graph
          * unchanged. Already revoked work is retired even when the slice has no allowance.
          */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget);

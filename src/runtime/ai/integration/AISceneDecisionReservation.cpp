@@ -469,7 +469,7 @@ namespace Horo::AI {
         auto bounded = decisionExecution_->agent;
         const auto limit = plan->MaximumDecisionWorkUnits();
         if (!limit)
-            return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a flat cooked decision."));
+            return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a bounded cooked decision."));
         const auto &root = plan->Graphs()[plan->Occurrences().front().plan];
         auto model = BindModel(*decisionExecution_, agent, root);
         if (model.HasError())

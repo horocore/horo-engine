@@ -51,6 +51,33 @@ namespace Horo::AI {
                 return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
             return Result<void>::Success();
         }
+
+        /** @brief Reserves the whole Behavior Tree closure before any child can execute. */
+        std::optional<std::size_t> TreeClosureWork(const CookedDecisionPlan &plan) noexcept {
+            std::size_t work{};
+            const auto occurrences = plan.Occurrences();
+            for (std::size_t index = 0; index < occurrences.size(); ++index) {
+                const auto &occurrence = occurrences[index];
+                const auto &graph = plan.Graphs()[occurrence.plan];
+                const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graph.execution);
+                if (!tree)
+                    return std::nullopt;
+
+                const auto local = (*tree)->MaximumDecisionWorkUnits();
+                if (occurrences.size() == 1)
+                    return local;
+                // One evaluation and one retirement scan, plus one restart scan per ancestor.
+                const auto passes = plan.Storage().maximumCallDepth + 1;
+                // Entering a call locates its child twice. Retirement can locate it once more.
+                const auto lookups = 3 * graph.calls.size() * (occurrence.subtreeEnd - index - 1);
+                const auto available = std::numeric_limits<std::size_t>::max() - work;
+                if (lookups > available || local > (available - lookups) / passes)
+                    return std::nullopt;
+                work += passes * local + lookups;
+            }
+            return work;
+        }
+
     }  // namespace
 
     Result<DecisionGraphCompilation> DecisionGraphCompiler::Compile(DecisionGraphAssetId root, std::span<const DecisionGraphSource> sources,
@@ -133,18 +160,16 @@ namespace Horo::AI {
 
     /** @copydoc CookedDecisionPlan::MaximumDecisionWorkUnits */
     std::optional<std::size_t> CookedDecisionPlan::MaximumDecisionWorkUnits() const noexcept {
-        if (occurrences_.size() != 1)
-            return std::nullopt;
-        const auto &execution = graphs_[occurrences_.front().plan].execution;
-        if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&execution))
-            return (*tree)->MaximumDecisionWorkUnits();
-        if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&execution)) {
-            std::size_t actionWork{};
-            for (const auto &action : (*utility)->Actions())
-                actionWork = std::max(actionWork, action->MaximumDecisionWorkUnits());
-            return (*utility)->Selector().MaximumWorkUnits() + actionWork;
+        if (occurrences_.size() == 1) {
+            const auto &root = graphs_[occurrences_.front().plan];
+            if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&root.execution)) {
+                std::size_t actionWork{};
+                for (const auto &action : (*utility)->Actions())
+                    actionWork = std::max(actionWork, action->MaximumDecisionWorkUnits());
+                return (*utility)->Selector().MaximumWorkUnits() + actionWork;
+            }
         }
-        return std::nullopt;
+        return TreeClosureWork(*this);
     }
 
     Result<bool> DecisionPlanStore::TryActivate(DecisionGraphCompilation candidate) {

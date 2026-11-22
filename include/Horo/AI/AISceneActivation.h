@@ -396,7 +396,7 @@ namespace Horo::AI {
 
     using AiSceneLocalPolicyCatalog = std::map<ControllerTypeId, std::shared_ptr<const AiSceneLocalPolicyBinding>>;
 
-    /** @brief Opt-in fixed-tick execution for supported flat cooked decisions owned by this Scene. */
+    /** @brief Opt-in fixed-tick execution for budgeted cooked decisions owned by this Scene. */
     struct AiSceneCookedDecisionExecution final {
         JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
         AiTaskSchedulerSettings scheduler;
@@ -551,16 +551,16 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<void> ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution);
 
-        /** @brief Replaces one flat cooked decision at the owner's completed tick boundary.
+        /** @brief Replaces one budgeted cooked decision at the owner's completed tick boundary.
          * @param agent Exact active Scene agent generation.
          * @param previous Exact currently published cooked plan and image owner.
          * @param replacement Current compiled revision of the same root.
          * @param migration Optional direct forward migration for a newer version of the same authored Blackboard schema.
          * @return Success or a typed rejection preserving the prior decision, Blackboard and task range.
-         * @details Executable-equivalent plans retain active tasks and their existing callbacks. An incompatible accepted edit
+         * @details Executable-equivalent flat trees retain active tasks and their existing callbacks. An accepted restart
          * retires active nodes with PlanReplaced and restarts the root. A schema migration stages a new Blackboard and revokes
          * the previous read, write and task reservation leases at publication. Agents with separate live task or sensing
-         * authorities require coordinated Scene replacement for a schema migration. Composed decisions are unsupported.
+         * authorities require coordinated Scene replacement for a schema migration. Composed Behavior Trees restart as a unit.
          * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
         [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
                                                                     std::shared_ptr<const CookedDecisionPlan> replacement,
