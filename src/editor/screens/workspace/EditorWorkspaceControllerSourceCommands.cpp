@@ -97,6 +97,7 @@ namespace Horo::Editor {
         m_inspectionCommandEndpoint.reset();
         m_debugCaptureEndpoint.reset();
         m_debugCapture.Clear();
+        m_debugCaptureAuthorized = {};
         m_debugCaptureEntity.reset();
         RevokeGameplayTestCommands();
         m_buildCommandEndpoint.reset();

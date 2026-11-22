@@ -129,7 +129,7 @@ namespace Horo::Editor {
         std::string project;
         std::uint64_t authorizationRevision{};
         std::thread::id owner;
-        std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &)> start;
+        std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &, std::function<bool()>)> start;
         std::function<std::optional<EditorDebugCaptureArtifact>(std::uint64_t)> read;
         std::function<bool(std::uint64_t)> cancel;
     };

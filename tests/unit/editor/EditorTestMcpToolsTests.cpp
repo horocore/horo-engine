@@ -84,13 +84,15 @@ namespace {
         EditorDebugCaptureStorage store;
         const auto now = EditorDebugCaptureStorage::Clock::time_point{};
         unsigned starts{};
+        std::function<bool()> authorized;
         const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(
             EditorDebugCaptureEndpoint{.project = "project-one",
                                        .authorizationRevision = 3,
                                        .owner = std::this_thread::get_id(),
                                        .start =
-                                           [&](const EditorDebugCaptureRequest &request) {
+                                           [&](const EditorDebugCaptureRequest &request, std::function<bool()> current) {
             ++starts;
+            authorized = std::move(current);
             const auto id = store.Start(request, now);
             REQUIRE(id);
             return Result<std::uint64_t>::Success(*id);
@@ -123,6 +125,10 @@ namespace {
         Approve(session, cancel);
         CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
         CHECK(Execute(session, Command("after", "debug.get_capture", args))["result"]["phase"] == "cancelled");
+        REQUIRE(authorized);
+        CHECK(authorized());
+        CHECK(session.Close().HasValue());
+        CHECK_FALSE(authorized());
     }
 
     TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {

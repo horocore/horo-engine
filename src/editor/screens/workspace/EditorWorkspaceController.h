@@ -834,12 +834,13 @@ namespace Horo::Editor {
         std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
         std::shared_ptr<const EditorDebugCaptureEndpoint> m_debugCaptureEndpoint;
         EditorDebugCaptureStorage m_debugCapture;
+        std::function<bool()> m_debugCaptureAuthorized;
         Runtime::SceneRuntimeId m_debugCaptureScene;
         std::optional<Runtime::EntityRef> m_debugCaptureEntity;
         SceneObjectId m_debugCaptureObject;
 
         /** @brief Admits one capture in an existing active Play scene. */
-        [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request);
+        [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request, std::function<bool()> authorized);
         /** @brief Samples the committed Play transformation on the editor owner lane. */
         void UpdateDebugCapture();
         /** @brief Reads a numeric page without changing authored state, selection, or presentation. */

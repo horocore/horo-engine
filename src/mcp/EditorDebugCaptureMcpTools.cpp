@@ -1,6 +1,7 @@
 #include "EditorDebugCaptureMcpTools.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpSession.h"
 
@@ -120,7 +121,11 @@ namespace Horo::Editor {
             Output Start(const EditorDebugCaptureEndpoint &endpoint, const Json &arguments, const Mcp::McpRequestContext &context) {
                 const auto result =
                     endpoint.start({arguments.at("target").get<std::uint64_t>(), arguments.at("samples").get<std::uint32_t>(),
-                                    arguments.at("intervalMs").get<std::uint32_t>()});
+                                    arguments.at("intervalMs").get<std::uint32_t>()},
+                                   [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
+                    const auto active = principal.lock();
+                    return active && !active->IsStopRequested();
+                });
                 if (result.HasError())
                     return Output::Failure(result.ErrorValue());
                 *owner_ = {result.Value(), context.session, context.authority};

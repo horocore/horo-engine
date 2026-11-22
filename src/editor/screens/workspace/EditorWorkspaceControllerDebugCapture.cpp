@@ -18,14 +18,15 @@ namespace Horo::Editor {
     std::weak_ptr<const EditorDebugCaptureEndpoint> EditorWorkspaceController::BindDebugCapture(std::string project,
                                                                                                 std::uint64_t authorizationRevision) {
         m_debugCapture.Clear();
+        m_debugCaptureAuthorized = {};
         m_debugCaptureEntity.reset();
         m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(
             EditorDebugCaptureEndpoint{.project = std::move(project),
                                        .authorizationRevision = authorizationRevision,
                                        .owner = std::this_thread::get_id(),
                                        .start =
-                                           [this](const EditorDebugCaptureRequest &request) {
-            return StartDebugCapture(request);
+                                           [this](const EditorDebugCaptureRequest &request, std::function<bool()> authorized) {
+            return StartDebugCapture(request, std::move(authorized));
         },
                                        .read =
                                            [this](std::uint64_t id) {
@@ -38,10 +39,11 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::StartDebugCapture */
-    Result<std::uint64_t> EditorWorkspaceController::StartDebugCapture(const EditorDebugCaptureRequest &request) {
+    Result<std::uint64_t> EditorWorkspaceController::StartDebugCapture(const EditorDebugCaptureRequest &request,
+                                                                       std::function<bool()> authorized) {
         using Output = Result<std::uint64_t>;
         const auto scene = m_playSession.SceneView();
-        if (m_playSession.State() != EditorPlaySessionState::Playing || !scene || !scene->IsCurrent())
+        if (!authorized || !authorized() || m_playSession.State() != EditorPlaySessionState::Playing || !scene || !scene->IsCurrent())
             return Output::Failure(MakeError(CaptureUnavailable));
         const SceneObjectId object{request.target};
         const auto authored = std::ranges::find(m_viewModel.objects, object, &SceneObject::id);
@@ -54,6 +56,7 @@ namespace Horo::Editor {
         if (!id)
             return Output::Failure(MakeError(CaptureBusy));
         m_debugCaptureScene = scene->RuntimeId();
+        m_debugCaptureAuthorized = std::move(authorized);
         m_debugCaptureEntity = entity;
         m_debugCaptureObject = object;
         return Output::Success(*id);
@@ -63,6 +66,12 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdateDebugCapture() {
         if (!m_debugCaptureEntity)
             return;
+        if (!m_debugCaptureAuthorized || !m_debugCaptureAuthorized()) {
+            m_debugCapture.Clear();
+            m_debugCaptureAuthorized = {};
+            m_debugCaptureEntity.reset();
+            return;
+        }
         const auto scene = m_playSession.SceneView();
         if (m_playSession.State() != EditorPlaySessionState::Playing || !scene || !scene->IsCurrent() ||
             scene->RuntimeId() != m_debugCaptureScene || scene->Find({m_debugCaptureObject.value}) != m_debugCaptureEntity) {
