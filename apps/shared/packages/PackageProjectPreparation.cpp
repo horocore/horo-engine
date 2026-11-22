@@ -68,6 +68,50 @@ namespace Horo::Application::Internal {
             return Result<std::string>::Success(std::move(bytes));
         }
 
+        struct MetadataDocuments final {
+            std::string request;
+            std::string lock;
+
+            bool Matches(const PreparedPackageProject &expected) const {
+                return Digest(request) == expected.requestDocumentDigest && Digest(lock) == expected.lockDigest;
+            }
+
+            bool Fits(const Packages::PackageLockfileLimits &limits) const {
+                return request.size() <= RequestLimit && lock.size() <= limits.documentBytes;
+            }
+        };
+
+        /** @brief Captures both documents under their independent byte limits. */
+        Result<MetadataDocuments> ReadDocuments(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                                const CancellationToken &cancellation) {
+            auto request = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
+            if (request.HasError())
+                return Result<MetadataDocuments>::Failure(request.ErrorValue());
+            auto lock = ReadMetadata(metadata / "packages.lock", limits.documentBytes, cancellation);
+            if (lock.HasError())
+                return Result<MetadataDocuments>::Failure(lock.ErrorValue());
+            return Result<MetadataDocuments>::Success({std::move(request).Value(), std::move(lock).Value()});
+        }
+
+        struct ValidatedMetadata final {
+            Packages::ValidatedPackageRequest request;
+            Packages::ValidatedPackageLockfileV1 lock;
+        };
+
+        /** @brief Verifies that the lock describes the exact portable request. */
+        Result<ValidatedMetadata> ValidateDocuments(const std::string_view requestBytes, const std::string_view lockBytes,
+                                                    const Packages::PackageLockfileLimits &limits) {
+            auto request = Packages::ValidatedPackageRequest::Parse(requestBytes);
+            if (request.HasError())
+                return Result<ValidatedMetadata>::Failure(request.ErrorValue());
+            auto lock = Packages::ValidatedPackageLockfileV1::Parse(lockBytes, limits);
+            if (lock.HasError())
+                return Result<ValidatedMetadata>::Failure(lock.ErrorValue());
+            if (auto matched = request.Value().ValidateLock(lock.Value()); matched.HasError())
+                return Result<ValidatedMetadata>::Failure(matched.ErrorValue());
+            return Result<ValidatedMetadata>::Success({std::move(request).Value(), std::move(lock).Value()});
+        }
+
         /** @brief The request's old bytes and the three identities needed to recognize every publication phase. */
         struct MetadataJournal final {
             Sha256Digest oldLock;
@@ -134,7 +178,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Detects a journal without creating directories or locks during ordinary read-only project admission. */
-        Result<bool> HasJournal(const std::filesystem::path &path, DurableFileSystem &files) {
+        Result<bool> HasJournal(const std::filesystem::path &path, const DurableFileSystem &files) {
             const auto entry = files.InspectEntry(path);
             if (entry.HasError())
                 return Result<bool>::Failure(entry.ErrorValue());
@@ -145,6 +189,43 @@ namespace Horo::Application::Internal {
 
         Result<ExclusiveFileLock> AcquireMetadata(const std::filesystem::path &journal, DurableFileSystem &files) {
             return files.TryAcquireExclusive(journal.parent_path() / "package-metadata.lock", "horo.package-metadata");
+        }
+
+        enum class RecoveryAction {
+            Keep,
+            RestoreRequest,
+            Conflict
+        };
+
+        /** @brief Derives the only safe action from the exact observed identities. */
+        RecoveryAction RecoveryFor(const MetadataDocuments &documents, const MetadataJournal &journal) {
+            const auto lock = Digest(documents.lock);
+            const bool publishedRequest = Digest(documents.request) == journal.newRequest;
+            if (lock == journal.newLock)
+                return publishedRequest ? RecoveryAction::Keep : RecoveryAction::Conflict;
+            if (lock != journal.oldLock)
+                return RecoveryAction::Conflict;
+            if (documents.request == journal.oldRequest)
+                return RecoveryAction::Keep;
+            return publishedRequest ? RecoveryAction::RestoreRequest : RecoveryAction::Conflict;
+        }
+
+        /** @brief Restores a proven half-commit without overwriting an independent revision. */
+        Result<void> ReconcileDocuments(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                        const MetadataJournal &journal, DurableFileSystem &files, const CancellationToken &cancellation) {
+            const auto documents = ReadDocuments(metadata, limits, cancellation);
+            if (documents.HasError())
+                return Result<void>::Failure(documents.ErrorValue());
+            const auto action = RecoveryFor(documents.Value(), journal);
+            if (action == RecoveryAction::Conflict)
+                return Result<void>::Failure(MetadataConflict());
+            const std::string_view request = action == RecoveryAction::RestoreRequest ? journal.oldRequest : documents.Value().request;
+            if (auto validated = ValidateDocuments(request, documents.Value().lock, limits); validated.HasError())
+                return Result<void>::Failure(MetadataConflict());
+            if (action == RecoveryAction::Keep)
+                return Result<void>::Success();
+            AtomicFileReplacementReceipt receipt;
+            return ReplaceMetadata(metadata / "packages.json", request, files, receipt);
         }
 
         /** @brief Repairs only an exact interrupted publication. A changed or malformed pair is left intact for review. */
@@ -162,30 +243,8 @@ namespace Horo::Application::Internal {
             const auto journal = DecodeJournal(bytes.Value());
             if (!journal)
                 return Result<void>::Failure(MetadataConflict());
-            const auto request = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
-            if (request.HasError())
-                return Result<void>::Failure(request.ErrorValue());
-            const auto lock = ReadMetadata(metadata / "packages.lock", limits.documentBytes, cancellation);
-            if (lock.HasError())
-                return Result<void>::Failure(lock.ErrorValue());
-
-            const auto lockDigest = Digest(lock.Value());
-            const bool committed = lockDigest == journal->newLock;
-            if (committed ? Digest(request.Value()) != journal->newRequest
-                          : lockDigest != journal->oldLock ||
-                                (request.Value() != journal->oldRequest && Digest(request.Value()) != journal->newRequest))
-                return Result<void>::Failure(MetadataConflict());
-
-            const auto restoredRequest = Packages::ValidatedPackageRequest::Parse(committed ? request.Value() : journal->oldRequest);
-            const auto restoredLock = Packages::ValidatedPackageLockfileV1::Parse(lock.Value(), limits);
-            if (restoredRequest.HasError() || restoredLock.HasError() ||
-                restoredRequest.Value().ValidateLock(restoredLock.Value()).HasError())
-                return Result<void>::Failure(MetadataConflict());
-            if (!committed && request.Value() != journal->oldRequest) {
-                AtomicFileReplacementReceipt receipt;
-                if (auto restored = ReplaceMetadata(metadata / "packages.json", journal->oldRequest, files, receipt); restored.HasError())
-                    return restored;
-            }
+            if (auto reconciled = ReconcileDocuments(metadata, limits, *journal, files, cancellation); reconciled.HasError())
+                return reconciled;
             // A failed durability confirmation preserves the journal for the next attempt.
             if (auto synced = files.SyncDirectory(metadata); synced.HasError())
                 return synced;
@@ -201,10 +260,47 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(pending.ErrorValue());
             if (!pending.Value())
                 return Result<void>::Success();
-            const auto lease = AcquireMetadata(path, files);
-            if (lease.HasError())
+            if (const auto lease = AcquireMetadata(path, files); lease.HasValue())
+                return RecoverMetadata(metadata, limits, files, cancellation);
+            else
                 return Result<void>::Failure(lease.ErrorValue());
-            return RecoverMetadata(metadata, limits, files, cancellation);
+        }
+
+        /** @brief Rechecks the request after the lock read and detects an in-flight paired publication. */
+        Result<void> ConfirmReadablePair(const std::filesystem::path &metadata, const std::string_view request,
+                                         const DurableFileSystem &files, const CancellationToken &cancellation) {
+            const auto recheck = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
+            if (recheck.HasError())
+                return Result<void>::Failure(recheck.ErrorValue());
+            if (recheck.Value() != request)
+                return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::InvalidInput));
+            const auto pending = HasJournal(JournalPath(metadata), files);
+            if (pending.HasError())
+                return Result<void>::Failure(pending.ErrorValue());
+            if (pending.Value())
+                return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::Busy));
+            return Result<void>::Success();
+        }
+
+        /** @brief The durable request precedes the lock, whose native replacement is the commit point. */
+        Result<PackageMetadataPublication> CommitDocuments(const std::filesystem::path &metadata, const MetadataDocuments &previous,
+                                                           const MetadataDocuments &next, DurableFileSystem &files) {
+            using Publication = Result<PackageMetadataPublication>;
+            const auto journalPath = JournalPath(metadata);
+            AtomicFileReplacementReceipt journalReceipt;
+            const auto journal = EncodeJournal({Digest(previous.lock), Digest(next.lock), Digest(next.request), previous.request});
+            if (auto recorded = ReplaceMetadata(journalPath, journal, files, journalReceipt); recorded.HasError())
+                return Publication::Failure(recorded.ErrorValue());
+            AtomicFileReplacementReceipt requestReceipt;
+            if (auto written = ReplaceMetadata(metadata / "packages.json", next.request, files, requestReceipt); written.HasError())
+                return Publication::Failure(written.ErrorValue());
+            AtomicFileReplacementReceipt lockReceipt;
+            if (auto written = ReplaceMetadata(metadata / "packages.lock", next.lock, files, lockReceipt); written.HasError())
+                return lockReceipt.WasCommitted() ? Publication::Success({written.ErrorValue()})
+                                                  : Publication::Failure(written.ErrorValue());
+            if (auto cleared = files.RemoveDurable(journalPath); cleared.HasError())
+                return Publication::Success({cleared.ErrorValue()});
+            return Publication::Success({});
         }
     }  // namespace
 
@@ -217,46 +313,29 @@ namespace Horo::Application::Internal {
         const auto &metadata = directory.Value();
         if (auto recovered = RecoverInterruptedPublication(metadata, policy.limits.lockfile, files, cancellation); recovered.HasError())
             return Result<PreparedPackageProject>::Failure(recovered.ErrorValue());
-        auto requestBytes = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
-        if (requestBytes.HasError())
-            return Result<PreparedPackageProject>::Failure(requestBytes.ErrorValue());
-        auto request = Packages::ValidatedPackageRequest::Parse(requestBytes.Value());
-        if (request.HasError())
-            return Result<PreparedPackageProject>::Failure(request.ErrorValue());
-        auto lockBytes = ReadMetadata(metadata / "packages.lock", policy.limits.lockfile.documentBytes, cancellation);
-        if (lockBytes.HasError())
-            return Result<PreparedPackageProject>::Failure(lockBytes.ErrorValue());
-        auto lock = Packages::ValidatedPackageLockfileV1::Parse(lockBytes.Value(), policy.limits.lockfile);
-        if (lock.HasError())
-            return Result<PreparedPackageProject>::Failure(lock.ErrorValue());
-        if (const auto matched = request.Value().ValidateLock(lock.Value()); matched.HasError())
-            return Result<PreparedPackageProject>::Failure(matched.ErrorValue());
-        if (const auto valid =
-                lock.Value().ValidateForRestore(request.Value().Digest(), policy.platform, policy.limits.supportedPackageFormatVersion);
+        auto documents = ReadDocuments(metadata, policy.limits.lockfile, cancellation);
+        if (documents.HasError())
+            return Result<PreparedPackageProject>::Failure(documents.ErrorValue());
+        auto validated = ValidateDocuments(documents.Value().request, documents.Value().lock, policy.limits.lockfile);
+        if (validated.HasError())
+            return Result<PreparedPackageProject>::Failure(validated.ErrorValue());
+        auto &[request, lock] = validated.Value();
+        if (const auto valid = lock.ValidateForRestore(request.Digest(), policy.platform, policy.limits.supportedPackageFormatVersion);
             valid.HasError())
             return Result<PreparedPackageProject>::Failure(valid.ErrorValue());
-        // Re-read bounded intent after lock capture. A concurrent metadata replacement cannot silently bind another current request.
-        const auto recheck = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
-        if (recheck.HasError())
-            return Result<PreparedPackageProject>::Failure(recheck.ErrorValue());
-        if (recheck.Value() != requestBytes.Value())
-            return Result<PreparedPackageProject>::Failure(MakeError(Packages::PackageRestoreErrors::InvalidInput));
-        const auto pending = HasJournal(JournalPath(metadata), files);
-        if (pending.HasError())
-            return Result<PreparedPackageProject>::Failure(pending.ErrorValue());
-        if (pending.Value())
-            return Result<PreparedPackageProject>::Failure(MakeError(Packages::PackageRestoreErrors::Busy));
+        if (auto stable = ConfirmReadablePair(metadata, documents.Value().request, files, cancellation); stable.HasError())
+            return Result<PreparedPackageProject>::Failure(stable.ErrorValue());
         PreparedPackageProject prepared;
         prepared.application.restore = {.projectRoot = metadata.parent_path(),
-                                        .lockfileJson = std::move(lockBytes).Value(),
-                                        .expectedRequestHash = request.Value().Digest(),
+                                        .lockfileJson = std::move(documents.Value().lock),
+                                        .expectedRequestHash = request.Digest(),
                                         .platform = policy.platform,
                                         .mode = policy.mode,
                                         .requirePublisherVerification = policy.requirePublisherVerification};
-        prepared.application.lockedPlan = std::move(lock).Value();
-        prepared.application.portableRequest = std::move(request).Value();
+        prepared.application.lockedPlan = std::move(lock);
+        prepared.application.portableRequest = std::move(request);
         prepared.lockDigest = Digest(prepared.application.restore.lockfileJson);
-        prepared.requestDocumentDigest = Digest(requestBytes.Value());
+        prepared.requestDocumentDigest = Digest(documents.Value().request);
         return Result<PreparedPackageProject>::Success(std::move(prepared));
     }
 
@@ -269,46 +348,29 @@ namespace Horo::Application::Internal {
         if (directory.HasError())
             return Publication::Failure(directory.ErrorValue());
         const auto &metadata = directory.Value();
-        if (metadata.parent_path() != expected.application.restore.projectRoot || !expected.application.portableRequest ||
-            !expected.application.lockedPlan)
+        if (metadata.parent_path() != expected.application.restore.projectRoot)
             return Publication::Failure(MetadataConflict());
-        const auto journalPath = JournalPath(metadata);
-        const auto lease = AcquireMetadata(journalPath, files);
-        if (lease.HasError())
-            return Publication::Failure(lease.ErrorValue());
+        auto acquired = AcquireMetadata(JournalPath(metadata), files);
+        if (acquired.HasError())
+            return Publication::Failure(acquired.ErrorValue());
+        const auto lease = std::move(acquired).Value();
         if (auto recovered = RecoverMetadata(metadata, policy.limits.lockfile, files, {}); recovered.HasError())
             return Publication::Failure(recovered.ErrorValue());
-        const auto requestPath = metadata / "packages.json";
-        const auto lockPath = metadata / "packages.lock";
-        const auto beforeRequest = ReadMetadata(requestPath, RequestLimit, {});
-        if (beforeRequest.HasError())
-            return Publication::Failure(beforeRequest.ErrorValue());
-        const auto beforeLock = ReadMetadata(lockPath, policy.limits.lockfile.documentBytes, {});
-        if (beforeLock.HasError())
-            return Publication::Failure(beforeLock.ErrorValue());
-        if (Digest(beforeRequest.Value()) != expected.requestDocumentDigest || Digest(beforeLock.Value()) != expected.lockDigest)
+        const auto previous = ReadDocuments(metadata, policy.limits.lockfile, {});
+        if (previous.HasError())
+            return Publication::Failure(previous.ErrorValue());
+        if (!previous.Value().Matches(expected))
             return Publication::Failure(MetadataConflict());
-        const auto plan =
-            Packages::PackageRemovalPlan::Prepare(*expected.application.portableRequest, *expected.application.lockedPlan, package);
+        const auto validated = ValidateDocuments(previous.Value().request, previous.Value().lock, policy.limits.lockfile);
+        if (validated.HasError())
+            return Publication::Failure(validated.ErrorValue());
+        const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
         if (plan.HasError())
             return Publication::Failure(plan.ErrorValue());
-        const auto &nextRequest = plan.Value().request.SerializeCanonical();
-        const auto nextLock = plan.Value().lock.SerializeCanonical();
-        if (nextRequest.size() > RequestLimit || nextLock.size() > policy.limits.lockfile.documentBytes)
+        const MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
+        if (!next.Fits(policy.limits.lockfile))
             return Publication::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
 
-        AtomicFileReplacementReceipt journalReceipt;
-        const auto journal = EncodeJournal({expected.lockDigest, Digest(nextLock), Digest(nextRequest), beforeRequest.Value()});
-        if (auto recorded = ReplaceMetadata(journalPath, journal, files, journalReceipt); recorded.HasError())
-            return Publication::Failure(recorded.ErrorValue());
-        AtomicFileReplacementReceipt requestReceipt;
-        if (auto written = ReplaceMetadata(requestPath, nextRequest, files, requestReceipt); written.HasError())
-            return Publication::Failure(written.ErrorValue());
-        AtomicFileReplacementReceipt lockReceipt;
-        if (auto written = ReplaceMetadata(lockPath, nextLock, files, lockReceipt); written.HasError())
-            return lockReceipt.WasCommitted() ? Publication::Success({written.ErrorValue()}) : Publication::Failure(written.ErrorValue());
-        if (auto cleared = files.RemoveDurable(journalPath); cleared.HasError())
-            return Publication::Success({cleared.ErrorValue()});
-        return Publication::Success({});
+        return CommitDocuments(metadata, previous.Value(), next, files);
     }
 }  // namespace Horo::Application::Internal

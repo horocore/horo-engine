@@ -37,7 +37,10 @@ namespace {
             FailBeforeReplace,
             FailAfterReplace
         };
-        LockWrite write{LockWrite::Normal};
+
+        void SetLockWrite(LockWrite write) {
+            write_ = write;
+        }
 
         Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
             return native_.InspectEntry(path);
@@ -75,10 +78,10 @@ namespace {
         Result<void> AtomicReplaceTracked(const std::filesystem::path &source, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
             const bool lock = destination.filename() == "packages.lock";
-            if (lock && write == LockWrite::FailBeforeReplace)
+            if (lock && write_ == LockWrite::FailBeforeReplace)
                 return Result<void>::Failure(Failure());
             auto replaced = native_.AtomicReplaceTracked(source, destination, receipt);
-            if (replaced.HasValue() && lock && write == LockWrite::FailAfterReplace)
+            if (replaced.HasValue() && lock && write_ == LockWrite::FailAfterReplace)
                 return Result<void>::Failure(Failure());
             return replaced;
         }
@@ -97,6 +100,7 @@ namespace {
         }
 
         NativeDurableFileSystem native_;
+        LockWrite write_{LockWrite::Normal};
     };
 
     struct HostFixture final {
@@ -193,7 +197,7 @@ namespace {
         const auto oldLock = fixture.Read("packages.lock");
 
         SECTION("Failed replacement restores the exact previous request and allows retry") {
-            files.write = MetadataFiles::LockWrite::FailBeforeReplace;
+            files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
             CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasError());
             REQUIRE(std::filesystem::exists(journal));
             CHECK(fixture.Read("packages.json") != oldRequest);
@@ -201,12 +205,12 @@ namespace {
             CHECK(fixture.Read("packages.json") == oldRequest);
             CHECK(fixture.Read("packages.lock") == oldLock);
             CHECK_FALSE(std::filesystem::exists(journal));
-            files.write = MetadataFiles::LockWrite::Normal;
+            files.SetLockWrite(MetadataFiles::LockWrite::Normal);
             REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files).HasValue());
         }
 
         SECTION("Committed lock with an uncertain flush keeps the new pair") {
-            files.write = MetadataFiles::LockWrite::FailAfterReplace;
+            files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
             const auto committed = PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files);
             REQUIRE(committed.HasValue());
             CHECK(committed.Value().recoveryDiagnostic.has_value());
@@ -234,7 +238,7 @@ namespace {
         CHECK(fixture.Read("packages.json") == oldRequest + "\n");
         const auto approved = PreparePackageProject(policy, files, {});
         REQUIRE(approved.HasValue());
-        files.write = MetadataFiles::LockWrite::FailBeforeReplace;
+        files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
         REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files).HasError());
         const auto edited = fixture.Read("packages.json") + "\n";
         fixture.Write("packages.json", edited);
