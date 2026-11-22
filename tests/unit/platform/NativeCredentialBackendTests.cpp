@@ -11,7 +11,7 @@
 TEST_CASE("Native credential backend preserves and removes only the exact reference", "[platform][credentials]") {
     using namespace Horo;
     const auto backend = Platform::CreateNativeCredentialBackend();
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
     REQUIRE(backend);
 #endif
     if (!backend)
@@ -26,6 +26,8 @@ TEST_CASE("Native credential backend preserves and removes only the exact refere
     constexpr std::array replacement{std::byte{5}, std::byte{6}};
     const auto stored = owner.Put(Security::SecureBytes{original});
     REQUIRE(stored.HasValue());
+    const auto independent = owner.Put(Security::SecureBytes{replacement});
+    REQUIRE(independent.HasValue());
 
     const auto reference = CredentialReference::Parse(stored.Value().Value());
     REQUIRE(reference.HasValue());
@@ -49,13 +51,15 @@ TEST_CASE("Native credential backend preserves and removes only the exact refere
     REQUIRE(removed.HasError());
     CHECK(removed.ErrorValue().code.Value() == SecurityErrors::CredentialNotFound.code.Value());
     CHECK(reader->Remove(reference.Value()).HasValue());
+    const auto unaffected = reader->Resolve(independent.Value());
+    REQUIRE(unaffected.HasValue());
+    CHECK(std::ranges::equal(unaffected.Value().View(), replacement));
 }
 
-#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
-TEST_CASE("Persistent credential reference can be reopened in a fresh process", "[platform][credentials]") {
+TEST_CASE("Persistent credential reference survives enrollment owner teardown", "[platform][credentials]") {
     using namespace Horo;
     const auto backend = Platform::CreateNativeCredentialBackend();
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
     REQUIRE(backend);
 #endif
     if (!backend || !backend->Available())
@@ -85,6 +89,7 @@ TEST_CASE("Persistent credential reference can be reopened in a fresh process", 
     REQUIRE(bytes.HasValue());
     CHECK(std::ranges::equal(bytes.Value().View(), secret));
 
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     NativeExternalProcessRunner runner;
     const ExternalProcessRequest probe{.executable = HORO_PROCESS_TEST_CHILD,
                                        .arguments = {"verify-credential-fixture", std::string{restored.Value().Value()}},
@@ -93,15 +98,17 @@ TEST_CASE("Persistent credential reference can be reopened in a fresh process", 
     REQUIRE(openedByChild.HasValue());
     CHECK(openedByChild.Value().reason == ProcessTerminationReason::Exited);
     CHECK(openedByChild.Value().exitCode == 0);
+#endif
 
     REQUIRE(reopened.Revoke(restored.Value()).HasValue());
     CHECK(reopened.Revoke(restored.Value()).HasValue());
     const auto revoked = reopened.Resolve(restored.Value(), 0);
     REQUIRE(revoked.HasError());
     CHECK(revoked.ErrorValue().code.Value() == SecurityErrors::CredentialNotFound.code.Value());
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     const auto rejectedByChild = runner.Run(probe, {});
     REQUIRE(rejectedByChild.HasValue());
     CHECK(rejectedByChild.Value().reason == ProcessTerminationReason::Exited);
     CHECK(rejectedByChild.Value().exitCode == 4);
-}
 #endif
+}

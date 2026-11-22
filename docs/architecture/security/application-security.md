@@ -298,6 +298,10 @@ Linux builds with libsecret use the current desktop user's unlocked default
 Secret Service collection. They require a persistent collection and bound
 service calls on the worker lane. The desktop session owns keyring setup and
 unlock.
+On macOS the native backend binds opaque references to generic passwords in the
+current user's unlocked default Keychain. Lookup, replacement, and deletion use
+that same Keychain and Horo's service namespace. macOS controls authorization
+for the calling application.
 Platforms without a native backend expose an unavailable result at host
 composition.
 
