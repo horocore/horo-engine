@@ -142,7 +142,7 @@ namespace Horo::XR {
                         return Reject<void>(XRErrors::TrackingSnapshotInvalid);
                     assignedRoles[roleIndex] = true;
                 }
-                if (index > 0 && !(devices[index - 1].id < device.id))
+                if (index > 0 && devices[index - 1].id.slot.index >= device.id.slot.index)
                     return Reject<void>(XRErrors::TrackingSnapshotInvalid);
             }
             return Result<void>::Success();

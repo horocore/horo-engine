@@ -361,6 +361,29 @@ namespace Horo::XR {
         CHECK(actions[0].device.slot.generation == 2);
     }
 
+    TEST_CASE("XR tracking snapshots permit only one controller generation per slot", "[unit][xr][tracking-snapshot]") {
+        TrackingFixture fixture;
+        auto replacement = fixture.controller;
+        ++replacement.id.slot.generation;
+        replacement.role = XRTrackedDeviceRole::RightController;
+        fixture.devices.push_back(replacement);
+        std::array actions{XRTrackedActionRecord{fixture.controller.id, 0, XRTrackedActionKind::Scalar, true, 0.5F, 0.0F}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 1;
+        descriptor.actions = actions;
+
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+
+        fixture.devices[1].id = replacement.id;
+        descriptor.devices = std::span{fixture.devices}.first(2);
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        fixture.poses[1].device = replacement.id;
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        actions[0].device = replacement.id;
+        CHECK(SnapshotHasValue(descriptor, fixture));
+    }
+
     TEST_CASE("XR action snapshot ordering and aggregate capacity are finite", "[unit][xr][tracking-snapshot]") {
         TrackingFixture fixture;
         const XRTrackedActionRecord value{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0};
