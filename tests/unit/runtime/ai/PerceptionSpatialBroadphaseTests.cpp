@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -273,7 +273,7 @@ namespace Horo::AI {
                 }
                 const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
                 INFO("clustered queries=" << listenerCount << " leaves inspected=" << examined << " max leaves/query=" << maximumExamined
-                                            << " allocation bytes=" << allocations.requestedBytes << " elapsed us=" << elapsed.count());
+                                          << " allocation bytes=" << allocations.requestedBytes << " elapsed us=" << elapsed.count());
                 CHECK(matchingQueries == listenerCount);
                 CHECK(maximumExamined <= sourceBurst * 2);
                 CHECK(examined <= listenerCount * sourceBurst * 2);
