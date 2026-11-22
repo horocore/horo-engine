@@ -560,7 +560,7 @@ namespace Horo::AI {
          * @details Executable-equivalent Behavior Tree closures retain active call frames, tasks and callbacks. An accepted restart
          * retires active nodes with PlanReplaced and restarts the root. A schema migration stages a new Blackboard and revokes
          * the previous read, write and task reservation leases at publication. Agents with separate live task or sensing
-         * authorities require coordinated Scene replacement for a schema migration. Incompatible closures restart as a unit.
+         * authorities require coordinated Scene replacement for a schema migration. All other accepted closures restart as a unit.
          * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
         [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
                                                                     std::shared_ptr<const CookedDecisionPlan> replacement,

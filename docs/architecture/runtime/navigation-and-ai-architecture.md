@@ -2857,10 +2857,12 @@ remain cooperative: they check both operation ancestors and the Foundation job
 token at bounded intervals, while image leases pin running callbacks to completion.
 The graph's owner-lane observation covers all active occurrences, including
 mailbox wakes and the earliest fixed deadline in nested Behavior Trees or
-selected Utility actions. Retirement hides the closed occurrence's signals.
-The scheduler admits all-tree closures with a complete work allowance and can
-restart them at the replacement boundary, retiring every old occurrence.
-Equivalent revisions validate the complete occurrence layout, task range and
+selected Utility actions. Running State Machines request the next fixed tick
+so reactive scheduling can continue their update and transition phases.
+Retirement hides the closed occurrence's signals. The scheduler admits mixed
+closures with a complete work allowance and can restart them at the replacement
+boundary, retiring every old occurrence.
+Equivalent Behavior Tree revisions validate the complete occurrence layout, task range and
 provider bindings before rebinding any tree. They preserve active call frames
 and independent mailboxes, including repeated occurrences of the same asset.
 
@@ -3180,7 +3182,7 @@ initial and structural Scene owners retain the executable closure with its root
 bindings and recheck provider currentness at publication. A missing selected
 artifact rejects startup. An invalid authenticated payload preserves the codec
 error. An additional deterministic execution policy turns bounded
-Behavior Tree closures and standalone Utility plans with an authored execution task into Scene-owned scheduled
+decision closures with an authored execution task into Scene-owned scheduled
 decisions. Initial activation and prefab creation reserve the exact agent's
 blackboard, task slots, evaluator and slice allowance within the aggregate
 publication. Rollback leaves the live scheduler and task-slot allocator
@@ -3191,9 +3193,9 @@ The configured authoritative headless owner evaluates and dispatches those
 decisions on its actual fixed clock before Gameplay. A same-tick downstream
 retry does not replay a completed AI slice. The current cooked executor
 has no Scene command writer, so its dispatch commits no typed gameplay
-intents. Other cooked graph shapes require an execution contract before
-admission. The compiler charges graph evaluation, retirement, potential
-ancestor resets, and child dispatch across the closure before the first callback.
+intents. The compiler charges graph evaluation, retirement, potential ancestor
+resets, action selection, state transitions and child dispatch across the closure
+before the first callback.
 
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,

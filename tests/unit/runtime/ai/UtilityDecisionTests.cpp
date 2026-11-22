@@ -213,6 +213,44 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 2);
         }
 
+        TEST_CASE("Mixed graph budget reserves Utility selection before stepping the closure", "[ai][decision-compiler][utility]") {
+            UtilityFixture fixture;
+            auto machine = CallingMachine(2, 3, DecisionPlanKind::Utility);
+            auto &body = std::get<StateMachineAssetDescriptor>(machine.body);
+            body.states.push_back({.id = Node(4), .source = Location()});
+            body.transitions.front().target = Node(4);
+            body.transitions.push_back({.id = Node(5), .source = Node(4), .target = Node(2), .location = Location()});
+            body.maximumTransitionsPerStep = 2;
+            const std::array sources{CallTree(1, 2, DecisionPlanKind::StateMachine), machine, UtilitySource(3)};
+            const auto plan = fixture.Compile(sources, 1);
+            auto graph = fixture.Instance(plan);
+            const auto units = plan->MaximumDecisionWorkUnits();
+            REQUIRE(units.has_value());
+            const auto snapshot = fixture.blackboard->Snapshot().Value();
+            const DecisionGraphStepInput input{1, fixture.binding, snapshot, {}};
+            AiWorkBudget shortBudget{*units - 1};
+            const auto denied = graph->StepBudgeted(input, shortBudget);
+            REQUIRE(denied.HasValue());
+            CHECK_FALSE(denied.Value().has_value());
+            CHECK(shortBudget.Remaining() == *units - 1);
+            CHECK(fixture.probe.starts == 0);
+            AiWorkBudget fullBudget{*units};
+            const auto stepped = graph->StepBudgeted(input, fullBudget);
+            REQUIRE(stepped.HasValue());
+            CHECK(stepped.Value() == std::optional{AiTaskState::Running});
+            CHECK(fullBudget.Remaining() == 0);
+            CHECK(fixture.probe.starts == 1);
+            CHECK(graph->NextFixedWakeTick() == std::optional<std::uint64_t>{2});
+
+            DecisionStepTrace trace;
+            AiWorkBudget nextBudget{*units};
+            const auto finished = graph->StepBudgetedWithTrace({2, fixture.binding, snapshot, {}}, nextBudget, trace);
+            REQUIRE(finished.HasValue());
+            CHECK(finished.Value() == std::optional{AiTaskState::Succeeded});
+            CHECK(std::ranges::count(trace.Records(), DecisionStepRecordKind::StateMachineTransition, &DecisionStepRecord::kind) == 2);
+            CHECK_FALSE(graph->NextFixedWakeTick().has_value());
+        }
+
         TEST_CASE("Utility compilation rejects missing scalar bindings malformed providers and nonfinite policy before factories",
                   "[ai][decision-compiler][utility]") {
             UtilityFixture fixture;

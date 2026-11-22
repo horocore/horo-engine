@@ -127,7 +127,7 @@ namespace Horo::AI {
             timer.control.durationTicks = 4;
             const auto timedTree = Tree(3, {TreeNode(1, DecisionControlKind::Root), timer, TreeNode(3, DecisionControlKind::Task)},
                                         {Edge(1, 1, 2), Edge(2, 2, 3)});
-            const std::array sources{CallTree(1, 2, DecisionPlanKind::StateMachine), CallingMachine(2, 3, DecisionPlanKind::BehaviorTree),
+            const std::array sources{CallTree(1, 2, DecisionPlanKind::BehaviorTree), CallTree(2, 3, DecisionPlanKind::BehaviorTree),
                                      timedTree};
             auto instance = fixture.Instance(fixture.Compile(sources, 1));
             CHECK_FALSE(instance->NextFixedWakeTick().has_value());

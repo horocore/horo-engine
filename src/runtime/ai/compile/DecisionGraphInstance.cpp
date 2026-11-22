@@ -215,9 +215,10 @@ namespace Horo::AI {
         std::optional<std::uint64_t> earliest;
         for (const auto &occurrence : occurrences_) {
             const auto *action = ActiveAction(*occurrence);
-            if (!action)
-                continue;
-            const auto deadline = action->NextFixedWakeTick();
+            auto deadline = action ? action->NextFixedWakeTick() : std::nullopt;
+            if (occurrence->active && occurrence->machine && occurrence->outcome == AiTaskState::Running &&
+                occurrence->lastTick < std::numeric_limits<std::uint64_t>::max())
+                deadline = occurrence->lastTick + 1;
             if (deadline.has_value() && (!earliest.has_value() || *deadline < *earliest))
                 earliest = deadline;
         }
@@ -431,7 +432,7 @@ namespace Horo::AI {
                                                                                const LocalPolicyUtilityInput *policy) {
         using Outcome = Result<std::optional<AiTaskState>>;
         const auto work = plan_->MaximumDecisionWorkUnits();
-        if (!work)
+        if (!work.has_value())
             return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable, "Cooked decision shape does not support scheduler slices."));
         auto observation = input;
         AiWorkBudget utilityWork{*work};

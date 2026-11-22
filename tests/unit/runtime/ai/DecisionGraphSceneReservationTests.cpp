@@ -141,21 +141,52 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == (admitted ? 1 : 0));
         }
 
-        TEST_CASE("Budgeted execution rejects a State Machine closure before consuming its scheduler allowance",
+        TEST_CASE("Scene budgets State Machine calls and retires their active descendants on replacement",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;
-            const std::array sources{CallingMachine(1, 2, DecisionPlanKind::BehaviorTree), TaskTree(2)};
+            fixture.probe.succeedTick = 100;
+            auto root = CallTree(1, 2, DecisionPlanKind::StateMachine);
+            root.executionTask = MakeIdentity<TaskId>(9000);
+            const std::array sources{root, CallingMachine(2, 3, DecisionPlanKind::BehaviorTree), TaskTree(3)};
             const auto plan = fixture.Compile(sources, 1);
-            CHECK_FALSE(plan->MaximumDecisionWorkUnits());
-            auto graph = DecisionGraphInstance::Create(plan, fixture.providers, fixture.RuntimeBinding());
-            REQUIRE(graph.HasValue());
-            const auto blackboard = fixture.blackboard->Snapshot();
-            REQUIRE(blackboard.HasValue());
-            AiWorkBudget budget{32};
-            const auto result = graph.Value()->StepBudgeted({1, fixture.binding, blackboard.Value(), {}}, budget);
-            TestSupport::ExpectError(result, AIErrors::CapabilityUnavailable);
-            CHECK(budget.Remaining() == 32);
+            const auto allowance = plan->MaximumDecisionWorkUnits();
+            REQUIRE(allowance.has_value());
+            auto source = TaskTree(1);
+            source.executionTask = root.executionTask;
+            const auto replacement = fixture.Compile(std::span{&source, 1}, 1);
+            REQUIRE(*allowance > replacement->MaximumDecisionWorkUnits().value());
+
+            const auto graph = fixture.Instance(plan);
+            const auto board = fixture.blackboard->Snapshot().Value();
+            AiWorkBudget shortBudget{*allowance - 1};
+            const auto denied = graph->StepBudgeted({1, fixture.binding, board, {}}, shortBudget);
+            REQUIRE(denied.HasValue());
+            CHECK_FALSE(denied.Value().has_value());
+            CHECK(shortBudget.Remaining() == *allowance - 1);
             CHECK(fixture.probe.starts == 0);
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = *allowance}}).Value();
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(fixture.probe.starts == 1);
+            const auto retired = fixture.probe.continuation;
+            REQUIRE(retired.IsCurrent());
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, plan, replacement).HasValue());
+            CHECK_FALSE(retired.IsCurrent());
+            REQUIRE(fixture.probe.abortReasons.size() == 1);
+            CHECK(fixture.probe.abortReasons.front() == AiTaskCancellationReason::PlanReplaced);
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK(fixture.probe.starts == 1);
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(fixture.probe.starts == 2);
+            CHECK(fixture.probe.resumes == 0);
         }
 
         TEST_CASE("Scene admits the entire tree closure and retires its removed callee at a tick boundary",

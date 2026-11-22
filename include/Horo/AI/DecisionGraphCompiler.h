@@ -101,7 +101,7 @@ namespace Horo::AI {
         [[nodiscard]] AiCapabilitySet Capabilities() const noexcept;
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Checks support for one all-or-nothing scheduler slice before creating any provider callbacks.
-         * @return Maximum units for a Behavior Tree closure or a single-occurrence Utility graph, otherwise empty.
+         * @return Maximum units for the complete executable closure, or empty if the bound is not representable.
          */
         [[nodiscard]] std::optional<std::size_t> MaximumDecisionWorkUnits() const noexcept;
 

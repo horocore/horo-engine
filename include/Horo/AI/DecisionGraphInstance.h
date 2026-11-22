@@ -139,7 +139,7 @@ namespace Horo::AI {
         /** @brief Tests whether an active tree or Utility action has an outstanding mailbox wake.
          * @return False off the owner lane or while a step is in progress. */
         [[nodiscard]] bool HasPendingTaskWake() const noexcept;
-        /** @brief Copies the earliest fixed deadline across active trees and selected Utility actions.
+        /** @brief Copies the earliest fixed deadline across active trees, Utility actions and running State Machines.
          * @return No deadline when the graph cannot be observed or has no active deadline. */
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);

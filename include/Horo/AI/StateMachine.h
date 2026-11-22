@@ -162,6 +162,11 @@ namespace Horo::AI {
             return source_.transitions;
         }
 
+        /** @brief Returns the authored upper bound on transitions in one evaluation. */
+        [[nodiscard]] std::size_t MaximumTransitionsPerStep() const noexcept {
+            return source_.maximumTransitionsPerStep;
+        }
+
     private:
         friend class StateMachineInstance;
 

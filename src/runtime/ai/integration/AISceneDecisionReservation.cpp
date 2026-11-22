@@ -130,7 +130,7 @@ namespace Horo::AI {
             return Bound::Success(policy);
         }
 
-        /** @brief Flat cooked decisions own their task lease and borrow only a weak exact Scene publication. */
+        /** @brief Cooked decisions own their task lease and borrow only a weak exact Scene publication. */
         class ScheduledCookedDecision final : public IAiScheduledDecision {
         public:
             ScheduledCookedDecision(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
@@ -468,15 +468,16 @@ namespace Horo::AI {
         using Output = Result<AiScheduledDecisionRegistration>;
         auto bounded = decisionExecution_->agent;
         const auto limit = plan->MaximumDecisionWorkUnits();
-        if (!limit)
+        if (!limit.has_value())
             return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a bounded cooked decision."));
         const auto &root = plan->Graphs()[plan->Occurrences().front().plan];
         auto model = BindModel(*decisionExecution_, agent, root);
         if (model.HasError())
             return Output::Failure(std::move(model).ErrorValue());
-        const auto required = *limit + (model.Value() ? ModelWork(*model.Value()) : 0);
-        if (required > bounded.workUnitsPerTick)
+        const auto modelWork = model.Value() ? ModelWork(*model.Value()) : 0;
+        if (*limit > bounded.workUnitsPerTick || modelWork > bounded.workUnitsPerTick - *limit)
             return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+        const auto required = *limit + modelWork;
         if (!root.executionTask.IsValid())
             return Output::Failure(
                 MakeError(AIErrors::TaskContextInvalid, "Scheduled cooked decisions require an authored execution task."));
