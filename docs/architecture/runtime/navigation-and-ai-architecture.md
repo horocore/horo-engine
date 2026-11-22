@@ -537,6 +537,15 @@ that already finished still rechecks its pinned provider when the caller takes
 it. Same-world replacement yields `StaleSnapshot`, while world retirement yields
 `InvalidWorld`. Both retain the original request and topology provenance.
 
+The asset loader can prepare a sorted set of exact tile addresses under a
+separate prefetch allowance. It still verifies the complete cooked envelope,
+then pins only the selected tiles. Missing or over-budget selections fail before
+cache admission. The Scene navigation owner can stage that resident set through
+the original host-selected provider and combined reservation budget. The staged
+generation is invisible to new queries until publication. Removed tile bytes and
+native provider reservations remain charged until the last older reader releases
+them.
+
 The shared world budget accounts for cell-backed navigation resources and their retired but
 still-pinned storage until actually freed. Navigation caches/scratch use explicit host-assigned
 sub-budgets and do not independently charge the same allocation again. `wst.*` residency and

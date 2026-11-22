@@ -255,28 +255,107 @@ namespace Horo::Navigation {
             return bytes;
         }
 
+        /** @brief Validates the complete stream selection before invoking the provider or pinning new bytes. */
+        [[nodiscard]] Result<std::vector<NavigationLoadedSurface>> StreamedSurfaces(const Detail::NavigationAssetSceneState &state,
+                                                                                    std::span<const NavigationStreamedSurface> selections) {
+            using Surfaces = Result<std::vector<NavigationLoadedSurface>>;
+            const auto &limits = state.limits.assets;
+            if (selections.empty())
+                return Surfaces::Failure(MakeError(NavigationErrors::NoNavigationData));
+            if (selections.size() > limits.maximumPartitions)
+                return Surfaces::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            std::vector<NavigationLoadedSurface> surfaces;
+            surfaces.reserve(selections.size());
+            auto remaining = limits.maximumDecodedBytes;
+            for (const auto &selection : selections) {
+                const auto &asset = selection.asset;
+                const auto &active = *state.provenance;
+                const auto root = std::ranges::find(active, asset.id, &NavigationAssetProvenance::id);
+                if (root == active.end() || root->registryRevision != asset.registryRevision ||
+                    root->cookedContentDigest != asset.cookedContentDigest || root->cacheKeyDigest != asset.cacheKeyDigest ||
+                    root->sourceDigest != asset.sourceDigest)
+                    return Surfaces::Failure(MakeError(NavigationErrors::StaleSnapshot));
+                const auto &required = state.selection.requiredProfile;
+                if (required && (!asset.contentProvenance || !asset.contentProvenance->projectProfile ||
+                                 !asset.contentProvenance->projectProfile->MatchesAuthority(*required)))
+                    return Surfaces::Failure(MakeError(NavigationErrors::ProjectProfileStale));
+                if (selection.partitionIndex >= asset.partitions.size() || selection.surfaceGeneration == 0 ||
+                    asset.scope != state.selection.scope)
+                    return Surfaces::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
+                const auto &partition = asset.partitions[selection.partitionIndex];
+                if (partition.scope != asset.scope || partition.tiles.empty() ||
+                    std::ranges::any_of(surfaces, [&partition](const auto &surface) {
+                    return surface.partition->surface == partition.surface && surface.partition->profile == partition.profile;
+                }))
+                    return Surfaces::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
+                for (const auto &tile : partition.tiles) {
+                    if (!tile || tile->Key().surface != partition.surface || tile->Key().profile != partition.profile ||
+                        tile->Key().scope != state.selection.scope)
+                        return Surfaces::Failure(MakeError(NavigationErrors::NavMeshArtifactCorrupt));
+                    const auto bytes = tile->StorageBytes();
+                    if (bytes > remaining || (limits.maximumBytesPerTile && bytes > *limits.maximumBytesPerTile))
+                        return Surfaces::Failure(MakeError(NavigationErrors::CapacityExceeded));
+                    remaining -= bytes;
+                }
+                surfaces.push_back({asset.id, selection.surfaceGeneration, &partition});
+            }
+            return Surfaces::Success(std::move(surfaces));
+        }
+
+        /** @brief Retains the canonical cache allocation for each tile captured by the detached backend. */
+        [[nodiscard]] Result<std::vector<Assets::AssetPayloadLease>> PinStreamedTiles(Assets::AssetPayloadCache &cache,
+                                                                                      std::span<const NavigationLoadedSurface> surfaces) {
+            using Pins = Result<std::vector<Assets::AssetPayloadLease>>;
+            std::vector<Assets::AssetPayloadLease> pins;
+            for (const auto &surface : surfaces) {
+                for (const auto &tile : surface.partition->tiles) {
+                    auto pin = cache.Admit(std::as_bytes(tile->Bytes()));
+                    if (pin.HasError())
+                        return Pins::Failure(pin.ErrorValue());
+                    pins.push_back(std::move(pin).Value());
+                }
+            }
+            return Pins::Success(std::move(pins));
+        }
+
+        /** @brief Builds a provider against the same charged limits for both initial and streamed activation. */
+        [[nodiscard]] Result<NavigationPreparedAssetBackend> PrepareProvider(const NavigationWorldActivationDescriptor &descriptor,
+                                                                             std::span<const NavigationLoadedSurface> surfaces,
+                                                                             const Detail::NavigationAssetSceneState &state) {
+            using Provider = Result<NavigationPreparedAssetBackend>;
+            const auto budget = AvailableProviderBudget(state);
+            if (budget.HasError())
+                return Provider::Failure(budget.ErrorValue());
+            auto prepared = state.factory(descriptor, surfaces, budget.Value());
+            if (prepared.HasError())
+                return prepared;
+            const auto &candidate = prepared.Value();
+            if (!candidate.backend || candidate.reservedProviderBytes == 0 || candidate.reservedProviderBytes > budget.Value())
+                return Provider::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            return prepared;
+        }
+
+        /** @brief Checks any declared cooked project policy against the new provider's exact capability revision. */
+        [[nodiscard]] Result<void> ValidateAssetProfile(const LoadedNavMeshAsset &asset,
+                                                        const NavigationProviderCapabilities &capabilities) {
+            if (!asset.contentProvenance || !asset.contentProvenance->projectProfile)
+                return Result<void>::Success();
+            const auto admitted =
+                AdmitNavigationProjectProfile(*asset.contentProvenance->projectProfile, capabilities, capabilities.revision);
+            return admitted.HasValue() ? Result<void>::Success() : Result<void>::Failure(admitted.ErrorValue());
+        }
+
         /** @brief Finalize a detached lifecycle; aggregate publication then has no fallible Stage/Commit operation. */
         [[nodiscard]] Result<std::shared_ptr<NavigationWorldLifecycle>> PrepareWorld(
             const NavigationWorldActivationDescriptor &descriptor, const std::span<const NavigationLoadedSurface> surfaces,
             std::vector<LoadedNavMeshAsset> &assets, Detail::NavigationAssetSceneState &state,
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance) {
-            const auto budget = AvailableProviderBudget(state);
-            if (budget.HasError())
-                return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(budget.ErrorValue());
-            const auto available = budget.Value();
-            auto prepared = state.factory(descriptor, surfaces, available);
+            auto prepared = PrepareProvider(descriptor, surfaces, state);
             if (prepared.HasError())
                 return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(prepared.ErrorValue());
-            if (!prepared.Value().backend || prepared.Value().reservedProviderBytes == 0 ||
-                prepared.Value().reservedProviderBytes > available) {
-                return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
-            }
             const auto capabilities = prepared.Value().backend->Capabilities();
             for (const auto &asset : assets) {
-                if (!asset.contentProvenance || !asset.contentProvenance->projectProfile)
-                    continue;
-                const auto admitted =
-                    AdmitNavigationProjectProfile(*asset.contentProvenance->projectProfile, capabilities, capabilities.revision);
+                const auto admitted = ValidateAssetProfile(asset, capabilities);
                 if (admitted.HasError())
                     return Result<std::shared_ptr<NavigationWorldLifecycle>>::Failure(admitted.ErrorValue());
             }
@@ -377,6 +456,48 @@ namespace Horo::Navigation {
     /** @copydoc NavigationAssetSceneActivationParticipant::ActiveWorld */
     std::shared_ptr<NavigationWorldLifecycle> NavigationAssetSceneActivationParticipant::ActiveWorld() const noexcept {
         return state_->closed ? nullptr : state_->active;
+    }
+
+    /** @copydoc NavigationAssetSceneActivationParticipant::StageStreamedTopology */
+    Result<void> NavigationAssetSceneActivationParticipant::StageStreamedTopology(const NavigationWorldActivationDescriptor &expected,
+                                                                                  NavigationGeneration next,
+                                                                                  std::span<const NavigationStreamedSurface> selections) {
+        const auto world = ActiveWorld();
+        if (!world || !state_->provenance || !state_->factory)
+            return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
+        const auto current = world->ActiveDescriptor();
+        if (current.HasError() || current.Value() != expected || next <= expected.topology)
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        if (world->HasStagedCandidate())
+            return Result<void>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+        static_cast<void>(world->CollectRetired());
+        try {
+            const auto surfaces = StreamedSurfaces(*state_, selections);
+            if (surfaces.HasError())
+                return Result<void>::Failure(surfaces.ErrorValue());
+            auto descriptor = expected;
+            descriptor.topology = next;
+            const auto provenance = state_->provenance;
+            auto prepared = PrepareProvider(descriptor, surfaces.Value(), *state_);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            if (world != ActiveWorld() || provenance != state_->provenance)
+                return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+            const auto capabilities = prepared.Value().backend->Capabilities();
+            for (const auto &selection : selections) {
+                const auto admitted = ValidateAssetProfile(selection.asset, capabilities);
+                if (admitted.HasError())
+                    return Result<void>::Failure(admitted.ErrorValue());
+            }
+            auto pins = PinStreamedTiles(*state_->cache, surfaces.Value());
+            if (pins.HasError())
+                return Result<void>::Failure(pins.ErrorValue());
+            return world->StageTopology(expected, next,
+                                        std::make_unique<PinnedAssetBackend>(std::move(prepared).Value(), std::move(pins).Value(),
+                                                                             state_->accounting, provenance));
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        }
     }
 
     /** @copydoc NavigationAssetSceneActivationParticipant::ActiveAssetProvenance */

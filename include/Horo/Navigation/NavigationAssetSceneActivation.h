@@ -17,6 +17,13 @@ namespace Horo::Navigation {
         const LoadedNavMeshPartition *partition{}; /**< Borrow expires when the injected factory returns. */
     };
 
+    /** @brief One exact partition from a verified, possibly selectively loaded asset. */
+    struct NavigationStreamedSurface final {
+        const LoadedNavMeshAsset &asset;
+        std::size_t partitionIndex{};
+        std::uint64_t surfaceGeneration{};
+    };
+
     /** @brief Unique native provider plus its host-qualified allocation reservation. */
     struct NavigationPreparedAssetBackend final {
         std::unique_ptr<INavigationQueryBackend> backend;
@@ -100,6 +107,16 @@ namespace Horo::Navigation {
         /** @brief Pins the active lifecycle for structural registration on the same host owner thread.
          * @return Exact published lifecycle or null. The Scene participant still owns replacement and shutdown. */
         [[nodiscard]] std::shared_ptr<NavigationWorldLifecycle> ActiveWorld() const noexcept;
+        /** @brief Builds and stages the complete desired resident set for the active world.
+         * @param expected Exact live predecessor before cell work started.
+         * @param next New unique topology generation.
+         * @param surfaces Verified authored asset selections, borrowed only during preparation.
+         * @return Success or a typed failure. The active world is preserved until its owner commits the candidate.
+         * @details The backend retains selected tile bytes and its reservation through worker retirement. An empty
+         * desired set is handled by the owner's explicit world unload.
+         */
+        [[nodiscard]] Result<void> StageStreamedTopology(const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
+                                                         std::span<const NavigationStreamedSurface> surfaces);
         /** @brief Read exact asset provenance for the current provider generation.
          * @return Owner-thread borrow valid until publication or shutdown; no inactive fallback is returned. */
         [[nodiscard]] std::span<const NavigationAssetProvenance> ActiveAssetProvenance() const noexcept;

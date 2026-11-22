@@ -383,9 +383,8 @@ namespace Horo::Navigation {
         REQUIRE(loaded.Value().partitions.front().tiles.front()->ContentIdentity() == built.ContentIdentity());
     }
 
-    TEST_CASE("NavMesh residency rejects an oversized decoded tile before pinning any tile",
-              "[unit][navigation][navmesh_asset][canonical][budget]") {
-        auto set = TileSet();
+    /** @brief Adds a canonical empty neighboring tile to the fixture's live ground tile. */
+    static void AddEmptyNeighbor(NavigationCookedTileSet &set) {
         const auto &built = *set.tiles.front();
         const auto descriptor = ProjectNavigationCookedTileDescriptor(built).Value();
         const NavigationPreparedTile input{.tile = {.key = {built.Key().profile, built.Key().surface, {.x = -1}},
@@ -396,6 +395,12 @@ namespace Horo::Navigation {
                                            .dependencyKey = Digest(4)};
         NavigationTileBuildResult empty{.state = NavigationTileBuildState::Empty, .key = input.tile.key.tile, .bounds = input.tile.bounds};
         set.tiles.insert(set.tiles.begin(), NavigationCookedTile::Create(input, std::move(empty)).Value());
+    }
+
+    TEST_CASE("NavMesh residency rejects an oversized decoded tile before pinning any tile",
+              "[unit][navigation][navmesh_asset][canonical][budget]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
         const auto payload = EncodeNavigationCookedTileSet(set, 4096).Value();
         const auto encoded = Envelope(payload);
         auto referenceCache = Assets::AssetPayloadCache::Create(8, 4096).Value();
@@ -417,6 +422,89 @@ namespace Horo::Navigation {
         const auto exact = LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache, {.limits = {.maximumBytesPerTile = cap}});
         REQUIRE(exact.HasValue());
         CHECK(exact.Value().tileBytes.size() == 2);
+    }
+
+    TEST_CASE("NavMesh prefetch retains only verified selected tile addresses within its allowance",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
+        const auto encoded = Envelope(EncodeNavigationCookedTileSet(set, 4096).Value());
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const std::array selected{set.tiles.front()->Key()};
+        const auto bytes = set.tiles.front()->StorageBytes();
+        auto load = [&cache, &encoded](std::span<const NavigationBakeTileKey> keys, std::size_t budget) {
+            return LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache,
+                                    {.selectedTiles = keys, .maximumSelectedBytes = budget});
+        };
+        TestSupport::RequireError(load(selected, bytes - 1), NavigationErrors::CapacityExceeded);
+        const std::array duplicates{selected.front(), selected.front()};
+        TestSupport::RequireError(load(duplicates, bytes * 2), NavigationErrors::NavMeshArtifactInvalid);
+        auto missingKey = selected.front();
+        missingKey.tile.x -= 2;
+        TestSupport::RequireError(load(std::span{&missingKey, 1U}, bytes), NavigationErrors::NoNavigationData);
+        CHECK(cache->Snapshot().residentEntries == 0);
+        const auto empty = load({}, bytes);
+        REQUIRE(empty.HasValue());
+        CHECK(empty.Value().partitions.empty());
+        CHECK(cache->Snapshot().residentEntries == 0);
+
+        const auto exact = load(selected, bytes);
+        REQUIRE(exact.HasValue());
+        REQUIRE(exact.Value().partitions.size() == 1);
+        REQUIRE(exact.Value().partitions.front().tiles.size() == 1);
+        REQUIRE(exact.Value().tileBytes.size() == 1);
+        CHECK(exact.Value().tileBytes.front().Digest() == set.tiles.front()->ContentIdentity());
+        CHECK(cache->Snapshot().residentEntries == 1);
+    }
+
+    TEST_CASE("Streamed NavMesh removes tiles from the next provider while an older reader pins them",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
+        const auto &removed = set.tiles.front();
+        const auto &retained = set.tiles.back();
+        const auto encoded = Envelope(EncodeNavigationCookedTileSet(set, 4096).Value());
+        std::vector<std::size_t> preparedTileCounts;
+        const NavigationAssetBackendFactory factory = [&preparedTileCounts](const auto &world, const auto surfaces, auto budget) {
+            preparedTileCounts.push_back(surfaces.front().partition->tiles.size());
+            return NativeFactory(world, surfaces, budget);
+        };
+        Harness host{{.maximumReservedProviderBytes = 2 * ProviderReservation}, factory};
+        host.Update(encoded);
+        REQUIRE_FALSE(host.Activate(Definition()));
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        auto old = host.participant->Acquire().Value();
+        const auto original = old.Descriptor();
+        const auto revision = host.registry.Snapshot().Revision();
+        const std::array selected{retained->Key()};
+        const auto prefetched = LoadNavMeshAsset({Asset(), Type()}, revision, encoded, Target(), *host.cache,
+                                                 {.selectedTiles = selected, .maximumSelectedBytes = retained->StorageBytes()});
+        REQUIRE(prefetched.HasValue());
+        const std::array surfaces{NavigationStreamedSurface{prefetched.Value(), 0, 1}};
+        const auto next = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(host.participant->StageStreamedTopology(original, next, surfaces).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor() == original);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == 2 * ProviderReservation);
+
+        REQUIRE(world->CommitAtSafePoint(original.scene, original.sceneGeneration).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor().topology == next);
+        CHECK(old.IsRevoked());
+        CHECK((preparedTileCounts == std::vector<std::size_t>{2, 1}));
+        const auto both = host.cache->Snapshot().retainedPayloadBytes;
+        host.cache->Evict(removed->ContentIdentity());
+        CHECK(host.cache->Snapshot().retainedPayloadBytes == both);
+        const auto current = host.participant->Acquire().Value().Descriptor();
+        const auto successor = NavigationGeneration::Create(next.Value() + 1).Value();
+        TestSupport::RequireError(host.participant->StageStreamedTopology(current, successor, surfaces),
+                                  NavigationErrors::CapacityExceeded);
+        old = {};
+        REQUIRE(host.participant->StageStreamedTopology(current, successor, surfaces).HasValue());
+        CHECK(host.cache->Snapshot().retainedPayloadBytes < both);
+        auto staged = current;
+        staged.topology = successor;
+        REQUIRE(world->DiscardStagedTopology(staged).HasValue());
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
     }
 
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
