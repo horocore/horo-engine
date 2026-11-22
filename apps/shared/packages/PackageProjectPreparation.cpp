@@ -199,30 +199,32 @@ namespace Horo::Application::Internal {
 
         /** @brief Derives the only safe action from the exact observed identities. */
         RecoveryAction RecoveryFor(const MetadataDocuments &documents, const MetadataJournal &journal) {
+            using enum RecoveryAction;
             const auto lock = Digest(documents.lock);
             const bool publishedRequest = Digest(documents.request) == journal.newRequest;
             if (lock == journal.newLock)
-                return publishedRequest ? RecoveryAction::Keep : RecoveryAction::Conflict;
+                return publishedRequest ? Keep : Conflict;
             if (lock != journal.oldLock)
-                return RecoveryAction::Conflict;
+                return Conflict;
             if (documents.request == journal.oldRequest)
-                return RecoveryAction::Keep;
-            return publishedRequest ? RecoveryAction::RestoreRequest : RecoveryAction::Conflict;
+                return Keep;
+            return publishedRequest ? RestoreRequest : Conflict;
         }
 
         /** @brief Restores a proven half-commit without overwriting an independent revision. */
         Result<void> ReconcileDocuments(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
                                         const MetadataJournal &journal, DurableFileSystem &files, const CancellationToken &cancellation) {
+            using enum RecoveryAction;
             const auto documents = ReadDocuments(metadata, limits, cancellation);
             if (documents.HasError())
                 return Result<void>::Failure(documents.ErrorValue());
             const auto action = RecoveryFor(documents.Value(), journal);
-            if (action == RecoveryAction::Conflict)
+            if (action == Conflict)
                 return Result<void>::Failure(MetadataConflict());
-            const std::string_view request = action == RecoveryAction::RestoreRequest ? journal.oldRequest : documents.Value().request;
+            const std::string_view request = action == RestoreRequest ? journal.oldRequest : documents.Value().request;
             if (auto validated = ValidateDocuments(request, documents.Value().lock, limits); validated.HasError())
                 return Result<void>::Failure(MetadataConflict());
-            if (action == RecoveryAction::Keep)
+            if (action == Keep)
                 return Result<void>::Success();
             AtomicFileReplacementReceipt receipt;
             return ReplaceMetadata(metadata / "packages.json", request, files, receipt);
@@ -319,15 +321,16 @@ namespace Horo::Application::Internal {
         auto validated = ValidateDocuments(documents.Value().request, documents.Value().lock, policy.limits.lockfile);
         if (validated.HasError())
             return Result<PreparedPackageProject>::Failure(validated.ErrorValue());
-        auto &[request, lock] = validated.Value();
+        auto [request, lock] = std::move(validated).Value();
         if (const auto valid = lock.ValidateForRestore(request.Digest(), policy.platform, policy.limits.supportedPackageFormatVersion);
             valid.HasError())
             return Result<PreparedPackageProject>::Failure(valid.ErrorValue());
         if (auto stable = ConfirmReadablePair(metadata, documents.Value().request, files, cancellation); stable.HasError())
             return Result<PreparedPackageProject>::Failure(stable.ErrorValue());
+        auto bytes = std::move(documents).Value();
         PreparedPackageProject prepared;
         prepared.application.restore = {.projectRoot = metadata.parent_path(),
-                                        .lockfileJson = std::move(documents.Value().lock),
+                                        .lockfileJson = std::move(bytes.lock),
                                         .expectedRequestHash = request.Digest(),
                                         .platform = policy.platform,
                                         .mode = policy.mode,
@@ -335,7 +338,7 @@ namespace Horo::Application::Internal {
         prepared.application.lockedPlan = std::move(lock);
         prepared.application.portableRequest = std::move(request);
         prepared.lockDigest = Digest(prepared.application.restore.lockfileJson);
-        prepared.requestDocumentDigest = Digest(documents.Value().request);
+        prepared.requestDocumentDigest = Digest(bytes.request);
         return Result<PreparedPackageProject>::Success(std::move(prepared));
     }
 
