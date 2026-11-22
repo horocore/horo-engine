@@ -781,6 +781,70 @@ namespace Horo::Tests::OpenXRAction {
         CHECK(fixture.actions.script.liveActions == 0);
     }
 
+    TEST_CASE("OpenXR space creation keeps loss-pending handles for rollback without publishing tracking", "[xr][native][spaces]") {
+        TrackingFixture fixture;
+        auto &script = fixture.actions.session.script;
+        auto &tracking = fixture.actions.script.tracking;
+        std::size_t expectedSpaces = 0;
+        SECTION("local reference") {
+            tracking.loseOnReferenceCall = expectedSpaces = 1;
+        }
+        SECTION("view reference") {
+            tracking.loseOnReferenceCall = expectedSpaces = 2;
+        }
+        SECTION("optional stage reference") {
+            tracking.loseOnReferenceCall = expectedSpaces = 3;
+        }
+        SECTION("calibrated world reference") {
+            tracking.loseOnReferenceCall = expectedSpaces = 4;
+        }
+        SECTION("controller action space") {
+            script.fail = "create-action-space";
+            script.failureResult = XR_SESSION_LOSS_PENDING;
+            expectedSpaces = 5;
+        }
+        const Math::Transform calibration{.translation = {5.0F, 0.0F, 0.0F}};
+        const auto prepared = fixture.Prepare(calibration, true);
+        REQUIRE(prepared.HasError());
+        CHECK(prepared.ErrorValue().code.Value() == XRErrors::RuntimeUnavailable.code.Value());
+        CHECK(std::ranges::count(script.calls, "destroy-space") == expectedSpaces);
+        CHECK(tracking.spaces == 0);
+        CHECK(fixture.actions.script.liveActions == 0);
+        CHECK(fixture.actions.script.liveSets == 0);
+        CHECK(fixture.actions.owner.References(fixture.actions.session.Request().candidate).HasError());
+        CHECK_FALSE(fixture.actions.session.owner.Session().IsValid());
+        REQUIRE(fixture.actions.owner.Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR loss-pending creation retains handles when native rollback must be retried", "[xr][native][spaces]") {
+        TrackingFixture fixture;
+        auto &script = fixture.actions.session.script;
+        auto &tracking = fixture.actions.script.tracking;
+        tracking.loseOnReferenceCall = 2;
+        script.fail = "destroy-space";
+        REQUIRE(fixture.Prepare().HasError());
+        CHECK(tracking.spaces == 2);
+        CHECK(fixture.actions.owner.References(fixture.actions.session.Request().candidate).HasError());
+        script.fail = {};
+        REQUIRE(fixture.actions.owner.Close().HasValue());
+        CHECK(tracking.spaces == 0);
+        CHECK(fixture.actions.script.liveActions == 0);
+        CHECK(fixture.actions.script.liveSets == 0);
+    }
+
+    TEST_CASE("OpenXR maps a native reference-space capacity refusal to the XR budget error", "[xr][native][spaces]") {
+        TrackingFixture fixture;
+        auto &script = fixture.actions.session.script;
+        script.fail = "create-reference";
+        script.failureResult = XR_ERROR_LIMIT_REACHED;
+        const auto prepared = fixture.Prepare();
+        REQUIRE(prepared.HasError());
+        CHECK(prepared.ErrorValue().code.Value() == XRErrors::CapacityExceeded.code.Value());
+        CHECK(fixture.actions.script.tracking.spaces == 0);
+        CHECK(fixture.actions.script.liveActions == 0);
+        CHECK(fixture.actions.script.liveSets == 0);
+    }
+
     TEST_CASE("OpenXR partial action-space failure rolls back references before pose actions", "[xr][native][poses]") {
         TrackingFixture fixture;
         fixture.actions.session.script.fail = "create-action-space";

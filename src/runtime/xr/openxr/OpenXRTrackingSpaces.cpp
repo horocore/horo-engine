@@ -34,8 +34,24 @@ namespace Horo::XR::OpenXRInternal {
         Error SpaceFailure(const char *phase, const XrResult result) {
             if (result == XR_ERROR_REFERENCE_SPACE_UNSUPPORTED || result == XR_ERROR_FUNCTION_UNSUPPORTED)
                 return MakeError(XRErrors::OperationUnsupported, phase);
+            if (result == XR_ERROR_LIMIT_REACHED)
+                return MakeError(XRErrors::CapacityExceeded, phase);
+            if (result == XR_SESSION_LOSS_PENDING || result == XR_ERROR_SESSION_LOST || result == XR_ERROR_INSTANCE_LOST)
+                return MakeError(XRErrors::RuntimeUnavailable, std::format("OpenXR {} interrupted by runtime loss; native result={}", phase,
+                                                                           static_cast<std::int32_t>(result)));
             return MakeError(XRErrors::OperationUnavailable,
                              std::format("OpenXR {} failed; native result={}", phase, static_cast<std::int32_t>(result)));
+        }
+
+        /** @brief Only a complete creation on a live session may proceed to space publication.
+         * @details Loss-pending calls can write valid handles. Their original owner retains them for teardown.
+         */
+        Result<void> CheckSpaceCreation(const char *phase, const XrResult result, const XrSpace space) {
+            if (result != XR_SUCCESS)
+                return Result<void>::Failure(SpaceFailure(phase, result));
+            if (space == XR_NULL_HANDLE)
+                return Result<void>::Failure(SpaceFailure(phase, XR_ERROR_RUNTIME_FAILURE));
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -68,23 +84,20 @@ namespace Horo::XR::OpenXRInternal {
         if (!context.Preparing() && context.Native().maximumSpaces < SpaceCount())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         XrReferenceSpaceCreateInfo info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
-        info.referenceSpaceType = NativeReference(request->base);
         info.poseInReferenceSpace.orientation.w = 1.0F;  // Native space offset, never a fabricated tracked pose.
-        auto result = context.DispatchTable().createReference(context.Native().session, &info, &base);
-        if (XR_FAILED(result) || base == XR_NULL_HANDLE)
-            return Result<void>::Failure(
-                SpaceFailure("create tracking reference space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
-        info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
-        result = context.DispatchTable().createReference(context.Native().session, &info, &view);
-        if (XR_FAILED(result) || view == XR_NULL_HANDLE)
-            return Result<void>::Failure(
-                SpaceFailure("create head reference space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
+        const auto createReference = [&](const char *phase, const XRSpaceKind kind, XrSpace &space) {
+            info.referenceSpaceType = NativeReference(kind);
+            const auto result = context.DispatchTable().createReference(context.Native().session, &info, &space);
+            return CheckSpaceCreation(phase, result, space);
+        };
+        if (auto created = createReference("create tracking reference space", request->base, base); created.HasError())
+            return created;
+        if (auto created = createReference("create head reference space", XRSpaceKind::View, view); created.HasError())
+            return created;
         if (request->alternateReferenceAvailable) {
-            info.referenceSpaceType = NativeReference(AlternateKind(request->base));
-            result = context.DispatchTable().createReference(context.Native().session, &info, &alternate);
-            if (result != XR_SUCCESS || alternate == XR_NULL_HANDLE)
-                return Result<void>::Failure(
-                    SpaceFailure("create alternate reference space", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
+            if (auto created = createReference("create alternate reference space", AlternateKind(request->base), alternate);
+                created.HasError())
+                return created;
         }
         if (request->base == XRSpaceKind::Stage || alternate != XR_NULL_HANDLE)
             if (auto bounds = ReadStageBounds(context); bounds.HasError())
@@ -97,9 +110,9 @@ namespace Horo::XR::OpenXRInternal {
             actionInfo.action = action.native;
             actionInfo.subactionPath = context.Hands()[role];
             actionInfo.poseInActionSpace.orientation.w = 1.0F;
-            result = context.DispatchTable().createSpace(context.Native().session, &actionInfo, &action.space);
-            if (XR_FAILED(result) || action.space == XR_NULL_HANDLE)
-                return Result<void>::Failure(SpaceFailure("create action space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
+            const auto result = context.DispatchTable().createSpace(context.Native().session, &actionInfo, &action.space);
+            if (auto created = CheckSpaceCreation("create action space", result, action.space); created.HasError())
+                return created;
         }
         return PrepareGazeSpace(context);
     }
@@ -112,9 +125,7 @@ namespace Horo::XR::OpenXRInternal {
         info.action = gazeAction;
         info.poseInActionSpace.orientation.w = 1.0F;
         const auto result = context.DispatchTable().createSpace(context.Native().session, &info, &gazeSpace);
-        if (result != XR_SUCCESS || gazeSpace == XR_NULL_HANDLE)
-            return Result<void>::Failure(SpaceFailure("create gaze space", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
-        return Result<void>::Success();
+        return CheckSpaceCreation("create gaze space", result, gazeSpace);
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::PrepareWorldSpace */
@@ -129,11 +140,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(pose.ErrorValue());
         info.referenceSpaceType = NativeReference(request->base);
         info.poseInReferenceSpace = pose.Value();
-        if (const auto result = context.DispatchTable().createReference(context.Native().session, &info, &world);
-            XR_FAILED(result) || world == XR_NULL_HANDLE)
-            return Result<void>::Failure(
-                SpaceFailure("create calibrated World reference space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
-        return Result<void>::Success();
+        const auto result = context.DispatchTable().createReference(context.Native().session, &info, &world);
+        return CheckSpaceCreation("create calibrated World reference space", result, world);
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::BindSpaces */

@@ -61,6 +61,7 @@ namespace Horo::Tests::OpenXRAction {
             XrExtent2Df bounds{3.0F, 4.0F};
             XrResult boundsResult{XR_SUCCESS};
             unsigned boundsReads{};
+            std::optional<std::size_t> loseOnReferenceCall;
             bool enabled{};
             unsigned suggestedPoseBindings{1};
             std::optional<XrBool32> poseActive;
@@ -327,7 +328,9 @@ namespace Horo::Tests::OpenXRAction {
                 REQUIRE(info->poseInReferenceSpace.position.z == 0.0F);
             }
             active->tracking.references.push_back(*info);
-            const auto result = Script::Record("create-reference");
+            const auto recorded = Script::Record("create-reference");
+            const auto result =
+                active->tracking.loseOnReferenceCall == active->tracking.references.size() ? XR_SESSION_LOSS_PENDING : recorded;
             if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
                 if (info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW)
