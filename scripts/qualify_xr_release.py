@@ -5,19 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
-import re
 
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_physical_gate, decode_record, fields, in_set, is_digest, is_token,
-    load_record, require, validate_identity, validate_record,
+    is_source_revision, load_record, require, validate_identity, validate_record,
 )
 
 
 REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
-REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 
 
 class Evidence:
@@ -111,10 +109,13 @@ def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
     evidence.desktop_preflight(digest, identity, component)
 
 
-def verify_claim(row: dict, evidence: Evidence) -> str:
+def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
     check_physical_gate(record, row["declaration"], set(row["requiredOptionalChecks"]))
+    observed_revision = record["provenance"].get("sourceRevision")
+    require(observed_revision is not None, "Device evidence does not record a source revision")
+    require(observed_revision == revision, "Device evidence is from another source revision")
     identity = record["tuple"]
     evidence.verify(identity["buildSha256"])
     evidence.verify(identity["packageReceiptSha256"])
@@ -128,7 +129,7 @@ def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
     matrix = fields(value, {"schemaVersion", "sourceRevision", "reviews", "tuples"}, "release matrix")
     require(type(matrix["schemaVersion"]) is int and matrix["schemaVersion"] == 1, "Unsupported release matrix schema")
     revision = matrix["sourceRevision"]
-    require(isinstance(revision, str) and REVISION.fullmatch(revision) is not None, "Missing exact release source revision")
+    require(is_source_revision(revision), "Missing exact release source revision")
     reviews = fields(matrix["reviews"], REVIEWS, "subsystem reviews")
     raw_rows = matrix["tuples"]
     require(isinstance(raw_rows, list) and len(raw_rows) <= MAX_TUPLES, "Invalid matrix tuple inventory")
@@ -158,7 +159,7 @@ def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
             messages.append(f"{label}: {row['category']} planning")
             continue
         try:
-            messages.append(f"{label}: {verify_claim(row, evidence)}")
+            messages.append(f"{label}: {verify_claim(row, evidence, revision)}")
         except (OSError, ValueError, RecursionError) as error:
             failures.append(f"{label}: {error}")
     return messages, failures

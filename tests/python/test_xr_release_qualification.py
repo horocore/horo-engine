@@ -39,7 +39,8 @@ def make_claim(root, mode, category="Reference"):
     plan = "xr-smoke-v1"
     record = {
         "schemaVersion": 1, "category": category, "evidenceLevel": "PhysicalDeviceQualification",
-        "status": "Passed", "tuple": identity, "provenance": {"testPlan": plan, "runId": mode},
+        "status": "Passed", "tuple": identity,
+        "provenance": {"testPlan": plan, "runId": mode, "sourceRevision": REVISION},
         "checks": {name: {"status": "Passed", "evidenceSha256": observation, "issue": None}
                    for name in ALL_CHECKS},
         "display": {"evidenceSha256": observation, "refreshMilliHertz": [90000],
@@ -129,6 +130,25 @@ def test_hashed_simulator_smoke_record_never_fulfills_physical_claim(release):
     result = run_matrix(release)
     assert result.returncode == 1
     assert "Standalone (xr-platform): Physical headset evidence is required" in result.stderr
+
+
+@pytest.mark.parametrize(("revision", "reason"), [
+    (None, "Device evidence does not record a source revision"),
+    ("b" * 40, "Device evidence is from another source revision"),
+    ("main", "Invalid device evidence source revision"),
+])
+def test_pcvr_smoke_record_must_identify_the_release_source(release, revision, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    del record["provenance"]["sourceRevision"]
+    if revision is not None:
+        record["provenance"]["sourceRevision"] = revision
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Tethered (xr-platform): {reason}" in result.stderr
 
 
 def update_claim_identity(row, evidence, **changes):

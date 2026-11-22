@@ -32,6 +32,7 @@ CORE_CHECKS = {"setup", "input", "displayEnumeration", "renderTiming",
 OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 SHA256 = re.compile(r"[0-9a-f]{64}")
+SOURCE_REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+/:@-]{0,127}")
 EXTENSION = re.compile(r"XR_[A-Za-z0-9_]{1,125}")
 
@@ -70,6 +71,10 @@ def is_token(value: object) -> bool:
 
 def is_digest(value: object) -> bool:
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def is_source_revision(value: object) -> bool:
+    return isinstance(value, str) and SOURCE_REVISION.fullmatch(value) is not None
 
 
 def in_set(value: object, choices: set[str]) -> bool:
@@ -133,7 +138,12 @@ def validate_record(value: object) -> dict:
     require(in_set(record["status"], STATUSES), "Invalid record status")
     observed = record["status"] not in {"Blocked", "NotRun"}
     validate_identity(record["tuple"], complete=observed and record["evidenceLevel"] == "PhysicalDeviceQualification")
-    provenance = fields(record["provenance"], {"testPlan", "runId"}, "provenance")
+    provenance_keys = {"testPlan", "runId"}
+    if isinstance(record["provenance"], dict) and "sourceRevision" in record["provenance"]:
+        provenance_keys.add("sourceRevision")
+    provenance = fields(record["provenance"], provenance_keys, "provenance")
+    if "sourceRevision" in provenance:
+        require(is_source_revision(provenance["sourceRevision"]), "Invalid device evidence source revision")
     require(is_token(provenance["testPlan"]), "Missing test-plan revision")
     require(is_token(provenance["runId"]) if observed else provenance["runId"] is None or is_token(provenance["runId"]),
             "Missing or invalid provenance run identity")

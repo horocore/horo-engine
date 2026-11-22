@@ -68,6 +68,12 @@ Each claimed row has a complete smoke `declaration` with `tuple` and
 uses `releaseClaim: false`. Its declaration and record may be null while
 the device owner investigates.
 
+Every claimed smoke record must include `provenance.sourceRevision` from the
+tested package's build provenance. It must match the matrix's exact source
+revision. Older records without this field remain readable by the device
+validator. To qualify them for a release, recover the revision from the original
+build provenance or repeat the device test with a traceable package.
+
 The packaged PCVR route requires Windows or Linux with Vulkan and a
 successful Desktop OpenXR preflight receipt. Use Windows or Linux for
 `hostPlatform` and keep the operating system version in `hostVersion`.
