@@ -39,6 +39,7 @@ namespace Horo::Tests::PackageApplicationService {
 
             std::function<void()> onActivate;
             unsigned activated{}, retired{}, finalized{};
+            bool drainAllowed{true};
 
         private:
             class Receipt final : public IPackageModuleActivation {
@@ -57,7 +58,7 @@ namespace Horo::Tests::PackageApplicationService {
                 }
 
                 bool Finalize() noexcept override {
-                    if (!retired_)
+                    if (!retired_ || !host_.drainAllowed)
                         return false;
                     ++host_.finalized;
                     return true;
@@ -333,6 +334,76 @@ namespace Horo::Tests::PackageApplicationService {
             CHECK(fixture.lifecycle->Active()->modules.empty());
             CHECK(host->retired == 1);
             CHECK(host->finalized == 1);
+        }
+
+        TEST_CASE("Package installation keeps active and draining package owners in the committed graph",
+                  "[packages][application][removal]") {
+            ExactRoleTrust trust;
+            auto host = std::make_shared<TestRoleHost>();
+            Fixture fixture{true, host, &trust};
+
+            struct AllowDrainOnExit {
+                TestRoleHost &host;
+
+                ~AllowDrainOnExit() {
+                    host.drainAllowed = true;
+                }
+            } allowDrain{*host};
+
+            const auto selected = SelectedRole(fixture);
+            const auto activated = fixture.application->ActivateModules(std::span{&selected, 1});
+            REQUIRE(activated.HasValue());
+            REQUIRE(WaitForTerminal(fixture, activated.Value()).outcome == PackageOperationOutcome::Succeeded);
+            const auto previous = fixture.install.InstalledRecord();
+            REQUIRE(previous);
+
+            const auto replacement = Parse<HoroPackageId>("com.horo.replacement");
+            const auto &original = fixture.graph.lock->Packages().front();
+            const PackageResolutionPlan plan{.packages = {{replacement, original.version, original.source, original.artifactDigest, {}}}};
+            const PackageLockArtifact artifact{replacement,
+                                               original.version,
+                                               original.source,
+                                               original.artifactDigest,
+                                               original.manifestDigest,
+                                               original.fileManifestDigest};
+            auto configuration = fixture.Configuration();
+            configuration.restore.expectedRequestHash = ComputeSha256(std::as_bytes(std::span{std::string_view{"replacement-request"}}));
+            auto lock = ValidatedPackageLockfileV1::Generate(plan, std::span{&replacement, 1}, configuration.restore.expectedRequestHash,
+                                                             std::span{&artifact, 1});
+            REQUIRE(lock.HasValue());
+            configuration.restore.lockfileJson = lock.Value().SerializeCanonical();
+            configuration.lockedPlan = std::move(lock).Value();
+            auto rebound =
+                PackageApplication::Create(fixture.jobs, *fixture.restore, fixture.install, *fixture.lifecycle, std::move(configuration));
+            REQUIRE(rebound.HasValue());
+            fixture.application = std::move(rebound).Value();
+
+            const auto tryInstall = [&] {
+                const auto started = fixture.application->Install();
+                REQUIRE(started.HasValue());
+                return WaitForTerminal(fixture, started.Value());
+            };
+            const auto checkBlocked = [&](const PackageOperationSnapshot &result) {
+                CHECK(result.outcome == PackageOperationOutcome::Failed);
+                REQUIRE(result.diagnostic);
+                CHECK(result.diagnostic->code.Value() == PackageLifecycleErrors::PackageInUse.code.Value());
+                CHECK(result.diagnostic->message == "Packages still in use: " + selected.package.Value());
+                CHECK(fixture.install.InstalledRecord() == previous);
+            };
+            checkBlocked(tryInstall());
+            host->drainAllowed = false;
+            const auto disabled = fixture.application->Disable();
+            REQUIRE(disabled.HasValue());
+            REQUIRE(WaitForTerminal(fixture, disabled.Value()).outcome == PackageOperationOutcome::Succeeded);
+            CHECK(host->retired == 1);
+            CHECK(host->finalized == 0);
+            checkBlocked(tryInstall());
+
+            host->drainAllowed = true;
+            fixture.lifecycle->FinalizeRetirements();
+            REQUIRE(tryInstall().outcome == PackageOperationOutcome::Succeeded);
+            REQUIRE(fixture.install.InstalledRecord() != previous);
+            CHECK(fixture.install.ActiveGraph()->packages.front().lock.package == replacement);
         }
 
         TEST_CASE("Package application reports role trust decisions without reusing stale attempt evidence",

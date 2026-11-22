@@ -83,6 +83,18 @@ namespace Horo::Packages {
         return state_->pending.size() + state_->draining.size();
     }
 
+    /** @copydoc PackageModuleRetirementQueue::AppendRetainedPackages */
+    Result<void> PackageModuleRetirementQueue::AppendRetainedPackages(std::vector<HoroPackageId> &packages) const {
+        if (std::this_thread::get_id() != state_->owner)
+            return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        for (const auto &composition : state_->pending)
+            composition->AppendRetainedPackages(packages);
+        for (const auto &composition : state_->draining)
+            if (composition)
+                composition->AppendRetainedPackages(packages);
+        return Result<void>::Success();
+    }
+
     /** @copydoc PackageModuleRetirementQueue::Reserve */
     bool PackageModuleRetirementQueue::Reserve() noexcept {  // NOSONAR(cpp:S5817) Mutates lifecycle authority.
         if (std::this_thread::get_id() != state_->owner || state_->inDrain || state_->reserved >= state_->maximum)

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <set>
 #include <thread>
 #include <utility>
 
@@ -288,6 +289,36 @@ namespace Horo::Packages {
     /** @copydoc PackageLifecycleService::Active */
     std::shared_ptr<const PackageActivationSnapshot> PackageLifecycleService::Active() const {
         return std::this_thread::get_id() == impl_->owner ? impl_->active : nullptr;
+    }
+
+    /** @copydoc PackageLifecycleService::MissingRetainedPackages */
+    Result<std::vector<HoroPackageId>> PackageLifecycleService::MissingRetainedPackages(const PackageRestoreGraph &replacement) const {
+        using Output = Result<std::vector<HoroPackageId>>;
+        if (std::this_thread::get_id() != impl_->owner || impl_->preparing)
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        std::vector<HoroPackageId> retained;
+        if (impl_->current)
+            impl_->current->AppendRetainedPackages(retained);
+        for (const auto &composition : impl_->retired)
+            if (composition)
+                composition->AppendRetainedPackages(retained);
+        if (const auto &queue = impl_->configuration.moduleRetirements) {
+            if (const auto read = queue->AppendRetainedPackages(retained); read.HasError())
+                return Output::Failure(read.ErrorValue());
+        }
+        if (retained.empty())
+            return Output::Success(std::move(retained));
+
+        std::set<std::string_view, std::less<>> available;
+        for (const auto &package : replacement.packages)
+            available.insert(package.lock.package.Value());
+        std::erase_if(retained, [&available](const auto &package) {
+            return available.contains(package.Value());
+        });
+        std::ranges::sort(retained);
+        const auto duplicates = std::ranges::unique(retained);
+        retained.erase(duplicates.begin(), duplicates.end());
+        return Output::Success(std::move(retained));
     }
 
     /** @copydoc PackageLifecycleService::State */

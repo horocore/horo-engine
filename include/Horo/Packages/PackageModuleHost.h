@@ -127,6 +127,8 @@ namespace Horo::Packages {
         [[nodiscard]] bool Reserve() noexcept;
         /** @brief Transfers a reserved generation, preserving the entire verified resource closure. */
         void Retain(std::unique_ptr<Detail::PackageComposition> composition) noexcept;
+        /** @brief Appends package owners still present in the retirement queue on its owner lane. */
+        [[nodiscard]] Result<void> AppendRetainedPackages(std::vector<HoroPackageId> &packages) const;
         /** @brief Releases one unused reservation. */
         void Release() noexcept;
     };

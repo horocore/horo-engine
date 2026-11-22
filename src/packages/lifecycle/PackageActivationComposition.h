@@ -48,6 +48,8 @@ namespace Horo::Packages::Detail {
 
         [[nodiscard]] virtual bool Finalize() = 0;
         [[nodiscard]] virtual std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept = 0;
+        /** @brief Appends package identities still owned by this composition, including during retirement. */
+        virtual void AppendRetainedPackages(std::vector<HoroPackageId> &packages) const = 0;
     };
 
     /** @brief Detached complete native host; retirement retains files until its actual work leases drain. */
@@ -61,6 +63,7 @@ namespace Horo::Packages::Detail {
         void Retire() noexcept override;
         [[nodiscard]] bool Finalize() override;
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept override;
+        void AppendRetainedPackages(std::vector<HoroPackageId> &packages) const override;
 
     private:
         /** @brief Evaluates all grants and stages verified bytes before any executable host callback. */
@@ -77,6 +80,7 @@ namespace Horo::Packages::Detail {
         std::unique_ptr<Extensions::ExtensionManager> manager_;
         std::vector<Extensions::ExtensionCapabilityAdmission> admissions_;
         std::vector<std::shared_ptr<Extensions::ExtensionRetirement>> retirements_;
+        std::vector<HoroPackageId> retainedPackages_;
         bool retired_{};
         bool removeContent_{true};
     };

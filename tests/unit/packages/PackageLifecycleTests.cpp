@@ -219,6 +219,25 @@ TEST_CASE("Package lifecycle generation and file storage survive retained old ca
     CHECK(fixture.retiredIds.size() == 2U);
 }
 
+TEST_CASE("Package removal inventory retains native package identity until the old catalog drains", "[packages][activation][removal]") {
+    Fixture fixture;
+    fixture.Install();
+    REQUIRE(fixture.Activate().HasValue());
+    auto retained = fixture.service->Active();
+    REQUIRE(retained);
+    const auto package = fixture.enabled.front().package;
+    const PackageRestoreGraph replacement;
+    REQUIRE(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
+    CHECK(fixture.service->MissingRetainedPackages(*retained->install->Graph()).Value().empty());
+
+    REQUIRE(fixture.service->Activate({}, PackageActivationBoundary::Quiescent, fixture.cancellation.Token()).HasValue());
+    CHECK(fixture.service->Active()->activations.empty());
+    CHECK(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
+    retained.reset();
+    fixture.service->FinalizeRetirements();
+    CHECK(fixture.service->MissingRetainedPackages(replacement).Value().empty());
+}
+
 TEST_CASE("Package lifecycle shutdown during native preparation cannot publish or resurrect a graph", "[packages][activation]") {
     Fixture fixture;
     fixture.Install();

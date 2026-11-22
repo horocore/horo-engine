@@ -25,6 +25,7 @@ namespace Horo::Packages::Detail {
         [[nodiscard]] std::vector<PackageModuleReport> Reports() const override;
         [[nodiscard]] bool Finalize() override;
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept override;
+        void AppendRetainedPackages(std::vector<HoroPackageId> &packages) const override;
 
     private:
         struct Entry final {

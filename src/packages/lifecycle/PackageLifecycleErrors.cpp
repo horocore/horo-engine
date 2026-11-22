@@ -27,6 +27,12 @@ namespace Horo::Packages::PackageLifecycleErrors {
                                            .defaultSeverity = ErrorSeverity::Error,
                                            .summary = "Installed package composition changed during activation.",
                                            .remediationHint = "Retry using the current install record."};
+    const ErrorCodeDescriptor PackageInUse{.domain = Domain,
+                                           .code = ErrorCode{"packages.activation.package_in_use"},
+                                           .defaultSeverity = ErrorSeverity::Warning,
+                                           .summary = "The replacement would remove packages still owned by active or retiring modules.",
+                                           .remediationHint =
+                                               "Disable the affected modules and let their callbacks drain before retrying."};
     const ErrorCodeDescriptor
         InvalidLifecycle{.domain = Domain,
                          .code = ErrorCode{"packages.activation.invalid_lifecycle"},

@@ -142,6 +142,12 @@ namespace Horo::Packages {
         /** @brief Returns the last fully published composition on the lifecycle owner lane.
          * @return Owning immutable snapshot or empty before publication, after withdrawal, or off the owner lane. */
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Active() const;
+        /** @brief Finds native package owners that a replacement graph would remove.
+         * @param replacement Exact candidate availability graph from restore.
+         * @return Sorted unique package IDs that remain active or are still draining, or an owner-lane failure.
+         * @details This read does not finalize owners or inspect project asset and service references. The application serializes
+         * replacement commits with activation operations on the composition lane. */
+        [[nodiscard]] Result<std::vector<HoroPackageId>> MissingRetainedPackages(const PackageRestoreGraph &replacement) const;
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */
         [[nodiscard]] PackageLifecycleState State() const;
         /** @brief Finalizes reverse-order retirement after outstanding importer/callback leases are released. */

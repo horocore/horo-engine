@@ -148,11 +148,13 @@ namespace Horo::Packages::Detail {
                                                                                      snapshot_->generation),
                                                                   configuration.editorHosts);
         retirements_.reserve(candidates.size());
+        retainedPackages_.reserve(candidates.size());
         for (const auto &candidate : candidates) {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             const auto packageRoot = root_ / std::to_string(candidate.packageIndex);
             const auto descriptor = packageRoot / candidate.descriptor.Value();
+            retainedPackages_.push_back(install_->Graph()->packages[candidate.packageIndex].lock.package);
             auto loaded = manager_->LoadExtension(descriptor.parent_path().string(), candidate.providers, candidate.selectedModules);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
@@ -203,5 +205,10 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageActivationComposition::Snapshot */
     std::shared_ptr<const PackageActivationSnapshot> PackageActivationComposition::Snapshot() const noexcept {
         return snapshot_;
+    }
+
+    /** @copydoc PackageComposition::AppendRetainedPackages */
+    void PackageActivationComposition::AppendRetainedPackages(std::vector<HoroPackageId> &packages) const {
+        packages.insert(packages.end(), retainedPackages_.begin(), retainedPackages_.end());
     }
 }  // namespace Horo::Packages::Detail

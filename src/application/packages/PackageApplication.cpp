@@ -1,5 +1,6 @@
 #include "Horo/Application/PackageApplication.h"
 
+#include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
 #include <limits>
@@ -139,6 +140,20 @@ namespace Horo::Application {
     void PackageApplication::Impl::SubmitInstall(std::shared_ptr<const Packages::PackageRestoreGraph> graph) {
         if (!graph) {
             Finish(Result<void>::Failure(Failure("packages.application.graph_unavailable")));
+            return;
+        }
+        const auto retained = lifecycle.MissingRetainedPackages(*graph);
+        if (retained.HasError()) {
+            Finish(Result<void>::Failure(retained.ErrorValue()));
+            return;
+        }
+        if (!retained.Value().empty()) {
+            std::string detail{"Packages still in use:"};
+            for (const auto &package : retained.Value()) {
+                detail += ' ';
+                detail += package.Value();
+            }
+            Finish(Result<void>::Failure(MakeError(Packages::PackageLifecycleErrors::PackageInUse, std::move(detail))));
             return;
         }
         auto completed = std::make_shared<PackageOperations::Completion>();

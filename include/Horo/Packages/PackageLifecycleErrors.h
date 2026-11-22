@@ -13,6 +13,8 @@ namespace Horo::Packages::PackageLifecycleErrors {
     extern const ErrorCodeDescriptor Cancelled;
     /** @brief Install generation changed during staging. */
     extern const ErrorCodeDescriptor StaleInstall;
+    /** @brief A replacement would remove one or more packages with retained executable owners. */
+    extern const ErrorCodeDescriptor PackageInUse;
     /** @brief Owner-lane, lifecycle boundary or retained-owner limit rejected activation. */
     extern const ErrorCodeDescriptor InvalidLifecycle;
     /** @brief Private verified content could not be materialized. */

@@ -302,6 +302,9 @@ quiescent boundary. Disable selects an empty or reduced module set. Uninstall
 removes package availability only after the same withdrawal/drain policy and
 project-reference checks; old resource receipts remain valid until drain. These
 operations do not create a second installer or mutate project-owned assets.
+The package application rejects an install-graph replacement that would remove a
+package still owned by an active or retiring module. The diagnostic identifies
+the retained packages. The host can retry after their owners drain.
 
 ## Enablement State
 
