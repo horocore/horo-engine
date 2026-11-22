@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "editor/modals/settings/SettingsModalInternal.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
@@ -276,6 +277,49 @@ TEST_CASE("Shared configuration fields render long provenance and typed errors a
     REQUIRE(ImGui::GetDrawData() != nullptr);
     CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
     CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 100);
+}
+
+TEST_CASE("Gameplay accessibility settings share the user draft and Apply transaction", "[unit][editor][gui][accessibility]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace SettingsModalInternal;
+
+    ConfigurationSchema schema;
+    const auto contribution = Gameplay::MakeGameplayAccessibilityContribution();
+    for (const auto &descriptor : contribution.settings)
+        REQUIRE(schema.Register(descriptor).HasValue());
+
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    SettingsPresentationFixture fixture{{720.0F, 640.0F}, std::move(schema)};
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(fixture.gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
+
+    auto &state = fixture.modal.Draft();
+    REQUIRE(HasGameplayAccessibilitySettings(state));
+    REQUIRE(state.configuration);
+    for (const auto &descriptor : contribution.settings) {
+        REQUIRE(descriptor.label);
+        CHECK_FALSE(fixture.gui.localization.Get(descriptor.label->namespaceId, descriptor.label->key).starts_with("[missing:"));
+        CHECK(state.configuration->EditBuffer(descriptor.key) != nullptr);
+    }
+    state.activeTab = static_cast<int>(SettingsTab::Accessibility);
+    const SettingKey aim{"accessibility.gameplay.aim_assist"};
+    REQUIRE(state.configuration->Edit(aim, "1001").HasError());
+    DrawModalFrame(fixture);
+    REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+    REQUIRE_FALSE(fixture.modal.ApplyDraft());
+    CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(aim)) == 0);
+
+    REQUIRE(state.configuration->Edit(aim, "750").HasValue());
+    state.activeTab = static_cast<int>(SettingsTab::Configuration);
+    DrawModalFrame(fixture);
+    REQUIRE(fixture.modal.ApplyDraft());
+    const auto tick = Gameplay::GameplayAssistTickSnapshot::Capture(fixture.configuration.Snapshot());
+    REQUIRE(tick.HasValue());
+    CHECK(tick.Value().Preferences().aimAssist == 0.75F);
 }
 
 TEST_CASE("Settings presentation renders extension and plugin detail surfaces", "[unit][editor][gui][settings]") {

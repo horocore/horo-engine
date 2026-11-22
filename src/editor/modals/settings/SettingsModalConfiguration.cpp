@@ -1,11 +1,17 @@
 #include "Horo/Editor/EditorConfiguration.h"
 #include "SettingsModalInternal.h"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 
 namespace Horo::Editor::SettingsModalInternal {
     namespace {
+        /** @brief Classifies fields by the gameplay accessibility configuration owner's namespace. */
+        bool IsGameplayAccessibilityField(const ConfigurationSettingField &field) {
+            return field.descriptor.key.Value().starts_with("accessibility.gameplay.");
+        }
+
         /** @brief Maps typed source metadata to stable localization keys. */
         const char *SourceText(const ConfigurationSource source) {
             constexpr std::array keys{"configuration.source.invocation", "configuration.source.environment", "configuration.source.session",
@@ -127,27 +133,10 @@ namespace Horo::Editor::SettingsModalInternal {
                 state.configurationPreviewed = true;
             }
         }
-    }  // namespace
 
-    /** @copydoc DrawConfiguration */
-    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, const ConfigurationSource source) {
-        using namespace Theme;
-        using namespace Ui;
-        const auto &binding = source == ConfigurationSource::Project ? state.projectConfiguration : state.configuration;
-        if (!binding) {
-            if (source == ConfigurationSource::Project && state.projectConfigurationError) {
-                const auto &message = SettingsModal::kTextScope.Text(context.localization, "configuration.project_unavailable");
-                ImGui::TextWrapped("%s", message.c_str());
-            }
-            return;
-        }
-        auto &session = *binding;
-        const auto &title =
-            SettingsModal::kTextScope.Text(context.localization,
-                                           source == ConfigurationSource::Project ? "configuration.project_title" : "configuration.title");
-        SectionTitle(title.c_str(), context.theme.fonts);
-        for (const auto &field : session.Fields()) {
-            const auto &key = field.descriptor.key;
+        /** @brief Draws one descriptor row and reports whether editing may have replaced the rows. */
+        bool DrawConfigurationField(SettingsState &state, ConfigurationSettingsSession &session, const ConfigurationSettingField &field,
+                                    const EditorGuiContext &context, const ConfigurationSource source) {
             DrawMetadata(field, context);
             if (field.descriptor.sensitivity == SettingSensitivity::Public)
                 DrawPublicValues(field, context);
@@ -157,17 +146,50 @@ namespace Horo::Editor::SettingsModalInternal {
                                                                              ? "configuration.sensitive"
                                                                              : "configuration.readonly");
                 ImGui::TextWrapped("%s", policy.c_str());
-                continue;
+                return false;
             }
             const auto &publicPolicy =
                 SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_public"
                                                                                                             : "configuration.public");
             ImGui::TextWrapped("%s", publicPolicy.c_str());
             if (DrawFieldControl(session, field, context, source)) {
-                ApplyFieldEdit(state, session, key);
-                return;
+                ApplyFieldEdit(state, session, field.descriptor.key);
+                return true;
             }
             DrawFieldFeedback(session, field, context);
+            return false;
+        }
+    }  // namespace
+
+    /** @copydoc HasGameplayAccessibilitySettings */
+    bool HasGameplayAccessibilitySettings(const SettingsState &state) {
+        return state.configuration && std::ranges::any_of(state.configuration->Fields(), IsGameplayAccessibilityField);
+    }
+
+    /** @copydoc DrawConfiguration */
+    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, const std::string_view titleKey) {
+        using namespace Theme;
+        using namespace Ui;
+        const auto tab = static_cast<SettingsTab>(state.activeTab);
+        const bool project = tab == SettingsTab::ProjectConfiguration;
+        const bool accessibility = tab == SettingsTab::Accessibility;
+        const auto source = project ? ConfigurationSource::Project : ConfigurationSource::User;
+        const auto &binding = project ? state.projectConfiguration : state.configuration;
+        if (!binding) {
+            if (source == ConfigurationSource::Project && state.projectConfigurationError) {
+                const auto &message = SettingsModal::kTextScope.Text(context.localization, "configuration.project_unavailable");
+                ImGui::TextWrapped("%s", message.c_str());
+            }
+            return;
+        }
+        auto &session = *binding;
+        const auto &title = SettingsModal::kTextScope.Text(context.localization, titleKey);
+        SectionTitle(title.c_str(), context.theme.fonts);
+        for (const auto &field : session.Fields()) {
+            if (!project && IsGameplayAccessibilityField(field) != accessibility)
+                continue;
+            if (DrawConfigurationField(state, session, field, context, source))
+                return;
         }
         if (session.Failure()) {
             const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");

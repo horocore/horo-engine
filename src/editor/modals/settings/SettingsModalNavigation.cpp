@@ -98,6 +98,8 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {general.c_str(), "G", General}, ctx);
         DrawNavItem(st, {appearance.c_str(), "A", Appearance}, ctx);
         DrawNavItem(st, {input.c_str(), "I", Input}, ctx);
+        if (HasGameplayAccessibilitySettings(st))
+            DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "accessibility.title").c_str(), "A", Accessibility}, ctx);
         const auto &codeEditor = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
         const auto &keymaps = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
         DrawNavGroup(codeEditor.c_str(), ctx);
@@ -503,10 +505,13 @@ namespace Horo::Editor::SettingsModalInternal {
                 DrawGeneral(st, ctx);
                 break;
             case Configuration:
-                DrawConfiguration(st, ctx);
+                DrawConfiguration(st, ctx, "configuration.title");
                 break;
             case ProjectConfiguration:
-                DrawConfiguration(st, ctx, ConfigurationSource::Project);
+                DrawConfiguration(st, ctx, "configuration.project_title");
+                break;
+            case Accessibility:
+                DrawConfiguration(st, ctx, "accessibility.gameplay_title");
                 break;
             case Appearance:
                 DrawAppearance(st, ctx);

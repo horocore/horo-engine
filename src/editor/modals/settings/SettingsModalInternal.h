@@ -38,6 +38,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Prefab,
         Configuration,
         ProjectConfiguration,
+        Accessibility,
     };
 
     struct NavItem {
@@ -92,8 +93,10 @@ namespace Horo::Editor::SettingsModalInternal {
     /** @brief Draw the cached project-owned prefab policy through typed commands and shared controls. */
     void DrawPrefabSettings(SettingsState &state, const EditorGuiContext &context);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);
-    /** @brief Renders shared descriptor fields, safe precedence inspection and immutable preview results. */
-    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, ConfigurationSource source = ConfigurationSource::User);
+    /** @brief Reports whether the host contributed gameplay accessibility settings to the user draft. */
+    [[nodiscard]] bool HasGameplayAccessibilitySettings(const SettingsState &state);
+    /** @brief Renders descriptor fields for the active configuration or accessibility tab using the shared draft. */
+    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, std::string_view titleKey);
     void DrawCollision(SettingsState &st, const EditorGuiContext &ctx);
     void DrawUpdates(SettingsState &st, const EditorGuiContext &ctx);
     [[nodiscard]] bool DrawFooterContent(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx);

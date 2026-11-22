@@ -39,7 +39,8 @@ namespace Horo::Gameplay {
                         ConfigurationSourcePolicy{ConfigurationSourceMask::User | ConfigurationSourceMask::Session |
                                                       ConfigurationSourceMask::Invocation | ConfigurationSourceMask::PackagedProfile,
                                                   false},
-                    .validation = std::move(validation)};
+                    .validation = std::move(validation),
+                    .label = SettingLabelKey{"editor", "settings." + key.Value()}};
         }
 
         /** @brief Publishes the bounds used by fixed tick capture to configuration ingress. */

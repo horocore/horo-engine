@@ -3447,6 +3447,7 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
             HoroEngine::VisualAccessibility
+            HoroEngine::GameplayAccessibility
             HoroEngine::EditorServices
             HoroEngine::Extensions
             HoroThirdParty::ImGui
