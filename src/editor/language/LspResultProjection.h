@@ -55,6 +55,7 @@ namespace Horo::Editor::Language {
     struct LanguageTextEdit final {
         LanguageByteSpan span;
         std::string replacement;
+        bool operator==(const LanguageTextEdit &) const = default;
     };
 
     /** @brief Diagnostic urgency in protocol order; omitted severity is unspecified. */
@@ -91,6 +92,7 @@ namespace Horo::Editor::Language {
         std::string insertText;
         std::vector<LanguageTextEdit> edits;
         std::optional<LanguageByteSpan> primaryEdit; /**< Identifies the main range among the sorted edits. */
+        bool operator==(const LanguageCompletionItem &) const = default;
     };
 
     /** @brief Plans one atomic and undoable completion, including its additional document edits. */

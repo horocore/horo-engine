@@ -1,6 +1,8 @@
 #include "EditorWorkspaceController.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "ScriptModuleHostServices.h"
 #include "WorkspacePathText.h"
+#include "editor/source_editor/HoroScriptModuleLanguage.h"
 
 namespace Horo::Editor {
     namespace {
@@ -35,17 +37,79 @@ namespace Horo::Editor {
         m_viewModel.sourceLanguageUnavailable = true;
     }
 
+    /** @copydoc EditorWorkspaceController::ConfigureScriptLanguage */
+    void EditorWorkspaceController::ConfigureScriptLanguage(std::shared_ptr<Extensions::ScriptModuleHostServices> host) {
+        m_scriptLanguageHost = std::move(host);
+        if (!m_scriptLanguageHost || m_sourceOpenService.ProjectRoot().empty())
+            return;
+        auto bindings = Language::LoadScriptModuleSourceBindings(m_sourceOpenService.ProjectRoot());
+        if (bindings.HasError()) {
+            LOG_WARN("editor.source.language", "%s", bindings.ErrorValue().message.c_str());
+            return;
+        }
+        m_viewModel.sourceScriptBindings = std::move(bindings).Value();
+    }
+
+    /** @copydoc EditorWorkspaceController::QueryScriptLanguage */
+    Result<Language::LanguageResult> EditorWorkspaceController::QueryScriptLanguage(const SourceLanguageIntent &intent) {
+        using Output = Result<Language::LanguageResult>;
+        const auto identity = intent.source.Identity();
+        const auto *module = Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, identity.key.source);
+        if (!module || !m_scriptLanguageHost)
+            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+        const auto current = m_sourceOpenService.Documents().Snapshot(identity.instance);
+        if (current.HasError() || !current.Value().SharesStateWith(intent.source))
+            return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+        const auto imports =
+            m_scriptLanguageHost->DescribeActiveModuleApis(module->package, module->module, m_scriptLanguageProject.Lease());
+        if (imports.HasError())
+            return Output::Failure(imports.ErrorValue());
+        return Language::QueryHoroScriptImports(intent.source, intent.kind, intent.view.caret, imports.Value());
+    }
+
+    /** @copydoc EditorWorkspaceController::RequestScriptLanguage */
+    void EditorWorkspaceController::RequestScriptLanguage(const SourceLanguageIntent &intent) {
+        m_viewModel.sourceLanguageStatus.reset();
+        auto queried = QueryScriptLanguage(intent);
+        if (queried.HasError()) {
+            m_viewModel.sourceLanguageStatus = {intent.source, SourceLanguageStatusKind::ScriptModuleUnavailable};
+            return;
+        }
+        auto result = std::move(queried).Value();
+        if (intent.kind == SourceLanguageRequestKind::Completion) {
+            AcceptSourceCompletions(result, intent.view, true);
+        } else if (auto *hover = std::get_if<Language::LanguageHover>(&result.payload)) {
+            m_viewModel.sourceScriptHover = {intent.source, intent.view, std::move(hover->text)};
+        } else {
+            m_viewModel.sourceLanguageStatus = {intent.source, SourceLanguageStatusKind::NoSymbol};
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::ScriptCompletionCurrent */
+    bool EditorWorkspaceController::ScriptCompletionCurrent(const SourceLanguageCompletions &result, const std::size_t index) {
+        const auto queried = QueryScriptLanguage({result.source, SourceLanguageRequestKind::Completion, result.view});
+        if (queried.HasError())
+            return false;
+        const auto *current = std::get_if<Language::LanguageCompletions>(&queried.Value().payload);
+        return current && std::ranges::find(current->items, result.completions.items[index]) != current->items.end();
+    }
+
     /** @copydoc EditorWorkspaceController::RequestSourceLanguage */
     void EditorWorkspaceController::RequestSourceLanguage(const SourceLanguageIntent &intent) {
         using enum SourceLanguageRequestKind;
-        if (!m_sourceLanguage || !intent.source.IsCurrent() ||
-            intent.source.Identity().instance != m_viewModel.workspacePanelHost.ActiveDocument() ||
-            (intent.kind != Definition && intent.kind != Completion))
+        if (!intent.source.IsCurrent() || intent.source.Identity().instance != m_viewModel.workspacePanelHost.ActiveDocument())
             return;
-        if (m_pendingSourceLanguage)
+        if (m_sourceLanguage && m_pendingSourceLanguage)
             static_cast<void>(m_sourceLanguage->Cancel(m_pendingSourceLanguage->request));
         m_pendingSourceLanguage.reset();
         m_viewModel.sourceCompletions.reset();
+        m_viewModel.sourceScriptHover.reset();
+        if (Language::FindScriptModuleSourceBinding(m_viewModel.sourceScriptBindings, intent.source.Identity().key.source)) {
+            RequestScriptLanguage(intent);
+            return;
+        }
+        if (!m_sourceLanguage || (intent.kind != Definition && intent.kind != Completion))
+            return;
         const auto request = m_sourceLanguage->Request(intent.source, intent.kind, {.offset = intent.view.caret});
         if (request.HasError()) {
             m_viewModel.sourceLanguageStatus = {intent.source, SourceLanguageStatusKind::Refused};
@@ -118,14 +182,15 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::AcceptSourceCompletions */
-    void EditorWorkspaceController::AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view) {
+    void EditorWorkspaceController::AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view,
+                                                            const bool fromScriptModule) {
         auto *completions = std::get_if<Language::LanguageCompletions>(&result.payload);
         if (!completions || completions->items.empty()) {
             m_viewModel.sourceLanguageStatus = {result.context.source, SourceLanguageStatusKind::NoCompletion};
             return;
         }
         m_viewModel.sourceCompletions = std::make_shared<const SourceLanguageCompletions>(
-            SourceLanguageCompletions{std::move(result.context.source), view, std::move(*completions)});
+            SourceLanguageCompletions{std::move(result.context.source), view, std::move(*completions), fromScriptModule});
     }
 
     /** @copydoc EditorWorkspaceController::ApplySourceCompletion */
@@ -136,6 +201,10 @@ namespace Horo::Editor {
             intent.index >= result->completions.items.size())
             return;
         m_viewModel.sourceCompletions.reset();
+        if (result->fromScriptModule && !ScriptCompletionCurrent(*result, intent.index)) {
+            m_viewModel.sourceLanguageStatus = {result->source, SourceLanguageStatusKind::ScriptModuleUnavailable};
+            return;
+        }
         auto completion = Language::PlanLanguageCompletion(result->source, result->view, result->completions.items[intent.index]);
         if (completion.HasError()) {
             m_viewModel.sourceEditingResult = Result<SourceEditingPublication>::Failure(std::move(completion).ErrorValue());
@@ -154,6 +223,8 @@ namespace Horo::Editor {
             m_viewModel.sourceLanguageFocus.reset();
         if (m_viewModel.sourceCompletions && !m_viewModel.sourceCompletions->source.IsCurrent())
             m_viewModel.sourceCompletions.reset();
+        if (m_viewModel.sourceScriptHover && !m_viewModel.sourceScriptHover->source.IsCurrent())
+            m_viewModel.sourceScriptHover.reset();
         std::erase_if(m_viewModel.sourceLanguageDiagnostics, [](const auto &entry) {
             return !entry.second->context.source.IsCurrent();
         });

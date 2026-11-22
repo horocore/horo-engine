@@ -103,6 +103,8 @@ namespace Horo::Extensions {
         Result<std::uint64_t> IssueGeneration() const;
         Result<ExtensionCapabilityAdmission> AdmitReference(std::string moduleId, std::uint64_t generation) const;
         Result<ModuleScriptSourceLease> Source(std::string_view package, std::string_view moduleId) const;
+        /** @brief Copies the declaration of the exact currently admitted module. */
+        [[nodiscard]] Result<ExtensionModuleManifest> ActiveDeclaration(std::string_view package, std::string_view moduleId) const;
         Result<ModuleScriptResolvedImport> Resolve(std::string_view package, std::string_view moduleId, std::string_view id) const;
         Result<void> ValidateActiveArtifacts(const ExtensionManifest &, std::span<const ModuleScriptArtifactEvidence>) const;
 

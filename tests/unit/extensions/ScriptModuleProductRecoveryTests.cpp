@@ -50,6 +50,11 @@ namespace Horo::Extensions::Tests {
         CHECK(beforeInstall[1].unavailable->code.Value() == ExtensionErrors::ScriptInvocationUnavailable.code.Value());
 
         CheckSignedImportLanguageQueries(package, beforeInstall);
+        const auto active = Take(host.modules->DescribeActiveModuleApis(package.id, package.module, host.project.Lease()));
+        REQUIRE(active.size() == 2);
+        REQUIRE(active[0].descriptor);
+        CHECK(active[0].descriptor->nameSpace == beforeInstall[0].descriptor->nameSpace);
+        CHECK(host.modules->DescribeActiveModuleApis(package.id, "not-loaded", host.project.Lease()).HasError());
 
         Accept(host.modules->PrepareReference(true));
         const auto retained = Take(host.modules->DescribeApis(*program, policy));
@@ -73,6 +78,7 @@ namespace Horo::Extensions::Tests {
         CHECK(partial[1].descriptor.has_value());
         host.project.Revoke();
         CHECK(host.modules->DescribeApis(*program, policy).HasError());
+        CHECK(host.modules->DescribeActiveModuleApis(package.id, package.module, host.project.Lease()).HasError());
     }
 
     TEST_CASE("Actual signed Headless operations retain the same two VM states across a real additive provider update",

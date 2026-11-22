@@ -2,6 +2,7 @@
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "ScriptModuleHostServices.h"
+#include "editor/source_editor/HoroScriptAuthoringConfig.h"
 #include "editor/source_editor/HoroScriptModuleLanguage.h"
 #include "editor/source_editor/SourceEditorTheme.h"
 #include "editor/source_editor/SourceSyntax.h"
@@ -69,6 +70,36 @@ TEST_CASE("Horo Script syntax supports Lua comments strings and keywords", "[edi
     RequireRole("a.lua", "--[=[ first\r\nreturn ]=]\nlocal x", "return", SourceSyntaxRole::Comment);
     RequireRole("a.lua", "local s = [==[ -- text\nreturn ]==]", "return", SourceSyntaxRole::String);
     RequireRole("a.lua", "local s = \"return \\\"text\\\"\"", "return", SourceSyntaxRole::String);
+}
+
+TEST_CASE("Project script bindings validate source identity and let one source select one module", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-config"};
+    const auto root = std::filesystem::canonical(directory.Path());
+    const auto missing = LoadScriptModuleSourceBindings(root);
+    REQUIRE(missing.HasValue());
+    CHECK(missing.Value().empty());
+    REQUIRE(std::filesystem::create_directory(root / ".horo"));
+    const auto config = root / ".horo/script-language.json";
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[
+        {"source":"scripts/demo.lua","package":"example.pack","module":"example.pack.runner"},
+        {"source":"scripts/another.horo_script","package":"second.pack","module":"second.pack.runner"}
+    ]})";
+    const auto loaded = LoadScriptModuleSourceBindings(root);
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value().size() == 2);
+    const auto demo = SourceDocumentId::Parse("scripts/demo.lua");
+    REQUIRE(demo.HasValue());
+    const auto *binding = FindScriptModuleSourceBinding(loaded.Value(), demo.Value());
+    REQUIRE(binding);
+    CHECK(binding->module == "example.pack.runner");
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[
+        {"source":"scripts/demo.lua","package":"example.pack","module":"example.pack.runner"},
+        {"source":"scripts/demo.lua","package":"second.pack","module":"second.pack.runner"}
+    ]})";
+    CHECK(LoadScriptModuleSourceBindings(root).HasError());
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[{"source":"../bad.lua","package":"p","module":"m"}]})";
+    CHECK(LoadScriptModuleSourceBindings(root).HasError());
 }
 
 TEST_CASE("Horo Script import queries ignore inert or out-of-scope aliases and retire with the source", "[editor][source][script-api]") {

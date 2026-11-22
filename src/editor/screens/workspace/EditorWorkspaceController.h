@@ -774,6 +774,8 @@ namespace Horo::Editor {
         IExternalProcessRunner *m_sourceLanguageRunner{};
         Language::ClangdSettings m_clangdSettings;
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
+        Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
 
         struct PendingSourceLanguage final {
@@ -1267,6 +1269,14 @@ namespace Horo::Editor {
         void RefreshSourceDocumentProjection();
         /** @brief Admits a language provider once its compiler metadata is available. */
         void PrepareSourceLanguage();
+        /** @brief Loads the project's authored script-to-module bindings. */
+        void ConfigureScriptLanguage(std::shared_ptr<Extensions::ScriptModuleHostServices> host);
+        /** @brief Resolves a module and queries its metadata in the exact source revision. */
+        [[nodiscard]] Result<Language::LanguageResult> QueryScriptLanguage(const SourceLanguageIntent &intent);
+        /** @brief Publishes one explicit Lua completion or hover request. */
+        void RequestScriptLanguage(const SourceLanguageIntent &intent);
+        /** @brief Revalidates an accepted Lua completion against the current registered provider. */
+        [[nodiscard]] bool ScriptCompletionCurrent(const SourceLanguageCompletions &result, std::size_t index);
         /** @brief Asks the synchronized provider for the active source feature. */
         void RequestSourceLanguage(const SourceLanguageIntent &intent);
         /** @brief Retires a request if its document is no longer active or its deadline passed. */
@@ -1280,7 +1290,7 @@ namespace Horo::Editor {
         /** @brief Consumes one matching language reply from the current request. */
         void AcceptSourceLanguage(Language::LanguageResult result);
         /** @brief Displays completion choices for their originating view and source lease. */
-        void AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view);
+        void AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view, bool fromScriptModule = false);
         /** @brief Applies a selected completion using the source document's history authority. */
         void ApplySourceCompletion(const SourceCompletionIntent &intent);
         /** @brief Opens an in-project definition and publishes its exact selection. */

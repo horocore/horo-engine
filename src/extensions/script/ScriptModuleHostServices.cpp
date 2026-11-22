@@ -91,13 +91,19 @@ namespace Horo::Extensions {
         }
 
         /** @brief Reads the builtin's installed descriptor without preparing or reloading a provider. */
-        ScriptModuleApiMetadata DescribeReference(const ScriptModuleReferenceInstallation *reference,
-                                                  const ScriptModuleOperationPolicy &policy) {
-            if (!ReferenceAllowed(policy))
+        ScriptModuleApiMetadata DescribeReference(const ScriptModuleReferenceInstallation *reference, const bool allowed) {
+            if (!allowed)
                 return {ReferenceAlias, std::nullopt, MakeError(ExtensionErrors::CapabilityUnavailable)};
             if (!reference)
                 return {ReferenceAlias, std::nullopt, MakeError(ExtensionErrors::ScriptInvocationUnavailable)};
             return DescribeImport(ReferenceAlias, reference->Bind(ReferenceAlias));
+        }
+
+        /** @brief Describes a declared native import through the host's binding resolution. */
+        ScriptModuleApiMetadata DescribeNativeImport(const auto &state, const std::string_view package, const std::string_view module,
+                                                     const ExtensionServiceImportManifest &declared) {
+            return DescribeImport(declared.id,
+                                  BindModuleScriptHostImport(*state.authority, package, module, declared.id, declared.id, state.profile));
         }
     }  // namespace
 
@@ -169,12 +175,29 @@ namespace Horo::Extensions {
                 result.push_back({declared.id, std::nullopt, MakeError(ExtensionErrors::CapabilityUnavailable)});
                 continue;
             }
-            const auto imported = BindModuleScriptHostImport(*impl_->authority, program.Manifest().id, program.Module().id, declared.id,
-                                                             declared.id, impl_->profile);
-            result.push_back(DescribeImport(declared.id, imported));
+            result.push_back(DescribeNativeImport(*impl_, program.Manifest().id, program.Module().id, declared));
         }
         if (program.RequestsReference())
-            result.push_back(DescribeReference(impl_->reference.get(), policy));
+            result.push_back(DescribeReference(impl_->reference.get(), ReferenceAllowed(policy)));
+        return Output::Success(std::move(result));
+    }
+
+    /** @copydoc ScriptModuleHostServices::DescribeActiveModuleApis */
+    Result<std::vector<ScriptModuleApiMetadata>> ScriptModuleHostServices::DescribeActiveModuleApis(
+        const std::string_view package, const std::string_view module, const ScriptCapabilityScopeLease &project) const {
+        using Output = Result<std::vector<ScriptModuleApiMetadata>>;
+        if (project.Kind() != ScriptCapabilityScopeKind::Project || !project.IsUsable())
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationContextRevoked));
+        const auto active = impl_->authority->ActiveDeclaration(package, module);
+        if (active.HasError())
+            return Output::Failure(active.ErrorValue());
+        const auto &declaration = active.Value();
+        std::vector<ScriptModuleApiMetadata> result;
+        result.reserve(declaration.imports.size() + 1);
+        for (const auto &declared : declaration.imports)
+            result.push_back(DescribeNativeImport(*impl_, package, module, declared));
+        if (std::ranges::find(declaration.requiredCapabilities, "horo.script.reference") != declaration.requiredCapabilities.end())
+            result.push_back(DescribeReference(impl_->reference.get(), true));
         return Output::Success(std::move(result));
     }
 

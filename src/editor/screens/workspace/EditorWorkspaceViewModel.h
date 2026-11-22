@@ -40,6 +40,7 @@
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
+#include "editor/source_editor/HoroScriptAuthoringConfig.h"
 #include "editor/ui/UiCanvasPreview.h"
 
 #include <filesystem>
@@ -373,6 +374,14 @@ namespace Horo::Editor {
         SourceDocumentSnapshot source;
         SourceEditingView view;
         Language::LanguageCompletions completions;
+        bool fromScriptModule{};
+    };
+
+    /** @brief Hover text associated with the current source and caret. */
+    struct SourceLanguageHover final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        std::string text;
     };
 
     /** @brief Explicit acceptance of one item from the current presentation. */
@@ -385,7 +394,9 @@ namespace Horo::Editor {
         Waiting,
         Refused,
         NoDefinition,
-        NoCompletion
+        NoCompletion,
+        NoSymbol,
+        ScriptModuleUnavailable
     };
 
     /** @brief A language request notice only visible on its originating source publication. */
@@ -1145,6 +1156,8 @@ namespace Horo::Editor {
         std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
         std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
         std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
+        std::vector<Language::ScriptModuleSourceBinding> sourceScriptBindings;
+        std::optional<SourceLanguageHover> sourceScriptHover;
         std::optional<SourceLanguageStatus> sourceLanguageStatus;
         bool sourceLanguageConfigured{};
         bool sourceLanguageUnavailable{}; /**< Native source editing remains available. */

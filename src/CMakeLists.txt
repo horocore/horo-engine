@@ -4047,6 +4047,7 @@ add_library(HoroEditorServices STATIC
         editor/language/HoroScriptSyntax.cpp
         editor/source_editor/SourceSyntax.cpp
         editor/source_editor/HoroScriptModuleLanguage.cpp
+        editor/source_editor/HoroScriptAuthoringConfig.cpp
         editor/proposals/ProposedChangeSet.cpp
         editor/proposals/ProposedChangeSetCodec.cpp
         editor/proposals/ProposedUnifiedPatch.cpp

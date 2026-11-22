@@ -166,4 +166,16 @@ namespace Horo::Extensions {
             new ModuleScriptNativePort{std::make_unique<ModuleScriptNativePort::Impl>(impl_->state, std::move(actual))}};
         return Output::Success(ModuleScriptResolvedImport{*found, std::move(port)});
     }
+
+    /** @copydoc ModuleScriptHostAuthority::ActiveDeclaration */
+    Result<ExtensionModuleManifest> ModuleScriptHostAuthority::ActiveDeclaration(std::string_view package,
+                                                                                 std::string_view moduleId) const {
+        using Output = Result<ExtensionModuleManifest>;
+        if (auto lane = RequireOpenOwner(); lane.HasError())
+            return Output::Failure(lane.ErrorValue());
+        const auto module = Consumer(*impl_->state, package, moduleId);
+        if (module.HasError())
+            return Output::Failure(module.ErrorValue());
+        return Output::Success(module.Value()->declaration);
+    }
 }  // namespace Horo::Extensions

@@ -3540,6 +3540,10 @@
     "workspace.source_language.no_definition": {"text": "Bu projede açılabilecek bir tanım bulunamadı."},
     "workspace.source_language.no_completion": {"text": "Bu konumda tamamlama önerisi bulunamadı."},
     "workspace.source_language.script_error": {"text": "Betik Sözdizimi Hatasına Git"},
+    "workspace.source_language.script_actions": {"text": "Betik Dil İşlemleri"},
+    "workspace.source_language.describe_symbol": {"text": "Sembol Bilgisini Göster"},
+    "workspace.source_language.no_symbol": {"text": "Bu konumda kayıtlı bir API sembolü bulunamadı."},
+    "workspace.source_language.script_module_unavailable": {"text": "Yapılandırılan betik modülü veya bu API öğesi kullanılamıyor. Projenin betik dil eşleştirmesini kontrol edip yeniden sorgulayın."},
     "workspace.global_dock.operations.search": {
       "text": "İşlemlerde ara..."
     },

@@ -286,6 +286,25 @@ project typed source completion and hover. Completion supplies an exact
 identifier replacement range. The lexer excludes comments and strings
 from matching, and the source lease fences queries against later edits.
 
+At workspace open, the editor reads optional `.horo/script-language.json`.
+Version 1 maps each project-relative Lua source to the package and module
+that own its imports. For example:
+
+```json
+{
+  "schemaVersion": 1,
+  "bindings": [
+    {"source": "scripts/demo.lua", "package": "example.pack", "module": "example.pack.runner"}
+  ]
+}
+```
+
+The source toolbar uses the current registered module to answer completion
+and symbol information. Selection rechecks the proposed edit against the
+current schema before applying it. Reopen the workspace to read changes to
+the binding file. The file selects metadata under the existing host
+registration and grants no execution capabilities.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

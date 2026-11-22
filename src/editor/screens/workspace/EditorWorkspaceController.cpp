@@ -142,6 +142,7 @@ namespace Horo::Editor {
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);
         InitializeProjectState(absoluteProjectRoot);
+        ConfigureScriptLanguage(dependencies.gameplay.moduleScripts);
         InitializeWorkspaceLayout();
         InitializeInitialScene(absoluteProjectRoot);
         RefreshSceneProjections();

@@ -42,6 +42,10 @@ namespace Horo::Editor {
                     return "workspace.source_language.no_definition";
                 case SourceLanguageStatusKind::NoCompletion:
                     return "workspace.source_language.no_completion";
+                case SourceLanguageStatusKind::NoSymbol:
+                    return "workspace.source_language.no_symbol";
+                case SourceLanguageStatusKind::ScriptModuleUnavailable:
+                    return "workspace.source_language.script_module_unavailable";
             }
             return "workspace.source_language.retry";
         }
@@ -66,29 +70,40 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Offers language actions only for configured C++ source views. */
+        /** @brief Offers the actions supported by the exact registered source adapter. */
         void DrawSourceLanguageActions(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
                                        const SourceEditorWidget &widget, const EditorWorkspaceViewModel &model,
                                        EditorWorkspaceViewCommandData &command) {
-            if (ClassifySourceLanguage(source.Identity().key.source.Value()) != SourceLanguage::Cpp)
+            const auto identity = source.Identity();
+            const auto family = ClassifySourceLanguage(identity.key.source.Value());
+            const auto script = family == SourceLanguage::HoroScript &&
+                                Language::FindScriptModuleSourceBinding(model.sourceScriptBindings, identity.key.source);
+            if (!script && family != SourceLanguage::Cpp)
                 return;
             const auto notice = [&](const char *key) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, context.localization.Get("editor", key), Theme::Muted(),
                                 context.theme.fonts);
             };
-            if (model.sourceLanguageUnavailable) {
+            if (!script && model.sourceLanguageUnavailable) {
                 notice("workspace.source_language.unavailable");
                 return;
             }
-            if (!model.sourceLanguageConfigured)
+            if (!script && !model.sourceLanguageConfigured)
                 return;
             if (model.sourceLanguageStatus && model.sourceLanguageStatus->source.SharesStateWith(source))
                 notice(LanguageNotice(model.sourceLanguageStatus->kind));
             const auto view = widget.View();
-            const std::array labels{context.localization.Get("editor", "workspace.source_language.actions").c_str(),
-                                    context.localization.Get("editor", "workspace.source_language.definition").c_str(),
+            const std::array labels{context.localization
+                                        .Get("editor",
+                                             script ? "workspace.source_language.script_actions" : "workspace.source_language.actions")
+                                        .c_str(),
+                                    context.localization
+                                        .Get("editor",
+                                             script ? "workspace.source_language.describe_symbol" : "workspace.source_language.definition")
+                                        .c_str(),
                                     context.localization.Get("editor", "workspace.source_language.complete").c_str()};
-            constexpr std::array kinds{SourceLanguageRequestKind::Definition, SourceLanguageRequestKind::Completion};
+            const std::array kinds{script ? SourceLanguageRequestKind::Hover : SourceLanguageRequestKind::Definition,
+                                   SourceLanguageRequestKind::Completion};
             int action = 0;
             if (Ui::ComboControl("##SourceLanguageActions", &action, labels.data(), static_cast<int>(labels.size()), context.theme.fonts) &&
                 action > 0 && command.command == EditorWorkspaceViewCommand::None) {
@@ -96,6 +111,10 @@ namespace Horo::Editor {
                 command.sourceLanguageIntent = SourceLanguageIntent{source, kinds[static_cast<std::size_t>(action - 1)], view};
             }
             DrawSourceCompletions(context, source, view, model.sourceCompletions, command);
+            if (script && model.sourceScriptHover && model.sourceScriptHover->source.SharesStateWith(source) &&
+                model.sourceScriptHover->view.viewId == view.viewId && model.sourceScriptHover->view.caret == view.caret) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, model.sourceScriptHover->text, Theme::Muted(), context.theme.fonts);
+            }
         }
     }  // namespace
 
