@@ -103,7 +103,7 @@ namespace Horo::Render::Detail {
         if (!dispatch.barrier || !dispatch.copy || !dispatch.beginRendering || !dispatch.endRendering)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::EntryPointMissing));
         dispatch.copyImage = std::bit_cast<PFN_vkCmdCopyBufferToImage2>(request.resolver(request.device, "vkCmdCopyBufferToImage2"));
-        dispatch.copyStereoCoverage =
+        dispatch.copyImageToBuffer =
             std::bit_cast<PFN_vkCmdCopyImageToBuffer2>(request.resolver(request.device, "vkCmdCopyImageToBuffer2"));
         native = dispatch;
         LoadMaterialDispatch(request.device, request.resolver);
@@ -268,12 +268,24 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanGraphRuntime::SupportsStereoCoverageReadback */
     bool VulkanGraphRuntime::SupportsStereoCoverageReadback() const noexcept {
-        return impl_->owner == std::this_thread::get_id() && !impl_->lifecycle.closing && impl_->native.copyStereoCoverage;
+        return impl_->owner == std::this_thread::get_id() && !impl_->lifecycle.closing && impl_->native.copyImageToBuffer;
     }
 
     /** @copydoc VulkanGraphRuntime::ReadCompletedStereoCoverage */
     Result<bool> VulkanGraphRuntime::ReadCompletedStereoCoverage(std::uint64_t instance, const RenderTimelinePoint completion,
                                                                  std::span<std::byte> destination) {
+        return ReadCompletedGraphBytes(instance, completion, VulkanReadbackKind::StereoCoverage, destination);
+    }
+
+    /** @copydoc VulkanGraphRuntime::ReadCompletedColor */
+    Result<bool> VulkanGraphRuntime::ReadCompletedColor(std::uint64_t instance, RenderTimelinePoint completion,
+                                                        std::span<std::byte> destination) {
+        return ReadCompletedGraphBytes(instance, completion, VulkanReadbackKind::Color, destination);
+    }
+
+    /** @copydoc VulkanGraphRuntime::ReadCompletedGraphBytes */
+    Result<bool> VulkanGraphRuntime::ReadCompletedGraphBytes(std::uint64_t instance, RenderTimelinePoint completion,
+                                                             VulkanReadbackKind kind, std::span<std::byte> destination) {
         using Outcome = Result<bool>;
         if (const auto admitted = impl_->GpuAccess(false); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
@@ -285,7 +297,7 @@ namespace Horo::Render::Detail {
         const auto observed = impl_->commands.Observe({.completion = completion, .expectedDeviceIncarnation = impl_->deviceIncarnation});
         if (observed.HasError() || !observed.Value())
             return observed;
-        if (const auto read = impl_->resources->ReadStereoCoverage(instance, completion, destination); read.HasError())
+        if (const auto read = impl_->resources->ReadGraphBytes(instance, completion, kind, destination); read.HasError())
             return Outcome::Failure(read.ErrorValue());
         return Outcome::Success(true);
     }

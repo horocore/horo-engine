@@ -137,6 +137,18 @@ namespace Horo::Render::Detail {
         [[nodiscard]] virtual Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const = 0;
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;
         virtual void DetachDeviceChild(IVulkanEditorDeviceChild &child) noexcept = 0;
+
+        /** @brief Copies tightly packed RGBA8 bytes from an exact completed color readback receipt.
+         * @param instance Exact live host staging instance resolved by the selected frontend.
+         * @param completion Timeline point accepted for that color copy.
+         * @param destination Output span with the exact captured byte count.
+         * @return True when copied, false for a missing route or incomplete receipt, or a typed failure.
+         */
+        [[nodiscard]] virtual Result<bool> ReadCompletedColor([[maybe_unused]] std::uint64_t instance,
+                                                              [[maybe_unused]] RenderTimelinePoint completion,
+                                                              [[maybe_unused]] std::span<std::byte> destination) {
+            return Result<bool>::Success(false);
+        }
     };
 
     /** @brief Host-owned borrowed connection; runtime attachment never selects or creates another renderer. */

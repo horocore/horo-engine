@@ -105,19 +105,20 @@ namespace Horo::Render {
             return resource.id == id && resource.kind == kind && resource.resourceClass == RenderGraphResourceClass::Persistent;
         }
 
-        /** @brief Only retained renderer storage can participate in the closed coverage readback workload. */
-        bool MatchesStereoCoverageCopy(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
-                                       std::span<const RenderGraphResourceUsage> uses, const RenderGraphStereoCoverageCopy &copy) {
-            if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || copy.PackedBytes() == 0)
+        /** @brief Matches a bounded readback to exactly one retained texture and one retained staging buffer. */
+        bool MatchesTextureReadback(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
+                                    std::span<const RenderGraphResourceUsage> uses, RenderGraphResourceId image,
+                                    RenderGraphResourceId staging, std::size_t bytes) {
+            if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || bytes == 0)
                 return false;
-            if (!IsPersistentResource(graph, copy.source, RenderGraphResourceKind::Texture) ||
-                !IsPersistentResource(graph, copy.destination, RenderGraphResourceKind::Buffer))
+            if (!IsPersistentResource(graph, image, RenderGraphResourceKind::Texture) ||
+                !IsPersistentResource(graph, staging, RenderGraphResourceKind::Buffer))
                 return false;
-            const auto source = std::ranges::find(uses, copy.source, &RenderGraphResourceUsage::resource);
-            const auto destination = std::ranges::find(uses, copy.destination, &RenderGraphResourceUsage::resource);
+            const auto source = std::ranges::find(uses, image, &RenderGraphResourceUsage::resource);
+            const auto destination = std::ranges::find(uses, staging, &RenderGraphResourceUsage::resource);
             return source != uses.end() && destination != uses.end() &&
-                   MatchesCopyUse(*source, copy.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) &&
-                   MatchesCopyUse(*destination, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
+                   MatchesCopyUse(*source, image, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) &&
+                   MatchesCopyUse(*destination, staging, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
         }
 
         /** @brief Matches only the sampled mask and accumulating counter storage of the closed kernel. */
@@ -173,7 +174,9 @@ namespace Horo::Render {
             if (const auto *value = std::get_if<RenderGraphBufferCopy>(&workload))
                 return MatchesCopy(pass, uses, *value);
             if (const auto *value = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
-                return MatchesStereoCoverageCopy(request.graph, pass, uses, *value);
+                return MatchesTextureReadback(request.graph, pass, uses, value->source, value->destination, value->PackedBytes());
+            if (const auto *value = std::get_if<RenderGraphColorReadback>(&workload))
+                return MatchesTextureReadback(request.graph, pass, uses, value->source, value->destination, value->PackedBytes());
             if (const auto *value = std::get_if<RenderGraphStereoCoverageReduction>(&workload))
                 return MatchesStereoCoverageReduction(request.graph, pass, uses, *value);
             return MatchesBasic(pass, uses, workload);

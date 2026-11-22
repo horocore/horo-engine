@@ -341,7 +341,8 @@ namespace Horo::Render::Detail {
             if (index != 0 && use.resource == uiPaintNeutral)
                 return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             auto &state = states[use.resource.value - 1];
-            state.coverageReadbackBytes = 0;
+            state.readbackBytes = 0;
+            state.readbackKind = VulkanReadbackKind::None;
             state.coverageReduction = false;
         }
         prepared.before.offset = barriers.size();

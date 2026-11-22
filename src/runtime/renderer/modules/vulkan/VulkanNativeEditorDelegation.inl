@@ -65,6 +65,11 @@ Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelineP
     return graph_.ReadCompletedStereoCoverage(instance, completion, destination);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::ReadCompletedColor */
+Result<bool> ReadCompletedColor(std::uint64_t instance, RenderTimelinePoint completion, std::span<std::byte> destination) override {
+    return graph_.ReadCompletedColor(instance, completion, destination);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
 bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept override {
     return graph_.SupportsStereoCoverageReduction(queue);

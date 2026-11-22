@@ -15,13 +15,21 @@
 #include <optional>
 
 namespace Horo::Render::Detail {
+    /** @brief Distinguishes the producers allowed to publish host-visible graph bytes. */
+    enum class VulkanReadbackKind {
+        None,
+        StereoCoverage,
+        Color
+    };
+
     /** @brief Actual native generation state committed only after successful queue submission. */
     struct VulkanGraphResourceState {
         RenderGraphLogicalState logical;
         RenderTimelinePoint completion;
         bool hasNativeState{false};
         bool contentsDefined{false};
-        std::size_t coverageReadbackBytes{};
+        std::size_t readbackBytes{};
+        VulkanReadbackKind readbackKind{VulkanReadbackKind::None};
         bool coverageReduction{};
     };
 
@@ -205,9 +213,9 @@ namespace Horo::Render::Detail {
         /** @brief Maps only the storage result marked by the accepted exact reduction completion. */
         [[nodiscard]] Result<void> ReadStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
                                                                RenderGraphStereoCoverageReduction::Tallies &destination);
-        /** @brief Copies an exact coherent coverage result after the caller observes its matching GPU signal. */
-        [[nodiscard]] Result<void> ReadStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
-                                                      std::span<std::byte> destination);
+        /** @brief Copies exact coherent graph bytes from the expected producer after the caller observes its GPU signal. */
+        [[nodiscard]] Result<void> ReadGraphBytes(std::uint64_t instance, RenderTimelinePoint completion, VulkanReadbackKind kind,
+                                                  std::span<std::byte> destination);
         /** @brief Replaces exact host-visible uniform or vertex bytes after the selected frame owner proves prior retirement.
          * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
          * No index/storage usage, allocation, submission or completion authority is introduced. */

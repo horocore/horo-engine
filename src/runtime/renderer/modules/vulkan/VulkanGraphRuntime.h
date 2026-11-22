@@ -59,6 +59,9 @@ namespace Horo::Render::Detail {
         /** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverage */
         [[nodiscard]] Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
                                                                std::span<std::byte> destination);
+        /** @brief Polls the exact color copy's submission and copies the coherent bytes only after completion. */
+        [[nodiscard]] Result<bool> ReadCompletedColor(std::uint64_t instance, RenderTimelinePoint completion,
+                                                      std::span<std::byte> destination);
         /** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
         [[nodiscard]] bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept;
         /** @copydoc IVulkanEditorGraphicsPort::PrepareStereoCoverageReduction */
@@ -122,6 +125,9 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<RenderBackendDrainProgress> PollDrain();
 
     private:
+        /** @brief Enforces the same exact receipt and nonblocking completion policy for every graph readback. */
+        [[nodiscard]] Result<bool> ReadCompletedGraphBytes(std::uint64_t instance, RenderTimelinePoint completion, VulkanReadbackKind kind,
+                                                           std::span<std::byte> destination);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

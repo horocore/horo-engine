@@ -92,10 +92,16 @@ namespace Horo::Render::Detail {
             /** @brief Copies exact eye tiles and makes the completed coherent storage visible to the host. */
             void EncodeStereoCoverageCopy(VkCommandBuffer command, const RenderGraphStereoCoverageCopy &copy,
                                           std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Copies a validated render color rectangle into tightly packed coherent staging. */
+            void EncodeColorReadback(VkCommandBuffer command, const RenderGraphColorReadback &readback,
+                                     std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Records one color image transfer and its exact host visibility barrier. */
+            void EncodeImageReadback(VkCommandBuffer command, VkImage image, VkBuffer buffer, std::span<const VkBufferImageCopy2> regions,
+                                     VkDeviceSize bytes) const noexcept;
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdCopyBufferToImage2 copyImage{};
-            PFN_vkCmdCopyImageToBuffer2 copyStereoCoverage{};
+            PFN_vkCmdCopyImageToBuffer2 copyImageToBuffer{};
             PFN_vkCmdBeginRendering beginRendering{};
             PFN_vkCmdEndRendering endRendering{};
             PFN_vkCmdBindPipeline bindPipeline{};
@@ -292,6 +298,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateBufferCopy(const RenderGraphBufferCopy &copy);
         /** @brief Validates native owned coverage texture and exact coherent staging bytes before encoding. */
         [[nodiscard]] Result<void> ValidateStereoCoverageCopy(const RenderGraphStereoCoverageCopy &copy);
+        /** @brief Proves an exact resident image and staging buffer before publishing a color receipt. */
+        [[nodiscard]] Result<void> ValidateColorReadback(const RenderGraphColorReadback &readback);
         /** @brief Checks exact native upload descriptors and defined source contents before recording.
          * @param upload Closed whole-base-level operation. @return Success or typed failure without persistent state mutation.
          */

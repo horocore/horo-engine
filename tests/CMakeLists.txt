@@ -7078,7 +7078,7 @@ if (HORO_BUILD_RENDER_VULKAN)
                 HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
                 HORO_VFX_GPU_VULKAN_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_vulkan_locked")
         target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
-                HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface
+                HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface HoroRenderFrontendResourceAccessInternal
                 HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal HoroEngine::ShaderCompilerToolchain
                 HoroEngine::Platform HoroEngine::SceneRenderExtraction Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)

@@ -56,6 +56,31 @@ namespace Horo::Render {
         RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm}; /**< Exact tightly packed source and destination pixel format. */
     };
 
+    /** @brief Copies a bounded RGBA8 rectangle from a single-sample 2D texture into a tightly packed host staging buffer.
+     * @details X and Y are texel coordinates with a top-left origin. The graph declares CopySource and CopyDestination uses.
+     * Both resources must be persistent. No mapping or wait is implied by recording the operation.
+     */
+    struct RenderGraphColorReadback final {
+        static constexpr std::uint32_t MaximumAxis = 256;
+        static constexpr std::size_t BytesPerTexel = 4;
+        RenderGraphResourceId source, destination;
+        std::uint32_t x{}, y{};
+        FramebufferExtent extent;
+
+        /** @brief Returns the tightly packed byte count, or zero for invalid dimensions. */
+        [[nodiscard]] constexpr std::size_t PackedBytes() const noexcept {
+            if (!extent.width || !extent.height || extent.width > MaximumAxis || extent.height > MaximumAxis)
+                return 0;
+            return std::size_t{extent.width} * extent.height * BytesPerTexel;
+        }
+
+        /** @brief Checks the bounded crop against its exact source extent without offset addition. */
+        [[nodiscard]] constexpr bool Fits(FramebufferExtent sourceExtent) const noexcept {
+            return PackedBytes() && x <= sourceExtent.width && y <= sourceExtent.height && extent.width <= sourceExtent.width - x &&
+                   extent.height <= sourceExtent.height - y;
+        }
+    };
+
     /** @brief Copies two bounded, caller-selected tiles of the exact stereo R32Float coverage producer into one staging buffer.
      * @details The source is the same submitted graph's owned coverage attachment. Tiles are tightly packed in eye order.
      * Only diagnostic observations are exposed. This copy carries no pixel verdict or compositor capability.
@@ -216,11 +241,11 @@ namespace Horo::Render {
     };
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload =
-        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
-                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
-                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload,
-                     RenderGraphNativeReconstruction, RenderGraphStereoCoverageCopy, RenderGraphStereoCoverageReduction>;
+    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
+                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview,
+                                             RenderGraphUiPaint, RenderGraphMaterialRaster, RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw,
+                                             RenderGraphExposureGpu, RenderGraphTextureUpload, RenderGraphNativeReconstruction,
+                                             RenderGraphStereoCoverageCopy, RenderGraphStereoCoverageReduction, RenderGraphColorReadback>;
 
     /** @brief Validates exact native reconstruction graph roles before resolving backend descriptors.
      * @param request Immutable execution request. @param pass Exact compiled compute pass.

@@ -1476,6 +1476,12 @@ requires a positive finite timeout. Resource retirement consumes exact queue
 timeline evidence rather than frame indices, presentation, or CPU owner release.
 Sequence and timeline exhaustion fail before wraparound.
 
+`RenderGraphColorReadback` declares a bounded top-left rectangle over a resolved
+RGBA8 attachment and writes tightly packed bytes to persistent host staging.
+Vulkan records the copy and host visibility barrier with the producing graph
+and maps only after observing the exact accepted submission. The color receipt
+is distinct from the XR coverage receipt, even when their byte counts match.
+
 One frame:
 
 1. acquires a backend frame token

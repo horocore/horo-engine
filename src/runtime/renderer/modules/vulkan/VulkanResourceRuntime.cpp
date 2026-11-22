@@ -20,9 +20,11 @@
 namespace Horo::Render::Detail {
     namespace {
         /** @brief Verifies that a successful native copy published this exact coherent readback receipt. */
-        bool IsCompletedCoverageCopy(const VulkanGraphResourceState &state, const RenderTimelinePoint completion, const std::size_t bytes) {
+        bool IsCompletedReadback(const VulkanGraphResourceState &state, RenderTimelinePoint completion, VulkanReadbackKind kind,
+                                 std::size_t bytes) {
             return completion.IsValid() && state.completion == completion && state.hasNativeState && state.contentsDefined &&
-                   state.logical.operation == RenderGraphSynchronizationOperation::CopyDestination && state.coverageReadbackBytes == bytes;
+                   state.logical.operation == RenderGraphSynchronizationOperation::CopyDestination && state.readbackKind == kind &&
+                   state.readbackBytes == bytes;
         }
 
         [[nodiscard]] Error ResourceError(const ErrorCodeDescriptor &code, std::string message) {
@@ -657,15 +659,15 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc VulkanResourceRuntime::ReadStereoCoverage */
-    Result<void> VulkanResourceRuntime::ReadStereoCoverage(std::uint64_t instance, const RenderTimelinePoint completion,
-                                                           std::span<std::byte> destination) {
+    /** @copydoc VulkanResourceRuntime::ReadGraphBytes */
+    Result<void> VulkanResourceRuntime::ReadGraphBytes(std::uint64_t instance, RenderTimelinePoint completion, VulkanReadbackKind kind,
+                                                       std::span<std::byte> destination) {
         const auto found = impl_->buffers.find(instance);
         if (found == impl_->buffers.end())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
         auto &buffer = *found->second;
         if (destination.empty() || buffer.descriptor.byteSize != destination.size() ||
-            !IsCompletedCoverageCopy(buffer.graphState, completion, destination.size()))
+            !IsCompletedReadback(buffer.graphState, completion, kind, destination.size()))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
         if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
             return mapped;

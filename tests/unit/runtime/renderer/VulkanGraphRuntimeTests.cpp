@@ -12,6 +12,85 @@ namespace {
 #include "VulkanMaterialCommandTests.inl"
 #include "VulkanMultiviewCommandTests.inl"
 
+    TEST_CASE("Vulkan reads one exact RGBA8 rectangle after its graph submission completes", "[renderer][vulkan][graph][color-readback]") {
+        using SubmissionTest::Take;
+        enum class Crop {
+            Valid,
+            Outside,
+            Oversized,
+            WrongStaging
+        };
+        const auto scenario = GENERATE(Crop::Valid, Crop::Outside, Crop::Oversized, Crop::WrongStaging);
+        NativeGraphFixture fixture;
+        const RenderTextureDescriptor colorDescriptor{.extent = {8, 6},
+                                                      .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource};
+        const auto colorCost = Take(fixture.resources.QueryTextureMemoryCost(colorDescriptor));
+        const auto colorNative = Take(fixture.resources.CreateTexture(colorDescriptor, {}, TestSupport::PlacementFor(colorCost, 1)));
+        constexpr std::size_t CropBytes = 24;
+        const auto stagingBytes = scenario == Crop::WrongStaging ? CropBytes * 2 : CropBytes;
+        const RenderBufferDescriptor stagingDescriptor{stagingBytes, RenderBufferUsage::CopyDestination, RenderBufferAccess::HostVisible};
+        const auto stagingCost = Take(fixture.resources.QueryBufferMemoryCost(stagingDescriptor));
+        const auto stagingNative = Take(fixture.resources.CreateBuffer(stagingDescriptor, {}, TestSupport::PlacementFor(stagingCost, 2)));
+
+        auto builder = Take(RenderGraphBuilder::Create({2, 2, 3, 2}));
+        const auto color = Take(builder.ImportTexture({{1}, 1, 1}, RenderGraphResourceClass::Persistent));
+        const auto staging = Take(builder.ImportBuffer({{1}, 2, 1}, RenderGraphResourceClass::Persistent));
+        const auto clear = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        const auto copy = Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
+        REQUIRE(builder.AddUsage({clear, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
+        REQUIRE(builder.AddUsage({copy, color, RenderGraphAccess::Read, RenderGraphUsageKind::CopySource}).HasValue());
+        REQUIRE(builder.AddUsage({copy, staging, RenderGraphAccess::Write, RenderGraphUsageKind::CopyDestination}).HasValue());
+        REQUIRE(builder.AddDependency({clear, copy}).HasValue());
+        const auto authored = Take(builder.Finalize());
+        const auto schedule = Take(CompileRenderGraph(authored));
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const std::array initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded},
+                                 RenderGraphImportedState{staging, {}, RenderGraphInitialContents::Discarded}};
+        const auto sync = Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
+        const auto graph = Take(CompileRenderGraphExecution(authored, schedule, sync, queues));
+        const auto crop =
+            RenderGraphColorReadback{color, staging, scenario == Crop::Outside ? 7U : 1U, 3, {scenario == Crop::Oversized ? 257U : 3U, 2}};
+        const std::array workloads{RenderGraphPassWorkload{clear, RenderGraphColorAttachment{color, {}}},
+                                   RenderGraphPassWorkload{copy, crop}};
+        const std::array resources{RenderGraphResourceInstance{color, colorNative}, RenderGraphResourceInstance{staging, stagingNative}};
+        const RenderTimelinePoint completion{{1}, 1};
+        const std::array submissions{RenderGraphQueueSubmission{{{1}, {1}, {}, completion}, {0, workloads.size()}}};
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        const auto recorded = fixture.graph.ExecuteGraph({{1}, graph, workloads, resources, &fixture.lease, false, &transfer, submissions});
+        if (scenario != Crop::Valid) {
+            REQUIRE(recorded.HasError());
+            CHECK(fixture.encoded.coverageCopies.empty());
+            fixture.graph.AbortFrame({1});
+            return;
+        }
+        INFO((recorded.HasError() ? recorded.ErrorValue().message : "recorded"));
+        REQUIRE(recorded.HasValue());
+        REQUIRE(fixture.encoded.coverageCopies.size() == 1);
+        const auto &encoded = fixture.encoded.coverageCopies.front();
+        CHECK(encoded.imageOffset.x == 1);
+        CHECK(encoded.imageOffset.y == 3);
+        CHECK(encoded.imageExtent.width == 3);
+        CHECK(encoded.imageExtent.height == 2);
+        CHECK(encoded.imageSubresource.layerCount == 1);
+        CHECK(std::ranges::any_of(fixture.encoded.barriers, [](const VkBufferMemoryBarrier2 &barrier) {
+            return barrier.srcAccessMask == VK_ACCESS_2_TRANSFER_WRITE_BIT && barrier.dstAccessMask == VK_ACCESS_2_HOST_READ_BIT &&
+                   barrier.dstStageMask == VK_PIPELINE_STAGE_2_HOST_BIT && barrier.size == CropBytes;
+        }));
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+
+        std::array<std::byte, CropBytes> pixels{};
+        CHECK_FALSE(Take(fixture.graph.ReadCompletedColor(stagingNative, completion, pixels)));
+        fixture.commandState.state.Complete();
+        CHECK(fixture.graph.ReadCompletedStereoCoverage(stagingNative, completion, pixels).HasError());
+        CHECK(fixture.graph.ReadCompletedColor(stagingNative, completion, std::span{pixels}.first(1)).HasError());
+        auto expected = std::span{fixture.resourceState.state.mapped}.first(CropBytes);
+        std::ranges::fill(expected, std::byte{0x5a});
+        REQUIRE(Take(fixture.graph.ReadCompletedColor(stagingNative, completion, pixels)));
+        CHECK(std::ranges::equal(pixels, expected));
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Vulkan pre-frame uniform preparation waits for exact native readers by polling only",
               "[renderer][vulkan][graph][reconstruction][retirement]") {
         NativeGraphFixture fixture;
