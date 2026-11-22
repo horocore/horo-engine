@@ -163,6 +163,11 @@ namespace Horo::Application::Internal {
         return origin.HasError() ? Result<void>::Failure(origin.ErrorValue()) : Result<void>::Success();
     }
 
+    /** @copydoc OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent */
+    bool OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent() const noexcept {
+        return !mounted || (!revoked && mountedScene.IsCurrent() && mounted->origin.IsCurrent());
+    }
+
     /** @copydoc OpenXRPlayHost::SceneGeometry::Update */
     Result<void> OpenXRPlayHost::SceneGeometry::Update(const Runtime::RuntimeSceneView &scene) {
         if (authored) {

@@ -324,6 +324,10 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         if (eventsPending_)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (scene_->geometry && scene_->geometry->mounted) {
+            if (const auto source = scene_->geometry->ValidateSource(); source.HasError())
+                return Outcome::Failure(source.ErrorValue());
+        }
         return Outcome::Success(scene_->references);
     }
 

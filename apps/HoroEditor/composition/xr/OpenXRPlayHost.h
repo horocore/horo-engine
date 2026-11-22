@@ -611,6 +611,8 @@ namespace Horo::Application::Internal {
 
             /** @brief Checks the selected source and its retained structural and origin lifetimes. */
             [[nodiscard]] Result<void> ValidateSource() const;
+            /** @brief Checks whether an optional mounted source still owns its Scene and origin observations. */
+            [[nodiscard]] bool IsMountedSourceCurrent() const noexcept;
             /** @brief Updates authored draws or checks the exact immutable mounted Scene occurrence. */
             [[nodiscard]] Result<void> Update(const Runtime::RuntimeSceneView &scene);
             /** @brief Borrows leased mesh resources during cold renderer preparation. */

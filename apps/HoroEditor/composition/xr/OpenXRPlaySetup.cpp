@@ -216,7 +216,8 @@ namespace Horo::Application::Internal {
         // The owner only publishes an accepted plan and tracking sample from this exact session.
         const auto plan = sessions_->AcceptedPlan();
         if (!plan || !scene_->projection || scene_->session != state.session ||
-            scene_->projection->capabilities.Revision() != state.capabilityRevision || plan->Revision() != state.capabilityRevision) {
+            scene_->projection->capabilities.Revision() != state.capabilityRevision || plan->Revision() != state.capabilityRevision ||
+            (scene_->geometry && !scene_->geometry->IsMountedSourceCurrent())) {
             report.status = Stale;
             return report;
         }

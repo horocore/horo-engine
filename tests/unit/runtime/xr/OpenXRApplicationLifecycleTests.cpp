@@ -4,6 +4,8 @@
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 #include "Horo/Security/SecureMemory.h"
+#include "Horo/WorldStreaming/WorldPartitionRegistry.h"
+#include "Horo/WorldStreaming/WorldStreamingRuntimeComposition.h"
 #include "Horo/XR/XRAnchorPersistence.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRApplicationSession.h"
@@ -20,6 +22,7 @@
 #include "support/OpenXRPlaneCaptureTestSupport.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 #include "unit/runtime/physics/CharacterWorldTestHelpers.h"
+#include "unit/runtime/world_streaming/WorldStreamingTestUtils.h"
 
 #include <algorithm>
 #include <bit>
@@ -52,6 +55,63 @@ namespace Horo::Tests::OpenXRApplication {
     namespace {
         namespace Host = Horo::Application::Internal;
         using OpenXRProduct::RequireValue;
+
+        struct MountedOriginFixture final {
+            const WorldStreaming::WorldStreamingRuntimeCompositionConfig config = Config();
+            const std::array<int, 4> serviceInstances{1, 2, 3, 4};
+            std::unique_ptr<WorldStreaming::WorldPartitionRegistry> registry = PublishPartition(config.owner);
+            WorldStreaming::WorldStreamingRuntimeComposition composition;
+
+            explicit MountedOriginFixture(const WorldStreaming::OriginFrame &origin)
+                : composition(RequireValue(
+                      WorldStreaming::WorldStreamingRuntimeComposition::CreateWithOrigin(config, Services(), *registry, origin))) {}
+
+        private:
+            static WorldStreaming::WorldStreamingRuntimeCompositionConfig Config() {
+                using namespace WorldStreaming;
+                using TestSupport::IdentityFrom;
+                return {.owner = TestSupport::WorldOwner(),
+                        .revision = IdentityFrom<StreamingRuntimeCompositionRevision>(1),
+                        .schedulerOwner = IdentityFrom<StreamingSchedulerLedgerId>(1),
+                        .schedulerLimits = {.concurrentOperations = 1,
+                                            .capacityUnits = 1,
+                                            .concurrency = {.profile = WorldPartitionProjectProfile::Editor,
+                                                            .revision = IdentityFrom<StreamingConcurrencyRevision>(1),
+                                                            .loads = 1,
+                                                            .activations = 1,
+                                                            .retirements = 1}},
+                        .maximumFeatureAdapters = 1};
+            }
+
+            static std::unique_ptr<WorldStreaming::WorldPartitionRegistry> PublishPartition(
+                const WorldStreaming::StreamingRuntimeOwnerToken &owner) {
+                using namespace WorldStreaming;
+                using TestSupport::IdentityFrom;
+                auto registry = RequireValue(WorldPartitionRegistry::Create(IdentityFrom<WorldPartitionRegistryId>(1), owner, {1, 1}));
+                const auto anchor = Math::WorldCoordinate64::FromMillimeters(0, 0, 0);
+                const auto end = Math::WorldCoordinate64::FromMillimeters(999, 999, 999);
+                const auto grid = RequireValue(WorldCellQuantizationPolicy::Create(anchor, 1'000, {0, 0, 0, 0, 0, 0}, 1));
+                const auto layer = TestSupport::Layer();
+                const std::array layers{WorldLayerDescriptor{layer, "base", WorldLayerOwnership::WorldStreaming, WorldLayerFlags::None}};
+                const std::array cells{WorldPartitionCellDescriptor{{0, 0, 0, 0, layer}, {TestSupport::Asset(1)}}};
+                auto partition =
+                    RequireValue(WorldPartitionDescriptor::Create({}, owner.partition, {anchor, end}, grid, layers, cells, {1, 1, 16}));
+                REQUIRE(registry->Publish(std::move(partition), IdentityFrom<WorldPartitionRegistryRevision>(1)).HasValue());
+                return registry;
+            }
+
+            [[nodiscard]] std::array<WorldStreaming::StreamingRuntimeServiceBinding, 4> Services() const {
+                using namespace WorldStreaming;
+                using TestSupport::IdentityFrom;
+                using enum StreamingRuntimeServiceRole;
+                constexpr std::array roles{Planner, AssetProvider, SceneRuntime, FeatureAdapter};
+                std::array<StreamingRuntimeServiceBinding, roles.size()> bindings{};
+                for (std::size_t i = 0; i < roles.size(); ++i)
+                    bindings[i] = {IdentityFrom<StreamingRuntimeServiceId>(i + 1), IdentityFrom<StreamingRuntimeServiceRevision>(1),
+                                   roles[i], &serviceInstances[i]};
+                return bindings;
+            }
+        };
 
         /** @brief Limits initialization diagnostics to eight typed causes and bounded message/identity text per cause. */
         std::string ViewportInitializationError(const Error &error) {
@@ -468,11 +528,12 @@ namespace Horo::Tests::OpenXRApplication {
             WS::OriginFrame::Create({RequireValue(WS::OriginFrameId::Create(7)), RequireValue(WS::OriginFrameRevision::Create(3)),
                                      RequireValue(WS::OriginGeneration::Create(1))},
                                     originPosition));
-        auto owner = RequireValue(WS::OriginFrameOwner::Create(origin));
+        MountedOriginFixture mounted{origin};
+        REQUIRE(mounted.composition.Origin() != nullptr);
         const auto view = RequireValue(fixture.frontend->CreateRenderViewIdentity());
         const WS::OriginRebaseParticipantRequirement requirement{RequireValue(WS::OriginRebaseParticipantId::Create(7)),
                                                                  RequireValue(WS::OriginRebaseParticipantRevision::Create(1))};
-        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*owner, view, requirement, {2, 0, 0}));
+        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*mounted.composition.Origin(), view, requirement, {2, 0, 0}));
         const auto runtime = fixture.scene->View().RuntimeId();
         const Render::RenderOriginSceneSource source{{originPosition,
                                                       Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, 0, -1000)},
@@ -504,7 +565,7 @@ namespace Horo::Tests::OpenXRApplication {
             const auto session = fixture.play->ReadReferences(*retained);
             REQUIRE(session.HasValue());
             CHECK(session.Value().local.worldOriginRevision.Value() == 3);
-            owner->Shutdown();
+            REQUIRE(mounted.composition.BeginShutdown(mounted.config.owner).HasValue());
             CHECK(fixture.play->UpdateScene(fixture.scene->View()).HasError());
             CHECK_FALSE(fixture.play->UsesXrScene());
         }
@@ -526,7 +587,7 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("the retained origin must remain current through the publication gate") {
             auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
             REQUIRE(prepared.HasValue());
-            owner->Shutdown();
+            REQUIRE(mounted.composition.BeginShutdown(mounted.config.owner).HasValue());
             const auto stale = prepared.Value()->ValidatePublication();
             REQUIRE(stale.HasError());
             CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
@@ -565,10 +626,20 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(shift.kind == WS::OriginShiftDecisionKind::RequestShift);
             const std::array required{requirement};
             const std::array participants{static_cast<WS::IOriginRebaseParticipant *>(adapter.get())};
-            auto rebase = RequireValue(WS::OriginRebaseTransaction::Prepare({RequireValue(WS::OriginRebaseTransactionId::Create(1)), shift,
-                                                                             origin, 1, WS::OriginRebaseLifecycle::Active},
-                                                                            required, participants));
-            REQUIRE(rebase.Commit(*owner, WS::OriginRebaseCommitPoint::PostSimulation, WS::OriginRebaseLifecycle::Active).HasValue());
+            const WS::OriginRebaseTransactionContext rebase{RequireValue(WS::OriginRebaseTransactionId::Create(1)), shift, origin, 1,
+                                                            WS::OriginRebaseLifecycle::Active};
+            const auto &config = mounted.config;
+            REQUIRE(mounted.composition.PrepareOriginRebase(config.owner, config.revision, rebase, required, participants).HasValue());
+            const auto preparedReferences = RequireValue(fixture.play->ReadReferences(firstSession));
+            CHECK(preparedReferences.local == firstReferences.local);
+            CHECK(preparedReferences.stage == firstReferences.stage);
+            CHECK(fixture.play->ReadInspection().status != Editor::EditorXrInspectionStatus::Stale);
+            REQUIRE(mounted.composition
+                        .CommitOriginRebase(config.owner, config.revision, rebase.transaction, WS::OriginRebaseCommitPoint::PostSimulation)
+                        .HasValue());
+            WS::TestSupport::RequireError(fixture.play->ReadReferences(firstSession), WS::WorldStreamingErrors::OriginFrameStale);
+            CHECK(fixture.play->ReadInspection().status == Editor::EditorXrInspectionStatus::Stale);
+            CHECK(fixture.session->RetainedSession() == initialSession);
             CHECK(packet->origin.Get().HasError());
             CHECK(first->ValidatePublication().HasError());
             const auto previousWaits = fixture.script.frames.waits;
@@ -635,7 +706,7 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("expired origin never prepares native tracking") {
             const auto preparedCalls = fixture.script.native.calls.size();
-            owner->Shutdown();
+            REQUIRE(mounted.composition.BeginShutdown(mounted.config.owner).HasValue());
             const auto stale = participant->Prepare(fixture.definition, fixture.scene->View());
             REQUIRE(stale.HasError());
             CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());

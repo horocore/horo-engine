@@ -137,6 +137,11 @@ namespace Horo::WorldStreaming {
     /** @brief Immutable frame observation invalidated by replacement or owner shutdown. */
     class OriginFrameLease final {
     public:
+        /** @brief Reports whether the observed generation remains active without copying its frame or allocating an error. */
+        [[nodiscard]] bool IsCurrent() const noexcept {
+            return active_ && active_->load();
+        }
+
         /** @brief Returns the observed frame while its generation is active. @return Frame or typed stale failure. */
         [[nodiscard]] Result<OriginFrame> Get() const;
 

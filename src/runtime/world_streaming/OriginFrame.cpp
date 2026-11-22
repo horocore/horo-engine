@@ -122,7 +122,7 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc OriginFrameLease::Get */
     Result<OriginFrame> OriginFrameLease::Get() const {
-        if (!active_->load())
+        if (!IsCurrent())
             return Failure<OriginFrame>(WorldStreamingErrors::OriginFrameStale);
         return Result<OriginFrame>::Success(frame_);
     }
