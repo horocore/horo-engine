@@ -194,6 +194,7 @@ namespace Horo::Application::Internal {
             });
             adapters.insert(adapters.end(), std::make_move_iterator(packageAdapters.begin()),
                             std::make_move_iterator(packageAdapters.end()));
+            adapters.push_back(MakePackageUpdatePreviewCommandAdapter());
             adapters.push_back(
                 Cli::MakeNavigationBakeCommandAdapter([&navigation](const CliCommandRequest &command, const CliExecutionContext &context) {
                 return navigation.Bind(command, context);

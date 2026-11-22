@@ -59,7 +59,7 @@ namespace Horo::Packages {
 
     /** @brief Inert comparison of two complete portable package plans. */
     struct PackageUpdatePreview final {
-        bool requestChanged{};                  /**< Whether the portable intent changed even if the selected graph did not. */
+        bool requestChanged{};                    /**< Whether the portable intent changed even if the selected graph did not. */
         std::vector<PackageUpdateChange> changes; /**< Exact changed entries, ordered by package ID. */
 
         /**
@@ -69,12 +69,13 @@ namespace Horo::Packages {
          * @param candidate Candidate portable request.
          * @param candidateLock Lock corresponding to the candidate request.
          * @return Owned changes or the original typed request-to-lock mismatch.
-         * @post No files, cache, trust, or activation state change. Restore, reference checks, migration, and approval remain transaction-owned.
+         * @post No files, cache, trust, or activation state change. Restore, reference checks, migration, and approval remain
+         * transaction-owned.
          */
         [[nodiscard]] static Result<PackageUpdatePreview> Prepare(const ValidatedPackageRequest &current,
-                                                                 const ValidatedPackageLockfileV1 &currentLock,
-                                                                 const ValidatedPackageRequest &candidate,
-                                                                 const ValidatedPackageLockfileV1 &candidateLock);
+                                                                  const ValidatedPackageLockfileV1 &currentLock,
+                                                                  const ValidatedPackageRequest &candidate,
+                                                                  const ValidatedPackageLockfileV1 &candidateLock);
     };
 
     /** @brief Inert replacement documents for withdrawing one explicit package request from a verified plan. */

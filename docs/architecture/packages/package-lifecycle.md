@@ -370,6 +370,20 @@ approval, and migration belong to the transaction that applies the candidate.
 The package application checks current project authority and candidate platform
 compatibility before returning this preview to a host adapter.
 
+The headless CLI also supports a read-only preview of an already resolved
+candidate:
+
+```sh
+horo-engine package preview-update --project /path/to/project \
+  --candidate-request /path/to/candidate/packages.json \
+  --candidate-lock /path/to/candidate/packages.lock
+```
+
+The command returns the total number of changes, up to 32 ordered rows and
+the next offset. Pass `--offset` to read the following page. A next offset of
+`-1` means there are no more rows. A pending package metadata recovery blocks
+the preview until a recovery-capable operation repairs the project.
+
 ## Uninstall Policy
 
 Before uninstall:

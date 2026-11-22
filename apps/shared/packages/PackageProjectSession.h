@@ -49,12 +49,20 @@ namespace Horo::Application::Internal {
         Sha256Digest requestDocumentDigest;
     };
 
+    /** @brief Whether a metadata reader may repair an interrupted publication. */
+    enum class PackageProjectReadMode {
+        Recover,
+        ReadOnly
+    };
+
     /** @brief Reads exact portable metadata, validating request/lock freshness without resolving, fetching or executing code.
      * @param policy Host project/platform policy. @param files Filesystem for interrupted publication recovery.
      * @param cancellation Parent I/O cancellation.
+     * @param mode Read-only callers reject pending recovery without changing any file.
      * @return Complete validated snapshot or typed source diagnostic. */
     [[nodiscard]] Result<PreparedPackageProject> PreparePackageProject(const PackageProjectPolicy &policy, DurableFileSystem &files,
-                                                                       const CancellationToken &cancellation);
+                                                                       const CancellationToken &cancellation,
+                                                                       PackageProjectReadMode mode = PackageProjectReadMode::Recover);
 
     /** @brief Publication reached the lock replacement commit point. */
     struct PackageMetadataPublication final {

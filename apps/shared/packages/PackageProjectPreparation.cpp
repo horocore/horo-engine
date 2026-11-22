@@ -415,13 +415,22 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PreparePackageProject */
     Result<PreparedPackageProject> PreparePackageProject(const PackageProjectPolicy &policy, DurableFileSystem &files,
-                                                         const CancellationToken &cancellation) {
+                                                         const CancellationToken &cancellation, const PackageProjectReadMode mode) {
+        using Prepared = Result<PreparedPackageProject>;
         const auto directory = MetadataPath(policy.projectRoot);
         if (directory.HasError())
-            return Result<PreparedPackageProject>::Failure(directory.ErrorValue());
+            return Prepared::Failure(directory.ErrorValue());
         const auto &metadata = directory.Value();
-        if (auto recovered = RecoverInterruptedPublication(metadata, policy.limits.lockfile, files, cancellation); recovered.HasError())
-            return Result<PreparedPackageProject>::Failure(recovered.ErrorValue());
+        if (mode == PackageProjectReadMode::Recover) {
+            if (auto recovered = RecoverInterruptedPublication(metadata, policy.limits.lockfile, files, cancellation); recovered.HasError())
+                return Prepared::Failure(recovered.ErrorValue());
+        } else {
+            const auto pending = HasJournal(JournalPath(metadata), files);
+            if (pending.HasError())
+                return Prepared::Failure(pending.ErrorValue());
+            if (pending.Value())
+                return Prepared::Failure(MakeError(Packages::PackageRestoreErrors::Busy));
+        }
         auto documents = ReadDocuments(metadata, policy.limits.lockfile, cancellation);
         if (documents.HasError())
             return Result<PreparedPackageProject>::Failure(documents.ErrorValue());

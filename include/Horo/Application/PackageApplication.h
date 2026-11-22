@@ -179,7 +179,7 @@ namespace Horo::Application {
          * @post Does not fetch artifacts, start an operation, or change the project.
          */
         [[nodiscard]] Result<Packages::PackageUpdatePreview> PreviewUpdate(const Packages::ValidatedPackageRequest &candidate,
-                                                                          const Packages::ValidatedPackageLockfileV1 &candidateLock) const;
+                                                                           const Packages::ValidatedPackageLockfileV1 &candidateLock) const;
         /** @brief Requests cooperative cancellation of one exact current operation.
          * @param operation Expected operation identity. @return Success or typed stale/owner failure. */
         [[nodiscard]] Result<void> RequestCancel(PackageOperationId operation);

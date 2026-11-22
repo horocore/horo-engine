@@ -4,6 +4,7 @@
 #include "PackageCliHost.h"
 
 #include <fstream>
+#include <iterator>
 
 namespace {
     using namespace Horo;
@@ -99,17 +100,85 @@ namespace {
             REQUIRE(output.good());
         }
 
+        static CliParsedOption PathOption(const char *name, const std::filesystem::path &path) {
+            const auto utf8 = path.generic_u8string();
+            return {name, {{CliPathValue{std::string{utf8.begin(), utf8.end()}}, CliValueSource::Invocation, {}}}};
+        }
+
         CliCommandRequest Request() const {
-            const auto option = [](const char *name, const std::filesystem::path &path) {
-                const auto utf8 = path.generic_u8string();
-                return CliParsedOption{name, {{CliPathValue{std::string{utf8.begin(), utf8.end()}}, CliValueSource::Invocation, {}}}};
-            };
             return {.command = {{"package", "restore"}},
-                    .options = {option("project", std::filesystem::canonical(project.Path())),
-                                option("package-cache-root", std::filesystem::canonical(storage.Path()) / "cache"),
-                                option("package-temporary-root", std::filesystem::canonical(storage.Path()) / "temporary")}};
+                    .options = {PathOption("project", std::filesystem::canonical(project.Path())),
+                                PathOption("package-cache-root", std::filesystem::canonical(storage.Path()) / "cache"),
+                                PathOption("package-temporary-root", std::filesystem::canonical(storage.Path()) / "temporary")}};
         }
     };
+
+    TEST_CASE("Headless package update preview reads candidate documents without repairing or modifying the project",
+              "[packages][application][cli][update]") {
+        NativeProject fixture;
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto metadata = root / ".horo";
+        const auto read = [](const std::filesystem::path &path) {
+            const std::ifstream input{path, std::ios::binary};
+            REQUIRE(input.good());
+            return std::string{std::istreambuf_iterator<char>{input.rdbuf()}, {}};
+        };
+        const auto originalRequest = read(metadata / "packages.json");
+        const auto originalLock = read(metadata / "packages.lock");
+        auto candidate = nlohmann::json::parse(originalRequest);
+        candidate["dependencies"] = nlohmann::json::object();
+        const auto intent = Packages::ValidatedPackageRequest::Parse(candidate.dump());
+        REQUIRE(intent.HasValue());
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate({}, {}, intent.Value().Digest(), {});
+        REQUIRE(lock.HasValue());
+        fixture.Write("candidate.json", candidate.dump());
+        fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
+        auto registration = MakePackageUpdatePreviewCommandAdapter();
+        const auto descriptor = registration.adapter->GetDescriptor();
+        CHECK(descriptor.sideEffects == CliSideEffectPolicy::ReadsState);
+        const CliDispatchPolicy policy{.activeHost = CliHostKind::HoroEngine,
+                                       .maximumSideEffects = CliSideEffectPolicy::ReadsState,
+                                       .grantedCapabilities = registration.capabilities};
+        auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, {.activeHost = policy.activeHost,
+                                                                               .supportedContractVersion = {1, 0, 0},
+                                                                               .grantedCapabilities = policy.grantedCapabilities});
+        REQUIRE(registry.HasValue());
+        std::vector<CliCommandAdapterRegistration> adapters;
+        adapters.push_back(std::move(registration));
+        auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(adapters), policy);
+        REQUIRE(dispatcher.HasValue());
+        auto admitted = std::move(dispatcher).Value();
+        ConfigurationSchema schema;
+        REQUIRE(schema.Seal().HasValue());
+        const auto configuration = ConfigurationResolver::Resolve(schema, {}, 1);
+        REQUIRE(configuration.HasValue());
+        const CliCommandRequest command{.command = descriptor.path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
+                                                    NativeProject::PathOption("candidate-lock", metadata / "candidate.lock")}};
+        const auto execute = [&] {
+            return admitted.Dispatch(command, {.invocation = {1}, .configuration = &configuration.Value()});
+        };
+        SECTION("the preview reports the exact removal") {
+            const auto result = execute();
+            REQUIRE(result.Outcome().HasValue());
+            const auto &fields = result.Outcome().Value().fields;
+            REQUIRE(fields.size() == 4);
+            CHECK(std::get<bool>(fields[0].value));
+            CHECK(std::get<std::int64_t>(fields[1].value) == 1);
+            CHECK(std::get<std::int64_t>(fields[2].value) == -1);
+            CHECK(std::get<std::string>(fields[3].value).starts_with("com.horo.application-fixture [1.0.0 fixture.source "));
+            CHECK(std::get<std::string>(fields[3].value).ends_with("] -> [absent]"));
+        }
+        SECTION("a pending publication is left intact") {
+            std::filesystem::create_directory(metadata / "local");
+            fixture.Write("local/package-metadata.pending", "pending publication");
+            CHECK(execute().Outcome().HasError());
+            CHECK(read(metadata / "local/package-metadata.pending") == "pending publication");
+        }
+        CHECK(read(metadata / "packages.json") == originalRequest);
+        CHECK(read(metadata / "packages.lock") == originalLock);
+    }
 
     TEST_CASE("Concrete package CLI host rejects malformed typed paths before constructing a project", "[packages][application][cli]") {
         NativeProject fixture;
