@@ -321,6 +321,8 @@ namespace Horo::AI {
                        QueryExecutionSettings settings, std::unique_ptr<IQueryExecutionSource> source);
         /** @brief Checks that the owner synchronized this tick and can advance without overlapping work. */
         [[nodiscard]] bool CanAdvance(std::uint64_t tick) const noexcept;
+        [[nodiscard]] std::optional<QueryExecutionStatus> InputInvalidation() const noexcept;
+        [[nodiscard]] bool StopIfInvalidated() noexcept;
         /** @brief Advances candidate work once generation has completed. */
         void AdvanceCandidates(QueryExecutionBudget budget);
         /** @brief Polls accepted work and determines whether this synchronization is terminal. */

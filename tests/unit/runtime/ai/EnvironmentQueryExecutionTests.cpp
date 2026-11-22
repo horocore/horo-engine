@@ -60,6 +60,7 @@ namespace Horo::AI {
             std::optional<bool> filter;
             std::optional<QueryTestAvailability> nextAvailability;
             std::function<void()> onCurrent;
+            std::function<void()> onGenerate;
             std::function<void()> onTestStart;
             std::function<void()> onPoll;
             std::size_t destroyed{};
@@ -83,6 +84,8 @@ namespace Horo::AI {
 
             Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
                 ++probe_.generated;
+                if (probe_.onGenerate)
+                    probe_.onGenerate();
                 if (probe_.failure == SourceFailure::Generation)
                     throw std::runtime_error("generator failed");
                 if (probe_.actor) {
@@ -1222,6 +1225,56 @@ namespace Horo::AI {
             CHECK_FALSE(query->Sync(8));
             query.reset();
             CHECK(probe.cancelled == 1);
+        }
+
+        TEST_CASE("EQS fences provider work and publication after input invalidation", "[unit][ai][eqs][execution]") {
+            auto scene = MakeScene();
+            CancellationSource owner;
+            ExecutionProbe probe{.pointCount = 1};
+            auto query = MakeExecution(probe, *scene, false, false, nullptr, {}, owner.Token());
+            CHECK_FALSE(query->Sync(5));
+            AiWorkBudget budget{32};
+            const auto advance = [&] {
+                query->Advance(5, {budget, budget, budget});
+            };
+            auto expected = QueryExecutionStatus::StaleInputs;
+            int cancelledRequests = 0;
+            SECTION("capture invalidation prevents provider admission") {
+                probe.onGenerate = [&] { probe.current = false; };
+                advance();
+                CHECK(probe.generated == 1);
+                CHECK(probe.attempts == 0);
+            }
+            SECTION("revocation during provider admission retires its pending request immediately") {
+                probe.revokeOnStart = &owner;
+                expected = QueryExecutionStatus::Cancelled;
+                cancelledRequests = 1;
+                advance();
+                CHECK(probe.attempts == 1);
+                CHECK(probe.cancelled == 1);
+            }
+            SECTION("replacement during polling cannot publish the completed candidate") {
+                advance();
+                probe.onPoll = [&] { probe.current = false; };
+            }
+            SECTION("cancellation during polling takes precedence even if the candidate completed") {
+                advance();
+                probe.revokeOnPoll = &owner;
+                expected = QueryExecutionStatus::Cancelled;
+            }
+            SECTION("cancellation during polling retires a still-pending request once") {
+                probe.ready = false;
+                advance();
+                probe.revokeOnPoll = &owner;
+                expected = QueryExecutionStatus::Cancelled;
+                cancelledRequests = 1;
+            }
+            REQUIRE(query->Sync(6));
+            REQUIRE(query->Published());
+            CHECK(query->Published()->status == expected);
+            CHECK(query->Published()->winners.empty());
+            CHECK_FALSE(query->Sync(7));
+            CHECK(probe.cancelled == cancelledRequests);
         }
 
         TEST_CASE("EQS publishes completed tests in scored order", "[unit][ai][eqs][execution]") {

@@ -369,19 +369,19 @@ namespace Horo::AI {
         if (!CanAdvance(tick))
             return;
         lastAdvance_ = tick;
-        if (inputs_.ownerCancellation.IsCancellationRequested()) {
-            Cancel();
+        if (StopIfInvalidated())
             return;
-        }
-        if (!source_->IsCurrent(inputs_)) {
-            stale_ = true;
-            return;
-        }
         try {
-            if (!generated_ && Charge(budget, GenerationCost(settings_)))
+            if (!generated_ && Charge(budget, GenerationCost(settings_))) {
                 Generate();
-            if (generated_)
+                if (StopIfInvalidated())
+                    return;
+            }
+            if (generated_) {
                 AdvanceCandidates(budget);
+                if (pending_)
+                    (void)StopIfInvalidated();
+            }
         } catch (...) {
             StopTest();
             result_.error = ProviderFailure();
@@ -391,6 +391,30 @@ namespace Horo::AI {
     /** @copydoc QueryExecution::CanAdvance */
     bool QueryExecution::CanAdvance(const std::uint64_t tick) const noexcept {
         return !published_ && !cancelled_ && !result_.error && !pending_ && tick == lastSync_ && tick > lastAdvance_;
+    }
+
+    /** @brief Gives cancellation precedence when the adapter revokes authority during its input check. */
+    std::optional<QueryExecutionStatus> QueryExecution::InputInvalidation() const noexcept {
+        if (cancelled_ || inputs_.ownerCancellation.IsCancellationRequested())
+            return QueryExecutionStatus::Cancelled;
+        const bool current = !stale_ && source_->IsCurrent(inputs_);
+        if (inputs_.ownerCancellation.IsCancellationRequested())
+            return QueryExecutionStatus::Cancelled;
+        return current ? std::nullopt : std::optional{QueryExecutionStatus::StaleInputs};
+    }
+
+    /** @brief Retires provider work immediately and preserves the terminal reason for BlackboardSync. */
+    bool QueryExecution::StopIfInvalidated() noexcept {
+        const auto reason = InputInvalidation();
+        if (!reason)
+            return false;
+        if (*reason == QueryExecutionStatus::Cancelled)
+            Cancel();
+        else {
+            stale_ = true;
+            StopTest();
+        }
+        return true;
     }
 
     /** @copydoc QueryExecution::AdvanceCandidates */
@@ -451,10 +475,8 @@ namespace Horo::AI {
         const bool firstSync = lastSync_ == 0;
         ValidateTickSequence(tick);
         lastSync_ = tick;
-        if (cancelled_ || inputs_.ownerCancellation.IsCancellationRequested())
-            Publish(QueryExecutionStatus::Cancelled);
-        else if (stale_ || !source_->IsCurrent(inputs_))
-            Publish(QueryExecutionStatus::StaleInputs);
+        if (const auto reason = InputInvalidation())
+            Publish(*reason);
         else if (firstSync && tick <= settings_.deadlineTick && TryPublishCached())
             return true;
         else if (const auto status = TerminalAt(tick, finishEarly))
@@ -467,7 +489,11 @@ namespace Horo::AI {
         if (!cache)
             return false;
         const auto retained = cache->Lookup(cache_->scene, inputs_, *source_, cache_->Key(inputs_.contexts->Query()), lastSync_);
-        if (!retained || inputs_.ownerCancellation.IsCancellationRequested())
+        if (const auto reason = InputInvalidation()) {
+            Publish(*reason);
+            return true;
+        }
+        if (!retained)
             return false;
         // The lookup has revalidated source authority. Keep the new submission's provenance and publication tick.
         result_.generated = retained->generated;
@@ -494,8 +520,11 @@ namespace Horo::AI {
     /** @copydoc QueryExecution::TerminalAt */
     std::optional<QueryExecutionStatus> QueryExecution::TerminalAt(const std::uint64_t tick, const bool finishEarly) {
         const bool deadlineReached = tick >= settings_.deadlineTick;
-        if (pending_ && tick <= settings_.deadlineTick)
+        if (pending_ && tick <= settings_.deadlineTick) {
             Poll();
+            if (const auto reason = InputInvalidation())
+                return reason;
+        }
         if (result_.error)
             return QueryExecutionStatus::Failed;
         if (generated_ && scores_.size() == result_.generated)
@@ -578,6 +607,6 @@ namespace Horo::AI {
 
     /** @copydoc QueryExecution::InputsAreCurrent */
     bool QueryExecution::InputsAreCurrent() const noexcept {
-        return !inputs_.ownerCancellation.IsCancellationRequested() && source_->IsCurrent(inputs_);
+        return !InputInvalidation();
     }
 }  // namespace Horo::AI
