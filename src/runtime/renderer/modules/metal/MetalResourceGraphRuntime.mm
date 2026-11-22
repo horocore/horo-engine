@@ -5,6 +5,7 @@
 #include "MetalResourceRuntimeInternal.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -106,6 +107,57 @@ namespace Horo::Render::Detail {
             if (!ValidCopyRanges(copy, *source, *destination))
                 return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
                                                        "Metal graph copy byte range exceeds its resolved resident buffer."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires an exact, single-sample RGBA8 2D source and a bounded native rectangle. */
+        bool ValidColorReadbackSource(const RenderGraphColorReadback &copy, const MetalTextureInstance &source) {
+            const auto &d = source.descriptor;
+            return source.texture != nil && !source.texture.framebufferOnly && d.format == RenderTextureFormat::Rgba8Unorm &&
+                   d.dimension == RenderTextureDimension::TwoD && d.mipCount == 1 && d.layerCount == 1 && d.sampleCount == 1 &&
+                   HasTextureUsage(d.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource) && copy.Fits(d.extent);
+        }
+
+        /** @brief Admits only tightly packed, CPU-visible storage dedicated to copy destinations. */
+        bool ValidColorReadbackStorage(const MetalBufferInstance &buffer, std::size_t bytes) {
+            return bytes > 0 && buffer.buffer != nil && buffer.buffer.storageMode == MTLStorageModeShared &&
+                   buffer.descriptor.access == RenderBufferAccess::HostVisible && buffer.usage == RenderBufferUsage::CopyDestination &&
+                   buffer.descriptor.byteSize == bytes && buffer.buffer.length >= bytes;
+        }
+
+        /** @brief Proves both selected native identities before the graph can encode a color copy. */
+        Result<void> ValidateGraphColorReadback(const RenderGraphColorReadback &copy,
+                                                std::span<const RenderGraphResourceInstance> resources,
+                                                const std::unordered_set<MetalTextureInstance *> &textures,
+                                                const std::unordered_set<MetalBufferInstance *> &buffers) {
+            const auto *source = LiveGraphInstance(copy.source, resources, textures);
+            const auto *destination = LiveGraphInstance(copy.destination, resources, buffers);
+            if (!source || !destination)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            if (!ValidColorReadbackSource(copy, *source) || !ValidColorReadbackStorage(*destination, copy.PackedBytes()))
+                return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
+                                                       "Metal color readback requires RGBA8 source and exact shared staging."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Records a bounded top-left rectangle into shared staging on the graph's command buffer. */
+        Result<void> EncodeColorReadback(id<MTLCommandBuffer> commands, MetalTextureInstance &source, MetalBufferInstance &destination,
+                                         const RenderGraphColorReadback &copy) {
+            id<MTLBlitCommandEncoder> encoder = [commands blitCommandEncoder];
+            if (encoder == nil)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
+            const auto rowBytes = std::size_t{copy.extent.width} * RenderGraphColorReadback::BytesPerTexel;
+            [encoder copyFromTexture:source.texture
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(copy.x, copy.y, 0)
+                              sourceSize:MTLSizeMake(copy.extent.width, copy.extent.height, 1)
+                                toBuffer:destination.buffer
+                       destinationOffset:0
+                  destinationBytesPerRow:rowBytes
+                destinationBytesPerImage:0];
+            [encoder endEncoding];
+            destination.pendingColorReadback = commands;
             return Result<void>::Success();
         }
 
@@ -222,6 +274,13 @@ namespace Horo::Render::Detail {
                     return encoded;
                 Impl::TrackUse(source->use, commands);
                 Impl::TrackUse(destination->use, commands);
+            } else if (const auto *copy = std::get_if<RenderGraphColorReadback>(&workload)) {
+                auto *source = Decode<MetalTextureInstance>(GraphInstance(copy->source, resources));
+                auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
+                if (auto encoded = EncodeColorReadback(commands, *source, *destination, *copy); encoded.HasError())
+                    return encoded;
+                Impl::TrackUse(source->use, commands);
+                Impl::TrackUse(destination->use, commands);
             }
             return Result<void>::Success();
         }
@@ -264,6 +323,8 @@ namespace Horo::Render::Detail {
             return ValidateGraphColor(*color, resources, impl_->textures);
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
             return ValidateGraphCopy(*copy, resources, impl_->buffers);
+        if (const auto *copy = std::get_if<RenderGraphColorReadback>(&workload))
+            return ValidateGraphColorReadback(*copy, resources, impl_->textures, impl_->buffers);
         return Result<void>::Success();
     }
 
@@ -293,6 +354,9 @@ namespace Horo::Render::Detail {
         if (std::holds_alternative<RenderGraphExposureGpu>(workload))
             return Result<MetalRecordedOperation>::Failure(
                 MakeError(ExposureGpuErrors::Unsupported, "Exposure compute requires owner-thread graph encoding."));
+        if (std::holds_alternative<RenderGraphColorReadback>(workload))
+            return Result<MetalRecordedOperation>::Failure(
+                MakeError(RenderGraphExecutionErrors::UnsupportedWorkload, "Color readback requires owner-thread graph encoding."));
         if (std::holds_alternative<RenderGraphLightCulling>(workload) || std::holds_alternative<RenderGraphDepthAttachment>(workload))
             return Result<MetalRecordedOperation>::Failure(
                 MakeError(LightCullingErrors::Unsupported, "Light compute currently requires owner-thread graph encoding."));
@@ -345,6 +409,11 @@ namespace Horo::Render::Detail {
     void MetalResourceRuntime::FinishGraphCommands(void *commandBuffer, const bool committed) noexcept {
         id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
         for (auto *buffer : impl_->buffers) {
+            if (buffer->pendingColorReadback == commands && commands != nil) {
+                if (committed)
+                    buffer->submittedColorReadback = commands;
+                buffer->pendingColorReadback = nil;
+            }
             Impl::FinishUse(buffer->use, commands, committed);
         }
         for (auto *texture : impl_->textures) {
@@ -358,8 +427,11 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::PreserveUncertainGraphCommands */
     void MetalResourceRuntime::PreserveUncertainGraphCommands(void *commandBuffer) noexcept {
         id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
-        for (auto *buffer : impl_->buffers)
+        for (auto *buffer : impl_->buffers) {
+            if (buffer->pendingColorReadback == commands)
+                buffer->pendingColorReadback = nil;
             Impl::FinishUse(buffer->use, commands, true);
+        }
         for (auto *texture : impl_->textures)
             Impl::FinishUse(texture->use, commands, true);
         PreserveUncertainVfxGpuCommands(commandBuffer);
@@ -369,6 +441,28 @@ namespace Horo::Render::Detail {
     void MetalResourceRuntime::DrainGraphRetirements() noexcept {
         DrainVfxGpuRetirements(64);
         impl_->DrainRetired(64);
+    }
+
+    /** @copydoc MetalResourceRuntime::ReadCompletedColor */
+    Result<bool> MetalResourceRuntime::ReadCompletedColor(std::uint64_t instance, std::span<std::byte> destination) {
+        using Outcome = Result<bool>;
+        auto *buffer = Decode<MetalBufferInstance>(instance);
+        if (!impl_->buffers.contains(buffer) || buffer->use.retired || !ValidColorReadbackStorage(*buffer, destination.size()))
+            return Outcome::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        id<MTLCommandBuffer> producer = buffer->submittedColorReadback;
+        if (producer == nil || producer != buffer->use.last)
+            return Outcome::Success(false);
+        const auto status = producer.status;
+        if (status == MTLCommandBufferStatusError)
+            return Outcome::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
+        if (status != MTLCommandBufferStatusCompleted)
+            return Outcome::Success(false);
+        const auto contents = buffer->buffer.contents;
+        if (contents == nullptr)
+            return Outcome::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        std::memcpy(destination.data(), contents, destination.size());
+        buffer->submittedColorReadback = nil;
+        return Outcome::Success(true);
     }
 
 }  // namespace Horo::Render::Detail

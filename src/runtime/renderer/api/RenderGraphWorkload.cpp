@@ -6,7 +6,9 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <tuple>
+#include <utility>
 
 namespace Horo::Render {
     namespace {
@@ -524,7 +526,7 @@ namespace Horo::Render {
                                                             request.workloads[consumer].pass, *initializers);
         }
 
-        Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
+        Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request, std::optional<std::size_t> &colorReadback) {
             std::array<const RenderGraphMultiview *, RenderGraphMultiview::MaximumPassesPerFrame> multiview{};
             std::size_t reconstructionCount = 0;
             const RenderGraphStereoCoverageCopy *readback{};
@@ -537,6 +539,8 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(NativeReconstructionErrors::InvalidDispatch));
                 if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
                     return valid;
+                if (std::holds_alternative<RenderGraphColorReadback>(binding.workload) && std::exchange(colorReadback, index))
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
                 if (const auto *copy = std::get_if<RenderGraphStereoCoverageCopy>(&binding.workload)) {
                     if (readback)
                         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
@@ -586,6 +590,57 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Requires an in-graph clear and tracks whether later raster passes preserve initialized pixels. */
+        bool StoresColorAttachment(const RenderGraphWorkload &workload, RenderGraphResourceId image, bool initialized) {
+            const PrimaryOutputAttachment *operations{};
+            bool fullAttachment = true;
+            if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload); color && color->texture == image) {
+                operations = &color->operations;
+            } else if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload); raster && raster->color == image) {
+                operations = &raster->colorOperations;
+                fullAttachment = !raster->region;
+            }
+            if (!operations || operations->storeOperation != AttachmentStoreOperation::Store)
+                return false;
+            switch (operations->loadOperation) {
+                case AttachmentLoadOperation::Clear:
+                    return fullAttachment || initialized;
+                case AttachmentLoadOperation::Load:
+                    return initialized;
+                default:
+                    return false;
+            }
+        }
+
+        /** @brief Disallows other logical bindings to either identity in a readback pair. */
+        bool ExclusiveReadbackIdentity(const RenderGraphExecutionRequest &request, RenderGraphResourceId id) {
+            const auto kind = request.graph.Resources()[id.value - 1].kind;
+            const auto instance = request.resources[id.value - 1].instance;
+            for (std::size_t index = 0; index < request.resources.size(); ++index)
+                if (index != id.value - 1 && request.resources[index].instance == instance && request.graph.Resources()[index].kind == kind)
+                    return false;
+            return true;
+        }
+
+        /** @brief Admits one current-graph color crop with exclusive use of its tightly packed staging buffer. */
+        bool ProvenColorReadback(const RenderGraphExecutionRequest &request, std::size_t copyIndex) {
+            const auto &copy = std::get<RenderGraphColorReadback>(request.workloads[copyIndex].workload);
+            if (!ExclusiveReadbackIdentity(request, copy.source) || !ExclusiveReadbackIdentity(request, copy.destination))
+                return false;
+            const auto &graph = request.graph;
+            bool initialized = false;
+            for (std::size_t i = 0; i < graph.Passes().size(); ++i) {
+                const auto &pass = graph.Passes()[i];
+                for (const auto &use : graph.Usages().subspan(pass.usages.offset, pass.usages.count)) {
+                    if (use.resource == copy.destination && i != copyIndex)
+                        return false;
+                    if (i < copyIndex && use.resource == copy.source && use.access != RenderGraphAccess::Read)
+                        initialized = StoresColorAttachment(request.workloads[i].workload, copy.source, initialized);
+                }
+            }
+            return initialized;
+        }
+
         Result<void> ValidateRequestEnvelope(const RenderGraphExecutionRequest &request) {
             if (request.role > RenderGraphExecutionRole::UiComposition ||
                 (request.role == RenderGraphExecutionRole::UiComposition &&
@@ -608,7 +663,8 @@ namespace Horo::Render {
         if (auto envelope = ValidateRequestEnvelope(request); envelope.HasError())
             return envelope;
         const auto &graph = request.graph;
-        if (auto typed = ValidateTypedWorkloads(request); typed.HasError())
+        std::optional<std::size_t> colorReadback;
+        if (auto typed = ValidateTypedWorkloads(request, colorReadback); typed.HasError())
             return typed;
         if (request.submissions.empty() && (!graph.ReleaseTransfers().empty() || !graph.AcquireTransfers().empty()))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
@@ -622,6 +678,9 @@ namespace Horo::Render {
                                             RenderGraphResourceClass::Persistent});
         if (!RecordUses(request, aliases))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+        if (colorReadback && !ProvenColorReadback(request, *colorReadback))
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                   "Color readback requires a stored same-graph color attachment and exclusive staging."));
         return ValidateInstances(request, aliases);
     }
 }  // namespace Horo::Render

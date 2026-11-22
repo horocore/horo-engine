@@ -151,6 +151,8 @@ namespace Horo::Render::Detail {
         /** @brief Encodes prevalidated resource work on a retained-reference command buffer. */
         [[nodiscard]] Result<void> ExecuteGraphWorkload(void *commandBuffer, const RenderGraphWorkload &workload,
                                                         std::span<const RenderGraphResourceInstance> resources);
+        /** @brief Copies exact shared staging bytes only from a completed color readback. Never waits. */
+        [[nodiscard]] Result<bool> ReadCompletedColor(std::uint64_t instance, std::span<std::byte> destination);
         /** @brief Commits active resource pins, or abandons them while preserving older submitted uses. */
         void FinishGraphCommands(void *commandBuffer, bool committed) noexcept;
 #ifdef __OBJC__

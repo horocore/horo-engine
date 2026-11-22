@@ -1477,10 +1477,13 @@ timeline evidence rather than frame indices, presentation, or CPU owner release.
 Sequence and timeline exhaustion fail before wraparound.
 
 `RenderGraphColorReadback` declares a bounded top-left rectangle over a resolved
-RGBA8 attachment and writes tightly packed bytes to persistent host staging.
-Vulkan records the copy and host visibility barrier with the producing graph
-and maps only after observing the exact accepted submission. The color receipt
-is distinct from the XR coverage receipt, even when their byte counts match.
+RGBA8 attachment and writes tightly packed bytes to exclusive persistent host
+staging. A color clear in the same graph must initialize the attachment, and
+later passes must preserve its pixels until the copy. Vulkan
+records a host visibility barrier and maps only after observing the exact accepted
+submission. Metal encodes the crop on the owner lane, then consumes the
+one-use shared-buffer receipt after successful command completion. The color
+receipt is distinct from the XR coverage receipt, even when their byte counts match.
 
 One frame:
 

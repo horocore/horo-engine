@@ -77,7 +77,8 @@ namespace Horo::Render::Detail {
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,
                                                     const Workload &workload) {
-            if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment> || std::is_same_v<Workload, RenderGraphMultiview>) {
+            if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment> || std::is_same_v<Workload, RenderGraphMultiview> ||
+                          std::is_same_v<Workload, RenderGraphColorReadback>) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));

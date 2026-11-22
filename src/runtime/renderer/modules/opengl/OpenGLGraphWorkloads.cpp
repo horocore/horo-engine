@@ -145,7 +145,7 @@ namespace Horo::Render::Detail {
             } else if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment>) {
                 if (!ValidDepth(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-            } else if constexpr (std::is_same_v<Workload, RenderGraphMultiview>) {
+            } else if constexpr (std::is_same_v<Workload, RenderGraphMultiview> || std::is_same_v<Workload, RenderGraphColorReadback>) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));

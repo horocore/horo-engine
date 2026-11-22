@@ -18,9 +18,13 @@ namespace {
             Valid,
             Outside,
             Oversized,
-            WrongStaging
+            WrongStaging,
+            LoadWithoutClear,
+            AliasedStaging
         };
-        const auto scenario = GENERATE(Crop::Valid, Crop::Outside, Crop::Oversized, Crop::WrongStaging);
+        const auto scenario =
+            GENERATE(Crop::Valid, Crop::Outside, Crop::Oversized, Crop::WrongStaging, Crop::LoadWithoutClear, Crop::AliasedStaging);
+        CAPTURE(static_cast<int>(scenario));
         NativeGraphFixture fixture;
         const RenderTextureDescriptor colorDescriptor{.extent = {8, 6},
                                                       .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource};
@@ -32,32 +36,57 @@ namespace {
         const auto stagingCost = Take(fixture.resources.QueryBufferMemoryCost(stagingDescriptor));
         const auto stagingNative = Take(fixture.resources.CreateBuffer(stagingDescriptor, {}, TestSupport::PlacementFor(stagingCost, 2)));
 
-        auto builder = Take(RenderGraphBuilder::Create({2, 2, 3, 2}));
+        auto builder = Take(RenderGraphBuilder::Create({2, 3, 3, 2}));
         const auto color = Take(builder.ImportTexture({{1}, 1, 1}, RenderGraphResourceClass::Persistent));
         const auto staging = Take(builder.ImportBuffer({{1}, 2, 1}, RenderGraphResourceClass::Persistent));
+        const auto alias = scenario == Crop::AliasedStaging ? Take(builder.ImportBuffer({{1}, 3, 1}, RenderGraphResourceClass::Persistent))
+                                                            : RenderGraphResourceId{};
         const auto clear = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
         const auto copy = Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
-        REQUIRE(builder.AddUsage({clear, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
+        const bool loadOnly = scenario == Crop::LoadWithoutClear;
+        REQUIRE(builder
+                    .AddUsage({clear, color, loadOnly ? RenderGraphAccess::ReadWrite : RenderGraphAccess::Write,
+                               RenderGraphUsageKind::ColorAttachment})
+                    .HasValue());
         REQUIRE(builder.AddUsage({copy, color, RenderGraphAccess::Read, RenderGraphUsageKind::CopySource}).HasValue());
         REQUIRE(builder.AddUsage({copy, staging, RenderGraphAccess::Write, RenderGraphUsageKind::CopyDestination}).HasValue());
         REQUIRE(builder.AddDependency({clear, copy}).HasValue());
         const auto authored = Take(builder.Finalize());
         const auto schedule = Take(CompileRenderGraph(authored));
         const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
-        const std::array initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded},
-                                 RenderGraphImportedState{staging, {}, RenderGraphInitialContents::Discarded}};
+        std::vector initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded},
+                            RenderGraphImportedState{staging, {}, RenderGraphInitialContents::Discarded}};
+        if (loadOnly)
+            initial.front() = {color,
+                               {RenderGraphSynchronizationAccess::Write,
+                                RenderGraphSynchronizationOperation::ColorAttachment,
+                                RenderGraphPipelineScope::Graphics,
+                                RenderGraphTextureLayout::ColorAttachment,
+                                {1}},
+                               RenderGraphInitialContents::Preserved};
+        if (alias.IsValid())
+            initial.push_back({alias, {}, RenderGraphInitialContents::Discarded});
         const auto sync = Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
         const auto graph = Take(CompileRenderGraphExecution(authored, schedule, sync, queues));
         const auto crop =
             RenderGraphColorReadback{color, staging, scenario == Crop::Outside ? 7U : 1U, 3, {scenario == Crop::Oversized ? 257U : 3U, 2}};
-        const std::array workloads{RenderGraphPassWorkload{clear, RenderGraphColorAttachment{color, {}}},
+        const auto load = loadOnly ? AttachmentLoadOperation::Load : AttachmentLoadOperation::Clear;
+        const std::array workloads{RenderGraphPassWorkload{clear, RenderGraphColorAttachment{color, {.loadOperation = load}}},
                                    RenderGraphPassWorkload{copy, crop}};
-        const std::array resources{RenderGraphResourceInstance{color, colorNative}, RenderGraphResourceInstance{staging, stagingNative}};
+        std::vector resources{RenderGraphResourceInstance{color, colorNative}, RenderGraphResourceInstance{staging, stagingNative}};
+        if (alias.IsValid())
+            resources.push_back({alias, stagingNative});
         const RenderTimelinePoint completion{{1}, 1};
         const std::array submissions{RenderGraphQueueSubmission{{{1}, {1}, {}, completion}, {0, workloads.size()}}};
         RenderGraphLeaseTransfer transfer;
+        const RenderGraphExecutionRequest request{{1}, graph, workloads, resources, &fixture.lease, false, &transfer, submissions};
+        if (loadOnly || scenario == Crop::AliasedStaging) {
+            const auto canonical = ValidateRenderGraphExecutionRequest(request);
+            REQUIRE(canonical.HasError());
+            CHECK(canonical.ErrorValue().message.find("stored same-graph color attachment") != std::string::npos);
+        }
         REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
-        const auto recorded = fixture.graph.ExecuteGraph({{1}, graph, workloads, resources, &fixture.lease, false, &transfer, submissions});
+        const auto recorded = fixture.graph.ExecuteGraph(request);
         if (scenario != Crop::Valid) {
             REQUIRE(recorded.HasError());
             CHECK(fixture.encoded.coverageCopies.empty());
