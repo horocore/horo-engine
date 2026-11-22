@@ -24,6 +24,12 @@ namespace Horo::XR {
                                                 XRCapability::ExternalColorTargets,
                                                 XRCapability::SessionLossLifecycle,
                                                 XRCapability::CanonicalInputProjection};
+        constexpr auto InsetProjectionRequired = [] {
+            auto features = ProjectionRequired;
+            *std::ranges::find(features, XRCapability::PrimaryOpaqueStereo) = XRCapability::QuadViews;
+            return features;
+        }();
+
         constexpr std::array InteractionRequired{XRCapability::TrackedControllerRoles, XRCapability::ControllerAimGrip,
                                                  XRCapability::SuggestedBindings,      XRCapability::Haptics,
                                                  XRCapability::CancellableHaptics,     XRCapability::RuntimeUiInteraction,
@@ -33,11 +39,16 @@ namespace Horo::XR {
             return capability < XRCapability::Count;
         }
 
+        [[nodiscard]] constexpr const auto &RequiredProjection(const XRFeatureProfile profile) noexcept {
+            return profile == XRFeatureProfile::FoveatedInsetProjection ? InsetProjectionRequired : ProjectionRequired;
+        }
+
         [[nodiscard]] bool IsProfileRequired(const XRFeatureProfile profile, const XRCapability capability) noexcept {
             const auto contains = [capability](const auto &values) {
                 return std::ranges::find(values, capability) != values.end();
             };
-            return contains(ProjectionRequired) || (profile == XRFeatureProfile::TrackedInteraction1_0 && contains(InteractionRequired));
+            return contains(RequiredProjection(profile)) ||
+                   (profile == XRFeatureProfile::TrackedInteraction1_0 && contains(InteractionRequired));
         }
 
         [[nodiscard]] constexpr bool IsPostOne(const XRCapability capability) noexcept {
@@ -53,6 +64,8 @@ namespace Horo::XR {
 
         [[nodiscard]] constexpr bool IsOptionalOne(const XRFeatureProfile profile, const XRCapability capability) noexcept {
             using enum XRCapability;
+            if (profile == XRFeatureProfile::FoveatedInsetProjection && (capability == SpaceWarp || capability == FixedFoveation))
+                return false;
             return capability == HandTracking || capability == StageSpace || capability == DepthComposition ||
                    capability == FixedFoveation || capability == RefreshRateSelection || capability == VisibilityMask ||
                    capability == AndroidStandalone || capability == SpaceWarp ||
@@ -66,7 +79,8 @@ namespace Horo::XR {
 
         [[nodiscard]] bool ValidLimits(const XRFeatureNegotiationRequest &request) noexcept {
             const XRSystemLimits &limits = request.requestedLimits;
-            return limits.maximumViews == 2 && limits.maximumSpaces > 0 && limits.maximumActions > 0 &&
+            const auto views = request.profile == XRFeatureProfile::FoveatedInsetProjection ? 4U : 2U;
+            return limits.maximumViews == views && limits.maximumSpaces > 0 && limits.maximumActions > 0 &&
                    limits.maximumDevices >= (request.profile == XRFeatureProfile::TrackedInteraction1_0 ? 2U : 1U);
         }
 
@@ -188,7 +202,7 @@ namespace Horo::XR {
         if (evidence.Revision() != expectedRevision)
             return {StaleRevision, XRCapability::Count, {}, std::nullopt};
         for (const XRFeatureRequest &feature : request.features) {
-            if (IsPostOne(feature.capability))
+            if (IsPostOne(feature.capability) && !IsProfileRequired(request.profile, feature.capability))
                 return {UnsupportedPath, feature.capability, evidence.State(feature.capability), std::nullopt};
         }
         if (!ValidRequestShape(request))
@@ -197,7 +211,7 @@ namespace Horo::XR {
             return {CapacityExceeded, XRCapability::Count, {}, std::nullopt};
 
         Decisions decisions{};
-        if (const auto projection = ResolveRequired(evidence, ProjectionRequired, decisions); projection.status != Ok)
+        if (const auto projection = ResolveRequired(evidence, RequiredProjection(request.profile), decisions); projection.status != Ok)
             return projection;
         if (request.profile == XRFeatureProfile::TrackedInteraction1_0) {
             if (const auto interaction = ResolveRequired(evidence, InteractionRequired, decisions); interaction.status != Ok)

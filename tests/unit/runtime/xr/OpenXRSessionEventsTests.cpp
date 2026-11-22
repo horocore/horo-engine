@@ -39,7 +39,17 @@ namespace Horo::Tests::OpenXR {
             OpenXRSessionEvents events{native.owner, sessions, frames};
             XRSessionId session;
 
-            EventFixture() {
+            explicit EventFixture(const bool quad = false) {
+                if (quad) {
+                    native.capabilities = Capabilities(16, false, true);
+                    const auto &evidence = native.capabilities;
+                    const auto plan = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(),
+                                                          {.profile = XRFeatureProfile::FoveatedInsetProjection,
+                                                           .requestedLimits = {4, 2, 8, 1}});
+                    REQUIRE(plan.plan);
+                    native.plan = *plan.plan;
+                    script.expectedViewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+                }
                 REQUIRE(EventScript::active == nullptr);
                 EventScript::active = &script;
                 auto created =
@@ -50,13 +60,29 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(borrowed.HasValue());
                 script.session = borrowed.Value().session;
                 REQUIRE(events.Bind({&EventScript::GetProc}, {}).HasValue());
-                REQUIRE(frames.BindConfiguration({session, {3, 1}}, native.capabilities, {2, 2, 1}) == XRFrameStatus::Ok);
+                const auto views = native.plan.Limits().maximumViews;
+                REQUIRE(frames.BindConfiguration({session, {3, 1}}, native.capabilities, {views, views, 1}) == XRFrameStatus::Ok);
             }
 
             ~EventFixture() {
                 EventScript::active = nullptr;
             }
         };
+
+        TEST_CASE("OpenXR native begin uses the admitted quad configuration", "[xr][native][events][quad]") {
+            EventFixture fixture{true};
+            fixture.script.states[0] = XR_SESSION_STATE_READY;
+            fixture.script.count = 1;
+            REQUIRE(fixture.events.Poll(true).HasValue());
+            CHECK(fixture.script.begins == 1);
+            CHECK(fixture.events.Running());
+            CHECK(fixture.sessions.Snapshot().admitsFrames);
+            fixture.script.states[1] = XR_SESSION_STATE_STOPPING;
+            fixture.script.count = 2;
+            REQUIRE(fixture.events.Poll(false).HasValue());
+            CHECK(fixture.script.ends == 1);
+            CHECK_FALSE(fixture.events.Running());
+        }
 
         TEST_CASE("OpenXR translates only same-session reference notifications with well-formed evidence", "[xr][native][events][spaces]") {
             EventFixture fixture;

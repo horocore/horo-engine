@@ -16,6 +16,7 @@ namespace Horo::Tests::OpenXR {
         std::size_t count{};
         std::size_t cursor{};
         XrSession session{};
+        XrViewConfigurationType expectedViewConfiguration{XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
         unsigned begins{};
         unsigned exits{};
         unsigned ends{};
@@ -90,7 +91,7 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Begin(XrSession session, const XrSessionBeginInfo *info) {
             REQUIRE(session == active->session);
-            REQUIRE(info->primaryViewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
+            REQUIRE(info->primaryViewConfigurationType == active->expectedViewConfiguration);
             REQUIRE_FALSE(active->running);
             ++active->begins;
             const auto result = std::exchange(active->beginResult, XR_SUCCESS);

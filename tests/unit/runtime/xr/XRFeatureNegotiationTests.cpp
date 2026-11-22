@@ -101,6 +101,58 @@ namespace Horo::XR {
             }
         }
 
+        TEST_CASE("XR foveated inset projection admits exactly four views without stereo fallback", "[unit][xr][feature][quad]") {
+            using enum XRFeatureNegotiationStatus;
+            auto descriptor = Descriptor();
+            auto request = Request(XRFeatureProfile::FoveatedInsetProjection);
+            request.requestedLimits.maximumViews = 4;
+            auto &quad = descriptor.states[static_cast<std::size_t>(XRCapability::QuadViews)];
+            quad = XRCapabilityState::Available;
+            descriptor.states[static_cast<std::size_t>(XRCapability::PrimaryOpaqueStereo)] = XRCapabilityState::Unsupported;
+
+            SECTION("An admitted quad backend need not supply a second stereo path") {
+                const auto evidence = Snapshot(descriptor);
+                const auto before = Horo::Tests::AllocationProbe::Count();
+                const auto result = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), request);
+                const auto after = Horo::Tests::AllocationProbe::Count();
+                REQUIRE(result.status == Ok);
+                REQUIRE(result.plan);
+                CHECK(result.plan->Profile() == XRFeatureProfile::FoveatedInsetProjection);
+                CHECK(result.plan->Limits().maximumViews == 4);
+                CHECK(result.plan->Decision(XRCapability::QuadViews).state == XRFeatureDecisionState::Required);
+                CHECK(result.plan->Decision(XRCapability::PrimaryOpaqueStereo).state == XRFeatureDecisionState::NotRequested);
+                CHECK(after == before);
+
+                quad = XRCapabilityState::DependencyMissing;
+                const auto lost = Snapshot(descriptor);
+                CHECK(ValidateXRFeaturePlan(*result.plan, lost, lost.System(), lost.Revision()) == StaleRevision);
+            }
+            SECTION("Native discovery alone grants no quad projection plan") {
+                quad = XRCapabilityState::DependencyMissing;
+                descriptor.states[static_cast<std::size_t>(XRCapability::PrimaryOpaqueStereo)] = XRCapabilityState::Available;
+                const auto evidence = Snapshot(descriptor);
+                const auto result = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), request);
+                CHECK(result.status == RequiredUnavailable);
+                CHECK(result.capability == XRCapability::QuadViews);
+                CHECK(result.observed == XRCapabilityState::DependencyMissing);
+                CHECK_FALSE(result.plan);
+            }
+            SECTION("A smaller selected-device budget rejects the complete request") {
+                descriptor.limits.maximumViews = 2;
+                const auto evidence = Snapshot(descriptor);
+                const auto result = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), request);
+                CHECK(result.status == CapacityExceeded);
+                CHECK_FALSE(result.plan);
+            }
+            SECTION("A quad request cannot select two views") {
+                request.requestedLimits.maximumViews = 2;
+                const auto evidence = Snapshot(descriptor);
+                const auto result = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), request);
+                CHECK(result.status == InvalidRequest);
+                CHECK_FALSE(result.plan);
+            }
+        }
+
         TEST_CASE("XR tracked interaction never silently downgrades to projection", "[unit][xr][feature]") {
             auto descriptor = Descriptor(1, true);
             const auto supported = Snapshot(descriptor);

@@ -181,7 +181,10 @@ namespace Horo::XR::OpenXRInternal {
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         if (begin) {
-            const XrSessionBeginInfo info{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+            const auto configuration = native_->ProjectionConfiguration(session_);
+            if (configuration.HasError())
+                return Result<void>::Failure(configuration.ErrorValue());
+            const XrSessionBeginInfo info{XR_TYPE_SESSION_BEGIN_INFO, nullptr, configuration.Value().type};
             const auto result = dispatch_.begin(current.Value().session, &info);
             // A native success still creates cleanup debt if a foreign call revoked the publication during begin.
             running_ = result == XR_SUCCESS;

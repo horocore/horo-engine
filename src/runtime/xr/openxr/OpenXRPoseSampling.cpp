@@ -105,7 +105,27 @@ namespace Horo::XR::OpenXRInternal {
             return Pose::Success({position, orientation});
         }
 
-        /** @brief Validates complete stereo ABI, independent component flags and asymmetric view ranges before any publication. */
+        /** @brief Checks whether the inset shares the peripheral eye pose for the valid native components. */
+        bool SameEyePose(const XrPosef &peripheral, const XrPosef &inset, const XrViewStateFlags flags) noexcept {
+            if (const auto &a = peripheral.position, &b = inset.position;
+                (flags & XR_VIEW_STATE_POSITION_VALID_BIT) && (a.x != b.x || a.y != b.y || a.z != b.z))
+                return false;
+            if (!(flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT))
+                return true;
+            const auto &a = peripheral.orientation;
+            const auto &b = inset.orientation;
+            return std::array{a.x, a.y, a.z, a.w} == std::array{b.x, b.y, b.z, b.w};
+        }
+
+        /** @brief OpenXR blends overlaps and requires the inset projection to stay inside its peripheral view. */
+        bool ContainsInset(const XrView &peripheral, const XrView &inset, const XrViewStateFlags flags) noexcept {
+            const auto &outer = peripheral.fov;
+            const auto &inner = inset.fov;
+            return SameEyePose(peripheral.pose, inset.pose, flags) && inner.angleLeft >= outer.angleLeft &&
+                   inner.angleRight <= outer.angleRight && inner.angleDown >= outer.angleDown && inner.angleUp <= outer.angleUp;
+        }
+
+        /** @brief Validates the complete native ABI, independent component flags and asymmetric view ranges. */
         Result<void> ValidatePresentationViews(const NativePresentationViews &output, const XrViewState &state,
                                                std::uint32_t expectedViews) {
             if (constexpr XrViewStateFlags known = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT |
@@ -456,16 +476,19 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (!time.runtimeSample.IsValid() || !time.renderPrediction || !time.renderPrediction->IsValid() || time.simulation)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
-        if (expectedViews != 2)
-            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
         const Operation operation{sampling_};
+        const auto configuration = session_->ProjectionConfiguration(session);
+        if (configuration.HasError())
+            return Outcome::Failure(configuration.ErrorValue());
+        if (expectedViews != configuration.Value().viewCount)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
         const auto current = Current(session);
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());
         NativePresentationViews output;
         for (auto &view : output.views)
             view.type = XR_TYPE_VIEW;
-        const XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+        const XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO, nullptr, configuration.Value().type,
                                     time.renderPrediction->Nanoseconds(), tracking_.base};
         XrViewState state{XR_TYPE_VIEW_STATE};
         if (const auto located =
@@ -474,13 +497,17 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(PoseFailure("locate primary views", located));
         if (auto valid = ValidatePresentationViews(output, state, expectedViews); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
+        if (configuration.Value().type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET &&
+            (!ContainsInset(output.views[0], output.views[2], state.viewStateFlags) ||
+             !ContainsInset(output.views[1], output.views[3], state.viewStateFlags)))
+            return Outcome::Failure(MakeError(XRErrors::ViewPlanInvalid));
         if (auto fenced = Current(session); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());
         auto reference = tracking_.PresentationReference(TrackingContext{*this}, time);
         if (reference.HasError())
             return Outcome::Failure(reference.ErrorValue());
         output.flags = state.viewStateFlags;
-        for (std::uint32_t eye = 0; eye < expectedViews; ++eye) {
+        for (std::size_t eye = 0; eye < output.eyes.size(); ++eye) {
             const auto &identity = tracking_.eyeIdentities[eye];
             if (!identity.id.IsValid() || identity.id.session != session || identity.worldOriginRevision != tracking_.request->origin)
                 return Outcome::Failure(MakeError(XRErrors::IdentityStale));

@@ -40,11 +40,14 @@ namespace Horo::Tests::OpenXRAction {
                                                                                 gazeSet, stageBoundaryWarningMeters}});
             }
 
-            void Activate(std::uint32_t maximumSpaces = 3) {
+            void Activate(std::uint32_t maximumSpaces = 3, const bool quad = false) {
                 auto &session = actions.session;
+                if (quad)
+                    session.capabilities = Capabilities(16, false, true);
+                const auto profile = quad ? XRFeatureProfile::FoveatedInsetProjection : XRFeatureProfile::Projection1_0;
                 const auto plan = NegotiateXRFeatures(session.capabilities, session.capabilities.System(), session.capabilities.Revision(),
-                                                      {.profile = XRFeatureProfile::Projection1_0,
-                                                       .requestedLimits = {.maximumViews = 2,
+                                                      {.profile = profile,
+                                                       .requestedLimits = {.maximumViews = quad ? 4U : 2U,
                                                                            .maximumSpaces = maximumSpaces,
                                                                            .maximumActions = 8,
                                                                            .maximumDevices = 1}});
@@ -158,6 +161,33 @@ namespace Horo::Tests::OpenXRAction {
             CHECK_FALSE(queried);
             CHECK(fixture.actions.script.gaze.locationReads == 0);
         }
+    }
+
+    TEST_CASE("OpenXR locates the complete quad projection and fences misplaced insets", "[xr][native][poses][quad]") {
+        TrackingFixture fixture;
+        PresentationScript script;
+        script.quad = true;
+        script.count = 4;
+        REQUIRE(fixture.Prepare(Math::Transform{}).HasValue());
+        fixture.Activate(6, true);
+        REQUIRE(fixture.actions.owner.PreparePresentation({&PresentationScript::GetProc}).HasValue());
+        const auto session = fixture.actions.session.Request().candidate;
+        const XRTimeEvidence time{IdentityValue<XRRuntimeTime>(100), {}, IdentityValue<XRRenderPredictionTime>(120)};
+        bool valid = false;
+        SECTION("Four matching projections publish together") { valid = true; }
+        SECTION("A runtime cannot return only its outer pair") { script.count = 2; }
+        SECTION("An inset cannot change its eye position") { script.displacedInset = true; }
+        SECTION("An inset cannot extend beyond its peripheral projection") { script.oversizedInset = true; }
+        const auto result = fixture.actions.owner.LocatePresentation(session, time, 4);
+        if (valid) {
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().count == 4);
+            CHECK(result.Value().views[2].pose.position.x == result.Value().views[0].pose.position.x);
+            CHECK(result.Value().views[3].fov.angleRight < result.Value().views[1].fov.angleRight);
+        } else {
+            REQUIRE(result.HasError());
+        }
+        REQUIRE(fixture.actions.owner.LocatePresentation(session, time, 2).HasError());
     }
 
     TEST_CASE("OpenXR application dispatch composes canonical projection and preserves missing-entry rejection", "[xr][native][poses]") {

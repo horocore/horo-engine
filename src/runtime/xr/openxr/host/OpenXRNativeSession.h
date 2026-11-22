@@ -85,6 +85,12 @@ namespace Horo::XR::OpenXRInternal {
         std::uint64_t incarnation;    /**< Native child creation receipt; never a Horo session/candidate identity or clock. */
     };
 
+    /** @brief Exact configuration and complete view count selected by the admitted session plan. */
+    struct NativeProjectionConfiguration final {
+        XrViewConfigurationType type;
+        std::uint32_t viewCount;
+    };
+
     class OpenXRNativeSession;
     struct NativeFeatureProviderIssuer;
 
@@ -261,6 +267,9 @@ namespace Horo::XR::OpenXRInternal {
          * @post Does not publish capabilities, choose a renderer or claim session-dependent space/format facts.
          */
         [[nodiscard]] Result<NativeSystemCensus> DiscoverSystem(XRLoaderPreflightAttempt attempt) const;
+
+        /** @brief Reads the same live native session's immutable projection selection. */
+        [[nodiscard]] Result<NativeProjectionConfiguration> ProjectionConfiguration(const XRSessionId &session) const;
 
         /** @brief Reads optional quad configuration geometry for the exact current discovery attempt. */
         [[nodiscard]] Result<NativeQuadViewCensus> DiscoverQuadViews(XRLoaderPreflightAttempt attempt,

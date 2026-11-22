@@ -354,5 +354,6 @@ namespace Horo::XR {
         bool aborted_{};
         bool submitted_{};
         bool shutdown_{};
+        bool quadProjection_{};
     };
 }  // namespace Horo::XR

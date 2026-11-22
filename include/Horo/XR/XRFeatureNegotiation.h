@@ -14,10 +14,11 @@
 #include <span>
 
 namespace Horo::XR {
-    /** @brief Version-one product requirement sets, not ordered quality tiers. */
+    /** @brief Explicit XR product requirement sets, each with its own view configuration. */
     enum class XRFeatureProfile : std::uint8_t {
         Projection1_0,
         TrackedInteraction1_0,
+        FoveatedInsetProjection,
         Count
     };
 
@@ -46,8 +47,8 @@ namespace Horo::XR {
 
     /** @brief Complete, borrowed preflight request; the resolver copies decisions and retains no span. */
     struct XRFeatureNegotiationRequest final {
-        XRFeatureProfile profile{XRFeatureProfile::Count}; /**< Exact 1.0 profile required by the product. */
-        XRSystemLimits requestedLimits{};                  /**< Finite session budget; primary stereo requests exactly two views. */
+        XRFeatureProfile profile{XRFeatureProfile::Count}; /**< Exact profile required by the product. */
+        XRSystemLimits requestedLimits{};                  /**< Finite session budget with the profile's complete view count. */
         std::span<const XRFeatureRequest> features{};      /**< Additional closed, unique product feature policies. */
     };
 

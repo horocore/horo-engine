@@ -25,6 +25,10 @@ namespace Horo::XR {
             limits.maximumLayers > XRFrameHardLimits::MaximumLayers)
             return XRFrameStatus::CapacityExceeded;
 
+        const auto plan = sessions_->AcceptedPlan();
+        const bool quad = plan && plan->Profile() == XRFeatureProfile::FoveatedInsetProjection;
+        if (quad && limits.maximumViews != plan->Limits().maximumViews)
+            return XRFrameStatus::InvalidInput;
         if (const auto status = ValidateReprojectionPolicy(reprojection, limits); status != XRFrameStatus::Ok)
             return status;
 
@@ -33,6 +37,7 @@ namespace Horo::XR {
         configuration_ = configuration;
         revision_ = capabilities.Revision();
         limits_ = limits;
+        quadProjection_ = quad;
         return XRFrameStatus::Ok;
     }
 
@@ -128,6 +133,8 @@ namespace Horo::XR {
             return XRFrameStatus::InvalidInput;
         if (viewCount > limits_.maximumViews)
             return XRFrameStatus::CapacityExceeded;
+        if (quadProjection_ && viewCount != limits_.maximumViews)
+            return XRFrameStatus::InvalidInput;
         current_.locatedViews = viewCount;
         current_.phase = XRFramePhase::ViewsLocated;
         return XRFrameStatus::Ok;
@@ -288,6 +295,7 @@ namespace Horo::XR {
         reprojection_.reset();
         revision_ = {};
         limits_ = {};
+        quadProjection_ = false;
     }
 
     /** @copydoc XRFrameLifecycle::Shutdown */

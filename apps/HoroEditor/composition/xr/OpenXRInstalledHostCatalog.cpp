@@ -57,7 +57,7 @@ namespace Horo::Application::Internal {
                 !root.at("rendererBridge").is_number_unsigned() || root.at("rendererBridge") != 1 ||
                 !root.at("expiresAt").is_number_unsigned() || root.at("expiresAt").get<std::uint64_t>() <= nowUnixSeconds ||
                 !root.at("profile").is_number_unsigned() ||
-                root.at("profile").get<std::uint64_t>() >= static_cast<std::uint64_t>(XR::XRFeatureProfile::Count) ||
+                root.at("profile").get<std::uint64_t>() > static_cast<std::uint64_t>(XR::XRFeatureProfile::TrackedInteraction1_0) ||
                 !Foundation::HasAllowedFields(root.at("limits"), {"views", "spaces", "actions", "devices"}))
                 return false;
             if (const auto &limits = root.at("limits"); !Limit(limits.at("views"), XR::XRHardLimits::MaximumViews) ||

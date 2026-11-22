@@ -897,6 +897,18 @@ namespace Horo::XR::OpenXRInternal {
             featureProviders_[handle.slot_] = {};
     }
 
+    /** @copydoc OpenXRNativeSession::ProjectionConfiguration */
+    Result<NativeProjectionConfiguration> OpenXRNativeSession::ProjectionConfiguration(const XRSessionId &session) const {
+        using Outcome = Result<NativeProjectionConfiguration>;
+        if (const auto current = Borrow(session); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        const auto &plan = *retainedPlan_;
+        const auto type = plan.Profile() == XRFeatureProfile::FoveatedInsetProjection
+                              ? XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET
+                              : XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+        return Outcome::Success({type, plan.Limits().maximumViews});
+    }
+
     /** @copydoc OpenXRNativeSession::Borrow */
     Result<NativeSessionBorrow> OpenXRNativeSession::Borrow(const XRSessionId &session) const {
         const auto current = Validate(session);

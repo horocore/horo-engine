@@ -175,8 +175,8 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t count{};
         XrViewStateFlags flags{};
         XRCoordinateSpace reference;
-        std::array<XRCoordinateSpace, 2> eyes; /**< Logical View observation identities issued only after actual successful xrLocateViews.
-                                                 Not XrSpace children and never admitted by BorrowWorldSpace. */
+        std::array<XRCoordinateSpace, 2> eyes; /**< Left/right physical eye identities shared by the corresponding inset views.
+                                                 Issued only after successful xrLocateViews; never native XrSpace children. */
         XRPoseDescriptor referenceToWorld;
     };
 

@@ -14,7 +14,8 @@ namespace Horo::XR {
             return created.Value();
         }
 
-        XRCapabilitySnapshot Capabilities(const std::uint64_t runtime = 1, const std::uint64_t revision = 0, const bool synthesis = false) {
+        XRCapabilitySnapshot Capabilities(const std::uint64_t runtime = 1, const std::uint64_t revision = 0, const bool synthesis = false,
+                                          const bool quad = false) {
             XRCapabilityDescriptor descriptor{
                 .system = {.runtime = Generation<XRRuntimeGeneration>(runtime), .slot = {.index = 2, .generation = 1}},
                 .revision = Generation<XRCapabilityRevision>(revision == 0 ? runtime : revision),
@@ -29,6 +30,8 @@ namespace Horo::XR {
                 descriptor.states[static_cast<std::size_t>(feature)] = XRCapabilityState::Available;
             if (synthesis)
                 descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Available;
+            if (quad)
+                descriptor.states[static_cast<std::size_t>(XRCapability::QuadViews)] = XRCapabilityState::Available;
             auto created = XRCapabilitySnapshot::Create(descriptor);
             REQUIRE(created.HasValue());
             return created.Value();
@@ -336,6 +339,34 @@ namespace Horo::XR {
             CHECK(waited.frame == reservation.frame);
             REQUIRE(frames.Begin(waited.frame) == XRFrameStatus::Ok);
             REQUIRE(frames.End(waited.frame, 0) == XRFrameStatus::Ok);
+        }
+
+        TEST_CASE("XR frame gate keeps an admitted quad view set intact", "[unit][xr][frame][quad]") {
+            NoopResources resources;
+            XRSessionLifecycle sessions{resources};
+            XRFrameLifecycle frames{sessions};
+            const auto capabilities = Capabilities(1, 0, false, true);
+            const auto plan = NegotiateXRFeatures(capabilities, capabilities.System(), capabilities.Revision(),
+                                                  {.profile = XRFeatureProfile::FoveatedInsetProjection,
+                                                   .requestedLimits = {4, 2, 4, 1}});
+            REQUIRE(plan.plan);
+            const auto active = sessions.Activate(capabilities, capabilities.System(), capabilities.Revision(), *plan.plan);
+            REQUIRE(active.HasValue());
+            const auto session = active.Value();
+            REQUIRE(sessions.ApplyEvent(session, XRSessionEvent::Started).HasValue());
+            CHECK(frames.BindConfiguration(Configuration(session), capabilities, StereoLimits) == XRFrameStatus::InvalidInput);
+            REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, {4, 4, 1}) == XRFrameStatus::Ok);
+            const auto frame = Wait(frames, session);
+            REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
+            CHECK(frames.LocateViews(frame, 2) == XRFrameStatus::InvalidInput);
+            CHECK(frames.LocateViews(frame, 3) == XRFrameStatus::InvalidInput);
+            CHECK(frames.Snapshot().phase == XRFramePhase::Begun);
+            CHECK(frames.Snapshot().locatedViews == 0);
+            CHECK(frames.LocateViews(frame, 4) == XRFrameStatus::Ok);
+            CHECK(frames.Snapshot().locatedViews == 4);
+            CHECK(frames.End(frame, 1) == XRFrameStatus::OutOfOrder);
+            REQUIRE(frames.Abort(frame) == XRFrameStatus::Ok);
+            CHECK(frames.End(frame, 0) == XRFrameStatus::Ok);
         }
 
         TEST_CASE("XR frame contract completes a bounded predicted rendering transaction", "[unit][xr][frame]") {
