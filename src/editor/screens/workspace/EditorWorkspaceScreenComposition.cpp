@@ -297,6 +297,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 workspace->BindSourcePresentation(project, trustRevision),
                 workspace->BindGameplayBuildCommands(project, trustRevision),
                 workspace->BindGameplayTestCommands(project, trustRevision),
+                workspace->BindSceneInspection(project, trustRevision),
             };
         },
             .revoke =

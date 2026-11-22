@@ -1,4 +1,5 @@
 #include "EditorBuildCommandEndpoint.h"
+#include "EditorInspectionCommandEndpoint.h"
 #include "EditorSourcePresentation.h"
 #include "EditorTestCommandEndpoint.h"
 #include "EditorWorkspaceController.h"
@@ -93,6 +94,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RevokeWorkspaceCommands */
     void EditorWorkspaceController::RevokeWorkspaceCommands() noexcept {
         m_sourceCommandEndpoint.reset();
+        m_inspectionCommandEndpoint.reset();
         RevokeGameplayTestCommands();
         m_buildCommandEndpoint.reset();
         if (m_commandBuildSession) {

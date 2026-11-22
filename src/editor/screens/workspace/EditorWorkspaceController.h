@@ -78,6 +78,9 @@ namespace Horo::Application {
 
 namespace Horo::Editor {
     struct EditorSourceCommandEndpoint;
+    struct EditorInspectionCommandEndpoint;
+    struct TransformInspectionRequest;
+    struct TransformInspectionPage;
     struct EditorBuildCommandEndpoint;
     struct EditorTestCommandEndpoint;
     struct CapturedDecisionExternal;
@@ -218,6 +221,9 @@ namespace Horo::Editor {
                                                                                               std::uint64_t authorizationRevision);
         /** @brief Revokes workspace command leases and cancels command-owned work before project retirement. */
         void RevokeWorkspaceCommands() noexcept;
+        /** @brief Binds numeric inspection to this exact committed editor workspace. */
+        [[nodiscard]] std::weak_ptr<const EditorInspectionCommandEndpoint> BindSceneInspection(std::string project,
+                                                                                               std::uint64_t authorizationRevision);
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -809,6 +815,9 @@ namespace Horo::Editor {
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
+        std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
+        /** @brief Reads a numeric page without changing authored state, selection, or presentation. */
+        [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const TransformInspectionRequest &request) const;
         std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;
         std::shared_ptr<const EditorTestCommandEndpoint> m_testCommandEndpoint;
         std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;

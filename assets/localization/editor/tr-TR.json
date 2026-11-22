@@ -95,6 +95,7 @@
     "workspace.mcp_commands.open_source": {"text": "Kaynak gezinmesini etkinleştir"},
     "workspace.mcp_commands.open_build": {"text": "Derleme komutlarını etkinleştir"},
     "workspace.mcp_commands.open_tests": {"text": "CTest komutlarını etkinleştir"},
+    "workspace.mcp_commands.open_inspection": {"text": "Salt okunur sahne incelemesini etkinleştir"},
     "workspace.mcp_commands.close": {"text": "Komut oturumunu kapat"},
     "workspace.mcp_commands.arguments": {"text": "Argümanlar (JSON nesnesi)"},
     "workspace.mcp_commands.review": {"text": "Komutla devam et"},

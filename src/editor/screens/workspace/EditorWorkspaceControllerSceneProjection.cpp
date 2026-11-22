@@ -1,3 +1,4 @@
+#include "EditorInspectionCommandEndpoint.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -9,6 +10,40 @@
 namespace Horo::Editor {
 
     namespace {
+        const ErrorCodeDescriptor InspectionUnavailable{.domain = ErrorDomainId{"editor.inspection"},
+                                                        .code = ErrorCode{"scene_unavailable"},
+                                                        .defaultSeverity = ErrorSeverity::Warning,
+                                                        .summary = "The authored Scene is unavailable for inspection."};
+        const ErrorCodeDescriptor InspectionStale{.domain = ErrorDomainId{"editor.inspection"},
+                                                  .code = ErrorCode{"scene_stale"},
+                                                  .defaultSeverity = ErrorSeverity::Warning,
+                                                  .summary = "The Scene changed since the previous page."};
+        const ErrorCodeDescriptor InspectionObjectUnavailable{.domain = ErrorDomainId{"editor.inspection"},
+                                                              .code = ErrorCode{"object_unavailable"},
+                                                              .defaultSeverity = ErrorSeverity::Warning,
+                                                              .summary = "A requested object is missing or hidden."};
+        const ErrorCodeDescriptor InspectionInvalidPage{.domain = ErrorDomainId{"editor.inspection"},
+                                                        .code = ErrorCode{"invalid_page"},
+                                                        .defaultSeverity = ErrorSeverity::Warning,
+                                                        .summary = "Provide unique object IDs and a bounded range."};
+
+        /** @brief Projects authored numeric data without names or runtime handles. */
+        AgentViewportTransform LocalTransform(const SceneObject &object) {
+            const auto &value = object.localTransform;
+            return {object.id.value,
+                    {value.translation.x, value.translation.y, value.translation.z},
+                    {value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w},
+                    {value.scale.x, value.scale.y, value.scale.z}};
+        }
+
+        /** @brief Validates typed page boundaries independently of transport schema admission. */
+        bool ValidInspectionPage(const TransformInspectionRequest &request) {
+            const auto count = request.objects.size();
+            const auto maximum = TransformInspectionRequest::MaximumObjects;
+            return count <= maximum && request.offset < count && request.limit > 0 && request.limit <= maximum &&
+                   (request.offset == 0 || request.expected.has_value());
+        }
+
         /** @brief Keeps the public numeric context independent of internal editor interaction enums. */
         AgentViewportTool CapturedViewportTool(const EditorTransformTool tool) noexcept {
             switch (tool) {
@@ -94,19 +129,55 @@ namespace Horo::Editor {
                                                   .tool = CapturedViewportTool(m_viewModel.activeTransformTool)};
         if (components == AgentViewportComponents::LocalTransforms) {
             for (const auto id : std::span{snapshot.objects}.first(snapshot.objectCount)) {
-                const auto object = std::ranges::find_if(m_viewModel.objects, [id](const SceneObject &entry) {
-                    return entry.id.value == id;
-                });
+                const auto object = std::ranges::find(m_viewModel.objects, SceneObjectId{id}, &SceneObject::id);
                 if (object == m_viewModel.objects.end())
                     return std::nullopt;
-                const auto &value = object->localTransform;
-                snapshot.transforms[snapshot.transformCount++] = {id,
-                                                                  {value.translation.x, value.translation.y, value.translation.z},
-                                                                  {value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w},
-                                                                  {value.scale.x, value.scale.y, value.scale.z}};
+                snapshot.transforms[snapshot.transformCount++] = LocalTransform(*object);
             }
         }
         return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceController::BindSceneInspection */
+    std::weak_ptr<const EditorInspectionCommandEndpoint> EditorWorkspaceController::BindSceneInspection(
+        std::string project, const std::uint64_t authorizationRevision) {
+        m_inspectionCommandEndpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{std::move(project), authorizationRevision, std::this_thread::get_id(),
+                                            [this](const TransformInspectionRequest &request) {
+            return InspectLocalTransforms(request);
+        }});
+        return m_inspectionCommandEndpoint;
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectLocalTransforms */
+    Result<TransformInspectionPage> EditorWorkspaceController::InspectLocalTransforms(const TransformInspectionRequest &request) const {
+        using Output = Result<TransformInspectionPage>;
+        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() ||
+            m_viewModel.playState != EditorPlayState::Idle)
+            return Output::Failure(MakeError(InspectionUnavailable));
+        const InspectionSceneRevision scene{m_document.ReplacementEpoch(), m_document.Revision().value};
+        if (m_viewModel.assetDropFence.replacementEpoch != scene.epoch || m_viewModel.documentRevision.value != scene.revision)
+            return Output::Failure(MakeError(InspectionUnavailable));
+        if (request.expected && *request.expected != scene)
+            return Output::Failure(MakeError(InspectionStale));
+        if (!ValidInspectionPage(request))
+            return Output::Failure(MakeError(InspectionInvalidPage));
+        TransformInspectionPage page{.scene = scene};
+        const auto end = std::min(request.offset + request.limit, request.objects.size());
+        for (std::size_t index = 0; index < request.objects.size(); ++index) {
+            const auto id = request.objects[index];
+            const auto earlier = std::span{request.objects}.first(index);
+            if (!id || std::ranges::find(earlier, id) != earlier.end())
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            const auto object = std::ranges::find(m_viewModel.objects, SceneObjectId{id}, &SceneObject::id);
+            if (object == m_viewModel.objects.end() || !object->effectivelyVisible)
+                return Output::Failure(MakeError(InspectionObjectUnavailable));
+            if (index >= request.offset && index < end)
+                page.records.push_back(LocalTransform(*object));
+        }
+        if (end < request.objects.size())
+            page.nextOffset = end;
+        return Output::Success(std::move(page));
     }
 
     /** @copydoc EditorWorkspaceController::CaptureAgentSelectionValues */

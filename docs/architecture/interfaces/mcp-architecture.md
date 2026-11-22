@@ -458,6 +458,13 @@ Tools must not return unbounded scene graphs, logs, profiler data, or asset
 lists in one response. Streaming JSONL tools declare a per-record schema and
 bounded chunk size.
 
+The embedded editor's scene inspection grant exposes `inspect.transforms`
+as an owner-lane query. It returns only authored local translations,
+quaternions and scales for explicitly supplied visible object IDs. The
+request is bounded to 16 IDs and continuations repeat the exact Scene epoch
+and revision from the previous result. Play copies, retired workspaces and
+missing or hidden objects fail closed.
+
 ## MCP History Retention And Redaction
 
 `McpHistoryStore` stores bounded request summaries, not arbitrary full payloads.

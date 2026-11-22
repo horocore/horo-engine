@@ -1,6 +1,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorCommandMcpSession.h"
+#include "EditorInspectionMcpTools.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "EditorSourceMcpTools.h"
 #include "EditorTestMcpTools.h"
@@ -50,6 +51,50 @@ namespace {
 
     McpRequest Command(std::string id, std::string tool, Json arguments = Json::object()) {
         return {.id = std::move(id), .method = "tools/call", .params = {{"name", std::move(tool)}, {"arguments", std::move(arguments)}}};
+    }
+
+    TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {
+        std::vector<TransformInspectionRequest> reads;
+        const InspectionSceneRevision scene{7, 19};
+        const auto reader = [&](const TransformInspectionRequest &request) {
+            reads.push_back(request);
+            TransformInspectionPage page{.scene = scene,
+                                         .records = {{request.objects.at(request.offset), {1, 2, 3}, {0, 0, 0, 1}, {1, 1, 1}}}};
+            if (request.offset + 1 < request.objects.size())
+                page.nextOffset = request.offset + 1;
+            return Result<TransformInspectionPage>::Success(std::move(page));
+        };
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+            EditorInspectionCommandEndpoint{"project-one", 3, std::this_thread::get_id(), reader});
+        const auto policy = std::make_shared<McpAuthorization>(std::make_shared<Test::Entropy>());
+        REQUIRE(policy->SetTrust("project-one", 3, true).HasValue());
+        const EditorCommandMcpAdmission admission{"local-client", "project-one", 3, {std::string{EditorSceneInspectionGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.inspection = endpoint}, admission, policy);
+        REQUIRE(opened.HasValue());
+        const auto &session = *opened.Value();
+        const auto effect = session.ToolEffect("inspect.transforms");
+        REQUIRE(effect.HasValue());
+        CHECK(effect.Value() == McpToolEffect::Query);
+
+        const auto first = Execute(session, Command("first", "inspect.transforms", {{"objects", {42, 9}}, {"limit", 1}}));
+        REQUIRE(first.at("status") == "succeeded");
+        CHECK(first["result"]["records"][0]["object"] == 42);
+        CHECK(first["result"]["nextOffset"] == 1);
+        CHECK_FALSE(reads.front().expected);
+        const auto missingFence = Execute(session, Command("no-fence", "inspect.transforms", {{"objects", {42, 9}}, {"offset", 1}}));
+        CHECK(missingFence.at("status") == "failed");
+        CHECK(reads.size() == 1);
+        const auto second = Execute(session, Command("second", "inspect.transforms",
+                                                     {{"objects", {42, 9}}, {"offset", 1}, {"scene", first["result"]["scene"]}}));
+        REQUIRE(second.at("status") == "succeeded");
+        CHECK(second["result"]["records"][0]["object"] == 9);
+        CHECK_FALSE(second["result"].contains("nextOffset"));
+        CHECK(reads.back().expected == scene);
+        const auto oversize =
+            Execute(session, Command("oversize", "inspect.transforms",
+                                     {{"objects", std::vector<std::uint64_t>(TransformInspectionRequest::MaximumObjects + 1, 42)}}));
+        CHECK(oversize.at("status") == "failed");
+        CHECK(reads.size() == 2);
     }
 
     TEST_CASE("Configured test commands run through an approved embedded editor session", "[unit][editor][mcp][gameplay-test]") {

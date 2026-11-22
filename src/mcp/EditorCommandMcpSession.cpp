@@ -1,6 +1,7 @@
 #include "EditorCommandMcpSession.h"
 
 #include "EditorBuildMcpTools.h"
+#include "EditorInspectionMcpTools.h"
 #include "EditorSourceMcpTools.h"
 #include "EditorTestMcpTools.h"
 #include "Horo/Mcp/McpAuthorization.h"
@@ -60,6 +61,8 @@ namespace Horo::Editor {
                 return Outcome::Failure(build.ErrorValue());
             if (const auto test = AppendCommands(endpoints.test, admission, MakeEditorTestMcpTools, tools); test.HasError())
                 return Outcome::Failure(test.ErrorValue());
+            if (const auto read = AppendCommands(endpoints.inspection, admission, MakeEditorInspectionMcpTools, tools); read.HasError())
+                return Outcome::Failure(read.ErrorValue());
             const auto available = DeclaredGrants(tools);
             if (!std::ranges::all_of(admission.grants, [&](const auto &grant) {
                 return std::ranges::find(available, grant) != available.end();

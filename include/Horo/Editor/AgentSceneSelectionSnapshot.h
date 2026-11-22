@@ -46,7 +46,7 @@ namespace Horo::Editor {
         AgentViewportTool tool{};
     };
 
-    /** @brief Owner-issued IDs from the selected scene revision, with no runtime handles or scene contents. */
+    /** @brief Owner-issued selection with camera and authored component values available by explicit scope. */
     struct AgentSceneSelectionSnapshot final {
         static constexpr std::size_t MaximumObjects = 16;
         std::uint64_t documentEpoch{};
