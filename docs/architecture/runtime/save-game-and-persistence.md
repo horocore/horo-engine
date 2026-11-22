@@ -1871,6 +1871,8 @@ category evidence contribute to the unclassified count.
 Editor and CLI bundles withhold both the Save telemetry namespace and the Save
 error domain from their raw JSON evidence. A Save error embedded as a cause in
 another subsystem's crash record is omitted with its entire cause subtree.
+Raw diagnostic JSON and JSONL records exceeding the parser's nesting limit
+fail bundle preparation before any archive is published.
 
 ## Qualification And Implementation Status
 

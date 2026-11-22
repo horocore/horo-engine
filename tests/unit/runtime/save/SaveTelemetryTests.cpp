@@ -357,6 +357,38 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
     CHECK(Read(rolledLog).find("private-rolled-row-display") != std::string::npos);
 }
 
+TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before publication", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto input = session.directory / "nested";
+    const auto output = session.directory / "bundle.zip";
+    std::filesystem::path entry = "crash/nested.json";
+    SECTION("JSON crash metadata") {}
+    SECTION("JSONL crash metadata without a trailing newline") {
+        entry.replace_extension(".jsonl");
+    }
+    const auto write = [&input](const std::size_t depth) {
+        std::ofstream file{input, std::ios::binary};
+        REQUIRE(file.is_open());
+        for (std::size_t level = 0; level < depth; ++level)
+            file << R"({"cause":)";
+        file << R"({"domain":"horo.save","message":"private-deep-save-payload"})" << std::string(depth, '}');
+        file.close();
+        REQUIRE(file.good());
+    };
+    write(96);
+    const auto rejected = session.host->GenerateDiagnosticBundle(
+        {.outputPath = output, .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
+    REQUIRE(rejected.HasError());
+    CHECK_FALSE(std::filesystem::exists(output));
+
+    write(16);
+    const auto accepted = session.host->GenerateDiagnosticBundle(
+        {.outputPath = output, .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
+    REQUIRE(accepted.HasValue());
+    CHECK(Read(output).find("private-deep-save-payload") == std::string::npos);
+}
+
 TEST_CASE("Save telemetry preserves production failure results and discards private error text", "[save][telemetry][failure]") {
     Session session;
     REQUIRE(session.host);

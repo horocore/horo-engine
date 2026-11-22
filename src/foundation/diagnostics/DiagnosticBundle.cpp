@@ -24,6 +24,22 @@
 namespace Horo::Diagnostics {
     namespace {
         using Json = nlohmann::json;
+        constexpr int MaximumDiagnosticJsonDepth = 64;
+
+        struct DiagnosticJsonDepthExceeded final {};
+
+        /** @brief Bounds the DOM before recursive redaction, serialization or destruction can visit it. */
+        [[nodiscard]] std::optional<Json> ParseDiagnosticJson(const std::string &text) {
+            try {
+                return Json::parse(text, [](const int depth, const Json::parse_event_t, Json &) {
+                    if (depth > MaximumDiagnosticJsonDepth)
+                        throw DiagnosticJsonDepthExceeded{};
+                    return true;
+                }, false, true);
+            } catch (const DiagnosticJsonDepthExceeded &) {
+                return std::nullopt;
+            }
+        }
 
         /** @brief Escapes one JSON string into @p output. */
         void AppendJsonString(std::string &output, const std::string_view value) {
@@ -163,16 +179,18 @@ namespace Horo::Diagnostics {
             while (std::getline(lines, line)) {
                 if (line.empty())
                     continue;
-                Json record = Json::parse(line, nullptr, false, true);
-                if (record.is_discarded()) {
+                auto record = ParseDiagnosticJson(line);
+                if (!record)
+                    return std::nullopt;
+                if (record->is_discarded()) {
                     if (lines.eof() && !text.ends_with('\n'))
                         break;
                     return std::nullopt;
                 }
-                if (SummaryOnlyRecord(record, namespaces))
+                if (SummaryOnlyRecord(*record, namespaces))
                     continue;
-                RedactJson(record, namespaces);
-                sanitized += record.dump();
+                RedactJson(*record, namespaces);
+                sanitized += record->dump();
                 sanitized += '\n';
             }
             return sanitized;
@@ -192,11 +210,11 @@ namespace Horo::Diagnostics {
             } else if (archivePath.extension() == ".json") {
                 if (text.empty())
                     return std::vector<std::byte>{};
-                Json document = Json::parse(text, nullptr, false, true);
-                if (document.is_discarded())
+                auto document = ParseDiagnosticJson(text);
+                if (!document || document->is_discarded())
                     return std::nullopt;
-                RedactJson(document, namespaces);
-                sanitized = document.dump();
+                RedactJson(*document, namespaces);
+                sanitized = document->dump();
                 sanitized += '\n';
             } else {
                 return std::nullopt;
@@ -375,8 +393,8 @@ namespace Horo::Diagnostics {
                     auto redacted = RedactDiagnosticText(entry.archivePath, bytes, request.summaryOnlyNamespaces);
                     if (!redacted.has_value())
                         return Result<PreparedBundleData>::Failure(
-                            MakeBundleError(ObservabilityErrors::BundleReadFailed,
-                                            "A redacted diagnostic input must contain valid JSON or complete JSONL records."));
+                            MakeBundleError(ObservabilityErrors::BundleReadFailed, "A redacted diagnostic input must contain valid JSON or "
+                                                                                   "complete JSONL records within the nesting limit."));
                     bytes = std::move(*redacted);
                 }
                 if (bytes.size() > request.maxInputBytes - std::min(request.maxInputBytes, totalPreparedBytes))
