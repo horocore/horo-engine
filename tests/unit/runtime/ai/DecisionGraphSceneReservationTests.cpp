@@ -1008,6 +1008,56 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("Compatible Scene recook retains independent nested tasks and completions",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto root = ParallelCalls(11, 12, DecisionPlanKind::BehaviorTree);
+            root.executionTask = MakeIdentity<TaskId>(9000);
+            auto childRoot = TreeNode(1, DecisionControlKind::Root);
+            const auto compile = [&fixture, &root, &childRoot] {
+                const std::array sources{root, Tree(12, {childRoot, TreeNode(2, DecisionControlKind::Task)}, {Edge(1, 1, 2)})};
+                return fixture.Compile(sources, 11);
+            };
+            const auto previous = compile();
+            childRoot.displayName = "Renamed child root";
+            const auto replacement = compile();
+            REQUIRE(previous->Digest() != replacement->Digest());
+            REQUIRE(previous->Storage().occurrences == 3);
+            const auto allowance = previous->MaximumDecisionWorkUnits();
+            REQUIRE(allowance.has_value());
+            CHECK(allowance == replacement->MaximumDecisionWorkUnits());
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = *allowance}}).Value();
+            auto scene = SceneFixture(fixture, *previous);
+            scene.descriptor.cookedPlan = previous;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(fixture.probe.tasks.size() == 2);
+            CHECK(fixture.probe.tasks.front() != fixture.probe.tasks.back());
+            const auto completion = fixture.probe.continuation;
+            REQUIRE(completion.IsCurrent());
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement).HasValue());
+            CHECK(fixture.probe.factories == 2);
+            CHECK(fixture.probe.aborts == 0);
+            REQUIRE(completion.IsCurrent());
+            AiTaskTerminalResult completed{.state = AiTaskState::Succeeded};
+            REQUIRE(completion.PublishTerminal(completed).Value() == AiTaskPublicationDisposition::Accepted);
+            TestSupport::ExpectError(scheduler->EvaluateAtDecision(1), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().failed == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(fixture.probe.starts == 2);
+            CHECK(fixture.probe.resumes == 1);
+            CHECK(fixture.probe.lastResumeTask == fixture.probe.tasks.front());
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK_FALSE(completion.IsCurrent());
+        }
+
         TEST_CASE("Cooked Scene reports raw task callback errors without failing a successful Selector fallback",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;

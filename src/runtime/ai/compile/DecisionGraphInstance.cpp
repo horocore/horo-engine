@@ -233,36 +233,55 @@ namespace Horo::AI {
         return occurrence.tree.get();
     }
 
-    /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
-    Result<bool> DecisionGraphInstance::TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
+    /** @copydoc DecisionGraphInstance::TryRetainCompatibleTreeClosure */
+    Result<bool> DecisionGraphInstance::TryRetainCompatibleTreeClosure(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
         using Retained = Result<bool>;
         if (!candidate || std::this_thread::get_id() != owner_ || evaluating_)
             return Invalid<bool>(AIErrors::DecisionAssetActivationInvalid);
-        if (!Available() || plan_->Occurrences().size() != 1 || candidate->Occurrences().size() != 1 ||
-            candidate->Root() != plan_->Root() || candidate->providers_ != plan_->providers_ ||
+        if (!Available() || candidate->Occurrences().size() != occurrences_.size() || candidate->Root() != plan_->Root() ||
+            candidate->runtimeLayoutVersion_ != plan_->runtimeLayoutVersion_ || candidate->providers_ != plan_->providers_ ||
             candidate->providers_.owner_before(plan_->providers_) || plan_->providers_.owner_before(candidate->providers_) ||
-            candidate->Capabilities() != plan_->Capabilities())
+            candidate->Capabilities() != plan_->Capabilities() || candidate->Storage().taskSlots != plan_->Storage().taskSlots)
             return Retained::Success(false);
 
-        const auto &existing = plan_->Graphs()[plan_->Occurrences().front().plan];
-        const auto &next = candidate->Graphs()[candidate->Occurrences().front().plan];
-        auto &state = *occurrences_.front();
+        for (std::size_t index = 0; index < occurrences_.size(); ++index) {
+            auto valid = ValidateRetainedTreeOccurrence(index, *candidate);
+            if (valid.HasError() || !valid.Value())
+                return valid;
+        }
+        // Every occurrence is validated. Publishing the new plans needs no callbacks or storage.
+        for (std::size_t index = 0; index < occurrences_.size(); ++index) {
+            const auto &graph = candidate->Graphs()[candidate->Occurrences()[index].plan];
+            occurrences_[index]->tree->PublishRetainedPlan(std::get<std::shared_ptr<const BehaviorTreeExecutionPlan>>(graph.execution));
+        }
+        plan_ = candidate;
+        return Retained::Success(true);
+    }
+
+    /** @copydoc DecisionGraphInstance::ValidateRetainedTreeOccurrence */
+    Result<bool> DecisionGraphInstance::ValidateRetainedTreeOccurrence(const std::size_t index, const CookedDecisionPlan &candidate) const {
+        using Retained = Result<bool>;
+        const auto &current = plan_->Occurrences()[index];
+        const auto &replacement = candidate.Occurrences()[index];
+        if (replacement.parent != current.parent || replacement.callNode != current.callNode ||
+            replacement.subtreeEnd != current.subtreeEnd || replacement.firstTaskSlot != current.firstTaskSlot)
+            return Retained::Success(false);
+
+        const auto &existing = plan_->Graphs()[current.plan];
+        const auto &next = candidate.Graphs()[replacement.plan];
+        const auto &live = occurrences_[index]->tree;
         const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&next.execution);
-        if (!state.tree || !tree || plan_->Storage().taskSlots != candidate->Storage().taskSlots ||
-            next.schemaVersion != existing.schemaVersion || next.executionTask != existing.executionTask ||
-            plan_->Occurrences().front().firstTaskSlot != candidate->Occurrences().front().firstTaskSlot)
-            return Retained::Success(false);
-        const auto sameProperties =
-            std::ranges::equal(existing.providerProperties, next.providerProperties, [](const auto &left, const auto &right) {
-            return left.node == right.node && left.properties == right.properties;
-        });
-        if (!sameProperties)
+        if (!live || !tree || next.asset != existing.asset || next.schemaVersion != existing.schemaVersion ||
+            next.executionTask != existing.executionTask || !live->plan_->IsCompatible(**tree))
             return Retained::Success(false);
 
-        const auto replaced = state.tree->TryRetainCompatiblePlan(*tree);
-        if (replaced.HasValue() && replaced.Value())
-            plan_ = candidate;
-        return replaced;
+        if (!std::ranges::equal(existing.providerProperties, next.providerProperties, [](const auto &left, const auto &right) {
+            return left.node == right.node && left.properties == right.properties;
+        }))
+            return Retained::Success(false);
+        if (auto admitted = live->AdmitReplacement(*tree, nullptr); admitted.HasError())
+            return Retained::Failure(admitted.ErrorValue());
+        return Retained::Success(true);
     }
 
     /** @copydoc DecisionGraphInstance::TraceOccurrence */

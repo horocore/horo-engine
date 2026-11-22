@@ -660,10 +660,15 @@ namespace Horo::AI {
             return Result<bool>::Success(false);
         if (auto admitted = AdmitReplacement(candidate, nullptr); admitted.HasError())
             return Result<bool>::Failure(admitted.ErrorValue());
+        PublishRetainedPlan(candidate);
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc BehaviorTreeInstance::PublishRetainedPlan */
+    void BehaviorTreeInstance::PublishRetainedPlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate) noexcept {
         EvaluationGuard guard(evaluating_);
         plan_ = candidate;
         replacementTick_ = tick_;
-        return Result<bool>::Success(true);
     }
 
     /** @copydoc BehaviorTreeInstance::AdmitReplacement */

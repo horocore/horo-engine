@@ -557,10 +557,10 @@ namespace Horo::AI {
          * @param replacement Current compiled revision of the same root.
          * @param migration Optional direct forward migration for a newer version of the same authored Blackboard schema.
          * @return Success or a typed rejection preserving the prior decision, Blackboard and task range.
-         * @details Executable-equivalent flat trees retain active tasks and their existing callbacks. An accepted restart
+         * @details Executable-equivalent Behavior Tree closures retain active call frames, tasks and callbacks. An accepted restart
          * retires active nodes with PlanReplaced and restarts the root. A schema migration stages a new Blackboard and revokes
          * the previous read, write and task reservation leases at publication. Agents with separate live task or sensing
-         * authorities require coordinated Scene replacement for a schema migration. Composed Behavior Trees restart as a unit.
+         * authorities require coordinated Scene replacement for a schema migration. Incompatible closures restart as a unit.
          * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
         [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
                                                                     std::shared_ptr<const CookedDecisionPlan> replacement,

@@ -161,11 +161,13 @@ namespace Horo::AI {
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> CreateReserved(
             std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
             AiDecisionTaskReservation reservation, AiTaskOperationContext operation, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks);
-        /** @brief Rebinds an executable-equivalent flat tree without discarding its mailbox or callback lease.
+        /** @brief Rebinds an executable-equivalent tree closure without discarding active call state or mailboxes.
          * @param candidate Current cooked revision of the same root.
          * @return True after a no-callback compatible replacement, false for a safely restartable mismatch, or owner error.
          * @pre The Scene owner has validated its exact predecessor and completed the current scheduler tick. */
-        [[nodiscard]] Result<bool> TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate);
+        [[nodiscard]] Result<bool> TryRetainCompatibleTreeClosure(const std::shared_ptr<const CookedDecisionPlan> &candidate);
+        /** @brief Validates one occurrence's layout, callback bindings and instance before any rebind. */
+        [[nodiscard]] Result<bool> ValidateRetainedTreeOccurrence(std::size_t index, const CookedDecisionPlan &candidate) const;
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
         /** @brief Admits one scheduler slice before writing optional evidence. */

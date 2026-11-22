@@ -332,6 +332,9 @@ namespace Horo::AI {
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
         /** @brief Tries only the compatible no-callback branch, leaving incompatible state untouched. */
         [[nodiscard]] Result<bool> TryRetainCompatiblePlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate);
+
+        /** @brief Installs an already validated equivalent plan without changing task or traversal state. */
+        void PublishRetainedPlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate) noexcept;
         /** @brief Validates replacement ownership, schema, task range and executor binding before any cancellation. */
         [[nodiscard]] Result<void> AdmitReplacement(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate,
                                                     const IBehaviorTreeExecutor *replacementExecutor) const;

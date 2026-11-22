@@ -2860,8 +2860,9 @@ mailbox wakes and the earliest fixed deadline in nested Behavior Trees or
 selected Utility actions. Retirement hides the closed occurrence's signals.
 The scheduler admits all-tree closures with a complete work allowance and can
 restart them at the replacement boundary, retiring every old occurrence.
-Preserving active call frames across compatible composed revisions requires
-separate migration admission.
+Equivalent revisions validate the complete occurrence layout, task range and
+provider bindings before rebinding any tree. They preserve active call frames
+and independent mailboxes, including repeated occurrences of the same asset.
 
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.
