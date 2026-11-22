@@ -373,6 +373,11 @@ namespace Horo::AI {
         }
 
     private:
+        friend class AiRuntimeCapability;
+
+        /** @brief Allows a derived projection to renew unchanged, already guarded values without waking observers. */
+        [[nodiscard]] Result<BlackboardCommitResult> CommitAtBlackboardSync(BlackboardWriteBatch &&batch, bool notifyAuthorizationRefresh);
+
         struct ObserverSlot final {
             BlackboardObserverRegistration registration{};
             std::uint32_t generation{1};

@@ -822,6 +822,19 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(dependencies.front().node.Value() == 2);
                 CHECK(dependencies.front().listener.Value() == 91);
             }
+            SECTION("paired Blackboard key identities are retained") {
+                source["controllers"][0]["blackboardProjection"] = {{"sources", 14}, {"positions", 15}};
+                const auto captured = CaptureProjectPerception(definition.Value(), asset, source.dump());
+                REQUIRE(captured.HasValue());
+                const auto &projection = captured.Value()->controllers.front().blackboardProjection;
+                REQUIRE(projection);
+                CHECK(projection->sources.Value() == 14);
+                CHECK(projection->positions.Value() == 15);
+            }
+            SECTION("duplicate Blackboard projection keys are refused") {
+                source["controllers"][0]["blackboardProjection"] = {{"sources", 14}, {"positions", 14}};
+                CHECK(CaptureProjectPerception(definition.Value(), asset, source.dump()).HasError());
+            }
             SECTION("listener outside the controller declaration is refused") {
                 watches[0]["listener"] = 92;
                 CHECK(CaptureProjectPerception(definition.Value(), asset, source.dump()).HasError());

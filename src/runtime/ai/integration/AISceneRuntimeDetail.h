@@ -20,6 +20,10 @@ namespace Horo::AI::Detail {
         std::vector<ScenePerceptionSense> senses;
         std::size_t workUnits{};
         std::optional<Error> suspension; /**< Original provider fault once no listener remains active. */
+        std::size_t projectionCapacity{};
+        std::size_t projectionDrops{};
+        std::uint64_t projectedTick{};
+        std::uint64_t projectedSpatialRevision{};
     };
 
     /** @brief Separates a provider fault from a failure of the Scene's sensing window. */

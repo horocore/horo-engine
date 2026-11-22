@@ -41,10 +41,13 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Requires the complete closed wire shape. */
-        void RequireFields(const Json &object, std::initializer_list<std::string_view> fields) {
-            if (!object.is_object() || object.size() != fields.size() || std::ranges::any_of(fields, [&](const auto field) {
-                return !object.contains(field);
-            }))
+        void RequireFields(const Json &object, std::initializer_list<std::string_view> fields,
+                           std::initializer_list<std::string_view> optional = {}) {
+            const auto contains = [&](const auto field) {
+                return object.contains(field);
+            };
+            const auto present = static_cast<std::size_t>(std::ranges::count_if(optional, contains));
+            if (!object.is_object() || object.size() != fields.size() + present || !std::ranges::all_of(fields, contains))
                 throw std::invalid_argument("Incomplete Perception policy object");
         }
 
@@ -158,16 +161,24 @@ namespace Horo::Application::Internal {
             return filter;
         }
 
+        /** @brief Resolves the stable keys of one explicit typed collection projection. */
+        AI::PerceptionBlackboardProjection ReadBlackboardProjection(const Json &object) {
+            RequireFields(object, {"sources", "positions"});
+            const auto sources = AI::BlackboardKeyId::Create(Unsigned(object["sources"]));
+            const auto positions = AI::BlackboardKeyId::Create(Unsigned(object["positions"]));
+            if (sources.HasError() || positions.HasError() || sources.Value() == positions.Value())
+                throw std::invalid_argument("Perception projection requires distinct Blackboard identities");
+            return {sources.Value(), positions.Value()};
+        }
+
         /** @brief Projects inert durable controller fields without choosing any runtime implementation. */
         ProjectPerceptionControllerSelection ReadController(const Json &object, const std::uint64_t schema) {
-            const bool hasWatches = schema >= 2 && object.contains("decisionWatches");
-            if (schema == 3) {
-                if (hasWatches)
-                    RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "filter", "decisionWatches"});
-                else
-                    RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "filter"});
-            } else if (hasWatches)
-                RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "decisionWatches"});
+            if (schema == 3)
+                RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "filter"},
+                              {"decisionWatches", "blackboardProjection"});
+            else if (schema == 2)
+                RequireFields(object, {"controller", "listeners", "sources", "layers", "mask"},
+                              {"decisionWatches", "blackboardProjection"});
             else
                 RequireFields(object, {"controller", "listeners", "sources", "layers", "mask"});
             auto controller = AI::ControllerTypeId::Create(Unsigned(object["controller"]));
@@ -189,8 +200,10 @@ namespace Horo::Application::Internal {
                 throw std::invalid_argument("Invalid Perception controller filters");
             if (result.listeners.empty() && result.sources.empty())
                 throw std::invalid_argument("Controller requires a listener or source");
-            if (hasWatches)
+            if (object.contains("decisionWatches"))
                 result.decisionWatches = ReadDecisionWatches(object["decisionWatches"], result.listeners);
+            if (object.contains("blackboardProjection"))
+                result.blackboardProjection = ReadBlackboardProjection(object["blackboardProjection"]);
             return result;
         }
 
@@ -432,7 +445,8 @@ namespace Horo::Application::Internal {
                                                         .sources = selection.sources,
                                                         .participant = selection.participant,
                                                         .listenerFilter = selection.listenerFilter,
-                                                        .decisionWatches = selection.decisionWatches});
+                                                        .decisionWatches = selection.decisionWatches,
+                                                        .blackboardProjection = selection.blackboardProjection});
                 if (const auto valid = AI::ValidateAiControllerDescriptor(*chosen); valid.HasError())
                     return Output::Failure(valid.ErrorValue());
             }

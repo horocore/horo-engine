@@ -101,6 +101,8 @@ namespace Horo::AI {
                                                            CancellationToken cancellation,
                                                            const Telemetry::OperationContext *diagnostics) const;
         friend class AiSceneRuntime;
+        [[nodiscard]] Result<BlackboardCommitResult> CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch &batch,
+                                                                           bool notifyAuthorizationRefresh) const;
 
         AiRuntimeCapability(std::weak_ptr<Detail::AiSceneRuntimeState> state, std::thread::id owner) noexcept
             : state_(std::move(state)), owner_(owner) {}

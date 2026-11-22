@@ -82,6 +82,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             ai_->PublishPerceptionAtSafePoint(*scene, current->Revision() + 1, positions.Value(), capture.spatial, capture.filtering);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
-        return ai_->PollPerceptionAtSensePoll(*scene, capture.spatial, tick, fixedStep);
+        if (const auto sensed = ai_->PollPerceptionAtSensePoll(*scene, capture.spatial, tick, fixedStep); sensed.HasError())
+            return sensed;
+        return ai_->PublishPerceptionBlackboardsAtBlackboardSync(*scene, capture.spatial, tick);
     }
 }  // namespace Horo::Application::Internal::EditorProjectSceneDetail

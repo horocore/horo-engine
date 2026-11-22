@@ -241,6 +241,11 @@ namespace Horo::AI {
 
     /** @copydoc AiRuntimeCapability::CommitBlackboardWrite */
     Result<BlackboardCommitResult> AiRuntimeCapability::CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch batch) const {
+        return CommitBlackboardWrite(agent, batch, true);
+    }
+
+    Result<BlackboardCommitResult> AiRuntimeCapability::CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch &batch,
+                                                                              const bool notifyAuthorizationRefresh) const {
         auto state = Lock();
         if (state.HasError())
             return Result<BlackboardCommitResult>::Failure(state.ErrorValue());
@@ -252,7 +257,7 @@ namespace Horo::AI {
         if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<BlackboardCommitResult>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
         const auto plan = slot.Value()->cookedPlan;
-        auto committed = slot.Value()->blackboard->CommitAtBlackboardSync(std::move(batch));
+        auto committed = slot.Value()->blackboard->CommitAtBlackboardSync(std::move(batch), notifyAuthorizationRefresh);
         if (committed.HasError() || committed.Value().Changes().empty())
             return committed;
         ++state.Value()->revision;

@@ -1368,6 +1368,17 @@ mode. Authored scheduler and Perception limits and development grants still
 apply.
 Deterministic headless replay requires its regular fixed-tick scheduling policy.
 
+A schema 2 or 3 controller may also select a paired collection projection with
+`"blackboardProjection": {"sources": 14, "positions": 15}`.
+Both keys must be writable collections with EntityReference and WorldCoordinate
+elements respectively. Scene admission checks their types and capacities
+before creating sense instances. Editor Play and authoritative headless
+publish both keys in one BlackboardSync commit after sensing and before
+Decision. The projected prefix uses memory order and the smaller collection
+capacity. The Agent inspector reports omitted observations for that batch.
+The full memory snapshot keeps its raw observations. A spatial authorization
+renewal with unchanged values refreshes reads without waking the Decision.
+
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
 existing Lua sandbox and allocator with a bounded instruction hook. Its callback

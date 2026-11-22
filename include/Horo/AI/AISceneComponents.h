@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -111,6 +112,19 @@ namespace Horo::AI {
         const AiControllerComponent *controller{};
     };
 
+    /** @brief Paired writable collections; the smaller admitted key capacity bounds the atomic projection. */
+    struct PerceptionBlackboardProjection final {
+        BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */
+        BlackboardKeyId positions; /**< WorldCoordinate collection; last-known memory facts only. */
+
+        /**
+         * @brief Validates the declared projection against the controller schema before sensing begins.
+         * @param schema Captured blackboard schema for the recipient.
+         * @return The shared item limit or a typed key, access or type failure.
+         */
+        [[nodiscard]] Result<std::size_t> Validate(const BlackboardSchema &schema) const;
+    };
+
     /** @brief Inert authored endpoint selection resolved against the host's admitted Perception registry. */
     struct AiControllerPerceptionEndpoints final {
         static constexpr std::size_t MaximumSenses = 16;
@@ -120,6 +134,7 @@ namespace Horo::AI {
         PerceptionParticipantFilter participant;
         PerceptionListenerFilter listenerFilter;
         std::vector<DecisionWakePerceptionDependency> decisionWatches; /**< Nonempty selects event-only cooked execution. */
+        std::optional<PerceptionBlackboardProjection> blackboardProjection; /**< Optional Scene-owned synchronized projection. */
     };
 
     /**

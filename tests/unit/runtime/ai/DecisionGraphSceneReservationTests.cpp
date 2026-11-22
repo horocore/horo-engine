@@ -469,6 +469,20 @@ namespace Horo::AI {
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;
             fixture.probe.succeedTick = 100;
+            const PerceptionBlackboardProjection keys{MakeIdentity<BlackboardKeyId>(80), MakeIdentity<BlackboardKeyId>(81)};
+            const auto collection = [](const BlackboardKeyId key, const BlackboardValueKind kind) {
+                return BlackboardKeyDescriptor{.key = key,
+                                               .kind = kind,
+                                               .cardinality = BlackboardValueCardinality::Collection,
+                                               .maximumCollectionElements = 1,
+                                               .defaultValue = BlackboardValue{BlackboardCollectionValue{.elementKind = kind}}};
+            };
+            const std::array descriptors{fixture.schema->Keys().front(), collection(keys.sources, BlackboardValueKind::EntityReference),
+                                         collection(keys.positions, BlackboardValueKind::WorldCoordinate)};
+            auto schema = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, descriptors});
+            REQUIRE(schema.HasValue());
+            fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+
             auto source = TaskTree(11);
             source.executionTask = MakeIdentity<TaskId>(9000);
             const auto plan = fixture.Compile(std::span{&source, 1}, 11);
@@ -492,7 +506,14 @@ namespace Horo::AI {
                                                     WakeSenseRegistry(registrations, {listener, otherListener}, native.capabilities)),
                                                 .listeners = {listener, otherListener},
                                                 .sources = {sense, otherSense},
-                                                .decisionWatches = {{Node(2), listener}}});
+                                                .decisionWatches = {{Node(2), listener}},
+                                                .blackboardProjection = keys});
+
+            auto malformed = authored.descriptor;
+            auto wrongKeys = std::make_shared<AiControllerPerceptionEndpoints>(*malformed.perceptionEndpoints);
+            wrongKeys->blackboardProjection = {keys.sources, descriptors.front().key};
+            malformed.perceptionEndpoints = std::move(wrongKeys);
+            TestSupport::ExpectError(ValidateAiControllerDescriptor(malformed), AIErrors::BlackboardValueTypeMismatch);
 
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             for (std::uint64_t id = 1; id <= 2; ++id) {
@@ -543,10 +564,15 @@ namespace Horo::AI {
             const std::array invalid{DecisionWakePerceptionDependency{Node(8), listener}};
             CHECK(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, invalid).HasError());
             const auto evaluate = [&](const std::uint64_t tick) {
+                const auto positions = sensing.positions(view);
+                REQUIRE(positions.HasValue());
+                REQUIRE(runtime.PublishPerceptionAtSafePoint(view, tick + 1, positions.Value(), spatial).HasValue());
                 REQUIRE(runtime
                             .PollPerceptionAtSensePoll(view, spatial, tick,
                                                        Duration::FromNanoseconds(sensing.execution->memory.fixedStep.count()))
                             .HasValue());
+                REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, tick).HasValue());
+                REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, tick).HasValue());
                 const auto decision = scheduler->EvaluateAtDecision(tick);
                 REQUIRE(decision.HasValue());
                 CHECK(decision.Value().failed == 0);
@@ -554,7 +580,28 @@ namespace Horo::AI {
                 return decision.Value().evaluated;
             };
             CHECK(evaluate(1) == 2);
+            const auto oldBoard = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(oldBoard.HasValue());
+            const auto oldSources = oldBoard.Value().Read(keys.sources);
+            REQUIRE(oldSources.HasValue());
+            REQUIRE(oldSources.Value());
+            CHECK(std::get<BlackboardCollectionValue>(*oldSources.Value()).count == 1);
+            const auto oldPositions = oldBoard.Value().Read(keys.positions);
+            REQUIRE(oldPositions.HasValue());
+            REQUIRE(oldPositions.Value());
+            const auto &positions = std::get<BlackboardCollectionValue>(*oldPositions.Value());
+            REQUIRE(positions.count == 1);
+            CHECK(std::get<Math::WorldCoordinate64>(positions.elements[0]) == Math::WorldCoordinate64::FromMillimeters(2000, 0, 0));
+            const auto inspection = runtime.CaptureAgentInspectionAtSafePoint(view, agent, {});
+            REQUIRE(inspection.HasValue());
+            CHECK(inspection.Value().perceptionProjectionDrops == 1);
+            CHECK(inspection.Value().stimuli.size() == 2);
             CHECK(evaluate(2) == 0);
+            CHECK(oldBoard.Value().Read(keys.sources).HasError());
+            const auto freshBoard = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(freshBoard.HasValue());
+            CHECK(freshBoard.Value().CapturedRevision() == oldBoard.Value().CapturedRevision());
+            CHECK(freshBoard.Value().Read(keys.sources).HasValue());
             primary.sees = false;
             CHECK(evaluate(3) == 1);
             CHECK(fixture.probe.resumes == 1);
@@ -593,6 +640,10 @@ namespace Horo::AI {
                 secondary.fails = true;
                 CHECK(evaluate(8) == 0);
                 TestSupport::ExpectError(runtime.ReadPerceptionAtSafePoint(view, recipient), AIErrors::PerceptionProviderFailed);
+                const auto cleared = capability.ReadBlackboard(agent, keys.sources);
+                REQUIRE(cleared.HasValue());
+                REQUIRE(cleared.Value());
+                CHECK(std::get<BlackboardCollectionValue>(*cleared.Value()).count == 0);
             }
             SECTION("the structural publication of a retired source wakes the surviving watcher") {
                 auto structural = runtime.MakeStructuralParticipant(std::span{&authored.descriptor, 1});

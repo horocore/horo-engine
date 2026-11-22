@@ -111,6 +111,7 @@ namespace Horo::AI {
                 result.omittedDecisionTasks = total - retained.size();
             }
             if (selected->sensing) {
+                result.perceptionProjectionDrops = selected->sensing->projectionDrops;
                 InspectSenseProviders(result, *selected->sensing);
                 const auto memory = ReadPerceptionAtSafePoint(scene, result.owner);
                 if (memory.HasError())

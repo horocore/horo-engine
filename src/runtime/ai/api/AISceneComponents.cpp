@@ -37,6 +37,20 @@ namespace Horo::AI {
             return kind < DecisionPlanKind::Count;
         }
 
+        /** @brief Resolves one projection key against the stable schema inventory. */
+        [[nodiscard]] Result<std::size_t> CollectionCapacity(const BlackboardSchema &schema, const BlackboardKeyId key,
+                                                             const BlackboardValueKind kind) {
+            const auto keys = schema.Keys();
+            const auto found = std::ranges::lower_bound(keys, key, {}, &BlackboardKeyDescriptor::key);
+            if (found == keys.end() || found->key != key)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardUnknownValueRejected));
+            if (found->access != BlackboardKeyAccess::ReadWrite)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+            if (found->kind != kind || found->cardinality != BlackboardValueCardinality::Collection)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
+            return Result<std::size_t>::Success(found->maximumCollectionElements);
+        }
+
         /** @brief Admits only available listener routes and known source senses from the authored registry. */
         [[nodiscard]] Result<void> ValidatePerceptionEndpoints(const AiControllerPerceptionEndpoints &endpoints) {
             if (!endpoints.registry || (endpoints.listeners.empty() && endpoints.sources.empty()))
@@ -69,6 +83,19 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc PerceptionBlackboardProjection::Validate */
+    Result<std::size_t> PerceptionBlackboardProjection::Validate(const BlackboardSchema &schema) const {
+        if (!sources.IsValid() || !positions.IsValid() || sources == positions)
+            return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+        const auto sourceCapacity = CollectionCapacity(schema, sources, BlackboardValueKind::EntityReference);
+        if (sourceCapacity.HasError())
+            return sourceCapacity;
+        const auto positionCapacity = CollectionCapacity(schema, positions, BlackboardValueKind::WorldCoordinate);
+        if (positionCapacity.HasError())
+            return positionCapacity;
+        return Result<std::size_t>::Success(std::min(sourceCapacity.Value(), positionCapacity.Value()));
+    }
 
     /** @copydoc ValidateAiAgentComponent */
     Result<void> ValidateAiAgentComponent(const AiAgentComponent &component) {
@@ -110,9 +137,17 @@ namespace Horo::AI {
                 return Failure(AIErrors::ControllerDescriptorIncompatible,
                                "AI cooked decision is stale or does not own the controller's exact root bindings.");
         }
-        if (descriptor.perceptionEndpoints)
-            return ValidatePerceptionEndpoints(*descriptor.perceptionEndpoints);
-        return Result<void>::Success();
+        if (!descriptor.perceptionEndpoints)
+            return Result<void>::Success();
+        const auto &endpoints = *descriptor.perceptionEndpoints;
+        if (endpoints.blackboardProjection) {
+            if (endpoints.listeners.empty())
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+            const auto admitted = endpoints.blackboardProjection->Validate(*descriptor.blackboardSchema);
+            if (admitted.HasError())
+                return Result<void>::Failure(admitted.ErrorValue());
+        }
+        return ValidatePerceptionEndpoints(endpoints);
     }
 
     /** @copydoc ValidateAiSceneComponents */

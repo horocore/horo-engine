@@ -200,6 +200,7 @@ namespace Horo::AI {
         std::vector<AiInspectionStimulus> stimuli;
         std::optional<AiInspectionFailure> perceptionFailure;
         std::vector<AiInspectionSenseProvider> senseProviders;
+        std::size_t perceptionProjectionDrops{}; /**< Capacity drops from the last synchronized projection. */
     };
 
     /** @brief Detached evidence from one selected decision and the canonical AI population at a completed tick. */
@@ -677,6 +678,13 @@ namespace Horo::AI {
         [[nodiscard]] Result<AiSceneDecisionReplayCapture> CaptureDecisionReplayAtSafePoint(Runtime::RuntimeSceneView scene,
                                                                                             std::uint64_t tick,
                                                                                             std::size_t maximumCanonicalBytes) const;
+
+        /** @brief Publishes each authored projection once per sensed tick and current spatial revision before Decision.
+         * @details The typed paired values share one Blackboard commit. An unchanged authorization renewal queues no wake.
+         */
+        [[nodiscard]] Result<void> PublishPerceptionBlackboardsAtBlackboardSync(const Runtime::RuntimeSceneView &scene,
+                                                                                const PerceptionSpatialBroadphase &spatial,
+                                                                                std::uint64_t tick);
 
         /** @brief Publishes the currently registered Perception endpoints through the canonical spatial owner.
          * @param scene Exact committed Scene. @param revision Positive owner-issued spatial revision.

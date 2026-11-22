@@ -301,6 +301,11 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardInstance::CommitAtBlackboardSync */
     Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch) {
+        return CommitAtBlackboardSync(std::move(batch), true);
+    }
+
+    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch,
+                                                                              const bool notifyAuthorizationRefresh) {
         const auto consumed = std::move(batch).ConsumeForCommit();
 
         if (publishing_)
@@ -318,7 +323,10 @@ namespace Horo::AI {
             if (applied.HasError())
                 return Result<BlackboardCommitResult>::Failure(applied.ErrorValue());
             const auto index = FindKey(*schema_, write.key);
-            if (applied.Value() || authorizationScratch_[index] != write.authorization)
+            const auto &previous = authorizationScratch_[index];
+            const bool authorizationChanged =
+                previous != write.authorization && (notifyAuthorizationRefresh || !previous || !write.authorization);
+            if (applied.Value() || authorizationChanged)
                 result.changedKeys[result.changedKeyCount++] = write.key;
             authorizationScratch_[index] = write.authorization;
         }

@@ -5,6 +5,7 @@
  * @brief RuntimeScene conversion and residency seam for dependency-neutral perception memory.
  */
 
+#include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/PerceptionMemory.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
@@ -35,19 +36,6 @@ namespace Horo::AI {
         PerceptionMemorySnapshot memory;
         std::shared_ptr<const BlackboardValueAuthorization> authorization;
         std::weak_ptr<const PerceptionSenseGeneration> provider;
-    };
-
-    /** @brief Paired writable collections; the smaller admitted key capacity bounds the atomic projection. */
-    struct PerceptionBlackboardProjection final {
-        BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */
-        BlackboardKeyId positions; /**< WorldCoordinate collection; last-known memory facts only. */
-
-        /**
-         * @brief Validates the declared projection against the controller schema before sensing begins.
-         * @param schema Captured blackboard schema for the recipient.
-         * @return The shared item limit or a typed key, access or type failure.
-         */
-        [[nodiscard]] Result<std::size_t> Validate(const BlackboardSchema &schema) const;
     };
 
     /** @brief One complete filtered value publication shared by blackboard and debug readers. */

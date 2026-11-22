@@ -2966,6 +2966,7 @@
     "workspace.game.ai_debug_set_breakpoint": {"text": "Break on next visit"},
     "workspace.game.ai_debug_clear_breakpoint": {"text": "Clear breakpoint"},
     "workspace.game.ai_inspection_perception": {"text": "Perception sense"},
+    "workspace.game.ai_inspection_perception_drops": {"text": "Omitted Blackboard observations"},
     "workspace.game.ai_inspection_provider": {"text": "Provider"},
     "workspace.game.ai_inspection_provider_available": {"text": "Available"},
     "workspace.game.ai_inspection_provider_unavailable": {"text": "Unavailable"},

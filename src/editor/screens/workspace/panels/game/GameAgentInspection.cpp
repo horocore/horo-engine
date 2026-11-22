@@ -279,6 +279,8 @@ namespace Horo::Editor {
                 line(std::format("{} · {}", text("ai_problem"), snapshot.decisionFailure->code.Value()), Theme::Warn());
             if (snapshot.perceptionFailure)
                 line(std::format("{} · {}", text("ai_inspection_perception"), snapshot.perceptionFailure->code.Value()), Theme::Warn());
+            if (snapshot.perceptionProjectionDrops != 0)
+                line(std::format("{} {}", text("ai_inspection_perception_drops"), snapshot.perceptionProjectionDrops), Theme::Warn());
             for (const auto &provider : snapshot.senseProviders)
                 DrawSenseProvider(provider, context);
             if (const auto &navigation = entry.navigation)

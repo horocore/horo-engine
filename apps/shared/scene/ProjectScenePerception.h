@@ -19,6 +19,7 @@ namespace Horo::Application::Internal {
         AI::PerceptionParticipantFilter participant;
         AI::PerceptionListenerFilter listenerFilter;
         std::vector<AI::DecisionWakePerceptionDependency> decisionWatches;
+        std::optional<AI::PerceptionBlackboardProjection> blackboardProjection;
     };
 
     /** @brief Stable listener authored for exactly one registered custom sense. */
