@@ -2460,8 +2460,9 @@ add_executable(HoroDecisionGraphCompilerTests
 )
 target_compile_features(HoroDecisionGraphCompilerTests PRIVATE cxx_std_20)
 target_include_directories(HoroDecisionGraphCompilerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroDecisionGraphCompilerTests PRIVATE HoroEngine::AI HoroEngine::GameplayLua HoroEngine::GameplayModuleHost
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::Platform)
+target_link_libraries(HoroDecisionGraphCompilerTests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration
+    HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::GameplayPhysicsIntegration
+    HoroEngine::GameplayCharacterIntegration HoroEngine::Platform)
 horo_register_catch_test(HoroDecisionGraphCompilerTests LABELS "unit;ai;headless"
     PROPERTIES TIMEOUT 90)
 
