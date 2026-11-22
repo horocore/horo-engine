@@ -908,6 +908,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity>) */
     Result<void> EditorWorkspaceController::SynchronizeRuntimeScenePreview(const std::optional<EditorViewportCrossFadeCapacity> capacity) {
+        ReconcileAgentSceneTransformReview();
         if (m_playSession.IsActive()) {
             ExtractPlayViewportScene();
             return Result<void>::Success();

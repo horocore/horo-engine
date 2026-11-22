@@ -418,6 +418,16 @@ namespace {
             CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
             CHECK(events.empty());
         }
+        SECTION("a lost runtime scene cannot leave the retired preview visible") {
+            scenes.Shutdown();
+            controller.SynchronizeRuntimeScenePreview();
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewportScene().instances.empty());
+            CHECK(controller.ViewportScene().transformOverrides.empty());
+            CHECK(controller.ApproveAgentSceneTransforms(preview.Value()).HasError());
+            CHECK(events.empty());
+            CHECK_FALSE(controller.ViewModel().isDirty);
+        }
     }
 
     TEST_CASE("Viewport Navigation Updates Only The Editor Camera Authority", "[unit][editor]") {

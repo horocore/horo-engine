@@ -137,8 +137,6 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::HandleDocumentCommandResult(const Result<SceneCommandResult> &result, const char *operation) {
-        m_agentSceneTransformReview.reset();
-        m_viewModel.agentSceneReview.reset();
         if (result.HasError()) {
             LOG_ERROR("editor.scene_document", "%s failed: %s", operation, result.ErrorValue().message.c_str());
             if (result.ErrorValue().code.Value() == SceneDocumentErrors::ObjectLocked.code.Value()) {
@@ -158,6 +156,8 @@ namespace Horo::Editor {
             CancelLightComponentPreview();
             return;
         }
+        if (m_agentSceneTransformReview)
+            CancelObjectTransformPreview();
         m_viewport.ClearTransformPreview();
         m_viewport.ClearLightPreview();
         m_dataBus.Publish(SceneDocumentChangedEvent{committed.revision, committed.state, committed.kind, m_document.IsDirty(),
@@ -213,19 +213,28 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::CancelObjectTransformPreview() {
+        const bool retiringReview = m_agentSceneTransformReview.has_value();
         m_agentSceneTransformReview.reset();
         m_viewModel.agentSceneReview.reset();
-        if (m_viewport.Current().transformPreviews.empty()) {
+        if (m_viewport.Current().transformPreviews.empty() && (!retiringReview || m_viewportScene.transformOverrides.empty())) {
             return;
         }
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
-        if (!active || m_viewportScene.runtimeSceneId != active->RuntimeId())
+        bool restored = false;
+        if (active && m_viewportScene.runtimeSceneId == active->RuntimeId()) {
+            const auto result = ApplyEditorViewportTransformPreview(*active, {}, m_viewportScene);
+            restored = result.HasValue();
+            if (!restored)
+                LOG_ERROR("editor.viewport", "Transform preview cancellation failed: %s", result.ErrorValue().message.c_str());
+        }
+        if (!restored && !retiringReview)
             return;
-        if (const Result<void> restored =
-                ApplyEditorViewportTransformPreview(*active, std::span<const SceneObjectTransformPreview>{}, m_viewportScene);
-            restored.HasError()) {
-            LOG_ERROR("editor.viewport", "Transform preview cancellation failed: %s", restored.ErrorValue().message.c_str());
-            return;
+        if (!restored) {
+            // A retired proposal may never be reapplied to the replacement viewport.
+            m_viewportScene = {};
+            m_viewportScene.camera = m_viewport.Current().camera;
+            m_activeRuntimeRevision = {};
+            ++m_viewportSceneRevision;
         }
         m_viewport.ClearTransformPreview();
         m_viewModel.primarySelectionPreviewWorldTransform.reset();
