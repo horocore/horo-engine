@@ -33,6 +33,7 @@ namespace Horo::Editor {
 
     /** @brief Retries host preparation without creating policy or cancelling a retained application operation. */
     void PackageModal::Reconnect() {
+        removalPreview_.reset();
         if (session_) {
             static_cast<void>(session_->Close(generation_));
             session_.reset();
@@ -80,10 +81,12 @@ namespace Horo::Editor {
         Ui::Hint(Text("policy_hint").c_str(), context_.theme.fonts);
         const auto plan = session_ ? session_->Plan() : nullptr;
         if (!plan) {
+            removalPreview_.reset();
             Ui::Hint(Text("plan_unavailable").c_str(), context_.theme.fonts);
             return;
         }
         if (plan != displayedPlan_) {
+            removalPreview_.reset();
             std::vector<PlanRow> rows;
             rows.reserve(plan->packages.size());
             for (const auto &entry : plan->packages)
@@ -114,6 +117,34 @@ namespace Horo::Editor {
         Ui::FieldLabel(Text("required_by").c_str(), context_.theme.fonts);
         for (const auto &dependant : selected->requiredBy)
             Ui::Hint(dependant.package.Value().c_str(), context_.theme.fonts);
+    }
+
+    /** @copydoc PackageModal::PreviewPackageRemoval */
+    void PackageModal::PreviewPackageRemoval() {
+        removalPreview_.reset();
+        const auto package = Packages::HoroPackageId::Parse(package_);
+        if (package.HasError()) {
+            error_ = package.ErrorValue();
+            return;
+        }
+        auto preview = session_->PreviewRemoval(generation_, package.Value());
+        if (preview.HasError()) {
+            error_ = preview.ErrorValue();
+            return;
+        }
+        error_.reset();
+        removalPreview_ = std::move(preview).Value();
+    }
+
+    /** @copydoc PackageModal::DrawRemovalPreview */
+    void PackageModal::DrawRemovalPreview() const {
+        if (!removalPreview_)
+            return;
+        const auto &removed = removalPreview_->removed;
+        const auto *label = removed.empty() ? "removal_kept" : "removal_candidates";
+        Ui::Hint(Text(label).c_str(), context_.theme.fonts);
+        for (const auto &package : removed)
+            Ui::Hint(package.package.Value().c_str(), context_.theme.fonts);
     }
 
     /** @brief Keeps the original typed cause for structured diagnostics; visible copy remains localized. */
@@ -163,8 +194,12 @@ namespace Horo::Editor {
         if (button("install", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Install));
         Ui::FieldLabel(Text("package").c_str(), context_.theme.fonts);
-        static_cast<void>(Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts));
+        if (Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts))
+            removalPreview_.reset();
         DrawPackageDependents();
+        if (button("preview_removal", session_ && !running && !package_.empty()))
+            PreviewPackageRemoval();
+        DrawRemovalPreview();
         Ui::FieldLabel(Text("descriptor").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
         const bool canActivate = session_ && !running && !package_.empty() && !descriptor_.empty();

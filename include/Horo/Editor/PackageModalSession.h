@@ -46,6 +46,10 @@ namespace Horo::Editor {
         [[nodiscard]] const std::optional<Application::PackageOperationSnapshot> &Operation() const noexcept;
         /** @brief Returns the last immutable plan, absent when evidence is unavailable. @return Owning read-only evidence. */
         [[nodiscard]] std::shared_ptr<const Application::PackagePlanSnapshot> Plan() const noexcept;
+        /** @brief Reads graph-only removal effects for the current opening.
+         * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
+        [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(PackageModalGeneration generation,
+                                                                                  const Packages::HoroPackageId &package) const;
 
     private:
         /** @brief Rejects controls from a closed or replaced modal opening before application access. */

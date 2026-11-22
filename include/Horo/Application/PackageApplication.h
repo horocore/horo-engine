@@ -166,6 +166,9 @@ namespace Horo::Application {
         /** @brief Returns the immutable precomputed plan, with evidence status separate from actual installed/active state.
          * @return Owning read-only plan or typed missing-evidence/owner-lane failure. */
         [[nodiscard]] Result<std::shared_ptr<const PackagePlanSnapshot>> Plan() const;
+        /** @brief Previews withdrawal of one package from the current exact locked graph.
+         * @param package Package from the displayed lock. @return Read-only graph impacts or a stale/missing evidence failure. */
+        [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(const Packages::HoroPackageId &package) const;
         /** @brief Requests cooperative cancellation of one exact current operation.
          * @param operation Expected operation identity. @return Success or typed stale/owner failure. */
         [[nodiscard]] Result<void> RequestCancel(PackageOperationId operation);

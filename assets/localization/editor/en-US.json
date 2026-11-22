@@ -4455,6 +4455,15 @@
     "workspace.packages.required_by": {
       "text": "Required by packages in this plan"
     },
+    "workspace.packages.preview_removal": {
+      "text": "Preview removal from the locked graph"
+    },
+    "workspace.packages.removal_kept": {
+      "text": "This package stays in the locked graph because other packages require it."
+    },
+    "workspace.packages.removal_candidates": {
+      "text": "Packages the locked graph would drop. Project references still need review."
+    },
     "workspace.packages.descriptor": {
       "text": "Declared extension descriptor path"
     },

@@ -88,4 +88,16 @@ namespace Horo::Application {
                 PackageOperations::Failure("packages.application.plan_unavailable"));
         return Result<std::shared_ptr<const PackagePlanSnapshot>>::Success(impl_->plan);
     }
+
+    /** @copydoc PackageApplication::PreviewRemoval */
+    Result<Packages::PackageRemovalGraphPreview> PackageApplication::PreviewRemoval(const Packages::HoroPackageId &package) const {
+        using Output = Result<Packages::PackageRemovalGraphPreview>;
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Output::Failure(lane.ErrorValue());
+        if (impl_->closing || !impl_->configuration.lockedPlan)
+            return Output::Failure(PackageOperations::Failure("packages.application.plan_unavailable"));
+        if (const auto current = impl_->configuration.validateAdmission(); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        return impl_->configuration.lockedPlan->PreviewRemoval(package);
+    }
 }  // namespace Horo::Application

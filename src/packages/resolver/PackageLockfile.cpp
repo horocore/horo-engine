@@ -459,6 +459,46 @@ namespace Horo::Packages {
         return m_packages;
     }
 
+    /** @copydoc ValidatedPackageLockfileV1::PreviewRemoval */
+    Result<PackageRemovalGraphPreview> ValidatedPackageLockfileV1::PreviewRemoval(const HoroPackageId &package) const {
+        using Output = Result<PackageRemovalGraphPreview>;
+        std::map<std::string_view, std::size_t, std::less<>> indices;
+        for (std::size_t index = 0; index < m_packages.size(); ++index)
+            indices.try_emplace(m_packages[index].package.Value(), index);
+        if (!indices.contains(package.Value()))
+            return Output::Failure(MakeError(InvalidLock, "The package is absent from the locked graph."));
+
+        PackageRemovalGraphPreview preview;
+        preview.directRoot = std::ranges::find(m_roots, package, &LockedPackageReference::package) != m_roots.end();
+        std::vector<bool> retained(m_packages.size());
+        std::vector<std::size_t> pending;
+        pending.reserve(m_packages.size());
+        const auto retain = [&](const HoroPackageId &id) {
+            const auto index = indices.at(id.Value());
+            if (!retained[index]) {
+                retained[index] = true;
+                pending.push_back(index);
+            }
+        };
+        for (const auto &root : m_roots)
+            if (root.package != package)
+                retain(root.package);
+        while (!pending.empty()) {
+            const auto index = pending.back();
+            pending.pop_back();
+            for (const auto &dependency : m_packages[index].dependencies)
+                retain(dependency.package);
+        }
+        for (std::size_t index = 0; index < m_packages.size(); ++index) {
+            const auto &entry = m_packages[index];
+            if (!retained[index])
+                preview.removed.emplace_back(entry.package, entry.version);
+            else if (std::ranges::find(entry.dependencies, package, &LockedPackageReference::package) != entry.dependencies.end())
+                preview.requiredBy.emplace_back(entry.package, entry.version);
+        }
+        return Output::Success(std::move(preview));
+    }
+
     /** @copydoc ValidatedPackageLockfileV1::ValidatedPackageLockfileV1 */
     ValidatedPackageLockfileV1::ValidatedPackageLockfileV1(const Sha256Digest &requestHash, std::vector<LockedPackageReference> roots,
                                                            std::vector<LockedPackage> packages)

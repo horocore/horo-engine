@@ -4455,6 +4455,15 @@
     "workspace.packages.required_by": {
       "text": "Bu paketi gerektiren paketler"
     },
+    "workspace.packages.preview_removal": {
+      "text": "Kilitli grafikten kaldırmayı önizle"
+    },
+    "workspace.packages.removal_kept": {
+      "text": "Diğer paketler bu paketi gerektirdiği için paket kilitli grafikte kalır."
+    },
+    "workspace.packages.removal_candidates": {
+      "text": "Kilitli grafikten çıkacak paketler. Proje referansları ayrıca incelenmeli."
+    },
     "workspace.packages.descriptor": {
       "text": "Bildirilen uzantı tanımlayıcısının yolu"
     },

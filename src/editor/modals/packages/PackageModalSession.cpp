@@ -113,4 +113,12 @@ namespace Horo::Editor {
     std::shared_ptr<const Application::PackagePlanSnapshot> PackageModalSession::Plan() const noexcept {
         return plan_;
     }
+
+    /** @copydoc PackageModalSession::PreviewRemoval */
+    Result<Packages::PackageRemovalGraphPreview> PackageModalSession::PreviewRemoval(const PackageModalGeneration generation,
+                                                                                     const Packages::HoroPackageId &package) const {
+        if (const auto valid = Validate(generation); valid.HasError())
+            return Result<Packages::PackageRemovalGraphPreview>::Failure(valid.ErrorValue());
+        return application_->PreviewRemoval(package);
+    }
 }  // namespace Horo::Editor

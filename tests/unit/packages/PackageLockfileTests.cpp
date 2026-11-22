@@ -108,6 +108,42 @@ TEST_CASE("Package lock generation is deterministic and round trips exact graph 
     CHECK(parsed.Value().Packages().front().contributions == std::vector<std::string>{"assets", "runtime"});
 }
 
+TEST_CASE("Package removal preview prunes only entries no remaining root can reach", "[packages][lockfile][removal]") {
+    Fixture fixture;
+    SECTION("removing the last root prunes the entire graph") {
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto preview = lock.Value().PreviewRemoval(Id("com.game.root"));
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().directRoot);
+        CHECK(preview.Value().removed == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")},
+                                                                             {Id("com.horo.runtime"), Version("2.0.1")},
+                                                                             {Id("com.shared.data"), Version("3.4.5")}});
+        CHECK(preview.Value().requiredBy.empty());
+    }
+    SECTION("another root preserves shared dependencies and explains retained roots") {
+        fixture.roots.push_back(Id("com.horo.runtime"));
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto preview = lock.Value().PreviewRemoval(Id("com.game.root"));
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().removed == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")}});
+
+        const auto retainedRoot = lock.Value().PreviewRemoval(Id("com.horo.runtime"));
+        REQUIRE(retainedRoot.HasValue());
+        CHECK(retainedRoot.Value().directRoot);
+        CHECK(retainedRoot.Value().removed.empty());
+        CHECK(retainedRoot.Value().requiredBy == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")}});
+
+        const auto transitive = lock.Value().PreviewRemoval(Id("com.shared.data"));
+        REQUIRE(transitive.HasValue());
+        CHECK_FALSE(transitive.Value().directRoot);
+        CHECK(transitive.Value().removed.empty());
+        CHECK(transitive.Value().requiredBy.size() == 2);
+        CheckFailure(lock.Value().PreviewRemoval(Id("com.missing")), "packages.lockfile.invalid");
+    }
+}
+
 TEST_CASE("Package lock generation binds every resolver selection to exact verified evidence", "[packages][lockfile]") {
     Fixture fixture;
 

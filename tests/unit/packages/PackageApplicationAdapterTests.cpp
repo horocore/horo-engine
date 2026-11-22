@@ -91,6 +91,9 @@ namespace {
         Editor::PackageModalSession modal{Borrow(fixture)};
         auto first = modal.Open();
         REQUIRE(first.HasValue());
+        const auto preview = modal.PreviewRemoval(first.Value(), fixture.graph.package);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().removed == std::vector<Packages::LockedPackageReference>{{fixture.graph.package, fixture.graph.version}});
         REQUIRE(fixture.source.calls == 0);
         auto operation = modal.Submit(first.Value(), PackageOperationKind::Install);
         REQUIRE(operation.HasValue());
@@ -101,6 +104,7 @@ namespace {
         REQUIRE(modal.Operation());
         CHECK(modal.Operation()->id == operation.Value());
         CHECK(modal.Cancel(first.Value()).HasError());
+        CHECK(modal.PreviewRemoval(first.Value(), fixture.graph.package).HasError());
         CHECK(WaitForTerminal(fixture, operation.Value()).outcome == PackageOperationOutcome::Succeeded);
         REQUIRE(modal.Refresh(second.Value()).HasValue());
         REQUIRE(modal.Plan());

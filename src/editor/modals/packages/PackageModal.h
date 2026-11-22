@@ -31,6 +31,10 @@ namespace Horo::Editor {
         void DrawPlan();
         /** @brief Shows direct dependents of the package selected in the active plan. */
         void DrawPackageDependents() const;
+        /** @brief Reads an inert removal preview for the entered package. */
+        void PreviewPackageRemoval();
+        /** @brief Displays the effects on the locked graph without offering an apply action. */
+        void DrawRemovalPreview() const;
         void DrawDiagnostic(const Error &error) const;
         void DrawActions();
         void Activate(bool gameplayModule);
@@ -49,6 +53,7 @@ namespace Horo::Editor {
 
         std::shared_ptr<const Application::PackagePlanSnapshot> displayedPlan_;
         std::vector<PlanRow> planRows_;
+        std::optional<Packages::PackageRemovalGraphPreview> removalPreview_;
         std::string package_;
         std::string descriptor_;
         std::string module_;

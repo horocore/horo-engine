@@ -169,12 +169,19 @@ namespace Horo::Tests::PackageApplicationService {
                 CHECK(packages[1].requiredBy == std::vector<LockedPackageReference>{{first, provider.version}, {last, provider.version}});
             };
             check(PackagePlanVerification::LockedOnly);
+            const auto preview = fixture.application->PreviewRemoval(first);
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().removed == std::vector<LockedPackageReference>{{first, provider.version}});
             CHECK(fixture.source.calls.load() == 0);
             const auto restore = fixture.application->Restore();
             REQUIRE(restore.HasValue());
             REQUIRE(WaitForTerminal(fixture, restore.Value()).outcome == PackageOperationOutcome::Succeeded);
             check(PackagePlanVerification::ArchiveVerified);
             CHECK_FALSE(fixture.install.InstalledRecord());
+            fixture.admissionAllowed = false;
+            const auto stale = fixture.application->PreviewRemoval(first);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == "fixture.metadata.stale");
         }
 
         TEST_CASE("Package application serializes mutations and fences replaced operation identities",

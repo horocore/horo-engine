@@ -59,6 +59,13 @@ namespace Horo::Packages {
         std::vector<std::string> contributions;
     };
 
+    /** @brief Exact effects of withdrawing one root from the locked dependency graph, before checking project and runtime references. */
+    struct PackageRemovalGraphPreview final {
+        bool directRoot{};
+        std::vector<LockedPackageReference> removed;    /**< Packages unreachable from every remaining root, in package-ID order. */
+        std::vector<LockedPackageReference> requiredBy; /**< Retained packages with a direct edge to the requested package. */
+    };
+
     /** @brief Strict schema-v1 package lockfile detached from cache, trust and transport state. */
     class ValidatedPackageLockfileV1 final {
     public:
@@ -103,6 +110,11 @@ namespace Horo::Packages {
         [[nodiscard]] std::span<const LockedPackageReference> Roots() const noexcept;
         /** @brief Returns the exact graph in package-ID order. @return Borrowed immutable lock entries. */
         [[nodiscard]] std::span<const LockedPackage> Packages() const noexcept;
+        /** @brief Computes what would be pruned if this direct root were withdrawn from the same exact locked graph.
+         * @param package Identity present in this lockfile. A transitive-only target cannot be withdrawn directly.
+         * @return Deterministic package removals and remaining dependents, or a typed failure for a missing package.
+         * @post Does not resolve new versions, change metadata, or authorize removal. */
+        [[nodiscard]] Result<PackageRemovalGraphPreview> PreviewRemoval(const HoroPackageId &package) const;
 
     private:
         ValidatedPackageLockfileV1(const Sha256Digest &requestHash, std::vector<LockedPackageReference> roots,
