@@ -130,7 +130,10 @@ namespace Horo::Editor {
             return Result<void>::Failure(decoded.ErrorValue());
         if (decoded.Value().Id() != document.query->Id() || decoded.Value().ResultSchema().id != document.query->ResultSchema().id)
             return conflict();
-        auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(decoded.Value(), *m_querySchema);
+        const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+        if (!schema)
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+        auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(decoded.Value(), *schema);
         if (settings.HasError())
             return Result<void>::Failure(settings.ErrorValue());
         const auto digest = ComputeSha256(bytes);

@@ -172,7 +172,7 @@ namespace Horo::AI {
             return properties;
         }
 
-        /** @brief Recognizes the source shape admitted by native point-lattice authoring. */
+        /** @brief Recognizes a built-in point generator followed by typed source tests. */
         bool HasBuiltinPointStages(const EnvironmentQueryAsset &asset) {
             const auto stages = asset.Stages();
             const auto first = std::ranges::min_element(stages, {}, &QueryAssetStage::executionOrder);
@@ -183,9 +183,7 @@ namespace Horo::AI {
             if (generator != LatticeGenerator && generator != AuthoredPointGenerator && generator != NavigationSurfaceGenerator)
                 return false;
             return std::ranges::all_of(stages, [first](const QueryAssetStage &stage) {
-                constexpr std::array tests{PointDistanceTest, PointVisibilityTest, PointNavigationTest};
-                return &stage == &*first ||
-                       (stage.kind == QueryStageKind::Test && std::ranges::find(tests, stage.test.Value()) != tests.end());
+                return &stage == &*first || stage.kind == QueryStageKind::Test;
             });
         }
 
@@ -1031,8 +1029,10 @@ namespace Horo::AI {
                 stage.properties = NavigationProperties(settings.navigation->maximumScoredCost, settings.navigation->scoreWeight);
                 return;
             }
-            const auto entry = std::ranges::find(settings.distanceTests, stage.id, &QueryPointDistanceStageSettings::stage);
-            stage.properties = DistanceProperties(entry->test);
+            if (stage.test.Value() == PointDistanceTest) {
+                const auto entry = std::ranges::find(settings.distanceTests, stage.id, &QueryPointDistanceStageSettings::stage);
+                stage.properties = DistanceProperties(entry->test);
+            }
         }
     }  // namespace
 
@@ -1053,7 +1053,10 @@ namespace Horo::AI {
             const auto provider = ReadPointProviderSettings(stage, registry, settings);
             if (provider.HasError())
                 return Settings::Failure(provider.ErrorValue());
-            if (provider.Value())
+            const auto *descriptor = registry.Find(stage.test);
+            const bool gameplay =
+                descriptor && descriptor->origin.kind == QueryDescriptorSourceKind::Native && descriptor->origin != BuiltinOrigin();
+            if (provider.Value() || gameplay)
                 continue;
             const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())

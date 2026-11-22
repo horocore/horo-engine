@@ -1164,6 +1164,77 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     }
 }
 
+TEST_CASE("Environment Query workspace saves built-in changes alongside a gameplay test", "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto initial = CreateBuiltinLatticeQuery(QueryId::Create(71).Value(), QueryStageId::Create(72).Value(),
+                                                   QueryResultSchemaId::Create(73).Value(), "Native filter", {500, 1}, 2);
+    REQUIRE(initial.HasValue());
+    const auto property = QueryPropertyId::Create(74).Value();
+    const auto test = QueryTestId::Create(75).Value();
+    const auto stage = QueryStageId::Create(76).Value();
+    const QueryTestDescriptor descriptor{.id = test,
+                                         .origin = {QueryDescriptorSourceKind::Native, QueryProviderId::Create(77).Value(), 1},
+                                         .inputItemType = initial.Value().ResultSchema().itemType,
+                                         .inputItemVersion = {1, 1},
+                                         .properties = {{property, QueryPropertyKind::Unsigned64, true}}};
+    const auto registry = CaptureBuiltinQuerySchema({}, std::span{&descriptor, 1});
+    REQUIRE(registry.HasValue());
+    QueryAssetSource mixed{.id = initial.Value().Id(),
+                           .displayName = initial.Value().DisplayName(),
+                           .result = initial.Value().ResultSchema(),
+                           .stages = {initial.Value().Stages().front(),
+                                      {.id = stage,
+                                       .kind = QueryStageKind::Test,
+                                       .executionOrder = 27,
+                                       .test = test,
+                                       .descriptorVersion = {1, 1},
+                                       .properties = {{property, std::uint64_t{625}}}}}};
+    const auto asset = EnvironmentQueryAsset::Capture(mixed);
+    REQUIRE(asset.HasValue());
+    project.WriteAsset(asset.Value());
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .latticeQueryFactory = CreateBuiltinLatticeQuery,
+                                          .querySchema = &registry.Value()});
+    Project::Open(controller, Project::Path);
+    const auto &documents = controller.ViewModel().environmentQueryDocuments;
+    REQUIRE(documents.size() == 1);
+    const auto &document = documents.front();
+    REQUIRE(document.descriptors == QueryDescriptorAvailability::Validated);
+    REQUIRE(document.settings);
+    auto changed = *document.settings;
+    changed.lattice.stepMillimeters = 750;
+    using enum EnvironmentQueryEditAction;
+    controller.ProcessCommand(
+        MakeEnvironmentQueryEditCommand(document, Apply, changed, EnvironmentQueryNavigationStageAddition{std::nullopt}));
+    REQUIRE_FALSE(document.diagnostic);
+    REQUIRE(document.dirty);
+    controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
+    CHECK(document.query->Stages().size() == 2);
+    controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Redo));
+    controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Save));
+    REQUIRE_FALSE(document.diagnostic);
+    REQUIRE_FALSE(document.dirty);
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+    REQUIRE(documents.empty());
+    Project::Open(controller, Project::Path);
+    REQUIRE(documents.size() == 1);
+    const auto &reopened = documents.front();
+    REQUIRE(reopened.settings);
+    CHECK(reopened.settings->lattice.stepMillimeters == 750);
+    CHECK(reopened.settings->navigation);
+    const auto saved = std::ranges::find(reopened.query->Stages(), stage, &QueryAssetStage::id);
+    REQUIRE(saved != reopened.query->Stages().end());
+    CHECK(saved->test == test);
+    CHECK(saved->executionOrder == 27);
+    REQUIRE(saved->properties.size() == 1);
+    CHECK(saved->properties.front().id == property);
+    CHECK(std::get<std::uint64_t>(saved->properties.front().value) == 625);
+}
+
 TEST_CASE("Environment Query New creates the first registered source from explicit native lattice settings",
           "[unit][editor][eqs][workspace]") {
     Project project{false};

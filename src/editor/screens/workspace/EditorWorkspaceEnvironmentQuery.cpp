@@ -383,8 +383,17 @@ namespace Horo::Editor {
                     drawTest(stage, {});
         }
 
+        bool UsesGameplayPointTests(const EnvironmentQueryWorkspaceDocument &document) noexcept {
+            if (!document.query || !document.settings)
+                return false;
+            const auto &settings = *document.settings;
+            const auto builtinStages =
+                1 + settings.distanceTests.size() + settings.visibility.has_value() + settings.navigation.has_value();
+            return document.query->Stages().size() > builtinStages;
+        }
+
         bool HasLiveQueryProvider(const EnvironmentQueryWorkspaceDocument &document) noexcept {
-            return document.perception ||
+            return document.perception || UsesGameplayPointTests(document) ||
                    (document.settings &&
                     (document.settings->visibility || document.settings->navigation ||
                      std::holds_alternative<AI::QueryNavigationSurfaceSettings>(document.settings->alternateGenerator)));
@@ -636,7 +645,7 @@ namespace Horo::Editor {
                                                                          const EnvironmentQueryPreviewRequest &request) {
         if (document.dirty || document.conflict)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        if (!m_querySchema || !m_sourceRecoveryJobs)
+        if (!m_querySchema || !m_sourceRecoveryJobs || UsesGameplayPointTests(document))
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         if (m_environmentQueryPreviewWork)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
@@ -1366,6 +1375,10 @@ namespace Horo::Editor {
             return true;
         }
 
+        if (UsesGameplayPointTests(*opened)) {
+            label(text("workspace.environment_query.live_select"), Theme::Muted());
+            return true;
+        }
         if (opened->perception) {
             label(text("workspace.environment_query.perception_preview"), Theme::Muted());
             return true;

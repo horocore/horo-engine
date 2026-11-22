@@ -63,8 +63,11 @@ namespace Horo::Editor {
         if (external.Value().Id() != draft.savedSource->Id() || external.Value().ResultSchema().id != draft.savedSource->ResultSchema().id)
             return conflict();
 
+        const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+        if (!schema)
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto stage = [&](AI::EnvironmentQueryAsset asset) -> Result<EnvironmentQueryState> {
-            auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(asset, *m_querySchema);
+            auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(asset, *schema);
             if (settings.HasError())
                 return Result<EnvironmentQueryState>::Failure(settings.ErrorValue());
             const auto bytes = AI::EnvironmentQuerySourceCodec::Encode(asset);

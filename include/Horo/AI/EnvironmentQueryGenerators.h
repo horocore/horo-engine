@@ -233,7 +233,7 @@ namespace Horo::AI {
     /** @brief Removes one admitted native point test while preserving all surviving identities and stage order. */
     [[nodiscard]] Result<EnvironmentQueryAsset> RemoveBuiltinPointTest(const EnvironmentQueryAsset &lattice, QueryStageId stage);
 
-    /** @brief Decodes the exact supported native authored shape and settings.
+    /** @brief Decodes built-in settings for an admitted point query. Registered gameplay tests remain in the source.
      * @param asset Saved or draft query. @param registry Exact installed descriptor catalog.
      * @return The typed editable settings, or a refusal that preserves unsupported source bytes.
      */

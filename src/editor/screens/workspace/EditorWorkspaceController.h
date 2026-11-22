@@ -981,6 +981,8 @@ namespace Horo::Editor {
         Runtime::SceneRuntimeId m_playQueryDigestRuntime;
         std::optional<Sha256Digest> m_playQueryDigest;
         void RefreshLiveEnvironmentQueryPreview(std::optional<Runtime::EntityRef> owner);
+        /** @brief Borrows the built-in catalog or retains the active gameplay image's inert authoring schema for this transaction. */
+        [[nodiscard]] std::shared_ptr<const AI::QuerySchemaRegistry> CaptureEnvironmentQueryAuthoringSchema() const;
 
         /** @brief Immutable semantic root retained by both history and the active Query draft. */
         struct EnvironmentQueryState final {

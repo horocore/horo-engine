@@ -131,6 +131,20 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceController::CaptureEnvironmentQueryAuthoringSchema */
+    std::shared_ptr<const AI::QuerySchemaRegistry> EditorWorkspaceController::CaptureEnvironmentQueryAuthoringSchema() const {
+        if (!m_querySchema)
+            return {};
+        if (m_gameplayRegistry) {
+            const auto provider = m_gameplayRegistry->AcquirePlayQueryTests();
+            if (provider.HasError())
+                return {};
+            if (provider.Value().schema)
+                return provider.Value().schema;
+        }
+        return {std::shared_ptr<const AI::QuerySchemaRegistry>{}, m_querySchema};
+    }
+
     /** @copydoc EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource */
     void EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result, const bool reloadExternal) {
         const auto &opened = *result.document;
@@ -185,10 +199,11 @@ namespace Horo::Editor {
         }
         EnvironmentQueryWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
                                                     std::make_shared<const AI::EnvironmentQueryAsset>(std::move(query).Value())};
-        candidate.descriptors = DescriptorAvailability(*candidate.query, m_querySchema);
+        const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+        candidate.descriptors = DescriptorAvailability(*candidate.query, schema.get());
         decltype(m_environmentQueryDrafts) prepared;
-        if (m_querySchema && m_mutations && m_durableFiles) {
-            const auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*candidate.query, *m_querySchema);
+        if (schema && m_mutations && m_durableFiles) {
+            const auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*candidate.query, *schema);
             const auto bytes = EnvironmentQuerySourceCodec::Encode(*candidate.query);
             const auto sidecar = CaptureQuerySidecar(ProjectRoot(), *record);
             if (settings.HasValue() && bytes.HasValue() && sidecar.HasValue() && sidecar.Value().exists &&
@@ -341,9 +356,12 @@ namespace Horo::Editor {
             draft.current = redo ? entry->after : entry->before;
             draft.history.DidReplay(redo);
         } else {
-            if (request.action != Apply || !m_querySchema)
+            if (request.action != Apply)
                 return Edit::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
-            auto prepared = PrepareQueryDraftEdit(*draft.current.source, *m_querySchema, request);
+            const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+            if (!schema)
+                return Edit::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            auto prepared = PrepareQueryDraftEdit(*draft.current.source, *schema, request);
             if (prepared.HasError())
                 return Edit::Failure(prepared.ErrorValue());
             auto candidate = std::move(prepared).Value();
@@ -412,7 +430,10 @@ namespace Horo::Editor {
                 !sidecar.Value().exists || sidecar.Value().digest != draft.sidecar)
                 return failed(MakeError(Assets::AssetSourceErrors::Conflict));
 
-            const auto validated = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*draft.current.source, *m_querySchema);
+            const auto schema = CaptureEnvironmentQueryAuthoringSchema();
+            if (!schema)
+                return failed(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto validated = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*draft.current.source, *schema);
             if (validated.HasError())
                 return failed(validated.ErrorValue());
             const auto encoded = EnvironmentQuerySourceCodec::Encode(*draft.current.source);

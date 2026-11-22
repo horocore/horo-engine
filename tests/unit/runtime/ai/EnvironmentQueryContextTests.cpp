@@ -4,6 +4,7 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -380,6 +381,67 @@ namespace Horo::AI {
             settings.alternateGenerator = std::monostate{};
             ExpectError(EditBuiltinPointQuerySettings(decoded.Value(), registry.Value(), settings),
                         AIErrors::EnvironmentQuerySchemaInvalid);
+        }
+
+        TEST_CASE("EQS built-in settings edits preserve registered gameplay tests", "[unit][ai][eqs][generator]") {
+            const auto source = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(81), MakeIdentity<QueryStageId>(82),
+                                                          MakeIdentity<QueryResultSchemaId>(83), "Mixed", {500, 1}, 2);
+            REQUIRE(source.HasValue());
+            const auto distance = AddBuiltinPointDistanceTest(source.Value(), MakeIdentity<QueryStageId>(84), {2000, true});
+            REQUIRE(distance.HasValue());
+            const auto property = MakeIdentity<QueryPropertyId>(89);
+            const QueryTestDescriptor custom{.id = MakeIdentity<QueryTestId>(85),
+                                             .origin = {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(86), 2},
+                                             .inputItemType = source.Value().ResultSchema().itemType,
+                                             .inputItemVersion = {1, 1},
+                                             .properties = {{property, QueryPropertyKind::Unsigned64, true}}};
+            const QueryAssetStage customStage{.id = MakeIdentity<QueryStageId>(87),
+                                              .kind = QueryStageKind::Test,
+                                              .executionOrder = 13,
+                                              .displayName = "Gameplay cutoff",
+                                              .test = custom.id,
+                                              .descriptorVersion = {2, 2},
+                                              .properties = {{property, std::uint64_t{470}}}};
+            QueryAssetSource mixed{.id = source.Value().Id(),
+                                   .displayName = distance.Value().DisplayName(),
+                                   .result = distance.Value().ResultSchema(),
+                                   .stages = {distance.Value().Stages().begin(), distance.Value().Stages().end()}};
+            mixed.stages.push_back(customStage);
+            const auto asset = EnvironmentQueryAsset::Capture(mixed);
+            REQUIRE(asset.HasValue());
+            const auto builtin = CaptureBuiltinQuerySchema();
+            const auto registry = CaptureBuiltinQuerySchema({}, std::span{&custom, 1});
+            REQUIRE(builtin.HasValue());
+            REQUIRE(registry.HasValue());
+            CHECK_FALSE(ReadBuiltinPointQuerySettings(asset.Value(), builtin.Value()).HasValue());
+            auto captured = ReadBuiltinPointQuerySettings(asset.Value(), registry.Value());
+            REQUIRE(captured.HasValue());
+            auto settings = std::move(captured).Value();
+            REQUIRE(settings.distanceTests.size() == 1);
+            settings.maximumResults = 3;
+            settings.lattice.stepMillimeters = 750;
+            const auto edited = EditBuiltinPointQuerySettings(asset.Value(), registry.Value(), settings);
+            REQUIRE(edited.HasValue());
+            const auto added = AddBuiltinPointNavigationTest(edited.Value(), MakeIdentity<QueryStageId>(88));
+            REQUIRE(added.HasValue());
+            REQUIRE(EnvironmentQueryPlan::Compile(added.Value(), registry.Value()).HasValue());
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(added.Value());
+            REQUIRE(bytes.HasValue());
+            const auto saved = EnvironmentQuerySourceCodec::Decode(bytes.Value());
+            REQUIRE(saved.HasValue());
+            const auto selected = std::ranges::find(saved.Value().Stages(), customStage.id, &QueryAssetStage::id);
+            REQUIRE(selected != saved.Value().Stages().end());
+            CHECK(selected->test == customStage.test);
+            CHECK(selected->executionOrder == customStage.executionOrder);
+            CHECK(selected->displayName == customStage.displayName);
+            CHECK(selected->descriptorVersion == customStage.descriptorVersion);
+            REQUIRE(selected->properties.size() == 1);
+            CHECK(selected->properties.front().id == property);
+            CHECK(std::get<std::uint64_t>(selected->properties.front().value) == 470);
+            const auto reopened = ReadBuiltinPointQuerySettings(saved.Value(), registry.Value());
+            REQUIRE(reopened.HasValue());
+            CHECK(reopened.Value().maximumResults == 3);
+            CHECK(reopened.Value().lattice.stepMillimeters == 750);
         }
 
         TEST_CASE("EQS authored point generation rejects incomplete position lists before writing", "[unit][ai][eqs][generator]") {
