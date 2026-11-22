@@ -119,6 +119,40 @@ namespace {
             return base.service->ActivateModules(selected, PackageActivationBoundary::Quiescent, base.cancellation.Token());
         }
     };
+
+    /** @brief Runs the same authored closure with one admitted package condition. */
+    std::shared_ptr<const AI::CookedDecisionPlan> RunPackageCondition(const AI::DecisionNodeTypeId type,
+                                                                      const AI::DecisionCompilationEnvironment &environment,
+                                                                      const AI::DecisionGraphTestSupport::Fixture &world,
+                                                                      AI::DecisionStepTrace &trace) {
+        using namespace AI::DecisionGraphTestSupport;
+        auto condition = TreeNode(2, AI::DecisionControlKind::Condition);
+        condition.kind = AI::BehaviorTreeNodeKind::Decorator;
+        condition.minimumChildren = 1;
+        condition.maximumChildren = 1;
+        condition.type = AI::BehaviorTreeNodeTypeId::Create(type.Value()).Value();
+        auto call = TreeNode(3, AI::DecisionControlKind::Subplan);
+        call.call = AI::DecisionSubplanCall{Graph(2), AI::DecisionPlanKind::StateMachine, {1, 1}};
+        const auto root = Tree(1, {TreeNode(1, AI::DecisionControlKind::Root), condition, call}, {Edge(1, 1, 2), Edge(2, 2, 3)});
+        const std::array sources{root, TerminalMachine(2)};
+        auto compiled = AI::DecisionGraphCompiler::Compile(Graph(1), sources, environment);
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        auto plan = std::move(compiled).Value().plan;
+        auto graph = AI::DecisionGraphInstance::Create(plan, environment.nodes, world.RuntimeBinding());
+        REQUIRE(graph.HasValue());
+        const auto units = plan->MaximumDecisionWorkUnits();
+        REQUIRE(units.has_value());
+        const auto snapshot = world.blackboard->Snapshot().Value();
+        AI::AiWorkBudget budget{*units};
+        const auto stepped = graph.Value()->StepBudgetedWithTrace({1, world.binding, snapshot, {}}, budget, trace);
+        REQUIRE(stepped.HasValue());
+        CHECK(stepped.Value() == std::optional{AI::AiTaskState::Succeeded});
+        CHECK(budget.Remaining() == 0);
+        return plan;
+    }
 }  // namespace
 
 TEST_CASE("Package runtime role invokes actual SDK owner and retains native callbacks until drain", "[packages][gameplay][hybrid]") {
@@ -506,14 +540,13 @@ TEST_CASE("Verified package script nodes use actual declared bytes and inherit n
 }
 
 TEST_CASE("Verified native and Lua package nodes use the same cooked decision execution contract", "[packages][decision-node]") {
-    using namespace AI::DecisionGraphTestSupport;
     GameplayFixture fixture;
     REQUIRE(fixture.Activate().HasValue());
     const auto generation = fixture.base.service->Active()->generation;
     auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
     REQUIRE(acquired.HasValue());
     REQUIRE(acquired.Value().size() == 1);
-    auto native = std::move(acquired.Value().front().nodes);
+    const auto native = acquired.Value().front().nodes;
     REQUIRE(native);
     REQUIRE(native->Contracts().size() == 1);
     const auto nativeType = native->Contracts().front().descriptor.type;
@@ -531,42 +564,16 @@ TEST_CASE("Verified native and Lua package nodes use the same cooked decision ex
     AI::DecisionGraphTestSupport::Fixture world;
     auto environment = world.Environment();
     environment.nodes = std::move(composed).Value();
-    const auto snapshot = world.blackboard->Snapshot().Value();
-    std::array<AI::DecisionStepTrace, 2> traces;
-    std::array<std::shared_ptr<const AI::CookedDecisionPlan>, 2> plans;
-    const std::array types{nativeType, scriptType};
-    for (std::size_t index = 0; index < types.size(); ++index) {
-        auto condition = TreeNode(2, AI::DecisionControlKind::Condition);
-        condition.kind = AI::BehaviorTreeNodeKind::Decorator;
-        condition.minimumChildren = 1;
-        condition.maximumChildren = 1;
-        condition.type = AI::BehaviorTreeNodeTypeId::Create(types[index].Value()).Value();
-        auto call = TreeNode(3, AI::DecisionControlKind::Subplan);
-        call.call = AI::DecisionSubplanCall{Graph(2), AI::DecisionPlanKind::StateMachine, {1, 1}};
-        const auto root = Tree(1, {TreeNode(1, AI::DecisionControlKind::Root), condition, call}, {Edge(1, 1, 2), Edge(2, 2, 3)});
-        const std::array sources{root, TerminalMachine(2)};
-        auto compiled = AI::DecisionGraphCompiler::Compile(Graph(1), sources, environment);
-        REQUIRE(compiled.HasValue());
-        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
-            UNSCOPED_INFO(diagnostic.message);
-        REQUIRE(compiled.Value().plan);
-        plans[index] = std::move(compiled.Value().plan);
-        auto graph = AI::DecisionGraphInstance::Create(plans[index], environment.nodes, world.RuntimeBinding());
-        REQUIRE(graph.HasValue());
-        const auto units = plans[index]->MaximumDecisionWorkUnits();
-        REQUIRE(units.has_value());
-        AI::AiWorkBudget budget{*units};
-        const auto stepped = graph.Value()->StepBudgetedWithTrace({1, world.binding, snapshot, {}}, budget, traces[index]);
-        REQUIRE(stepped.HasValue());
-        CHECK(stepped.Value() == std::optional{AI::AiTaskState::Succeeded});
-        CHECK(budget.Remaining() == 0);
-    }
-    CHECK_FALSE(traces.front().Records().empty());
-    CHECK(std::ranges::equal(traces.front().Records(), traces.back().Records()));
-    CHECK(traces.front().Header().planDigest != traces.back().Header().planDigest);
+    AI::DecisionStepTrace nativeTrace;
+    AI::DecisionStepTrace scriptTrace;
+    const auto nativePlan = RunPackageCondition(nativeType, environment, world, nativeTrace);
+    const auto scriptPlan = RunPackageCondition(scriptType, environment, world, scriptTrace);
+    CHECK_FALSE(nativeTrace.Records().empty());
+    CHECK(std::ranges::equal(nativeTrace.Records(), scriptTrace.Records()));
+    CHECK(nativeTrace.Header().planDigest != scriptTrace.Header().planDigest);
 
     fixture.base.service->Shutdown();
-    for (const auto &plan : plans) {
+    for (const auto &plan : {nativePlan, scriptPlan}) {
         CHECK_FALSE(plan->IsCurrent());
         CHECK(AI::DecisionGraphInstance::Create(plan, environment.nodes, world.RuntimeBinding()).HasError());
     }
