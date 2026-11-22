@@ -4,11 +4,15 @@
 
 #include "Horo/AI/AICapabilityDescriptors.h"
 #include "Horo/AI/AITaskJobService.h"
+#include "Horo/AI/DecisionIdentity.h"
 
 #include <atomic>
 #include <variant>
 
 namespace Horo::AI {
+    class BehaviorTreeExecutionPlan;
+    class DecisionAssetPlan;
+
     using SymbolicFactId = AiStableIdentity<struct SymbolicFactIdentityTag>;
     using SymbolicActionId = AiStableIdentity<struct SymbolicActionIdentityTag>;
     using SymbolicCompoundId = AiStableIdentity<struct SymbolicCompoundIdentityTag>;
@@ -144,6 +148,30 @@ namespace Horo::AI {
         std::array<Method, MaximumMethods> methods_{};
         std::size_t methodCount_{};
     };
+
+    /** @brief One host-admitted node occurrence for an exact primitive action and task. */
+    struct SymbolicTaskOccurrence final {
+        SymbolicActionId action;
+        TaskId task;
+        DecisionNodeId node;
+    };
+
+    /** @brief Exact ordered occurrence bindings borrowed only while compiling. */
+    struct SymbolicExecutionBindings final {
+        std::shared_ptr<const DecisionAssetPlan> asset;
+        DecisionNodeId sequence;
+        std::span<const SymbolicTaskOccurrence> occurrences;
+    };
+
+    /**
+     * @brief Converts a solved plan into an ordinary admitted Behavior Tree task sequence without invoking providers.
+     * @param plan Detached result the caller has accepted for the current world revision.
+     * @param bindings Exact decision asset and provider-bound occurrences supplied by the decision owner.
+     * @param tasks Current frozen task declarations for that owner.
+     * @return Immutable execution plan, null for a solved empty plan, or a typed admission failure.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileSymbolicTaskSequence(
+        const SymbolicPlan &plan, SymbolicExecutionBindings bindings, const AiCapabilityDescriptorSet &tasks);
 
     /** @brief One-shot detached search for the existing AI task job service. */
     class SymbolicPlanningJob final : public IAiTaskJob {

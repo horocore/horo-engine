@@ -2628,7 +2628,11 @@ transitions against frozen task declarations. Search owns only copied values
 and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. A host can submit
 the same detached computation through the existing AI task job service.
-The decision owner admits the returned tasks at its normal safe point.
+At its normal safe point, the decision owner rechecks the world revision and
+supplies the exact compiled asset and primitive node occurrences. The symbolic
+sequence adapter re-admits the task identities against the current declarations
+and uses the standard Behavior Tree compiler. Its result uses the existing task
+start, resume, cancellation and cleanup lifecycle.
 The HTN adapter composes the same registered primitives into guarded compound
 methods. It tries methods in stable ID order, preserves authored child order,
 and backtracks on copied facts. The work allowance and hard bound on pending

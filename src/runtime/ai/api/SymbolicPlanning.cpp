@@ -2,6 +2,7 @@
 
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AITaskScheduler.h"
+#include "Horo/AI/BehaviorTreeRuntime.h"
 
 #include <algorithm>
 #include <new>
@@ -312,6 +313,43 @@ namespace Horo::AI {
             plan.cost_ = 0;
         }
         return plan;
+    }
+
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileSymbolicTaskSequence(
+        const SymbolicPlan &plan, SymbolicExecutionBindings bindings, const AiCapabilityDescriptorSet &tasks) {
+        using Compiled = Result<std::shared_ptr<const BehaviorTreeExecutionPlan>>;
+        const auto steps = plan.Steps();
+        if (plan.Status() != SymbolicPlanStatus::Solved || steps.size() != bindings.occurrences.size())
+            return Compiled::Failure(MakeError(AIErrors::TaskContextInvalid));
+        if (steps.empty())
+            return Compiled::Success(nullptr);
+        if (!bindings.asset || !bindings.sequence.IsValid())
+            return Compiled::Failure(MakeError(AIErrors::DecisionAssetBindingMissing));
+        const auto schema = bindings.asset->BlackboardSchema();
+        if (!schema)
+            return Compiled::Failure(MakeError(AIErrors::DecisionAssetBindingMissing));
+
+        try {
+            BehaviorTreeExecutionNode root{.id = bindings.sequence, .operation = BehaviorTreeOperation::Sequence};
+            root.children.reserve(steps.size());
+            std::vector<BehaviorTreeExecutionNode> nodes;
+            nodes.reserve(steps.size() + 1);
+            for (std::size_t index = 0; index < steps.size(); ++index) {
+                const auto &step = steps[index];
+                const auto &occurrence = bindings.occurrences[index];
+                const auto task = tasks.Find(step.task);
+                if (!task || (task->blackboard && task->blackboard != schema->Identity()) || !occurrence.node.IsValid() ||
+                    occurrence.action != step.action || occurrence.task != step.task)
+                    return Compiled::Failure(MakeError(AIErrors::TaskContextInvalid));
+                root.children.push_back(occurrence.node);
+                nodes.push_back({.id = occurrence.node, .operation = BehaviorTreeOperation::Task, .task = step.task});
+            }
+            nodes.push_back(std::move(root));
+            return BehaviorTreeExecutionPlan::Compile(std::move(bindings.asset), bindings.sequence, nodes, {},
+                                                      {.maximumNodes = nodes.size(), .maximumDepth = 2});
+        } catch (const std::bad_alloc &) {
+            return Compiled::Failure(MakeError(AIErrors::BehaviorTreeStorageUnavailable));
+        }
     }
 
     Result<std::shared_ptr<SymbolicPlanningJob>> SymbolicPlanningJob::CaptureInputs(

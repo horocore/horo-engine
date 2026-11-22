@@ -216,5 +216,96 @@ namespace Horo::AI {
             CHECK(result->Steps()[1].task == input.openTask);
             CHECK(result->Cost() == 3);
         }
+
+        TEST_CASE("An admitted symbolic plan runs through the standard Behavior Tree task sequence", "[ai][planning][execution]") {
+            using enum BehaviorTreeOperation;
+            using BehaviorTreeTestSupport::Node;
+            DomainFixture input;
+            const auto plan = input.Capture().Search({}, input.goal, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            BehaviorTreeTestSupport::Fixture scene{{Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)}};
+            const std::array occurrences{
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
+            };
+            const auto compiled = CompileSymbolicTaskSequence(plan, {scene.Bindings(), Id<DecisionNodeId>(1), occurrences},
+                                                               input.Registry());
+            REQUIRE(compiled.HasValue());
+            REQUIRE(compiled.Value());
+            REQUIRE(compiled.Value()->Nodes().size() == 3);
+            CHECK(compiled.Value()->Nodes()[1].execution.task == input.pickTask);
+            CHECK(compiled.Value()->Nodes()[2].execution.task == input.openTask);
+            CHECK(scene.probe->orderCount == 0);
+
+            CancellationSource lifetime;
+            const BehaviorTreeInstanceBinding binding{
+                scene.agent, lifetime.Token(), 100, 1, {scene.agent, scene.schema->Identity(), scene.schema->Version(), 1, 1}};
+            auto instance = BehaviorTreeInstance::Create(compiled.Value(), binding,
+                                                        std::make_unique<BehaviorTreeTestSupport::Executor>(scene.probe));
+            REQUIRE(instance.HasValue());
+            scene.probe->outcome[2] = AiTaskState::Running;
+            CHECK(scene.Evaluate(*instance.Value(), 1) == AiTaskState::Running);
+            CHECK(scene.probe->starts[2] == 1);
+            CHECK(scene.probe->starts[3] == 0);
+            SECTION("the next task starts only after the first settles successfully") {
+                scene.probe->outcome[2] = AiTaskState::Succeeded;
+                CHECK(scene.Evaluate(*instance.Value(), 2) == AiTaskState::Succeeded);
+                CHECK(scene.probe->resumes[2] == 1);
+                CHECK(scene.probe->starts[3] == 1);
+                CHECK(scene.probe->cleanups[input.openTask.Value()] == 1);
+            }
+            SECTION("owner cancellation retires the live task without executing the remainder") {
+                lifetime.RequestCancellation();
+                CHECK(scene.Evaluate(*instance.Value(), 2) == AiTaskState::Cancelled);
+                CHECK(scene.probe->aborts[input.pickTask.Value()] == 1);
+                CHECK(scene.probe->starts[3] == 0);
+            }
+            CHECK(scene.probe->cleanups[input.pickTask.Value()] == 1);
+        }
+
+        TEST_CASE("Symbolic sequence admission rejects stale or mismatched task bindings", "[ai][planning][execution]") {
+            using enum BehaviorTreeOperation;
+            using BehaviorTreeTestSupport::Node;
+            DomainFixture input;
+            const auto domain = input.Capture();
+            const auto plan = domain.Search({}, input.goal, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            BehaviorTreeTestSupport::Fixture scene{{Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)}};
+            std::array occurrences{
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
+            };
+            const SymbolicExecutionBindings bindings{scene.Bindings(), Id<DecisionNodeId>(1), occurrences};
+            SECTION("task declaration was withdrawn") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
+            SECTION("task now requires another schema") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, Id<BlackboardSchemaId>(51)}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
+            SECTION("owner supplies another task for a planned action") {
+                occurrences[1].task = input.forceTask;
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("node occurrences are not distinct") {
+                occurrences[1].node = occurrences[0].node;
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("budget exhaustion supplies no executable plan") {
+                const auto exhausted = domain.Search({}, input.goal, 1);
+                CHECK(CompileSymbolicTaskSequence(exhausted, {}, input.Registry()).HasError());
+            }
+            SECTION("an already satisfied goal needs no executor") {
+                const auto ready = domain.Search(input.goal, input.goal, 1);
+                const auto empty = CompileSymbolicTaskSequence(ready, {}, input.Registry());
+                REQUIRE(empty.HasValue());
+                CHECK_FALSE(empty.Value());
+            }
+            CHECK(scene.probe->orderCount == 0);
+        }
     }  // namespace
 }  // namespace Horo::AI
