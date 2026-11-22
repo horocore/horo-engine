@@ -557,7 +557,7 @@ namespace Horo::Navigation {
         const auto world = host.participant->ActiveWorld();
         REQUIRE(world);
         const auto old = host.participant->Acquire().Value();
-        const auto original = old.Descriptor();
+        const auto &original = old.Descriptor();
         auto candidate = original;
         candidate.topology = NavigationGeneration::Create(original.topology.Value() + 1).Value();
         REQUIRE(world->StageEmptyTopology(original, candidate.topology).HasValue());

@@ -32,8 +32,11 @@ namespace Horo::Navigation {
     public:
         NavigationStreamedTopologyPublication(std::shared_ptr<Detail::NavigationAssetSceneState> state,
                                               std::shared_ptr<NavigationWorldLifecycle> world,
-                                              NavigationWorldActivationDescriptor candidate, NavigationWorldReadLease predecessor)
+                                              const NavigationWorldActivationDescriptor &candidate, NavigationWorldReadLease predecessor)
             : state_(std::move(state)), world_(std::move(world)), candidate_(candidate), predecessor_(std::move(predecessor)) {}
+
+        NavigationStreamedTopologyPublication(const NavigationStreamedTopologyPublication &) = delete;
+        NavigationStreamedTopologyPublication &operator=(const NavigationStreamedTopologyPublication &) = delete;
 
         ~NavigationStreamedTopologyPublication() override {
             if (ownsStage_)
@@ -555,8 +558,7 @@ namespace Horo::Navigation {
         if (!world)
             return Candidate::Failure(MakeError(NavigationErrors::NoNavigationData));
         NavigationWorldReadLease predecessor;
-        auto lease = world->Acquire(expected.world);
-        if (lease.HasValue())
+        if (auto lease = world->Acquire(expected.world); lease.HasValue())
             predecessor = std::move(lease).Value();
         else if (lease.ErrorValue().code.Value() != NavigationErrors::NoNavigationData.code.Value())
             return Candidate::Failure(lease.ErrorValue());

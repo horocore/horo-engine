@@ -73,19 +73,22 @@ namespace Horo::Runtime {
         /** @brief Retains exact durable content and residency fence until the pending structural transaction retires. */
         class AttachmentPublicationCheck final : public ScenePublicationCheck {
         public:
-            AttachmentPublicationCheck(const SceneCellPayloadIdentity &identity, SceneCellAttachmentRequest request,
+            AttachmentPublicationCheck(const SceneCellPayloadIdentity &identity, const SceneCellAttachmentRequest &request,
                                        std::shared_ptr<const SceneCellPayloadAuthority> authority)
-                : identity_(identity), request_(std::move(request)), authority_(std::move(authority)) {}
+                : identity_(identity), fence_(request.fence), cancellation_(request.cancellation),
+                  ownerCancellation_(request.ownerCancellation), authority_(std::move(authority)) {}
 
             Result<void> ValidatePublication() const override {
-                if (request_.cancellation.IsCancellationRequested() || request_.ownerCancellation.IsCancellationRequested())
+                if (cancellation_.IsCancellationRequested() || ownerCancellation_.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-                return authority_->ValidatePublication(identity_, request_.fence);
+                return authority_->ValidatePublication(identity_, fence_);
             }
 
         private:
             SceneCellPayloadIdentity identity_;
-            SceneCellAttachmentRequest request_;
+            WorldStreaming::StreamingFence fence_;
+            CancellationToken cancellation_;
+            CancellationToken ownerCancellation_;
             std::shared_ptr<const SceneCellPayloadAuthority> authority_;
         };
 
@@ -248,8 +251,7 @@ namespace Horo::Runtime {
                                                               const SceneCellAttachmentRequest &request,
                                                               std::vector<RuntimeGroupAssetLease> resources,
                                                               std::shared_ptr<const SceneCellPayloadAuthority> authority,
-                                                              const SceneInstanceOperation *replaces,
-                                                              std::shared_ptr<const SceneGroupPublication> publication) {
+                                                              const SceneInstanceOperation *replaces) {
         using Outcome = Result<SceneInstanceOperation>;
         const auto &identity = payload.Identity();
         if (!address.parent.IsValid() || !address.instance.IsValid() || address.definition != identity.scene ||
@@ -277,7 +279,7 @@ namespace Horo::Runtime {
             if (auto staged = StageAttach(commands, payload, request, std::move(resources), std::move(authority), ownership);
                 staged.HasError())
                 return Outcome::Failure(staged.ErrorValue());
-            return QueueInstance(service, std::move(commands), std::move(ownership), std::move(publication));
+            return QueueInstance(service, std::move(commands), std::move(ownership), request.publication);
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         }
@@ -299,8 +301,7 @@ namespace Horo::Runtime {
     /** @copydoc QueueStreamedSceneRemoval */
     Result<SceneInstanceOperation> QueueStreamedSceneRemoval(RuntimeSceneService &service, const SceneInstanceOperation &current,
                                                              const SceneCellAttachmentRequest &request,
-                                                             std::shared_ptr<const SceneCellPayloadAuthority> authority,
-                                                             std::shared_ptr<const SceneGroupPublication> publication) {
+                                                             std::shared_ptr<const SceneCellPayloadAuthority> authority) {
         using Outcome = Result<SceneInstanceOperation>;
         const auto *prior = ResidentInstance(service, current);
         if (!prior || request.runtime != prior->Instance()->parent || !prior->IsCell(prior->Identity(), request.fence.epoch))
@@ -313,7 +314,7 @@ namespace Horo::Runtime {
             auto removal = std::make_shared<const AttachmentOwnership>(identity, request.fence, prior->Instance());
             if (auto staged = StageDetach(commands, identity, request, std::move(authority), removal); staged.HasError())
                 return Outcome::Failure(staged.ErrorValue());
-            return QueueInstance(service, std::move(commands), std::move(removal), std::move(publication));
+            return QueueInstance(service, std::move(commands), std::move(removal), request.publication);
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         }

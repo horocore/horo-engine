@@ -875,20 +875,20 @@ namespace Horo::Runtime {
         RuntimeSceneService service;
         Activate(service);
         const auto payload = Payload();
-        const auto request = Request(service, payload);
+        auto request = Request(service, payload);
         const SceneInstanceAddress address{request.runtime, {2}, payload.Identity().scene, SceneInstanceMode::Streamed};
         const auto authority = Owner(payload, request, counts);
-        const auto attachOwner = std::make_shared<CellPublication>(counts, *authority, true);
-        const auto attach = QueueStreamedSceneInstance(service, address, payload, request, {}, authority, nullptr, attachOwner);
+        request.publication = std::make_shared<CellPublication>(counts, *authority, true);
+        const auto attach = QueueStreamedSceneInstance(service, address, payload, request, {}, authority);
         REQUIRE(attach.HasValue());
         Commit(service);
         REQUIRE(attach.Value().Receipt()->ResultValue());
         CHECK(counts.published == 1);
         CHECK(counts.notified == 1);
 
-        const auto removeOwner = std::make_shared<CellPublication>(counts, *authority, false);
+        request.publication = std::make_shared<CellPublication>(counts, *authority, false);
         counts.invalidateFence = true;
-        const auto rejected = QueueStreamedSceneRemoval(service, attach.Value(), request, authority, removeOwner);
+        const auto rejected = QueueStreamedSceneRemoval(service, attach.Value(), request, authority);
         REQUIRE(rejected.HasValue());
         Commit(service);
         REQUIRE(rejected.Value().Receipt()->Failure());
@@ -899,7 +899,7 @@ namespace Horo::Runtime {
 
         counts.invalidateFence = false;
         authority->ready = true;
-        const auto remove = QueueStreamedSceneRemoval(service, attach.Value(), request, authority, removeOwner);
+        const auto remove = QueueStreamedSceneRemoval(service, attach.Value(), request, authority);
         REQUIRE(remove.HasValue());
         Commit(service);
         REQUIRE(remove.Value().Receipt()->ResultValue());

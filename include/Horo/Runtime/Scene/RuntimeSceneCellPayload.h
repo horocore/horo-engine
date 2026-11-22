@@ -140,6 +140,7 @@ namespace Horo::Runtime {
         SceneDefinitionRevision expectedRevision; /**< Zero requires absence; otherwise exact replacement revision. */
         CancellationToken cancellation;
         CancellationToken ownerCancellation;
+        std::shared_ptr<const SceneGroupPublication> publication; /**< Optional feature owner for live Streamed attachment or removal. */
     };
 
     /** @brief Finds exact committed cell ownership in an immutable Scene view.
@@ -179,15 +180,13 @@ namespace Horo::Runtime {
      * @param payload Complete immutable cooked cell baseline. @param request Current residency/catalog and bounds.
      * @param resources Prepared verified dependency leases. @param authority Current shared streaming owner.
      * @param replaces Exact currently published operation, or null to require absence.
-     * @param publication Optional command-scoped feature owner prepared and committed with the cell.
      * @return Exact cancellable receipt or typed failure. The canonical safe point owns publication.
      * @details The parent admits one resident baseline per definition. Replacement must advance its content revision.
      */
     [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneInstance(
         RuntimeSceneService &service, const SceneInstanceAddress &address, const RuntimeSceneCellPayload &payload,
         const SceneCellAttachmentRequest &request, std::vector<RuntimeGroupAssetLease> resources,
-        std::shared_ptr<const SceneCellPayloadAuthority> authority, const SceneInstanceOperation *replaces = nullptr,
-        std::shared_ptr<const SceneGroupPublication> publication = {});
+        std::shared_ptr<const SceneCellPayloadAuthority> authority, const SceneInstanceOperation *replaces = nullptr);
 
     /** @brief Prepares one Streamed baseline inside the exact unpublished root before Scene activation callbacks.
      * @param service Receiving Scene service on its construction lane.
@@ -219,14 +218,12 @@ namespace Horo::Runtime {
      * @param service Canonical parent Scene owner. @param current Exact committed operation.
      * @param request Current exact eviction fence and parent/catalog/cancellation evidence.
      * @param authority Retained streaming authority for eviction.
-     * @param publication Optional command-scoped feature owner prepared and committed with retirement.
      * @return Exact cancellable receipt or typed failure, preserving all unmatched resident instances.
      */
     [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneRemoval(RuntimeSceneService &service,
                                                                            const SceneInstanceOperation &current,
                                                                            const SceneCellAttachmentRequest &request,
-                                                                           std::shared_ptr<const SceneCellPayloadAuthority> authority,
-                                                                           std::shared_ptr<const SceneGroupPublication> publication = {});
+                                                                           std::shared_ptr<const SceneCellPayloadAuthority> authority);
 
     /** @brief Retires exactly one attached baseline at the canonical Scene safe point.
      * @param service Canonical Scene owner. @param identity Exact committed baseline identity and revision.
