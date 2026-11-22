@@ -40,6 +40,7 @@ namespace Horo::Editor {
         Render::ImageProviderRoute route;
         Render::ImageProviderAvailability support;
         Sha256Digest inventory;
+        bool temporalGuidesVerified{}; /**< Both temporal guide programs were admitted from this inventory. */
     };
 
     /** @brief Storage from the exact detached-signed product inventory, retained through selected Vulkan admission. */

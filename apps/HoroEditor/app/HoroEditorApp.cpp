@@ -1780,6 +1780,9 @@ namespace Horo::Editor {
             LOG_INFO("editor.renderer.image_provider", "Provider %s/%s on %s has readiness %s (inventory %s).",
                      report.route.provider.c_str(), report.route.mode.c_str(), frontend.Capabilities().backend.Value().c_str(),
                      EditorImageProviderReadinessName(report.support.readiness), inventory.c_str());
+            if (request.mode == Render::ReconstructionKind::Temporal)
+                LOG_INFO("editor.renderer.image_provider", "Signed temporal guides %s.",
+                         report.temporalGuidesVerified ? "verified" : "not packaged");
             return Result<void>::Success();
         }
 

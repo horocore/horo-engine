@@ -8,7 +8,9 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <utility>
 
 namespace {
@@ -209,4 +211,71 @@ TEST_CASE("Editor image provider inspection admits only signed matching product 
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.artifact_mismatch");
     }
+    SECTION("A signed inventory without temporal guides does not advertise them") {
+        WriteSigned(installed, data, signer);
+        auto temporal = request;
+        temporal.mode = ReconstructionKind::Temporal;
+        const auto report = RequireValue(InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier));
+        CHECK(report.route.mode == "taau");
+        CHECK_FALSE(report.temporalGuidesVerified);
+    }
+    SECTION("A declared temporal guide cannot omit its reflection") {
+        const auto payload = "assets/shaders/editor/viewport-linear-depth-vulkan.horoshdr";
+        data.artifacts = {{payload, ReleaseArtifactRole::AssetArchive, 3, ComputeSha256(Bytes("abc"))}};
+        WriteSigned(installed, data, signer);
+        installed.Write(payload, "abc");
+        auto temporal = request;
+        temporal.mode = ReconstructionKind::Temporal;
+        const auto rejected = InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.invalid_inventory");
+    }
+    SECTION("A temporal guide with changed bytes is rejected under its real signed digest") {
+        const auto payload = "assets/shaders/editor/viewport-linear-depth-vulkan.horoshdr";
+        const auto reflection = "assets/shaders/editor/viewport-linear-depth-vulkan.reflection.json";
+        data.artifacts = {{payload, ReleaseArtifactRole::AssetArchive, 3, ComputeSha256(Bytes("abc"))},
+                          {reflection, ReleaseArtifactRole::AssetArchive, 2, ComputeSha256(Bytes("{}"))}};
+        WriteSigned(installed, data, signer);
+        installed.Write(payload, "xyz");
+        installed.Write(reflection, "{}");
+        auto temporal = request;
+        temporal.mode = ReconstructionKind::Temporal;
+        const auto rejected = InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.artifact_mismatch");
+    }
+}
+
+TEST_CASE("Editor inspects both cooked temporal guides from the same signed inventory", "[renderer][image-provider][editor][integration]") {
+    const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
+    if (!stage)
+        SKIP("Set HORO_TEST_EDITOR_TEMPORAL_STAGE to the reviewed Vulkan temporal reconstruction cook output.");
+    InstalledDirectory installed;
+    auto data = Inventory();
+    const std::filesystem::path source{stage};
+    for (const auto &entry : std::filesystem::recursive_directory_iterator{source}) {
+        if (!entry.is_regular_file())
+            continue;
+        const auto relative = entry.path().lexically_relative(source).generic_string();
+        std::ifstream input{entry.path(), std::ios::binary};
+        REQUIRE(input.good());
+        const std::string bytes{std::istreambuf_iterator<char>{input}, {}};
+        REQUIRE_FALSE(bytes.empty());
+        data.artifacts.emplace_back(relative, ReleaseArtifactRole::AssetArchive, bytes.size(), ComputeSha256(Bytes(bytes)));
+        installed.Write(relative, bytes);
+    }
+    REQUIRE(data.artifacts.size() == 13U);
+    const EditorProviderProductIdentity expected{std::get<EngineProductVersion>(data.version), data.platform, data.architecture};
+    Tests::OpenXRProduct::SigningKey signer;
+    auto roots = std::make_shared<Security::TrustedRootStore>();
+    REQUIRE(roots->Add(signer.root).HasValue());
+    const auto crypto = Security::CreateMbedTlsSignatureProvider();
+    REQUIRE(crypto);
+    const Security::ArtifactVerifier verifier{crypto, roots};
+    WriteSigned(installed, data, signer);
+    RendererOwner renderer;
+    const NativeDurableFileSystem files;
+    const EditorImageProviderInspection temporal{ReconstructionKind::Temporal, installed.root, {}};
+    const auto report = RequireValue(InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier));
+    CHECK(report.temporalGuidesVerified);
 }

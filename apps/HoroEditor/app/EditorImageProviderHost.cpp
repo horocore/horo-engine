@@ -1,6 +1,7 @@
 #include "EditorImageProviderHost.h"
 
 #include "EditorNativeReconstructionReleaseLayout.h"
+#include "EditorVulkanViewportShader.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "HostReleaseManifestSignatureVerifier.h"
@@ -173,14 +174,44 @@ namespace Horo::Editor {
             return ReadManifest(request, expected, files, verifier);
         }
 
-        /** @brief Reads the exact scene-linear editor artifact from the already verified provider inventory. */
-        Result<Bytes> ReadSignedScene(const DurableFileSystem &files, const std::filesystem::path &root,
+        /** @brief Reads an exact editor artifact from the already verified provider inventory. */
+        Result<Bytes> ReadSignedAsset(const DurableFileSystem &files, const std::filesystem::path &root,
                                       const Release::ReleaseArtifactManifest &manifest, std::string_view path, std::size_t maximum) {
             const auto records = manifest.Artifacts();
             const auto found = std::ranges::find(records, path, &Release::ReleaseArtifactRecord::path);
             if (found == records.end())
                 return Result<Bytes>::Failure(MakeError(InvalidInventory));
             return ReadArtifact(files, root, *found, maximum);
+        }
+
+        /** @brief Checks a declared guide family from exact signed bytes before inspection advertises it. */
+        Result<bool> VerifyTemporalGuides(const DurableFileSystem &files, const std::filesystem::path &root,
+                                          const Release::ReleaseArtifactManifest &manifest) {
+            using Outcome = Result<bool>;
+            using namespace NativeReconstructionRelease;
+            constexpr std::array guides{std::pair{EditorVulkanTemporalInput::LinearDepth, TemporalDepthPrefix},
+                                        std::pair{EditorVulkanTemporalInput::Motion, TemporalMotionPrefix}};
+            const auto inventory = manifest.Artifacts();
+            const auto declares = [&inventory](const auto &guide) {
+                const std::string prefix{guide.second};
+                return std::ranges::find(inventory, prefix + ".horoshdr", &Release::ReleaseArtifactRecord::path) != inventory.end() ||
+                       std::ranges::find(inventory, prefix + ".reflection.json", &Release::ReleaseArtifactRecord::path) != inventory.end();
+            };
+            if (!std::ranges::any_of(guides, declares))
+                return Outcome::Success(false);
+            for (const auto &[input, name] : guides) {
+                const std::string prefix{name};
+                const auto payload = ReadSignedAsset(files, root, manifest, prefix + ".horoshdr", MaximumPayloadBytes);
+                if (payload.HasError())
+                    return Outcome::Failure(payload.ErrorValue());
+                const auto reflection = ReadSignedAsset(files, root, manifest, prefix + ".reflection.json", MaximumReflectionBytes);
+                if (reflection.HasError())
+                    return Outcome::Failure(reflection.ErrorValue());
+                if (const auto validated = ValidateEditorVulkanTemporalInputCook(input, payload.Value(), reflection.Value());
+                    validated.HasError())
+                    return Outcome::Failure(validated.ErrorValue());
+            }
+            return Outcome::Success(true);
         }
     }  // namespace
 
@@ -236,7 +267,15 @@ namespace Horo::Editor {
             const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
-            return QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot);
+            auto route = QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot);
+            if (route.HasError() || request.mode != ReconstructionKind::Temporal)
+                return route;
+            const auto verified = VerifyTemporalGuides(files, request.productRoot, manifest.Value());
+            if (verified.HasError())
+                return Outcome::Failure(verified.ErrorValue());
+            auto report = std::move(route).Value();
+            report.temporalGuidesVerified = verified.Value();
+            return Outcome::Success(std::move(report));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
         }
@@ -256,12 +295,12 @@ namespace Horo::Editor {
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
             auto payload =
-                ReadSignedScene(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearPayloadPath,
+                ReadSignedAsset(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearPayloadPath,
                                 NativeReconstructionRelease::MaximumPayloadBytes);
             if (payload.HasError())
                 return Outcome::Failure(payload.ErrorValue());
             auto reflection =
-                ReadSignedScene(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearReflectionPath,
+                ReadSignedAsset(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearReflectionPath,
                                 NativeReconstructionRelease::MaximumReflectionBytes);
             if (reflection.HasError())
                 return Outcome::Failure(reflection.ErrorValue());

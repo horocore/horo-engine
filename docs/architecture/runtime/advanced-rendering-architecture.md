@@ -415,6 +415,13 @@ after the scene-linear source to include both temporal guide programs. The
 12-file inventory adds the verified linear-depth and jitter-free motion
 payload/reflection pairs under `assets/shaders/editor/`. Both pass the runtime
 interface validator before the stage is published.
+The signed `--inspect-image-provider=taau` path reports guide admission
+separately from renderer capability. A kernel-only package reports absent
+guides. If the inventory declares any guide file, both complete pairs must
+match the signed size and digest and pass the typed shader validation.
+The cold Editor image-provider host calls the same Vulkan shader-interface
+validator as the offline cook. That validator operates on bytes and reflection
+metadata without creating a renderer, device, or GPU resources.
 
 Release assembly incorporates the returned records into the complete Editor
 product manifest and verifies the assembled bytes before the existing detached

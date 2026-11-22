@@ -17,7 +17,7 @@ target_include_directories(HoroEditorImageProviderHostInternal PUBLIC "${HORO_ED
 target_link_libraries(HoroEditorImageProviderHostInternal
     PUBLIC HoroEngine::Application HoroEngine::RenderFrontend HoroEngine::Security
     PRIVATE HoroEngine::Platform HoroHostSignatureDocuments HoroEditorNativeReconstructionReleaseLayoutInternal
-        HoroReleaseManifestSignatureHostInternal)
+        HoroReleaseManifestSignatureHostInternal HoroEditorVulkanShaderInternal)
 
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
 # One non-installed host token boundary; headless tests use the same parser as the real graphical root.
