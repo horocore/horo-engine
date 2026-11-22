@@ -20,7 +20,8 @@ namespace Horo::AI {
             std::array<std::int16_t, 2> approachWeights{2, -3};
             std::array<std::int16_t, 2> waitWeights{0, 0};
             std::array<LocalPolicyRowSource, 2> rows{
-                LocalPolicyRowSource{approach, 0, approachWeights}, LocalPolicyRowSource{wait, 0, waitWeights},
+                LocalPolicyRowSource{approach, 0, approachWeights},
+                LocalPolicyRowSource{wait, 0, waitWeights},
             };
             LocalPolicySource source{model, 1, targets, schema, rows};
             LocalPolicyCookTarget cookTarget{target, true, sizeof(LocalLearnedPolicy), 32};
@@ -56,10 +57,18 @@ namespace Horo::AI {
                 expected = &AIErrors::SchedulerBudgetExhausted;
                 fixture.cookTarget.maximumWorkUnits = 1;
             }
-            SECTION("a row does not match the feature tensor shape") { fixture.rows.front().weights = {}; }
-            SECTION("the feature identity repeats") { fixture.schema[1] = fixture.schema[0]; }
-            SECTION("a row task is not registered") { fixture.rows.front().task = Id<TaskId>(192); }
-            SECTION("tensor schema version is unknown") { fixture.source.tensorSchemaVersion = 2; }
+            SECTION("a row does not match the feature tensor shape") {
+                fixture.rows.front().weights = {};
+            }
+            SECTION("the feature identity repeats") {
+                fixture.schema[1] = fixture.schema[0];
+            }
+            SECTION("a row task is not registered") {
+                fixture.rows.front().task = Id<TaskId>(192);
+            }
+            SECTION("tensor schema version is unknown") {
+                fixture.source.tensorSchemaVersion = 2;
+            }
             const auto invalid = LocalLearnedPolicy::Cook(fixture.source, fixture.cookTarget, tasks);
             REQUIRE(invalid.HasError());
             CHECK(invalid.ErrorValue().code.Value() == expected->code.Value());
@@ -102,7 +111,9 @@ namespace Horo::AI {
             auto work = model.RequiredWork();
             std::uint64_t tick = 8;
             CancellationSource cancellation;
-            SECTION("tensor input order differs") { std::swap(fixture.inputs[0], fixture.inputs[1]); }
+            SECTION("tensor input order differs") {
+                std::swap(fixture.inputs[0], fixture.inputs[1]);
+            }
             SECTION("the expected model digest was replaced") {
                 expected = LocalPolicyStatus::Stale;
                 digest = {};
@@ -145,9 +156,15 @@ namespace Horo::AI {
             auto expected = LocalPolicyStatus::Stale;
             std::uint64_t tick = 9;
             CancellationSource cancellation;
-            SECTION("the owner retained another Scene generation") { ++current.sceneGeneration; }
-            SECTION("the provider generation restarted") { ++current.providerGeneration; }
-            SECTION("a different request owns the decision slot") { ++current.requestGeneration; }
+            SECTION("the owner retained another Scene generation") {
+                ++current.sceneGeneration;
+            }
+            SECTION("the provider generation restarted") {
+                ++current.providerGeneration;
+            }
+            SECTION("a different request owns the decision slot") {
+                ++current.requestGeneration;
+            }
             SECTION("the application deadline passed") {
                 expected = LocalPolicyStatus::Expired;
                 tick = 11;

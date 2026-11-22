@@ -60,7 +60,14 @@ namespace Horo::AI {
     };
 
     enum class LocalPolicyStatus : std::uint8_t {
-        Proposed, InvalidInput, BudgetExhausted, Cancelled, Expired, Stale, MissingTask, Consumed
+        Proposed,
+        InvalidInput,
+        BudgetExhausted,
+        Cancelled,
+        Expired,
+        Stale,
+        MissingTask,
+        Consumed
     };
 
     struct LocalPolicyOutcome final {
@@ -79,7 +86,10 @@ namespace Horo::AI {
         LocalPolicyProposal(LocalPolicyProposal &&other) noexcept;
         LocalPolicyProposal &operator=(LocalPolicyProposal &&) = delete;
 
-        [[nodiscard]] LocalPolicyStatus Status() const noexcept { return status_; }
+        [[nodiscard]] LocalPolicyStatus Status() const noexcept {
+            return status_;
+        }
+
     private:
         friend class LocalLearnedPolicy;
         friend class LocalPolicyRequestSlot;
@@ -93,13 +103,14 @@ namespace Horo::AI {
     class LocalPolicyRequestSlot final {
     public:
         explicit LocalPolicyRequestSlot(const LocalPolicyRequestIdentity &identity) noexcept : identity_(identity) {}
+
         LocalPolicyRequestSlot(const LocalPolicyRequestSlot &) = delete;
         LocalPolicyRequestSlot &operator=(const LocalPolicyRequestSlot &) = delete;
 
         /** @brief Consumes exactly one matching result at the existing simulation safe point. */
         [[nodiscard]] LocalPolicyOutcome Consume(LocalPolicyProposal &proposal, const LocalPolicyRequestIdentity &current,
-                                                  const LocalLearnedPolicy &model, const AiCapabilityDescriptorSet &tasks,
-                                                  std::uint64_t tick, const CancellationToken &cancellation = {}) noexcept;
+                                                 const LocalLearnedPolicy &model, const AiCapabilityDescriptorSet &tasks,
+                                                 std::uint64_t tick, const CancellationToken &cancellation = {}) noexcept;
 
     private:
         LocalPolicyRequestIdentity identity_;
@@ -114,20 +125,24 @@ namespace Horo::AI {
         static constexpr std::size_t MaximumTargets = 16;
 
         /** @brief Validates target, tensor shape, schema, registered task declarations and resource admission. */
-        [[nodiscard]] static Result<LocalLearnedPolicy> Cook(
-            const LocalPolicySource &source, const LocalPolicyCookTarget &target, const AiCapabilityDescriptorSet &tasks,
-            std::optional<BlackboardSchemaId> blackboard = {});
+        [[nodiscard]] static Result<LocalLearnedPolicy> Cook(const LocalPolicySource &source, const LocalPolicyCookTarget &target,
+                                                             const AiCapabilityDescriptorSet &tasks,
+                                                             std::optional<BlackboardSchemaId> blackboard = {});
 
-        [[nodiscard]] const Sha256Digest &Digest() const noexcept { return digest_; }
+        [[nodiscard]] const Sha256Digest &Digest() const noexcept {
+            return digest_;
+        }
+
         [[nodiscard]] std::size_t RequiredWork() const noexcept;
         /** @brief Runs the bounded inference against exact typed features. Fall back at the caller on a typed failure. */
-        [[nodiscard]] LocalPolicyProposal Infer(
-            const LocalPolicyRequestIdentity &identity, LocalPolicyTargetId target, const Sha256Digest &expectedModel,
-            std::uint32_t tensorSchemaVersion, std::span<const LocalPolicyFeature> features, std::uint64_t tick, AiWorkBudget &work,
-            const CancellationToken &cancellation = {}) const noexcept;
+        [[nodiscard]] LocalPolicyProposal Infer(const LocalPolicyRequestIdentity &identity, LocalPolicyTargetId target,
+                                                const Sha256Digest &expectedModel, std::uint32_t tensorSchemaVersion,
+                                                std::span<const LocalPolicyFeature> features, std::uint64_t tick, AiWorkBudget &work,
+                                                const CancellationToken &cancellation = {}) const noexcept;
 
     private:
         friend class LocalPolicyRequestSlot;
+
         struct Row final {
             TaskId task;
             std::int32_t bias{};

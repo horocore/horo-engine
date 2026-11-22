@@ -104,10 +104,10 @@ namespace Horo::AI {
         return digest.Finalize();
     }
 
-    LocalPolicyProposal LocalLearnedPolicy::Infer(
-        const LocalPolicyRequestIdentity &identity, const LocalPolicyTargetId target, const Sha256Digest &expectedModel,
-        const std::uint32_t tensorSchemaVersion, const std::span<const LocalPolicyFeature> features, const std::uint64_t tick,
-        AiWorkBudget &work, const CancellationToken &cancellation) const noexcept {
+    LocalPolicyProposal LocalLearnedPolicy::Infer(const LocalPolicyRequestIdentity &identity, const LocalPolicyTargetId target,
+                                                  const Sha256Digest &expectedModel, const std::uint32_t tensorSchemaVersion,
+                                                  const std::span<const LocalPolicyFeature> features, const std::uint64_t tick,
+                                                  AiWorkBudget &work, const CancellationToken &cancellation) const noexcept {
         using enum LocalPolicyStatus;
         LocalPolicyProposal result;
         if (!ValidRequest(identity))
@@ -150,12 +150,12 @@ namespace Horo::AI {
     }
 
     LocalPolicyProposal::LocalPolicyProposal(LocalPolicyProposal &&other) noexcept
-        : status_(std::exchange(other.status_, LocalPolicyStatus::Consumed)), identity_(other.identity_),
-          modelDigest_(other.modelDigest_), task_(std::exchange(other.task_, {})) {}
+        : status_(std::exchange(other.status_, LocalPolicyStatus::Consumed)), identity_(other.identity_), modelDigest_(other.modelDigest_),
+          task_(std::exchange(other.task_, {})) {}
 
-    LocalPolicyOutcome LocalPolicyRequestSlot::Consume(
-        LocalPolicyProposal &proposal, const LocalPolicyRequestIdentity &current, const LocalLearnedPolicy &model,
-        const AiCapabilityDescriptorSet &tasks, const std::uint64_t tick, const CancellationToken &cancellation) noexcept {
+    LocalPolicyOutcome LocalPolicyRequestSlot::Consume(LocalPolicyProposal &proposal, const LocalPolicyRequestIdentity &current,
+                                                       const LocalLearnedPolicy &model, const AiCapabilityDescriptorSet &tasks,
+                                                       const std::uint64_t tick, const CancellationToken &cancellation) noexcept {
         using enum LocalPolicyStatus;
         if (retired_)
             return {Consumed, {}};
