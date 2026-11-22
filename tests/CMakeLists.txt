@@ -4639,6 +4639,7 @@ endif ()
 
 add_executable(HoroPlatformTests
         support/AllocationProbe.cpp
+        unit/platform/NativeCredentialBackendTests.cpp
         unit/platform/ExternalProcessByteChannelTests.cpp
         unit/platform/NativeProjectIoOwnersTests.cpp
         unit/foundation/PlatformTests.cpp

@@ -177,6 +177,7 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
     Horo/Platform/ConfigurationFileStore.h
     Horo/Platform/DynamicLibrary.h
     Horo/Platform/ExternalProcess.h
+    Horo/Platform/NativeCredentialBackend.h
     Horo/Platform/PlatformErrors.h
     Horo/Platform/SecureRandom.h
 )

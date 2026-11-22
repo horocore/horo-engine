@@ -285,14 +285,16 @@ if (WIN32)
             platform/file_storage/PublicationFileNativeWindows.cpp
             platform/windows/DynamicLibrary_Windows.cpp
             platform/windows/ExternalProcess_Windows.cpp
+            platform/windows/NativeCredentialBackend_Windows.cpp
             platform/windows/SecureRandom_Windows.cpp)
     target_compile_definitions(HoroPlatform PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-    target_link_libraries(HoroPlatform PRIVATE bcrypt)
+    target_link_libraries(HoroPlatform PRIVATE advapi32 bcrypt)
 else ()
     target_sources(HoroPlatform PRIVATE
             platform/file_storage/PublicationFileNativePosix.cpp
             platform/posix/DynamicLibrary_Posix.cpp
             platform/posix/ExternalProcess_Posix.cpp
+            platform/posix/NativeCredentialBackend_Posix.cpp
             platform/posix/SecureRandom_Posix.cpp)
     target_link_libraries(HoroPlatform PRIVATE dl)
     if (APPLE)

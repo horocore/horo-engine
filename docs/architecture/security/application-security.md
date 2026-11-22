@@ -290,6 +290,13 @@ Credentials are:
 
 Credential prompts identify the requesting operation and capability.
 
+On Windows the native platform backend stores generic credentials in Windows
+Credential Manager, under Horo's namespace and the current user on this machine.
+The host supplies opaque references and decides their lifetime. The backend
+rejects storage when the logon session disallows machine-local persistence.
+Platforms without a native backend expose an unavailable result at host
+composition.
+
 ## Network Access
 
 Network clients declare destination policy, protocol, timeout, size limits, and
