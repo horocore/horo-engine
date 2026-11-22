@@ -386,6 +386,11 @@ a schema-v1 lock with empty `roots` and `packages` arrays. The preview preserves
 the artifact and source identities of every retained entry. Reference checks,
 approval, and durable publication belong to the uninstall transaction.
 
+Observed native package registrations include service dependencies and system
+service requirements. The uninstall transaction checks retained observations
+against the exact current lock and reports which retained registration requires
+a service owned by a departing package. This evidence covers the observed roles.
+
 ## Rollback Contract
 
 Package lifecycle operations write a transaction journal before mutating project

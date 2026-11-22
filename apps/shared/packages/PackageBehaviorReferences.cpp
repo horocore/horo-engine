@@ -14,6 +14,10 @@ namespace Horo::Application::Internal {
         using Owners = std::map<Gameplay::BehaviorTypeId, std::set<Packages::HoroPackageId>>;
         using References = std::vector<PackageBehaviorReference>;
         constexpr std::size_t MaximumBehaviorReferences = 16'384;
+        constexpr std::size_t MaximumServiceReferences = 16'384;
+        constexpr auto ServiceInUse = "packages.host.service_in_use";
+        using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
+        using ServiceOwners = std::map<Gameplay::GameplayServiceId, std::set<Packages::HoroPackageId>>;
 
         Error ReferenceError(std::string code, std::string_view path = {}) {
             return {ErrorCode{std::move(code)}, ErrorDomainId{"packages.host"}, ErrorSeverity::Error, std::string{path}};
@@ -108,6 +112,38 @@ namespace Horo::Application::Internal {
                 return Result<References>::Failure(current.ErrorValue());
             return Result<References>::Success(std::move(references));
         }
+
+        /** @brief Records each provider and consumer pair before proceeding to the next requirement. */
+        Result<void> CollectServiceReferences(std::vector<Diagnostic> &references, const ServiceOwners &owners,
+                                              const Registration &consumer, std::string_view consumerId,
+                                              std::span<const Gameplay::GameplayServiceId> requirements) {
+            for (const auto &id : requirements) {
+                const auto matching = owners.find(id);
+                if (matching == owners.end())
+                    continue;
+                if (matching->second.size() > MaximumServiceReferences - references.size())
+                    return Result<void>::Failure(ReferenceError("packages.host.service_reference_limit"));
+                for (const auto &provider : matching->second)
+                    references.emplace_back(DiagnosticCode{ServiceInUse}, DiagnosticSeverity::Error,
+                                            provider.Value() + ": " + std::string{id.Value()}, SourceLocation{consumer.descriptorPath},
+                                            consumer.package.Value() + "/" + std::string{consumerId});
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks both dependency-bearing registration kinds against the same provider identities. */
+        Result<void> InspectServiceConsumer(std::vector<Diagnostic> &references, const ServiceOwners &owners,
+                                            const Registration &consumer) {
+            for (const auto &service : consumer.services)
+                if (auto result = CollectServiceReferences(references, owners, consumer, service.id.Value(), service.dependencies);
+                    result.HasError())
+                    return result;
+            for (const auto &system : consumer.systems)
+                if (auto result = CollectServiceReferences(references, owners, consumer, system.id.Value(), system.requiredServices);
+                    result.HasError())
+                    return result;
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc CheckRemovalRegistrationCoverage */
@@ -146,6 +182,42 @@ namespace Horo::Application::Internal {
         if (!missing.diagnostics.empty())
             return Result<void>::Failure(std::move(missing));
         return Result<void>::Success();
+    }
+
+    /** @copydoc InspectPackageServiceReferences */
+    Result<std::vector<Diagnostic>> InspectPackageServiceReferences(const PackageRemovalSources &sources,
+                                                                    const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                    const Packages::PackageRemovalGraphPreview &removal) {
+        using Inspection = Result<std::vector<Diagnostic>>;
+        if (removal.removed.empty())
+            return Inspection::Success({});
+        std::map<Packages::HoroPackageId, const Packages::LockedPackage *> locked;
+        for (const auto &entry : lock.Packages())
+            locked.emplace(entry.package, &entry);
+        std::set<Packages::HoroPackageId> departing;
+        for (const auto &entry : removal.removed)
+            departing.insert(entry.package);
+
+        ServiceOwners owners;
+        std::vector<const Registration *> retained;
+        for (const auto &registration : sources.registrations) {
+            const auto entry = locked.find(registration.package);
+            if (entry == locked.end() || registration.activationGeneration == 0 || entry->second->version != registration.version ||
+                entry->second->artifactDigest != registration.artifact)
+                continue;
+            if (departing.contains(registration.package)) {
+                for (const auto &service : registration.services)
+                    owners[service.id].insert(registration.package);
+            } else {
+                retained.push_back(&registration);
+            }
+        }
+        std::vector<Diagnostic> references;
+        if (!owners.empty())
+            for (const auto *consumer : retained)
+                if (auto result = InspectServiceConsumer(references, owners, *consumer); result.HasError())
+                    return Inspection::Failure(result.ErrorValue());
+        return Inspection::Success(std::move(references));
     }
 
     /** @copydoc InspectPackageBehaviorReferences */

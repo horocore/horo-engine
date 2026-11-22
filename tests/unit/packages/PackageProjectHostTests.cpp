@@ -444,6 +444,68 @@ namespace {
         CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
+    TEST_CASE("Package removal reports retained service and system requirements from the current lock", "[packages][application][host]") {
+        using namespace Packages;
+        HostFixture fixture;
+        const auto assets = fixture.AssetSource();
+        auto sources = fixture.RemovalSources(*assets);
+        const auto retired = fixture.graph.package;
+        const auto retained = HoroPackageId::Parse("com.horo.retained").Value();
+        const auto version = fixture.graph.version;
+        const auto source = fixture.graph.source;
+        const auto retiredDigest = fixture.graph.archive.Digest();
+        const auto retainedDigest = ComputeSha256(std::as_bytes(std::span{std::string_view{"retained"}}));
+        const PackageResolutionPlan graph{{{retired, version, source, retiredDigest, {}}, {retained, version, source, retainedDigest, {}}}};
+        const std::array roots{retired, retained};
+        const std::array artifacts{PackageLockArtifact{retired, version, source, retiredDigest, retiredDigest, retiredDigest},
+                                   PackageLockArtifact{retained, version, source, retainedDigest, retainedDigest, retainedDigest}};
+        const auto lock = ValidatedPackageLockfileV1::Generate(graph, roots, retiredDigest, artifacts);
+        REQUIRE(lock.HasValue());
+        PackageRemovalGraphPreview removal{.directRoot = true, .removed = {{retired, version}}};
+        const auto serviceId = Gameplay::GameplayServiceId::Parse("game.tests.required").Value();
+        const auto consumerId = Gameplay::GameplayServiceId::Parse("game.tests.consumer").Value();
+        const auto systemId = Gameplay::GameplaySystemId::Parse("game.tests.tick").Value();
+        using Inventory = GameplayPackageModuleHost::RegistrationInventory;
+        std::array registrations{
+            Inventory{.package = retired,
+                      .version = version,
+                      .artifact = retiredDigest,
+                      .activationGeneration = 1,
+                      .moduleId = "game.tests.provider",
+                      .services = {{.id = serviceId}}},
+            Inventory{.package = retained,
+                      .version = version,
+                      .artifact = retainedDigest,
+                      .activationGeneration = 2,
+                      .moduleId = "game.tests.retained",
+                      .services = {{.id = consumerId, .dependencies = {serviceId}}},
+                      .descriptorPath = "extensions/retained/extension.json",
+                      .systems = {{.id = systemId, .requiredServices = {serviceId}}}},
+        };
+        sources.registrations = registrations;
+
+        const auto references = InspectPackageServiceReferences(sources, lock.Value(), removal);
+        REQUIRE(references.HasValue());
+        REQUIRE(references.Value().size() == 2);
+        for (const auto &reference : references.Value()) {
+            CHECK(reference.code.Value() == "packages.host.service_in_use");
+            CHECK(reference.message == retired.Value() + ": game.tests.required");
+            CHECK(reference.location.source == "extensions/retained/extension.json");
+        }
+        CHECK(references.Value()[0].path == "com.horo.retained/game.tests.consumer");
+        CHECK(references.Value()[1].path == "com.horo.retained/game.tests.tick");
+
+        SECTION("stale retained artifact") {
+            registrations[1].artifact = retiredDigest;
+        }
+        SECTION("both packages leave the graph") {
+            removal.removed.push_back({retained, version});
+        }
+        const auto safe = InspectPackageServiceReferences(sources, lock.Value(), removal);
+        REQUIRE(safe.HasValue());
+        CHECK(safe.Value().empty());
+    }
+
     TEST_CASE("Package removal reports every affected native asset importer before changing metadata", "[packages][application][host]") {
         HostFixture fixture;
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),

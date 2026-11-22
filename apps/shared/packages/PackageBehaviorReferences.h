@@ -9,7 +9,7 @@ namespace Horo::Assets {
 
 namespace Horo::Application::Internal {
     /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
-     * @details Retains previously observed behavior IDs and the latest observed service descriptors per exact package artifact and role. */
+     * @details Retains observed behavior IDs and the latest service and system descriptors per exact package artifact and role. */
     struct PackageRemovalRegistrationEvidence final {
         std::vector<Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
     };
@@ -27,6 +27,17 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,
                                                                 const Packages::ValidatedPackageLockfileV1 &lock,
                                                                 const Packages::PackageRemovalGraphPreview &removal);
+
+    /** @brief Finds retained package services and systems that require a service from an exact departing artifact.
+     * @param sources Owned-registration observations bound to the current project.
+     * @param lock Current validated lock used to filter stale observations.
+     * @param removal Exact withdrawal effects from that lock.
+     * @return Bounded dependency diagnostics or a reference-limit error.
+     * @details Only supplied, observed package roles are examined. Registrations leaving together cannot block removal.
+     */
+    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageServiceReferences(const PackageRemovalSources &sources,
+                                                                                  const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                                  const Packages::PackageRemovalGraphPreview &removal);
 
     /** @brief A saved Scene or Prefab attachment using an exactly attributed package behavior. */
     struct PackageBehaviorReference final {

@@ -323,7 +323,7 @@ namespace Horo::Application::Internal {
             return Publication::Success({});
         }
 
-        /** @brief Reports both supported reference categories before creating the new metadata. */
+        /** @brief Reports supported reference categories before creating the new metadata. */
         Result<void> CheckRemovalReferences(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
                                             const Packages::PackageRemovalGraphPreview &impact) {
             if (auto coverage = CheckRemovalRegistrationCoverage(sources, lock, impact); coverage.HasError())
@@ -335,11 +335,20 @@ namespace Horo::Application::Internal {
                 InspectPackageBehaviorReferences(sources.assets, sources.files, sources.context, sources.registrations, lock, impact);
             if (behaviors.HasError())
                 return Result<void>::Failure(behaviors.ErrorValue());
-            if (importers.Value().empty() && behaviors.Value().empty())
+            auto services = InspectPackageServiceReferences(sources, lock, impact);
+            if (services.HasError())
+                return Result<void>::Failure(services.ErrorValue());
+            if (importers.Value().empty() && behaviors.Value().empty() && services.Value().empty())
                 return Result<void>::Success();
             constexpr auto ImporterInUse = "packages.host.importer_in_use";
             constexpr auto BehaviorInUse = "packages.host.behavior_in_use";
-            Error blocked{ErrorCode{importers.Value().empty() ? BehaviorInUse : ImporterInUse}, ErrorDomainId{"packages.host"}};
+            Error blocked{services.Value().empty() ? ErrorCode{BehaviorInUse} : ErrorCode{services.Value().front().code.Value()},
+                          ErrorDomainId{"packages.host"}};
+            if (!behaviors.Value().empty())
+                blocked.code = ErrorCode{BehaviorInUse};
+            if (!importers.Value().empty())
+                blocked.code = ErrorCode{ImporterInUse};
+            blocked.diagnostics = std::move(services).Value();
             for (const auto &reference : importers.Value())
                 blocked.diagnostics.emplace_back(DiagnosticCode{ImporterInUse}, DiagnosticSeverity::Error, reference.package.Value(),
                                                  SourceLocation{"packages.host"}, reference.assetPath);

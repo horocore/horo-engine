@@ -2,6 +2,7 @@
 
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
+#include "Horo/Gameplay/SystemRegistry.h"
 #include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageContentStaging.h"
@@ -357,6 +358,8 @@ namespace Horo::Packages {
                     inventory.behaviors.push_back(behavior.descriptor.typeId);
                 for (const auto &service : loaded.Services().Registrations())
                     inventory.services.push_back(service.descriptor);
+                for (const auto &system : loaded.Systems().Registrations())
+                    inventory.systems.push_back(system.descriptor);
             }
             return Inventory::Success(std::move(registrations));
         } catch (const std::bad_alloc &) {
