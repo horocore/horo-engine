@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Security/ArtifactSignature.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -50,6 +51,21 @@ namespace Horo::Editor {
         std::vector<std::uint8_t> sceneReflection;
     };
 
+    /** @brief Exact same-operation shader bytes retained from one authenticated product inventory. */
+    struct EditorSignedProviderShader final {
+        std::vector<std::uint8_t> payload;
+        std::vector<std::uint8_t> reflection;
+    };
+
+    /** @brief Complete signed Vulkan temporal family and its readiness on the selected renderer. */
+    struct EditorSignedTemporalProvider final {
+        EditorImageProviderAvailability availability;
+        std::array<Render::CookedNativeReconstructionKernel, 2> kernels; /**< Seed and history, in that order. */
+        EditorSignedProviderShader sceneLinear;
+        EditorSignedProviderShader linearDepth;
+        EditorSignedProviderShader motion;
+    };
+
     /** @brief Parses explicit and mutually exclusive inspection or spatial activation arguments. @param args Process arguments including
      * argv[0].
      * @return A complete request, no request, or a typed invalid-input failure. */
@@ -65,7 +81,7 @@ namespace Horo::Editor {
      * @details Installation verification reads the complete requested artifacts into owned buffers, checks signed length and digest,
      * then decodes those same buffers. Inspection does not realize provider kernels or change rendering selection.
      */
-    [[nodiscard]] Result<EditorImageProviderAvailability> InspectEditorImageProvider(Render::RenderFrontend &frontend,
+    [[nodiscard]] Result<EditorImageProviderAvailability> InspectEditorImageProvider(const Render::RenderFrontend &frontend,
                                                                                      const EditorImageProviderInspection &request,
                                                                                      const EditorProviderProductIdentity &expected,
                                                                                      const DurableFileSystem &files,
@@ -77,11 +93,25 @@ namespace Horo::Editor {
      * @param verifier Verifier supplied by the independent publisher policy.
      * @return Exact owned verified payloads or typed signature, compatibility, or artifact error.
      */
-    [[nodiscard]] Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(Render::RenderFrontend &frontend,
+    [[nodiscard]] Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(const Render::RenderFrontend &frontend,
                                                                                       const EditorImageProviderInspection &request,
                                                                                       const EditorProviderProductIdentity &expected,
                                                                                       const DurableFileSystem &files,
                                                                                       const Security::ArtifactVerifier &verifier);
+
+    /** @brief Returns the complete verified temporal family for cold viewport preparation.
+     * @param frontend Selected renderer on its owner thread outside a frame.
+     * @param request Explicit temporal mode and product root.
+     * @param expected Current editor release identity.
+     * @param files Bounded host read authority.
+     * @param verifier Verifier from independent publisher policy.
+     * @return Owned verified cook bytes and backend readiness, or a typed failure for an incomplete or invalid family.
+     * @details This operation queries capability without changing the active renderer or realizing any resources. */
+    [[nodiscard]] Result<EditorSignedTemporalProvider> LoadEditorSignedTemporalProvider(const Render::RenderFrontend &frontend,
+                                                                                        const EditorImageProviderInspection &request,
+                                                                                        const EditorProviderProductIdentity &expected,
+                                                                                        const DurableFileSystem &files,
+                                                                                        const Security::ArtifactVerifier &verifier);
 
     /** @brief Creates the standalone editor's verifier from an explicitly supplied independent publisher document.
      * @param files Host-authorized bounded file reader. @param trust Explicit host publisher document.

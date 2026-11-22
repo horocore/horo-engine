@@ -6,6 +6,7 @@
 #include "support/OpenXRProductSigningTestSupport.h"
 #include "support/renderer/RenderBackendDrainTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -73,6 +74,21 @@ namespace {
         const auto &json = inventory.CanonicalJson();
         installed.Write("manifest.json", json);
         installed.Write("manifest.signature.json", Application::Internal::EncodeDetachedSignatureDocument(signer.Sign(Bytes(json))));
+    }
+
+    /** @brief Adds the exact offline cook output to an installed directory and its candidate inventory. */
+    void AddCookedShaders(InstalledDirectory &installed, ReleaseArtifactManifestData &data, const std::filesystem::path &source) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator{source}) {
+            if (!entry.is_regular_file())
+                continue;
+            const auto relative = entry.path().lexically_relative(source).generic_string();
+            std::ifstream input{entry.path(), std::ios::binary};
+            REQUIRE(input.good());
+            const std::string bytes{std::istreambuf_iterator<char>{input}, {}};
+            REQUIRE_FALSE(bytes.empty());
+            data.artifacts.emplace_back(relative, ReleaseArtifactRole::AssetArchive, bytes.size(), ComputeSha256(Bytes(bytes)));
+            installed.Write(relative, bytes);
+        }
     }
 
     struct RendererOwner final {
@@ -246,24 +262,13 @@ TEST_CASE("Editor image provider inspection admits only signed matching product 
     }
 }
 
-TEST_CASE("Editor inspects both cooked temporal guides from the same signed inventory", "[renderer][image-provider][editor][integration]") {
+TEST_CASE("Editor inspects and retains the complete signed temporal shader family", "[renderer][image-provider][editor][integration]") {
     const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
     if (!stage)
         SKIP("Set HORO_TEST_EDITOR_TEMPORAL_STAGE to the reviewed Vulkan temporal reconstruction cook output.");
     InstalledDirectory installed;
     auto data = Inventory();
-    const std::filesystem::path source{stage};
-    for (const auto &entry : std::filesystem::recursive_directory_iterator{source}) {
-        if (!entry.is_regular_file())
-            continue;
-        const auto relative = entry.path().lexically_relative(source).generic_string();
-        std::ifstream input{entry.path(), std::ios::binary};
-        REQUIRE(input.good());
-        const std::string bytes{std::istreambuf_iterator<char>{input}, {}};
-        REQUIRE_FALSE(bytes.empty());
-        data.artifacts.emplace_back(relative, ReleaseArtifactRole::AssetArchive, bytes.size(), ComputeSha256(Bytes(bytes)));
-        installed.Write(relative, bytes);
-    }
+    AddCookedShaders(installed, data, std::filesystem::path{stage});
     REQUIRE(data.artifacts.size() == 13U);
     const EditorProviderProductIdentity expected{std::get<EngineProductVersion>(data.version), data.platform, data.architecture};
     Tests::OpenXRProduct::SigningKey signer;
@@ -272,10 +277,38 @@ TEST_CASE("Editor inspects both cooked temporal guides from the same signed inve
     const auto crypto = Security::CreateMbedTlsSignatureProvider();
     REQUIRE(crypto);
     const Security::ArtifactVerifier verifier{crypto, roots};
-    WriteSigned(installed, data, signer);
     RendererOwner renderer;
     const NativeDurableFileSystem files;
     const EditorImageProviderInspection temporal{ReconstructionKind::Temporal, installed.root, {}};
-    const auto report = RequireValue(InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier));
-    CHECK(report.temporalGuidesVerified);
+    SECTION("Preparation receives the same signed bytes and reports backend readiness separately") {
+        WriteSigned(installed, data, signer);
+        const auto report = RequireValue(InspectEditorImageProvider(*renderer.frontend, temporal, expected, files, verifier));
+        CHECK(report.temporalGuidesVerified);
+        const auto prepared = RequireValue(LoadEditorSignedTemporalProvider(*renderer.frontend, temporal, expected, files, verifier));
+        CHECK(prepared.availability.inventory == report.inventory);
+        CHECK(prepared.availability.support.readiness == ImageProviderReadiness::CapabilityUnavailable);
+        CHECK(prepared.kernels[0].entry == NativeReconstructionEntry::TemporalSeed);
+        CHECK(prepared.kernels[1].entry == NativeReconstructionEntry::TemporalHistory);
+        const auto verify = [&data](std::string_view path, const std::vector<std::uint8_t> &bytes) {
+            const auto record = std::ranges::find(data.artifacts, path, &ReleaseArtifactRecord::path);
+            REQUIRE(record != data.artifacts.end());
+            CHECK(ComputeSha256(std::as_bytes(std::span{bytes})) == record->digest);
+        };
+        verify("assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr", prepared.sceneLinear.payload);
+        verify("assets/shaders/editor/viewport-linear-depth-vulkan.reflection.json", prepared.linearDepth.reflection);
+        verify("assets/shaders/editor/viewport-motion-vulkan.horoshdr", prepared.motion.payload);
+    }
+    SECTION("Preparation rejects a temporal family missing any required component") {
+        for (const auto missing :
+             {"assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr", "assets/shaders/editor/viewport-motion-vulkan.reflection.json",
+              "assets/shaders/runtime/native-reconstruction-vulkan/ReconstructTemporal.horoshdr"}) {
+            CAPTURE(missing);
+            auto partial = data;
+            REQUIRE(std::erase_if(partial.artifacts, [missing](const auto &record) {
+                return record.path == missing;
+            }) == 1);
+            WriteSigned(installed, std::move(partial), signer);
+            CHECK(LoadEditorSignedTemporalProvider(*renderer.frontend, temporal, expected, files, verifier).HasError());
+        }
+    }
 }

@@ -117,27 +117,45 @@ namespace Horo::Editor {
             return Outcome::Success(CookedNativeReconstructionKernel{entry, target, std::move(artifact)});
         }
 
-        /** @brief Retains in-memory stage bytes through existing registry admission and the selected frontend query. */
-        Result<EditorImageProviderAvailability> QueryInstalledRoute(RenderFrontend &frontend, ReconstructionKind mode,
-                                                                    const Release::ReleaseArtifactManifest &manifest,
-                                                                    const DurableFileSystem &files, const std::filesystem::path &root,
-                                                                    CookedNativeReconstructionKernel *activation = nullptr) {
-            using Outcome = Result<EditorImageProviderAvailability>;
-            const bool temporal = mode == ReconstructionKind::Temporal;
-            const std::array entries{temporal ? Entry::TemporalSeed : Entry::Spatial, Entry::TemporalHistory};
+        /** @brief Stores the available cooked stages and their immutable registry identities in route order. */
+        struct InstalledKernels final {
             std::array<CookedNativeReconstructionKernel, 2> cooked;
             std::array<Sha256Digest, 2> digests;
             std::size_t count{};
+        };
+
+        /** @brief Collects the signed kernels declared for the requested route. */
+        Result<InstalledKernels> LoadInstalledKernels(ReconstructionKind mode, const Release::ReleaseArtifactManifest &manifest,
+                                                      const DurableFileSystem &files, const std::filesystem::path &root) {
+            using Outcome = Result<InstalledKernels>;
+            using enum Entry;
+            const bool temporal = mode == ReconstructionKind::Temporal;
+            const std::array entries{temporal ? TemporalSeed : Spatial, TemporalHistory};
+            InstalledKernels installed;
             for (const auto entry : std::span{entries}.first(temporal ? entries.size() : 1U)) {
                 auto loaded = LoadEntry(files, root, manifest.Artifacts(), entry);
                 if (loaded.HasError())
                     return Outcome::Failure(loaded.ErrorValue());
                 if (auto candidate = std::move(loaded).Value()) {
-                    digests[count] = candidate->artifact.artifactKey;
-                    cooked[count++] = std::move(*candidate);
+                    installed.digests[installed.count] = candidate->artifact.artifactKey;
+                    installed.cooked[installed.count++] = std::move(*candidate);
                 }
             }
-            auto descriptor = DescribeNativeReconstructionImageProvider(mode, std::span{cooked}.first(count));
+            return Outcome::Success(std::move(installed));
+        }
+
+        /** @brief Retains in-memory stage bytes through existing registry admission and the selected frontend query. */
+        Result<EditorImageProviderAvailability> QueryInstalledRoute(const RenderFrontend &frontend, ReconstructionKind mode,
+                                                                    const Release::ReleaseArtifactManifest &manifest,
+                                                                    const DurableFileSystem &files, const std::filesystem::path &root,
+                                                                    std::span<CookedNativeReconstructionKernel> retained = {}) {
+            using Outcome = Result<EditorImageProviderAvailability>;
+            auto loaded = LoadInstalledKernels(mode, manifest, files, root);
+            if (loaded.HasError())
+                return Outcome::Failure(loaded.ErrorValue());
+            auto installed = std::move(loaded).Value();
+            const auto kernels = std::span{installed.cooked}.first(installed.count);
+            auto descriptor = DescribeNativeReconstructionImageProvider(mode, kernels);
             if (descriptor.HasError())
                 return Outcome::Failure(descriptor.ErrorValue());
             auto route = descriptor.Value().route;
@@ -147,13 +165,14 @@ namespace Horo::Editor {
             providers.Seal();
             const auto supported =
                 frontend.DiscoverImageProvider(providers, route,
-                                               {.hostApi = {1, 0}, .admittedCookedArtifacts = std::span{digests}.first(count)});
+                                               {.hostApi = {1, 0},
+                                                .admittedCookedArtifacts = std::span{installed.digests}.first(installed.count)});
             if (supported.HasError())
                 return Outcome::Failure(supported.ErrorValue());
-            if (activation) {
-                if (mode != ReconstructionKind::Spatial || count != 1 || supported.Value().readiness != ImageProviderReadiness::Ready)
+            if (!retained.empty()) {
+                if (kernels.size() != retained.size())
                     return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
-                *activation = std::move(cooked.front());
+                std::ranges::move(kernels, retained.begin());
             }
             return Outcome::Success({std::move(route), supported.Value(), manifest.Digest()});
         }
@@ -184,34 +203,64 @@ namespace Horo::Editor {
             return ReadArtifact(files, root, *found, maximum);
         }
 
-        /** @brief Checks a declared guide family from exact signed bytes before inspection advertises it. */
-        Result<bool> VerifyTemporalGuides(const DurableFileSystem &files, const std::filesystem::path &root,
-                                          const Release::ReleaseArtifactManifest &manifest) {
-            using Outcome = Result<bool>;
+        /** @brief Loads a same-operation shader pair through the exact signed length and digest checks. */
+        Result<EditorSignedProviderShader> LoadSignedProviderShader(const DurableFileSystem &files, const std::filesystem::path &root,
+                                                                    const Release::ReleaseArtifactManifest &manifest,
+                                                                    std::string_view payloadPath, std::string_view reflectionPath) {
+            using Outcome = Result<EditorSignedProviderShader>;
             using namespace NativeReconstructionRelease;
-            constexpr std::array guides{std::pair{EditorVulkanTemporalInput::LinearDepth, TemporalDepthPrefix},
-                                        std::pair{EditorVulkanTemporalInput::Motion, TemporalMotionPrefix}};
+            auto payload = ReadSignedAsset(files, root, manifest, payloadPath, MaximumPayloadBytes);
+            if (payload.HasError())
+                return Outcome::Failure(payload.ErrorValue());
+            auto reflection = ReadSignedAsset(files, root, manifest, reflectionPath, MaximumReflectionBytes);
+            if (reflection.HasError())
+                return Outcome::Failure(reflection.ErrorValue());
+            return Outcome::Success({std::move(payload).Value(), std::move(reflection).Value()});
+        }
+
+        /** @brief Returns one exact signed temporal guide after validating its shader and reflected binding contract. */
+        Result<EditorSignedProviderShader> LoadTemporalGuide(const DurableFileSystem &files, const std::filesystem::path &root,
+                                                             const Release::ReleaseArtifactManifest &manifest,
+                                                             EditorVulkanTemporalInput input, std::string_view name) {
+            const std::string prefix{name};
+            auto guide = LoadSignedProviderShader(files, root, manifest, prefix + ".horoshdr", prefix + ".reflection.json");
+            if (guide.HasError())
+                return guide;
+            if (const auto validated = ValidateEditorVulkanTemporalInputCook(input, guide.Value().payload, guide.Value().reflection);
+                validated.HasError())
+                return Result<EditorSignedProviderShader>::Failure(validated.ErrorValue());
+            return guide;
+        }
+
+        struct TemporalGuides final {
+            EditorSignedProviderShader linearDepth;
+            EditorSignedProviderShader motion;
+        };
+
+        /** @brief Returns both authenticated guides together so callers never retain an incomplete pair. */
+        Result<TemporalGuides> LoadTemporalGuides(const DurableFileSystem &files, const std::filesystem::path &root,
+                                                  const Release::ReleaseArtifactManifest &manifest) {
+            using Outcome = Result<TemporalGuides>;
+            using namespace NativeReconstructionRelease;
+            auto depth = LoadTemporalGuide(files, root, manifest, EditorVulkanTemporalInput::LinearDepth, TemporalDepthPrefix);
+            if (depth.HasError())
+                return Outcome::Failure(depth.ErrorValue());
+            auto motion = LoadTemporalGuide(files, root, manifest, EditorVulkanTemporalInput::Motion, TemporalMotionPrefix);
+            if (motion.HasError())
+                return Outcome::Failure(motion.ErrorValue());
+            return Outcome::Success({std::move(depth).Value(), std::move(motion).Value()});
+        }
+
+        /** @brief Detects a guide declaration without treating an entirely absent optional family as broken. */
+        bool DeclaresTemporalGuides(const Release::ReleaseArtifactManifest &manifest) {
+            using namespace NativeReconstructionRelease;
             const auto inventory = manifest.Artifacts();
-            const auto declares = [&inventory](const auto &guide) {
-                const std::string prefix{guide.second};
+            const auto declares = [&inventory](std::string_view name) {
+                const std::string prefix{name};
                 return std::ranges::find(inventory, prefix + ".horoshdr", &Release::ReleaseArtifactRecord::path) != inventory.end() ||
                        std::ranges::find(inventory, prefix + ".reflection.json", &Release::ReleaseArtifactRecord::path) != inventory.end();
             };
-            if (!std::ranges::any_of(guides, declares))
-                return Outcome::Success(false);
-            for (const auto &[input, name] : guides) {
-                const std::string prefix{name};
-                const auto payload = ReadSignedAsset(files, root, manifest, prefix + ".horoshdr", MaximumPayloadBytes);
-                if (payload.HasError())
-                    return Outcome::Failure(payload.ErrorValue());
-                const auto reflection = ReadSignedAsset(files, root, manifest, prefix + ".reflection.json", MaximumReflectionBytes);
-                if (reflection.HasError())
-                    return Outcome::Failure(reflection.ErrorValue());
-                if (const auto validated = ValidateEditorVulkanTemporalInputCook(input, payload.Value(), reflection.Value());
-                    validated.HasError())
-                    return Outcome::Failure(validated.ErrorValue());
-            }
-            return Outcome::Success(true);
+            return declares(TemporalDepthPrefix) || declares(TemporalMotionPrefix);
         }
     }  // namespace
 
@@ -255,7 +304,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc InspectEditorImageProvider */
-    Result<EditorImageProviderAvailability> InspectEditorImageProvider(RenderFrontend &frontend,
+    Result<EditorImageProviderAvailability> InspectEditorImageProvider(const RenderFrontend &frontend,
                                                                        const EditorImageProviderInspection &request,
                                                                        const EditorProviderProductIdentity &expected,
                                                                        const DurableFileSystem &files,
@@ -268,13 +317,12 @@ namespace Horo::Editor {
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
             auto route = QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot);
-            if (route.HasError() || request.mode != ReconstructionKind::Temporal)
+            if (route.HasError() || request.mode != ReconstructionKind::Temporal || !DeclaresTemporalGuides(manifest.Value()))
                 return route;
-            const auto verified = VerifyTemporalGuides(files, request.productRoot, manifest.Value());
-            if (verified.HasError())
-                return Outcome::Failure(verified.ErrorValue());
+            if (const auto guides = LoadTemporalGuides(files, request.productRoot, manifest.Value()); guides.HasError())
+                return Outcome::Failure(guides.ErrorValue());
             auto report = std::move(route).Value();
-            report.temporalGuidesVerified = verified.Value();
+            report.temporalGuidesVerified = true;
             return Outcome::Success(std::move(report));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
@@ -282,7 +330,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc LoadEditorSignedSpatialProvider */
-    Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(RenderFrontend &frontend,
+    Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(const RenderFrontend &frontend,
                                                                         const EditorImageProviderInspection &request,
                                                                         const EditorProviderProductIdentity &expected,
                                                                         const DurableFileSystem &files,
@@ -294,23 +342,59 @@ namespace Horo::Editor {
             const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
-            auto payload =
-                ReadSignedAsset(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearPayloadPath,
-                                NativeReconstructionRelease::MaximumPayloadBytes);
-            if (payload.HasError())
-                return Outcome::Failure(payload.ErrorValue());
-            auto reflection =
-                ReadSignedAsset(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearReflectionPath,
-                                NativeReconstructionRelease::MaximumReflectionBytes);
-            if (reflection.HasError())
-                return Outcome::Failure(reflection.ErrorValue());
+            auto scene =
+                LoadSignedProviderShader(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearPayloadPath,
+                                         NativeReconstructionRelease::SceneLinearReflectionPath);
+            if (scene.HasError())
+                return Outcome::Failure(scene.ErrorValue());
             EditorSignedSpatialProvider admitted{};
-            const auto route = QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot, &admitted.kernel);
+            const auto route =
+                QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot, std::span{&admitted.kernel, 1});
             if (route.HasError())
                 return Outcome::Failure(route.ErrorValue());
-            admitted.scenePayload = std::move(payload).Value();
-            admitted.sceneReflection = std::move(reflection).Value();
+            if (route.Value().support.readiness != ImageProviderReadiness::Ready)
+                return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+            auto shader = std::move(scene).Value();
+            admitted.scenePayload = std::move(shader.payload);
+            admitted.sceneReflection = std::move(shader.reflection);
             return Outcome::Success(std::move(admitted));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
+        }
+    }
+
+    /** @copydoc LoadEditorSignedTemporalProvider */
+    Result<EditorSignedTemporalProvider> LoadEditorSignedTemporalProvider(const RenderFrontend &frontend,
+                                                                          const EditorImageProviderInspection &request,
+                                                                          const EditorProviderProductIdentity &expected,
+                                                                          const DurableFileSystem &files,
+                                                                          const Security::ArtifactVerifier &verifier) {
+        using Outcome = Result<EditorSignedTemporalProvider>;
+        using namespace NativeReconstructionRelease;
+        if (request.activateSpatial || request.mode != ReconstructionKind::Temporal)
+            return Outcome::Failure(MakeError(InvalidRequest));
+        try {
+            const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
+            if (manifest.HasError())
+                return Outcome::Failure(manifest.ErrorValue());
+            auto scene =
+                LoadSignedProviderShader(files, request.productRoot, manifest.Value(), SceneLinearPayloadPath, SceneLinearReflectionPath);
+            if (scene.HasError())
+                return Outcome::Failure(scene.ErrorValue());
+            if (const auto shader = LoadEditorVulkanSceneLinearCook(scene.Value().payload, scene.Value().reflection); shader.HasError())
+                return Outcome::Failure(shader.ErrorValue());
+            auto guides = LoadTemporalGuides(files, request.productRoot, manifest.Value());
+            if (guides.HasError())
+                return Outcome::Failure(guides.ErrorValue());
+            std::array<CookedNativeReconstructionKernel, 2> kernels;
+            auto route = QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot, kernels);
+            if (route.HasError())
+                return Outcome::Failure(route.ErrorValue());
+            auto report = std::move(route).Value();
+            report.temporalGuidesVerified = true;
+            auto shaders = std::move(guides).Value();
+            return Outcome::Success({std::move(report), std::move(kernels), std::move(scene).Value(), std::move(shaders.linearDepth),
+                                     std::move(shaders.motion)});
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
         }
