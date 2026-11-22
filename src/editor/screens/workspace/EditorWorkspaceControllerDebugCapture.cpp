@@ -70,6 +70,7 @@ namespace Horo::Editor {
                 return !lifetime.IsCancellationRequested() && viewport->CancelImageCapture(id);
             };
         }
+        endpoint.lifetime = lifetime;
         m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(std::move(endpoint));
         return m_debugCaptureEndpoint;
     }

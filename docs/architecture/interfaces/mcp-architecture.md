@@ -796,7 +796,8 @@ same authenticated session and source revision. A prepared pixel chunk can be
 collected once through `operations/get` while the source still owns it. To retry
 a lost delivery, request the same byte offset again while the capture is live.
 `debug.cancel_image` requires exact approval and withdraws pending or ready
-images. Workspace retirement, a source change, or loss of authority
+images. Workspace retirement also revokes chunks already prepared for delivery
+without waiting for another render frame. A source change or loss of authority
 withdraws the image.
 
 Call `viewport.image_source` with an empty argument object before requesting a

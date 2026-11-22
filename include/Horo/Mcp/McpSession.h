@@ -71,10 +71,11 @@ namespace Horo::Mcp {
     struct McpResultLease {
         std::weak_ptr<const void> owner;                 /**< Thread-safe liveness observation of an application-owned lease. */
         std::chrono::steady_clock::time_point expiresAt; /**< Result delivery deadline on the local monotonic clock. */
+        CancellationToken cancellation;                  /**< Optional application owner revocation independent of renderer progress. */
 
         /** @brief Returns whether the source still allows delivery. */
         [[nodiscard]] bool IsLive() const noexcept {
-            return std::chrono::steady_clock::now() < expiresAt && !owner.expired();
+            return !cancellation.IsCancellationRequested() && std::chrono::steady_clock::now() < expiresAt && !owner.expired();
         }
     };
 

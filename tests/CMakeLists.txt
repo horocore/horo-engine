@@ -4885,6 +4885,11 @@ target_link_libraries(HoroAssetSceneDropTests PRIVATE HoroEngine::EditorRenderEx
 add_executable(HoroEditorViewportResourceTests
         unit/editor/EditorViewportResourcesTests.cpp
 )
+if (TARGET HoroGui)
+    target_compile_definitions(HoroEditorViewportResourceTests PRIVATE HORO_TEST_VIEWPORT_MCP=1)
+    target_link_libraries(HoroEditorViewportResourceTests PRIVATE HoroEngine::Gui HoroEngine::AISceneIntegration
+        HoroEngine::DecisionCookHost HoroMcpEditorCommandsInternal HoroEngine::McpController)
+endif ()
 if (TARGET HoroEditorViewportOpenGL)
     target_sources(HoroEditorViewportResourceTests PRIVATE unit/editor/OpenGLViewportImageCaptureTests.cpp)
     target_include_directories(HoroEditorViewportResourceTests PRIVATE "${PROJECT_SOURCE_DIR}/src")

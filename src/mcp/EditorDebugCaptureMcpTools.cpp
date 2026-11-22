@@ -218,7 +218,7 @@ namespace Horo::Editor {
             if (!artifact || artifact->region != owner.region || artifact->rgba.size() != artifact->region.Bytes() ||
                 offset >= artifact->rgba.size())
                 return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
-            if (!context.BindResultLease({image->publication, image->expiresAt}))
+            if (!context.BindResultLease({image->publication, image->expiresAt, endpoint.lifetime}))
                 return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
 
             const auto bytes = artifact->rgba.size();

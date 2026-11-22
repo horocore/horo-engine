@@ -12,6 +12,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 
+#ifdef HORO_TEST_VIEWPORT_MCP
+#include "../mcp/McpAuthorizationTestSupport.h"
+#include "EditorCommandMcpSession.h"
+#include "Horo/Mcp/McpInProcessAdapter.h"
+#include "editor/screens/workspace/EditorWorkspaceController.h"
+#endif
+
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
@@ -98,7 +105,171 @@ namespace {
             return {.meshResources = resources};
         }
     };
+
+#ifdef HORO_TEST_VIEWPORT_MCP
+    /** @brief Exercises the production graph capture owner with a deterministic readback port. */
+    class GraphCaptureViewport final : public IEditorViewportRenderer {
+    public:
+        GraphCaptureViewport(RenderFrontend &frontend, EditorViewportResources &resources)
+            : frontend_(frontend), resources_(resources), extent_(resources.AllocatedExtent()) {}
+
+        ~GraphCaptureViewport() override {
+            capture_.Shutdown(frontend_);
+        }
+
+        Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region, std::function<bool()> authorized) override {
+            ++requests;
+            return capture_.Request(Source(), region, std::move(authorized));
+        }
+
+        std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override {
+            return capture_.Read(id, Source());
+        }
+
+        bool CancelImageCapture(std::uint64_t id) noexcept override {
+            return capture_.Cancel(id);
+        }
+
+        /** @brief Drive accepted staging without depending on a physical GPU. */
+        void CompleteFrame() {
+            const EditorGraphViewportImageCapture::Readback readback{nullptr, [](void *, std::uint64_t, RenderTimelinePoint,
+                                                                                 std::span<std::byte> pixels) {
+                std::ranges::fill(pixels, std::byte{0x42});
+                return Result<bool>::Success(true);
+            }};
+            capture_.Prepare(frontend_, Source(), readback);
+            REQUIRE(capture_.Pending());
+            capture_.Recorded();
+            capture_.Finish(true);
+            capture_.Prepare(frontend_, Source(), readback);
+        }
+
+        Result<void> ExecutePreparedFrame(RenderFrameScope &, std::span<const RenderPassDescriptor>) override {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
+        }
+
+        Result<void> ExecuteStaticMeshPass(const StaticMeshPassDescriptor &) override {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
+        }
+
+        void RequestExtent(EditorViewportExtent extent) noexcept override {
+            extent_ = extent;
+        }
+
+        void RequestGrid(const EditorViewportGridOptions &) noexcept override {}
+
+        void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &) noexcept override {}
+
+        EditorViewportExtent RequestedExtent() const noexcept override {
+            return extent_;
+        }
+
+        Math::ClipDepthRange ClipDepthRange() const noexcept override {
+            return Math::ClipDepthRange::ZeroToOne;
+        }
+
+        EditorViewportTextureView TextureView() const noexcept override {
+            return {};
+        }
+
+        bool IsReady() const noexcept override {
+            return resources_.IsReady();
+        }
+
+        std::size_t requests{};
+
+    private:
+        EditorGraphViewportImageCapture::Source Source() const {
+            return {resources_.Target(), resources_.PresentationTexture(), {extent_.width, extent_.height}};
+        }
+
+        RenderFrontend &frontend_;
+        EditorViewportResources &resources_;
+        EditorViewportExtent extent_;
+        EditorGraphViewportImageCapture capture_;
+    };
+#endif
 }  // namespace
+
+#ifdef HORO_TEST_VIEWPORT_MCP
+TEST_CASE("Approved viewport pixels are published through the workspace and withdrawn on retirement",
+          "[unit][editor][mcp][graph-image-capture]") {
+    using Json = nlohmann::json;
+    using namespace Horo::Mcp;
+    auto frontend = CreateFrontend();
+    ImageResolverFixture resolver;
+    auto resources = CreateResources(*frontend);
+    SettleResources(resources, *frontend, {}, {64, 32});
+    GraphCaptureViewport viewport{*frontend, resources};
+
+    CancellationSource process;
+    Runtime::RuntimeSceneService scenes;
+    EditorWorkspaceController workspace{"test-project", scenes, {}};
+    REQUIRE(scenes.Startup(process.Token()).HasValue());
+    const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, process.Token()};
+    REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+    workspace.SynchronizeRuntimeScenePreview();
+    auto opened = EditorCommandMcpSession::Create({.debugCapture = workspace.BindDebugCapture("project-one", 3, &viewport)},
+                                                  {"viewport-client", "project-one", 3, {"editor.debug.capture"}},
+                                                  Test::Authorization());
+    REQUIRE(opened.HasValue());
+    auto &session = *opened.Value();
+    const auto client = session.Client();
+    const auto command = [](const char *name, Json arguments = Json::object()) {
+        return McpRequest{.id = name, .method = "tools/call", .params = {{"name", name}, {"arguments", std::move(arguments)}}};
+    };
+    const auto approve = [&](const McpRequest &request) {
+        const auto challenge = session.RequestApproval(request);
+        REQUIRE(challenge.HasValue());
+        REQUIRE(session.Decide(challenge.Value(), true).HasValue());
+    };
+    const auto submit = [&](const McpRequest &request) {
+        const auto accepted = client->Call(request);
+        REQUIRE(accepted.HasValue());
+        REQUIRE(session.Pump().HasValue());
+        return McpRequest{.id = "image-result",
+                          .method = "operations/get",
+                          .params = {{"operationId", accepted.Value().at("operationId")}}};
+    };
+    const auto execute = [&](const McpRequest &request) {
+        auto completed = client->Call(submit(request));
+        REQUIRE(completed.HasValue());
+        return std::move(completed).Value();
+    };
+
+    Json crop{{"source", execute(command("viewport.image_source")).at("result")}, {"x", 4}, {"y", 3}, {"width", 2}, {"height", 1}};
+    const auto stale = command("viewport.capture_image", crop);
+    CHECK(client->Call(stale).HasError());
+    approve(stale);
+    EditorWorkspaceViewCommandData navigate;
+    navigate.command = EditorWorkspaceViewCommand::NavigateViewport;
+    navigate.viewportNavigationPayload = EditorViewportNavigationDelta{.yawRadians = 0.2F};
+    workspace.ProcessCommand(navigate);
+    CHECK(execute(stale).at("status") == "failed");
+    CHECK(viewport.requests == 0);
+
+    crop["source"] = execute(command("viewport.image_source")).at("result");
+    const auto request = command("viewport.capture_image", crop);
+    approve(request);
+    const auto started = execute(request);
+    REQUIRE(started.at("status") == "succeeded");
+    REQUIRE(viewport.requests == 1);
+    const auto read = command("debug.get_image", started.at("result"));
+    CHECK(execute(read).at("result").at("phase") == "pending");
+    viewport.CompleteFrame();
+    const auto delivery = submit(read);
+    const auto ready = client->Call(delivery);
+    REQUIRE(ready.HasValue());
+    CHECK(ready.Value().at("result").at("data") == "4242424242424242");
+    CHECK(client->Call(delivery).HasError());
+
+    const auto pendingDelivery = submit(read);
+    workspace.RevokeWorkspaceCommands();
+    CHECK(client->Call(pendingDelivery).HasError());
+    REQUIRE(session.Close().HasValue());
+    resources.Shutdown();
+}
+#endif
 
 TEST_CASE("Graph viewport observes a copy without a timeline only after frame acceptance", "[unit][editor][graph-image-capture]") {
     auto frontend = CreateFrontend();
