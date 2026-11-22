@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -352,6 +353,39 @@ TEST_CASE("Cloud credentials stay referenced and are required before dispatch", 
     }, {});
     REQUIRE(outcome.error->code == ModelErrorCode::CredentialUnavailable);
     REQUIRE(outcome.error->message.find("missing-ref") == std::string::npos);
+}
+
+TEST_CASE("Cloud credential lookup respects cancellation and sanitizes backend errors", "[agent][model][credentials]") {
+    constexpr auto sensitive = "private lookup detail";
+    unsigned lookups{};
+    auto provider = CreateOpenAIModelProvider({Endpoint(), "opaque-ref", std::chrono::milliseconds{2000}},
+                                              [&lookups](std::string_view) -> std::optional<std::string> {
+        ++lookups;
+        throw std::runtime_error("private lookup detail");
+    });
+    std::stop_source operation;
+    bool delivered{};
+    const auto sink = [&delivered](const ModelEvent &) {
+        delivered = true;
+        return true;
+    };
+    auto code = ModelErrorCode::CredentialUnavailable;
+    SECTION("cancelled operations do not resolve a credential") {
+        operation.request_stop();
+        code = ModelErrorCode::Cancelled;
+    }
+    SECTION("lookup exceptions are represented by the same redacted error as revoked credentials") {}
+
+    const auto discovery = provider->Discover(operation.get_token());
+    const auto generation = provider->Stream(Request("normal"), sink, operation.get_token());
+    REQUIRE(discovery.outcome.error);
+    REQUIRE(generation.error);
+    CHECK(discovery.outcome.error->code == code);
+    CHECK(generation.error->code == code);
+    CHECK(discovery.outcome.error->message.find(sensitive) == std::string::npos);
+    CHECK(generation.error->message.find(sensitive) == std::string::npos);
+    CHECK_FALSE(delivered);
+    CHECK(lookups == (operation.stop_requested() ? 0U : 2U));
 }
 
 TEST_CASE("Real adapters reject unconfirmed tool support before network dispatch", "[agent][model]") {

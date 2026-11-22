@@ -359,6 +359,10 @@ namespace Horo::Agent {
                                             {},
                                             m_protocol == Protocol::Ollama ? ModelResidency::OnDevice : ModelResidency::External,
                                             m_protocol == Protocol::Ollama ? ModelCostClass::LocalCompute : ModelCostClass::Metered};
+                if (cancellation.stop_requested()) {
+                    discovery.outcome = {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
+                    return discovery;
+                }
                 std::string body;
                 SensitiveCredential credential{ResolveCredential()};
                 if (credential.Invalid()) {
@@ -396,6 +400,8 @@ namespace Horo::Agent {
                     return admitted;
                 if (!sink)
                     return {ModelError{ModelErrorCode::InvalidRequest, "Model event sink is required", std::nullopt}};
+                if (cancellation.stop_requested())
+                    return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
                 const Json payload = RequestJson(request, m_protocol);
                 if (payload.is_null())
                     return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool schema or conversation history", std::nullopt}};
@@ -421,13 +427,18 @@ namespace Horo::Agent {
             }
 
         private:
+            /** @brief Treat a failed cloud lookup as unavailable without carrying provider diagnostics or copying the secret. */
             std::optional<std::string> ResolveCredential() const {
                 if (m_protocol == Protocol::Ollama)
                     return std::nullopt;
                 if (m_config.credentialReference.empty() || !m_resolver)
                     return std::string{};
-                auto credential = m_resolver(m_config.credentialReference);
-                return credential.value_or(std::string{});
+                try {
+                    auto credential = m_resolver(m_config.credentialReference);
+                    return std::move(credential).value_or(std::string{});
+                } catch (...) {  // Credential backends can throw diagnostics containing sensitive material.
+                    return std::string{};
+                }
             }
 
             Protocol m_protocol;
