@@ -106,6 +106,56 @@ return {
             generation.reset();
         }
 
+        TEST_CASE("Lua decision recook replaces the active VM at a tick boundary and releases both generations",
+                  "[ai][decision-node][lua]") {
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            auto original = Program();
+            auto originalGeneration = original->Acquire().Value();
+            const std::weak_ptr<const DecisionNodeGeneration> originalLease = originalGeneration;
+            auto instance = Instance(fixture, originalGeneration);
+            REQUIRE(fixture.Evaluate(*instance, 1) == AiTaskState::Running);
+
+            auto replacement = Program(R"(
+                return {
+                    role = "task",
+                    start = function() return 1 end,
+                    resume = function() return 2 end,
+                    abort = function() end,
+                    cleanup = function() end
+                }
+            )");
+            auto replacementGeneration = replacement->Acquire().Value();
+            const std::weak_ptr<const DecisionNodeGeneration> replacementLease = replacementGeneration;
+            const auto plan = BehaviorTreeExecutionPlan::Compile(Bindings(fixture, *replacementGeneration), MakeIdentity<DecisionNodeId>(1),
+                                                                 fixture.nodes);
+            REQUIRE(plan.HasValue());
+            auto executor = replacementGeneration->CreateExecutor(replacementGeneration, *plan.Value(), {});
+            REQUIRE(executor.HasValue());
+
+            original->Retire();
+            CHECK(original->Acquire().HasError());
+            original.reset();
+            originalGeneration.reset();
+            CHECK_FALSE(originalLease.expired());
+            const auto replaced = instance->Replace(plan.Value(), std::move(executor).Value());
+            REQUIRE(replaced.HasValue());
+            CHECK_FALSE(replaced.Value());
+            CHECK(originalLease.expired());
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            TestSupport::ExpectError(instance->Evaluate(1, snapshot.Value(), fixture.agent), AIErrors::TaskTransitionInvalid);
+            REQUIRE(fixture.Evaluate(*instance, 2) == AiTaskState::Running);
+            CHECK(fixture.Evaluate(*instance, 3) == AiTaskState::Succeeded);
+
+            replacement->Retire();
+            replacement.reset();
+            replacementGeneration.reset();
+            CHECK_FALSE(replacementLease.expired());
+            instance->Shutdown();
+            instance.reset();
+            CHECK(replacementLease.expired());
+        }
+
         TEST_CASE("Lua decision metadata rejects unsupported fields types holes and enum wraparound", "[ai][decision-node][lua]") {
             const std::array sources{"return {role='unknown'}",
                                      "return {role='task'}",
