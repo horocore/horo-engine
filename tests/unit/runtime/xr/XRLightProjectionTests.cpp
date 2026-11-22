@@ -137,9 +137,16 @@ namespace Horo::XR {
         auto projection = std::move(created).Value();
         const auto valid = Estimate(scope, 100);
         REQUIRE(projection.Update(scope, Make<XRRuntimeTime>(101), &valid).Value());
-        auto overLimit = Estimate(scope, 102);
-        overLimit.directional->intensity.relativeRgb.x = 100.0F;
-        RequireFailureIdentity(projection.Update(scope, Make<XRRuntimeTime>(102), &overLimit), XRErrors::OperationInvalid);
+        SECTION("a new timestamp cannot publish one valid lobe from an invalid estimate") {
+            auto invalidChannels = Estimate(scope, 102);
+            invalidChannels.directional->intensity.relativeRgb.x = 100.0F;
+            RequireFailureIdentity(projection.Update(scope, Make<XRRuntimeTime>(102), &invalidChannels), XRErrors::OperationInvalid);
+        }
+        SECTION("an invalid repeated timestamp clears the held estimate") {
+            auto invalidChannels = valid;
+            invalidChannels.ambient->relativeRgb.x = -1.0F;
+            RequireFailureIdentity(projection.Update(scope, Make<XRRuntimeTime>(102), &invalidChannels), XRErrors::OperationInvalid);
+        }
         CHECK_FALSE(projection.Update(scope, Make<XRRuntimeTime>(103), &valid).Value());
     }
 }  // namespace Horo::XR

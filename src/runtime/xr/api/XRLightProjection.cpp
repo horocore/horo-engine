@@ -131,13 +131,13 @@ namespace Horo::XR {
         if (!timestamp.IsValid() || timestamp > now || timestamp < lastSample_ ||
             now.Nanoseconds() - timestamp.Nanoseconds() > policy_.maximumAge.ToNanoseconds())
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        auto next = Project(*estimate, policy_);
+        if (next.HasError())
+            return Outcome::Failure(next.ErrorValue());
         if (timestamp == lastSample_) {
             current_ = RetainRepeatedObservation(std::move(previous), *estimate);
             return Outcome::Success(current_);
         }
-        auto next = Project(*estimate, policy_);
-        if (next.HasError())
-            return Outcome::Failure(next.ErrorValue());
         auto projected = std::move(next).Value();
         if (projected.ambient || projected.directional) {
             const auto gap = timestamp.Nanoseconds() - lastSample_.Nanoseconds();
