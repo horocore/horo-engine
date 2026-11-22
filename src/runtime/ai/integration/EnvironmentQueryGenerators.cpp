@@ -154,15 +154,14 @@ namespace Horo::AI {
         }
 
         /** @brief Recognizes the source shape admitted by native point-lattice authoring. */
-        bool HasBuiltinPointStages(const EnvironmentQueryAsset &asset, const bool allowSurface = false) {
+        bool HasBuiltinPointStages(const EnvironmentQueryAsset &asset) {
             const auto stages = asset.Stages();
             const auto first = std::ranges::min_element(stages, {}, &QueryAssetStage::executionOrder);
             if (first == stages.end() || first->kind != QueryStageKind::Generator ||
                 asset.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
                 return false;
             const auto generator = first->generator.Value();
-            if (generator != LatticeGenerator && generator != AuthoredPointGenerator &&
-                (!allowSurface || generator != NavigationSurfaceGenerator))
+            if (generator != LatticeGenerator && generator != AuthoredPointGenerator && generator != NavigationSurfaceGenerator)
                 return false;
             return std::ranges::all_of(stages, [first](const QueryAssetStage &stage) {
                 constexpr std::array tests{PointDistanceTest, PointVisibilityTest, PointNavigationTest};
@@ -335,8 +334,6 @@ namespace Horo::AI {
             return Generation::Success(SampleLattice(point, lattice, output.provenance, output.items.first(output.maximumItems)));
         }
 
-        using PointCandidates = std::variant<BuiltinDetachedPointCandidates, std::unique_ptr<const IBuiltinPointGenerator>>;
-
         Generation PublishAuthoredPoints(const AuthoredPoints &points, const QueryGeneratorOutput &output) {
             return GenerateQueryPoints(std::span{points.values}.first(points.count), output);
         }
@@ -356,13 +353,12 @@ namespace Horo::AI {
         /** @brief Evaluates detached native point kernels on the simulation owner under declared work bounds. */
         class PointOwnerSource final : public IOwnerQueryExecutionSource {
         public:
-            PointOwnerSource(const Runtime::RuntimeSceneView &scene, PointCandidates candidates, std::vector<PointOwnerTest> tests,
-                             QueryOwnerWorkLimits limits)
+            PointOwnerSource(const Runtime::RuntimeSceneView &scene, BuiltinPointQueryCandidates candidates,
+                             std::vector<PointOwnerTest> tests, QueryOwnerWorkLimits limits)
                 : IOwnerQueryExecutionSource(limits), scene_(scene), candidates_(std::move(candidates)), tests_(std::move(tests)) {}
 
             [[nodiscard]] bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
-                const auto *provider = std::get_if<std::unique_ptr<const IBuiltinPointGenerator>>(&candidates_);
-                return inputs.contexts->MatchesScene(scene_) && (!provider || (*provider)->IsCurrent(scene_));
+                return inputs.contexts->MatchesScene(scene_) && candidates_.IsCurrent(scene_);
             }
 
         private:
@@ -371,9 +367,7 @@ namespace Horo::AI {
                 if (!budget.Consume(WorkLimits().generationUnits))
                     return OwnerFailure<QueryGenerationResult>(AIErrors::SchedulerBudgetExhausted);
                 try {
-                    if (const auto *provider = std::get_if<std::unique_ptr<const IBuiltinPointGenerator>>(&candidates_))
-                        return (*provider)->Generate(scene_, inputs, output);
-                    return std::get<BuiltinDetachedPointCandidates>(candidates_).Generate(output);
+                    return candidates_.Generate(scene_, inputs, output);
                 } catch (const std::bad_alloc &) {
                     return OwnerFailure<QueryGenerationResult>(AIErrors::EnvironmentQueryLimitExceeded);
                 }
@@ -395,7 +389,7 @@ namespace Horo::AI {
             }
 
             Runtime::RuntimeSceneView scene_;
-            PointCandidates candidates_;
+            BuiltinPointQueryCandidates candidates_;
             std::vector<PointOwnerTest> tests_;
         };
 
@@ -439,20 +433,29 @@ namespace Horo::AI {
         }
 
         struct PointOwnerCandidates final {
-            BuiltinDetachedPointCandidates values;
+            BuiltinPointQueryCandidates values;
             QueryGeneratorProvenance provenance;
         };
 
         Result<PointOwnerCandidates> CapturePointCandidates(const QueryPlanStage &stage, const QueryItemTypeId itemType,
-                                                            const QueryContextSnapshot &contexts, const QuerySchemaRegistry &registry) {
+                                                            const QueryContextSnapshot &contexts, const QuerySchemaRegistry &registry,
+                                                            const LivePointQueryGenerator *live = nullptr) {
             using Capture = Result<PointOwnerCandidates>;
+            if (live) {
+                const auto &provenance = live->provenance;
+                if (stage.generator.Value() != NavigationSurfaceGenerator || !live->source || provenance.stage != stage.id ||
+                    provenance.generator != stage.generator || provenance.provider != BuiltinOrigin().provider)
+                    return Capture::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+                return Capture::Success({{*live}, provenance});
+            }
             if (stage.generator.Value() != AuthoredPointGenerator) {
                 const auto lattice = CapturePointOwnerGenerator(stage, itemType, contexts, registry);
                 if (lattice.HasError())
                     return Capture::Failure(lattice.ErrorValue());
                 const auto &generator = lattice.Value();
                 return Capture::Success(
-                    {{BuiltinDetachedPointCandidates::Lattice{generator.lattice, generator.center}}, generator.provenance});
+                    {{BuiltinDetachedPointCandidates{BuiltinDetachedPointCandidates::Lattice{generator.lattice, generator.center}}},
+                     generator.provenance});
             }
             const auto *descriptor = registry.Find(stage.generator);
             const auto *item = registry.Find(itemType);
@@ -462,8 +465,8 @@ namespace Horo::AI {
             auto points = CaptureAuthoredPoints(stage);
             if (points.HasError())
                 return Capture::Failure(points.ErrorValue());
-            return Capture::Success(
-                {{std::move(points).Value()}, {stage.id, descriptor->id, descriptor->origin.provider, contexts.Revision()}});
+            return Capture::Success({{BuiltinDetachedPointCandidates{std::move(points).Value()}},
+                                     {stage.id, descriptor->id, descriptor->origin.provider, contexts.Revision()}});
         }
 
         /** @brief Validated native distance kernels and their scoring rules before admission. */
@@ -670,7 +673,7 @@ namespace Horo::AI {
     Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &asset, QueryStageId stage,
                                                               QueryPointDistanceTest settings) {
         using Edited = Result<EnvironmentQueryAsset>;
-        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || !HasBuiltinPointStages(asset, true))
+        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || !HasBuiltinPointStages(asset))
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         const auto stages = asset.Stages();
         const auto last = std::ranges::max_element(stages, {}, &QueryAssetStage::executionOrder);
@@ -732,9 +735,32 @@ namespace Horo::AI {
         return PublishAuthoredPoints(std::get<Authored>(source), output);
     }
 
+    bool BuiltinPointQueryCandidates::IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept {
+        const auto *live = std::get_if<LivePointQueryGenerator>(&source);
+        return !live || (live->source && live->source->IsCurrent(scene));
+    }
+
+    std::size_t BuiltinPointQueryCandidates::WorkUnits() const noexcept {
+        if (const auto *live = std::get_if<LivePointQueryGenerator>(&source))
+            return live->workUnits;
+        return std::get<BuiltinDetachedPointCandidates>(source).WorkUnits();
+    }
+
+    Result<QueryGenerationResult> BuiltinPointQueryCandidates::Generate(const Runtime::RuntimeSceneView &scene,
+                                                                        const QueryExecutionInputs &inputs,
+                                                                        const QueryGeneratorOutput &output) const {
+        if (const auto *live = std::get_if<LivePointQueryGenerator>(&source)) {
+            if (!live->source)
+                return Generation::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            return live->source->Generate(scene, inputs, output);
+        }
+        return std::get<BuiltinDetachedPointCandidates>(source).Generate(output);
+    }
+
     /** @copydoc CaptureBuiltinPointVisibility */
     Result<BuiltinPointVisibilityPlan> CaptureBuiltinPointVisibility(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
-                                                                     const QueryContextSnapshot &contexts) {
+                                                                     const QueryContextSnapshot &contexts,
+                                                                     const LivePointQueryGenerator *live) {
         using Captured = Result<BuiltinPointVisibilityPlan>;
         const auto stages = plan.Stages();
         const auto *visibility = FindPointProviderTest(plan, PointVisibilityTest);
@@ -744,7 +770,7 @@ namespace Horo::AI {
         const auto *test = registry.Find(visibility->test);
         if (!test || test->origin != BuiltinOrigin())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-        auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, contexts, registry);
+        auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, contexts, registry, live);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
         const auto channel = ReadVisibilityChannel(*visibility);
@@ -788,7 +814,8 @@ namespace Horo::AI {
 
     /** @copydoc CaptureBuiltinPointNavigation */
     Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
-                                                                     const QueryContextSnapshot &contexts) {
+                                                                     const QueryContextSnapshot &contexts,
+                                                                     const LivePointQueryGenerator *live) {
         using Captured = Result<BuiltinPointNavigationPlan>;
         const auto stages = plan.Stages();
         const auto *navigation = FindPointProviderTest(plan, PointNavigationTest);
@@ -798,7 +825,7 @@ namespace Horo::AI {
         const auto *descriptor = registry.Find(path.test);
         if (!descriptor || descriptor->origin != BuiltinOrigin())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-        auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, contexts, registry);
+        auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, contexts, registry, live);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
         const auto settings = ReadNavigationSettings(path);
@@ -1050,7 +1077,8 @@ namespace Horo::AI {
                                                                            const QuerySchemaRegistry &registry,
                                                                            const Runtime::RuntimeSceneView &scene,
                                                                            QueryExecutionInputs inputs, QueryExecutionSettings settings,
-                                                                           std::span<PreparedPointQueryTest> providers) {
+                                                                           std::span<PreparedPointQueryTest> providers,
+                                                                           const LivePointQueryGenerator *live) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || inputs.contexts->Query() != plan.Id())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
@@ -1062,7 +1090,7 @@ namespace Horo::AI {
             return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, providers);
         if (providers.empty() || providers.size() + std::ranges::count_if(stages, distance) >= EnvironmentQuerySchemaLimits::Stages)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
-        const auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, *inputs.contexts, registry);
+        const auto generator = CapturePointCandidates(stages.front(), plan.ResultSchema().itemType, *inputs.contexts, registry, live);
         if (generator.HasError())
             return Admission::Failure(generator.ErrorValue());
         std::vector<PreparedPointQueryTest> tests;
@@ -1102,22 +1130,27 @@ namespace Horo::AI {
     Result<std::unique_ptr<QueryExecution>> AdmitBoundBuiltinPointQuery(const EnvironmentQueryPlan &plan,
                                                                         const QuerySchemaRegistry &registry,
                                                                         const Runtime::RuntimeSceneView &scene, QueryExecutionInputs inputs,
-                                                                        const QueryExecutionSettings settings,
-                                                                        const QueryGeneratorProvenance provenance,
-                                                                        std::unique_ptr<const IBuiltinPointGenerator> generator) {
+                                                                        QueryExecutionSettings settings,
+                                                                        const LivePointQueryGenerator &generator) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         const auto stages = plan.Stages();
-        if (!generator || stages.empty() || !inputs.contexts || !inputs.contexts->MatchesScene(scene))
+        if (!generator.source || stages.empty() || !inputs.contexts || !inputs.contexts->MatchesScene(scene))
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        if (generator.maximumCandidates > settings.maximumCandidates)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         auto tests = CapturePointOwnerTests(stages.subspan(1), *inputs.contexts, registry);
         if (tests.HasError())
             return Admission::Failure(tests.ErrorValue());
         auto scoring = QueryScoringPlan::Capture(plan, registry, tests.Value().rules, QueryScoreTieBreak::StableIndex);
         if (scoring.HasError())
             return Admission::Failure(scoring.ErrorValue());
+        settings.generatorWorkUnits = generator.workUnits;
+        settings.maximumCandidates = generator.maximumCandidates;
         const QueryOwnerWorkLimits limits{settings.generatorWorkUnits, 1U + std::bit_width(tests.Value().kernels.size())};
-        auto source = std::make_unique<PointOwnerSource>(scene, std::move(generator), std::move(tests).Value().kernels, limits);
-        return QueryExecution::AdmitDeterministic(std::move(inputs), provenance, std::move(scoring).Value(), settings, std::move(source));
+        auto source =
+            std::make_unique<PointOwnerSource>(scene, BuiltinPointQueryCandidates{generator}, std::move(tests).Value().kernels, limits);
+        return QueryExecution::AdmitDeterministic(std::move(inputs), generator.provenance, std::move(scoring).Value(), settings,
+                                                  std::move(source));
     }
 
     /** @copydoc AdmitBuiltinPointQuery */

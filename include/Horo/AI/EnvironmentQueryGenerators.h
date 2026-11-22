@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <variant>
@@ -121,6 +122,27 @@ namespace Horo::AI {
         [[nodiscard]] Result<QueryGenerationResult> Generate(const QueryGeneratorOutput &output) const;
     };
 
+    class IBuiltinPointGenerator;
+    struct QueryExecutionInputs;
+
+    /** @brief Lease on one live point generator with the declared publication and work limits. */
+    struct LivePointQueryGenerator final {
+        QueryGeneratorProvenance provenance;
+        std::shared_ptr<const IBuiltinPointGenerator> source;
+        std::size_t workUnits{};
+        std::size_t maximumCandidates{};
+    };
+
+    /** @brief Shared candidate source for native point tests. */
+    struct BuiltinPointQueryCandidates final {
+        std::variant<BuiltinDetachedPointCandidates, LivePointQueryGenerator> source;
+
+        [[nodiscard]] bool IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept;
+        [[nodiscard]] std::size_t WorkUnits() const noexcept;
+        [[nodiscard]] Result<QueryGenerationResult> Generate(const Runtime::RuntimeSceneView &scene, const QueryExecutionInputs &inputs,
+                                                             const QueryGeneratorOutput &output) const;
+    };
+
     /** @brief Captures up to @ref MaximumBuiltinAuthoredQueryPoints exact world points in authored order. */
     [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinAuthoredPointQuery(QueryId query, QueryStageId stage,
                                                                                 QueryResultSchemaId result, std::string displayName,
@@ -155,7 +177,7 @@ namespace Horo::AI {
 
     /** @brief Validated native line-of-sight plan for a bounded Physics owner batch. */
     struct BuiltinPointVisibilityPlan final {
-        BuiltinDetachedPointCandidates candidates;
+        BuiltinPointQueryCandidates candidates;
         QueryGeneratorProvenance generator;
         QueryStageId test;
         std::array<std::uint8_t, 16> channel;
@@ -167,7 +189,8 @@ namespace Horo::AI {
     /** @brief Validates exact native point generator and visibility descriptors before provider access. */
     [[nodiscard]] Result<BuiltinPointVisibilityPlan> CaptureBuiltinPointVisibility(const EnvironmentQueryPlan &plan,
                                                                                    const QuerySchemaRegistry &registry,
-                                                                                   const QueryContextSnapshot &contexts);
+                                                                                   const QueryContextSnapshot &contexts,
+                                                                                   const LivePointQueryGenerator *live = nullptr);
 
     /** @brief Adds a reachability filter with optional lower-is-better traversal cost to a lattice or authored point list.
      * @param maximumScoredCost Positive finite normalization ceiling. Omit it for reachability alone.
@@ -178,7 +201,7 @@ namespace Horo::AI {
 
     /** @brief Native lattice and one validated Navigation path stage. */
     struct BuiltinPointNavigationPlan final {
-        BuiltinDetachedPointCandidates candidates;
+        BuiltinPointQueryCandidates candidates;
         QueryGeneratorProvenance generator;
         QueryStageId test;
         std::optional<double> maximumScoredCost;
@@ -194,7 +217,8 @@ namespace Horo::AI {
     /** @brief Resolves the point generator and path stage without reading Navigation state. */
     [[nodiscard]] Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan,
                                                                                    const QuerySchemaRegistry &registry,
-                                                                                   const QueryContextSnapshot &contexts);
+                                                                                   const QueryContextSnapshot &contexts,
+                                                                                   const LivePointQueryGenerator *live = nullptr);
 
     /** @brief Removes a native point-distance stage while retaining all other source data.
      * @param lattice Detached source containing the stage. @param stage Stable identity of the test to remove.

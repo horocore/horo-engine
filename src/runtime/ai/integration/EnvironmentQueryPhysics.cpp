@@ -101,16 +101,20 @@ namespace Horo::AI {
                 : plan_(plan), scene_(scene), querier_(querier), eye_(eye), owner_(owner) {}
 
             bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
-                return inputs.contexts->MatchesScene(scene_) && (!batch_ || owner_.RetainsVisibilityAuthority(scene_, batch_->publication));
+                return inputs.contexts->MatchesScene(scene_) && plan_.candidates.IsCurrent(scene_) &&
+                       (!batch_ || owner_.RetainsVisibilityAuthority(scene_, batch_->publication));
             }
 
-            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
-                auto generated = plan_.candidates.Generate(output);
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
+                auto generated = plan_.candidates.Generate(scene_, inputs, output);
                 if (generated.HasError())
                     return generated;
-                count_ = generated.Value().itemCount;
-                for (std::size_t index = 0; index < count_; ++index)
+                const auto count = generated.Value().itemCount;
+                if (count > points_.size() || count > output.items.size())
+                    return Result<QueryGenerationResult>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+                for (std::size_t index = 0; index < count; ++index)
                     points_[index] = std::get<Math::WorldCoordinate64>(output.items[index]);
+                count_ = count;
                 return generated;
             }
 
@@ -197,11 +201,12 @@ namespace Horo::AI {
                                                                      const Runtime::RuntimeSceneView &scene, Runtime::EntityRef querier,
                                                                      const QueryExecutionInputs &inputs,
                                                                      const QueryExecutionSettings &settings,
-                                                                     IQueryPhysicsVisibilityOwner &owner) {
+                                                                     IQueryPhysicsVisibilityOwner &owner,
+                                                                     const LivePointQueryGenerator *live) {
         using Admission = Result<PreparedPointQueryTest>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || scene.Get(querier).HasError())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
-        const auto captured = CaptureBuiltinPointVisibility(plan, registry, *inputs.contexts);
+        const auto captured = CaptureBuiltinPointVisibility(plan, registry, *inputs.contexts, live);
         if (captured.HasError())
             return Admission::Failure(captured.ErrorValue());
         const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
@@ -211,9 +216,11 @@ namespace Horo::AI {
 
         const QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
         const auto capacity = std::min(settings.maximumCandidates, MaximumQueryPhysicsVisibilityRays);
+        if (live && live->maximumCandidates > capacity)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         auto source = std::make_unique<PointVisibilitySource>(captured.Value(), scene, querier, *eye, owner);
-        return Admission::Success(
-            {captured.Value().generator, rule, captured.Value().candidates.WorkUnits(), capacity, capacity, std::move(source)});
+        return Admission::Success({captured.Value().generator, rule, captured.Value().candidates.WorkUnits(),
+                                   live ? live->maximumCandidates : capacity, capacity, std::move(source)});
     }
 
     /** @copydoc QueryPhysicsProbe::~QueryPhysicsProbe */

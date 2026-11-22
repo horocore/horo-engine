@@ -100,6 +100,12 @@ namespace Horo::AI {
                                                                                        Runtime::EntityRef querier) const noexcept = 0;
     };
 
+    /** @brief Pins a cooked Navigation surface stage to the current scene and provider publication. */
+    [[nodiscard]] Result<LivePointQueryGenerator> CaptureBuiltinNavigationSurfaceGenerator(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
+        const IQueryNavigationOwner &owner);
+
     /** @brief Admits a cooked Navigation surface query with optional local point tests. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinNavigationSurfaceQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
@@ -114,5 +120,5 @@ namespace Horo::AI {
     [[nodiscard]] Result<PreparedPointQueryTest> PrepareBuiltinPointNavigationTest(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         Runtime::EntityRef querier, const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
-        const IQueryNavigationOwner &owner);
+        const IQueryNavigationOwner &owner, const LivePointQueryGenerator *live = nullptr);
 }  // namespace Horo::AI

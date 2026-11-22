@@ -1240,7 +1240,7 @@ namespace Horo::Editor {
         const bool roomForStage = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
         if (roomForStage)
             number("workspace.environment_query.new_distance_radius", "##new_distance_radius", fields.newDistanceRadius);
-        auto change = surface ? EnvironmentQueryStageChange{} : DrawEnvironmentQueryProviderStages(fields, channels);
+        auto change = DrawEnvironmentQueryProviderStages(fields, channels);
         const bool valid = fields.IsValid();
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});

@@ -111,11 +111,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> AdmitPlan(const CookedSceneQueryPlan &plan,
                                                                             const AI::AiTaskOperationContext &operation,
                                                                             std::uint64_t submitted, std::uint64_t deadline);
-        /** @brief Prepares both provider stages against the same frozen candidate context. */
-        [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> AdmitMixedPointPlan(const AI::EnvironmentQueryPlan &plan,
-                                                                                      Runtime::EntityRef querier,
-                                                                                      AI::QueryExecutionInputs inputs,
-                                                                                      AI::QueryExecutionSettings settings);
+        /** @brief Prepares declared provider stages against one frozen candidate source. */
+        [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> AdmitPointProviderPlan(const AI::EnvironmentQueryPlan &plan,
+                                                                                         Runtime::EntityRef querier,
+                                                                                         AI::QueryExecutionInputs inputs,
+                                                                                         AI::QueryExecutionSettings settings);
         /** @copydoc AI::IQueryPhysicsVisibilityOwner::RetainsVisibilityAuthority */
         [[nodiscard]] bool RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
                                                       const AI::QueryPhysicsPublication &publication) const noexcept override;

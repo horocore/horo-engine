@@ -106,11 +106,11 @@ namespace Horo::AI {
                   filter_(access.filter), probe_(access.requests) {}
 
             bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
-                return inputs.contexts->MatchesScene(scene_) && CurrentAccess().has_value();
+                return inputs.contexts->MatchesScene(scene_) && plan_.candidates.IsCurrent(scene_) && CurrentAccess().has_value();
             }
 
-            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
-                return plan_.candidates.Generate(output);
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
+                return plan_.candidates.Generate(scene_, inputs, output);
             }
 
             Result<bool> StartTest(const QueryExecutionInputs &inputs, const QueryStageId stage, const QueryGeneratedItem &item) override {
@@ -315,35 +315,44 @@ namespace Horo::AI {
         return GenerateQueryNavigationSurface({samples.Value(), completed, {}}, current->publication, output);
     }
 
+    Result<LivePointQueryGenerator> CaptureBuiltinNavigationSurfaceGenerator(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        const Runtime::EntityRef querier, const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
+        const IQueryNavigationOwner &owner) {
+        using Capture = Result<LivePointQueryGenerator>;
+        if (!inputs.contexts || inputs.contexts->Query() != plan.Id() || !inputs.contexts->MatchesScene(scene) ||
+            inputs.ownerCancellation.IsCancellationRequested())
+            return Capture::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto policy = ReadBuiltinNavigationSurface(plan, registry);
+        if (policy.HasError())
+            return Capture::Failure(policy.ErrorValue());
+        if (policy.Value().maximumCandidates > settings.maximumCandidates)
+            return Capture::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
+        const auto *center = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
+        if (!center)
+            return Capture::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+        auto surface = BoundQueryNavigationSurface::Capture(owner, scene, querier, *center, policy.Value());
+        if (surface.HasError())
+            return Capture::Failure(surface.ErrorValue());
+        const auto &stage = plan.Stages().front();
+        const QueryGeneratorProvenance provenance{stage.id, stage.generator, registry.Find(stage.generator)->origin.provider,
+                                                  surface.Value().Revision()};
+        const auto work = surface.Value().WorkUnits();
+        return Capture::Success({provenance, std::make_shared<BoundQueryNavigationSurface>(std::move(surface).Value()), work,
+                                 policy.Value().maximumCandidates});
+    }
+
     Result<std::unique_ptr<QueryExecution>> AdmitBuiltinNavigationSurfaceQuery(const EnvironmentQueryPlan &plan,
                                                                                const QuerySchemaRegistry &registry,
                                                                                const Runtime::RuntimeSceneView &scene,
                                                                                const Runtime::EntityRef querier,
                                                                                QueryExecutionInputs inputs, QueryExecutionSettings settings,
                                                                                const IQueryNavigationOwner &owner) {
-        using Admission = Result<std::unique_ptr<QueryExecution>>;
-        if (!inputs.contexts || inputs.contexts->Query() != plan.Id() || !inputs.contexts->MatchesScene(scene) ||
-            inputs.ownerCancellation.IsCancellationRequested())
-            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
-        const auto policy = ReadBuiltinNavigationSurface(plan, registry);
-        if (policy.HasError())
-            return Admission::Failure(policy.ErrorValue());
-        if (policy.Value().maximumCandidates > settings.maximumCandidates)
-            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-        const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
-        const auto *center = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
-        if (!center)
-            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
-        auto surface = BoundQueryNavigationSurface::Capture(owner, scene, querier, *center, policy.Value());
-        if (surface.HasError())
-            return Admission::Failure(surface.ErrorValue());
-        const auto &stage = plan.Stages().front();
-        const QueryGeneratorProvenance provenance{stage.id, stage.generator, registry.Find(stage.generator)->origin.provider,
-                                                  surface.Value().Revision()};
-        settings.generatorWorkUnits = surface.Value().WorkUnits();
-        settings.maximumCandidates = policy.Value().maximumCandidates;
-        return AdmitBoundBuiltinPointQuery(plan, registry, scene, std::move(inputs), settings, provenance,
-                                           std::make_unique<BoundQueryNavigationSurface>(std::move(surface).Value()));
+        const auto bound = CaptureBuiltinNavigationSurfaceGenerator(plan, registry, scene, querier, inputs, settings, owner);
+        if (bound.HasError())
+            return Result<std::unique_ptr<QueryExecution>>::Failure(bound.ErrorValue());
+        return AdmitBoundBuiltinPointQuery(plan, registry, scene, std::move(inputs), settings, bound.Value());
     }
 
     /** @copydoc QueryNavigationProbe::QueryNavigationProbe */
@@ -429,11 +438,19 @@ namespace Horo::AI {
     Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner) {
-        auto prepared = PrepareBuiltinPointNavigationTest(plan, registry, scene, querier, inputs, settings, owner);
+        std::optional<LivePointQueryGenerator> live;
+        if (UsesBuiltinNavigationSurface(plan)) {
+            auto bound = CaptureBuiltinNavigationSurfaceGenerator(plan, registry, scene, querier, inputs, settings, owner);
+            if (bound.HasError())
+                return Result<std::unique_ptr<QueryExecution>>::Failure(bound.ErrorValue());
+            live.emplace(std::move(bound).Value());
+        }
+        const auto *generator = live ? &*live : nullptr;
+        auto prepared = PrepareBuiltinPointNavigationTest(plan, registry, scene, querier, inputs, settings, owner, generator);
         if (prepared.HasError())
             return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
         auto test = std::move(prepared).Value();
-        return AdmitBuiltinPointProviderQuery(plan, registry, scene, std::move(inputs), settings, std::span{&test, 1});
+        return AdmitBuiltinPointProviderQuery(plan, registry, scene, std::move(inputs), settings, std::span{&test, 1}, generator);
     }
 
     /** @copydoc PrepareBuiltinPointNavigationTest */
@@ -441,11 +458,12 @@ namespace Horo::AI {
                                                                      const Runtime::RuntimeSceneView &scene, Runtime::EntityRef querier,
                                                                      const QueryExecutionInputs &inputs,
                                                                      const QueryExecutionSettings &settings,
-                                                                     const IQueryNavigationOwner &owner) {
+                                                                     const IQueryNavigationOwner &owner,
+                                                                     const LivePointQueryGenerator *live) {
         using Admission = Result<PreparedPointQueryTest>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || scene.Get(querier).HasError())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
-        const auto captured = CaptureBuiltinPointNavigation(plan, registry, *inputs.contexts);
+        const auto captured = CaptureBuiltinPointNavigation(plan, registry, *inputs.contexts, live);
         if (captured.HasError())
             return Admission::Failure(captured.ErrorValue());
         const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
@@ -461,7 +479,7 @@ namespace Horo::AI {
         auto source =
             std::make_unique<PointNavigationSource>(captured.Value(), scene, querier, *start, settings.deadlineTick, owner, *access);
         return Admission::Success({captured.Value().generator, captured.Value().Rule(), captured.Value().candidates.WorkUnits(),
-                                   settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
+                                   live ? live->maximumCandidates : settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
     }
 
     /** @copydoc EvaluateBuiltinPointNavigationPath */

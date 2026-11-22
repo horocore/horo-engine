@@ -195,15 +195,8 @@ namespace Horo::Application::Internal {
                                             .bestCount = 1};
         if (inspection_ && inspection_->agent == operation.agent && inspection_->query == plan.plan->Id())
             settings.debugCapture = {.maximumSamples = 16, .includeWorldPoints = true};
-        if (AI::UsesBuiltinPointVisibility(*plan.plan)) {
-            if (AI::UsesBuiltinPointNavigation(*plan.plan))
-                return AdmitMixedPointPlan(*plan.plan, owner.Value(), std::move(inputs), settings);
-            return AI::AdmitBuiltinPointVisibilityQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
-                                                        *this);
-        }
-        if (AI::UsesBuiltinPointNavigation(*plan.plan))
-            return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
-                                                        *this);
+        if (AI::UsesBuiltinPointVisibility(*plan.plan) || AI::UsesBuiltinPointNavigation(*plan.plan))
+            return AdmitPointProviderPlan(*plan.plan, owner.Value(), std::move(inputs), settings);
         if (AI::UsesBuiltinNavigationSurface(*plan.plan))
             return AI::AdmitBuiltinNavigationSurfaceQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
                                                           *this);
@@ -216,17 +209,37 @@ namespace Horo::Application::Internal {
         return AI::AdmitBuiltinPerceptionQuery(*plan.plan, *registry_, std::move(inputs), std::move(observations).Value(), settings);
     }
 
-    /** @copydoc SceneDecisionQueries::AdmitMixedPointPlan */
-    Execution SceneDecisionQueries::AdmitMixedPointPlan(const AI::EnvironmentQueryPlan &plan, Runtime::EntityRef querier,
-                                                        AI::QueryExecutionInputs inputs, AI::QueryExecutionSettings settings) {
-        auto visibility = AI::PrepareBuiltinPointVisibilityTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
-        if (visibility.HasError())
-            return Execution::Failure(visibility.ErrorValue());
-        auto navigation = AI::PrepareBuiltinPointNavigationTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
-        if (navigation.HasError())
-            return Execution::Failure(navigation.ErrorValue());
-        std::array tests{std::move(visibility).Value(), std::move(navigation).Value()};
-        return AI::AdmitBuiltinPointProviderQuery(plan, *registry_, scope_->scene, std::move(inputs), settings, tests);
+    /** @copydoc SceneDecisionQueries::AdmitPointProviderPlan */
+    Execution SceneDecisionQueries::AdmitPointProviderPlan(const AI::EnvironmentQueryPlan &plan, Runtime::EntityRef querier,
+                                                           AI::QueryExecutionInputs inputs, AI::QueryExecutionSettings settings) {
+        std::optional<AI::LivePointQueryGenerator> live;
+        if (AI::UsesBuiltinNavigationSurface(plan)) {
+            auto bound = AI::CaptureBuiltinNavigationSurfaceGenerator(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
+            if (bound.HasError())
+                return Execution::Failure(bound.ErrorValue());
+            live.emplace(std::move(bound).Value());
+        }
+        const auto *generator = live ? &*live : nullptr;
+
+        std::array<AI::PreparedPointQueryTest, 2> tests;
+        std::size_t count{};
+        // Visibility leads generation so it can retain the exact ordered batch for its Physics request.
+        if (AI::UsesBuiltinPointVisibility(plan)) {
+            auto visibility =
+                AI::PrepareBuiltinPointVisibilityTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this, generator);
+            if (visibility.HasError())
+                return Execution::Failure(visibility.ErrorValue());
+            tests[count++] = std::move(visibility).Value();
+        }
+        if (AI::UsesBuiltinPointNavigation(plan)) {
+            auto navigation =
+                AI::PrepareBuiltinPointNavigationTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this, generator);
+            if (navigation.HasError())
+                return Execution::Failure(navigation.ErrorValue());
+            tests[count++] = std::move(navigation).Value();
+        }
+        return AI::AdmitBuiltinPointProviderQuery(plan, *registry_, scope_->scene, std::move(inputs), settings,
+                                                  std::span{tests}.first(count), generator);
     }
 
     /** @copydoc SceneDecisionQueries::PrepareVisibilityCapability */

@@ -143,7 +143,7 @@ namespace Horo::AI {
     };
 
     /** @brief Admits one point query using all declared provider tests.
-     * @param tests Owned stage preparations. The first source generates the common lattice; later sources only test it.
+     * @param tests Owned stage preparations. The first source generates the common point batch; later sources only test it.
      */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(const EnvironmentQueryPlan &plan,
                                                                                   const QuerySchemaRegistry &registry,
@@ -154,7 +154,8 @@ namespace Horo::AI {
     /** @brief Adds the authored native distance stages to prepared Navigation and Physics stages. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointProviderQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
-        QueryExecutionInputs inputs, QueryExecutionSettings settings, std::span<PreparedPointQueryTest> providers);
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, std::span<PreparedPointQueryTest> providers,
+        const LivePointQueryGenerator *live = nullptr);
 
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */
     struct QueryExecutionBudget final {
@@ -378,8 +379,7 @@ namespace Horo::AI {
     /** @brief Runs an owner-provided point generator with native distance tests and stable ranking. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBoundBuiltinPointQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
-        QueryExecutionInputs inputs, QueryExecutionSettings settings, QueryGeneratorProvenance provenance,
-        std::unique_ptr<const IBuiltinPointGenerator> generator);
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, const LivePointQueryGenerator &generator);
 
     /** @brief Admits a saved native lattice query to simulation-owner execution.
      * @param plan Compiled native lattice and distance stages. @param registry Exact registry used to compile the plan.

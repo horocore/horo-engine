@@ -512,18 +512,26 @@ namespace Horo::Application::CharacterSceneProductTest {
             DistancePriority,
             CostPriority,
             NavigationSurface,
+            SurfaceVisibility,
+            SurfaceNavigation,
+            SurfaceMixed,
             AuthoredMixed
         };
         const auto scenario =
             GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
-                     Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface, Scenario::AuthoredMixed);
-        const bool surface = scenario == Scenario::NavigationSurface;
+                     Scenario::DistancePriority, Scenario::CostPriority, Scenario::NavigationSurface, Scenario::SurfaceVisibility,
+                     Scenario::SurfaceNavigation, Scenario::SurfaceMixed, Scenario::AuthoredMixed);
+        const bool surfaceVisibility = scenario == Scenario::SurfaceVisibility || scenario == Scenario::SurfaceMixed;
+        const bool surfaceNavigation = scenario == Scenario::SurfaceNavigation || scenario == Scenario::SurfaceMixed;
+        const bool surface = surfaceVisibility || surfaceNavigation || scenario == Scenario::NavigationSurface;
         const bool authored = scenario == Scenario::AuthoredMixed;
         const bool scoreCost = scenario != Scenario::Reachability;
-        const bool usesDistance = authored || scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority;
-        const bool mixed = usesDistance || scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
+        const bool usesDistance =
+            authored || scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority || scenario == Scenario::SurfaceMixed;
+        const bool visibility = surfaceVisibility || (!surface && usesDistance) || scenario == Scenario::VisibilityFirst ||
+                                scenario == Scenario::NavigationFirst;
         std::optional<Fixture> character;
-        if (mixed)
+        if (visibility)
             character.emplace();
         const auto agent = MakeIdentity<AgentId>(50);
         const auto controller = MakeIdentity<ControllerTypeId>(49);
@@ -564,11 +572,12 @@ namespace Horo::Application::CharacterSceneProductTest {
             REQUIRE(generator.HasValue());
         }
         const auto weight = scenario == Scenario::CostPriority ? 100u : 1u;
-        auto query = surface ? AddBuiltinPointDistanceTest(generator.Value(), MakeIdentity<QueryStageId>(2), {2'000, true})
-                             : AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2),
-                                                             scoreCost ? std::optional{10.0} : std::nullopt, weight);
+        auto query = surface && !surfaceNavigation
+                         ? AddBuiltinPointDistanceTest(generator.Value(), MakeIdentity<QueryStageId>(2), {2'000, true})
+                         : AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2),
+                                                         scoreCost ? std::optional{10.0} : std::nullopt, weight);
         REQUIRE(query.HasValue());
-        if (usesDistance || scenario == Scenario::NavigationFirst)
+        if (visibility && scenario != Scenario::VisibilityFirst)
             query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
         REQUIRE(query.HasValue());
         auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
@@ -651,7 +660,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         }, materialDependency);
 
         NativeNavigationProductWorld product;
-        const auto mode = mixed ? Physics::PhysicsRuntimeMode::Canonical : Physics::PhysicsRuntimeMode::Null;
+        const auto mode = visibility ? Physics::PhysicsRuntimeMode::Canonical : Physics::PhysicsRuntimeMode::Null;
         const auto started = product.Start(fixture, gameplay, {}, mode, [&](auto &input, auto &project) {
             input.cookedDecisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
                 Internal::HeadlessCookedDecisionInput{.committed = *project.committed,
@@ -691,7 +700,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         // This Detour provider scores through the cooked triangle's center, so the upper corner of the small lattice costs least.
         auto expected =
             scoreCost ? Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
-        if (mixed)
+        if (visibility)
             expected = Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000);
         if (surface || scenario == Scenario::DistancePriority)
             expected = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
