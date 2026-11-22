@@ -3609,7 +3609,10 @@ sensed coordinates or provider payloads.
 The selected Play agent also gets a read-only Decision trace sample at the
 inspector's fixed-tick cadence. The host publishes it only after the full
 Play tick commits. The Game inspector shows active nodes, state-machine
-transitions, and any omitted record count from the same trace used for replay.
+transitions and any omitted record count using the versioned Decision trace.
+Local model-backed Utility decisions emit the same evidence for their selected
+action or authored fallback. The trace omits model feature values and the
+inspection request grants no canonical replay capture.
 Read-only inspection is available for cooked Decision Play sessions.
 `--play-ai-debug` grants the visible Game inspector control over its exact
 selected agent generation. Pause skips that agent's next decision slice

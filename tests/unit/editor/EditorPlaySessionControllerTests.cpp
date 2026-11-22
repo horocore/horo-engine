@@ -1469,6 +1469,11 @@ TEST_CASE("Editor Play applies the authored model from its committed Scene gener
     const CancellationSource stop;
     REQUIRE(lifecycle.Startup(stop.Token()).HasValue());
     REQUIRE(scheduler.Value()->RunFrame(lifecycle, stop.Token(), false).HasValue());
+    REQUIRE(play.SceneView());
+    const auto entity = play.SceneView()->Find({7});
+    REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    const auto expected = outOfRange ? fallback : learned;
     for (const auto frame : {1, 2}) {
         CAPTURE(frame);
         clock.Advance(Duration::FromMilliseconds(10));
@@ -1476,16 +1481,19 @@ TEST_CASE("Editor Play applies the authored model from its committed Scene gener
         CHECK_FALSE(fixedOwner->localFailure);
     }
     REQUIRE_FALSE(ai.probe.calls.empty());
-    CHECK(ai.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
+    CHECK(ai.probe.calls.front() == "start:" + std::to_string(expected.Value()));
     CHECK(ai.probe.starts == 1);
     CHECK(ai.probe.resumes == 1);
     CHECK_FALSE(play.ReadDecisionProblem());
-    REQUIRE(play.SceneView());
-    const auto entity = play.SceneView()->Find({7});
-    REQUIRE(entity);
     play.RefreshAgentInspection(entity);
     REQUIRE_FALSE(play.AgentInspectionHistory().empty());
     const auto &latest = play.AgentInspectionHistory().back();
+    REQUIRE(latest.decisionTrace);
+    CHECK(latest.decisionTrace->Header().tick == 1);
+    CHECK(latest.decisionTrace->Header().root == graph.asset);
+    CHECK(std::ranges::any_of(latest.decisionTrace->Records(), [expected](const DecisionStepRecord &record) {
+        return record.kind == DecisionStepRecordKind::BehaviorNode && record.task == expected;
+    }));
     REQUIRE(latest.snapshot);
     const auto observed = std::ranges::find(latest.snapshot->keys, feature, &AiInspectionBlackboardRow::key);
     REQUIRE(observed != latest.snapshot->keys.end());

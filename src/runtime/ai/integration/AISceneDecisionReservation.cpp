@@ -140,16 +140,16 @@ namespace Horo::AI {
                                                    .blackboard = snapshot.Value(),
                                                    .events = {},
                                                    .treeResumeReason = resume};
-                auto *capture = state->decisionReplay ? &*state->decisionReplay : nullptr;
-                const bool recording = capture && capture->agent == context.agent && capture->tick == context.tick &&
-                                       capture->executor == this && !capture->observed;
-                const auto step = model_      ? StepModel(input, budget)
-                                  : recording ? decision_->StepBudgetedWithTrace(input, budget, *capture->trace, &providerFailure_)
-                                              : decision_->StepBudgeted(input, budget, &providerFailure_);
-                if (recording) {
+                auto &capture = state->decisionReplay;
+                const auto trace = capture && capture->agent == context.agent && capture->tick == context.tick &&
+                                           capture->executor == this && !capture->observed
+                                       ? capture->trace
+                                       : nullptr;
+                const auto step = model_ ? StepModel(input, budget, trace.get()) : StepGraph(input, budget, trace.get());
+                if (trace && capture && capture->trace == trace) {
                     const auto revision = input.blackboard.CapturedRevision();
-                    if (capture->trace->Header().MatchesObservation(capture->plan->Digest(), context.tick, input.current, revision))
-                        capture->observed = AiReplayDecisionObservation{capture->subject, input.current, revision, capture->trace.get()};
+                    if (trace->Header().MatchesObservation(capture->plan->Digest(), context.tick, input.current, revision))
+                        capture->observed = AiReplayDecisionObservation{capture->subject, input.current, revision, trace.get()};
                 }
                 if (step.HasError())
                     return Result<AiSliceOutcome>::Failure(step.ErrorValue());
@@ -207,7 +207,14 @@ namespace Horo::AI {
             }
 
         private:
-            Result<std::optional<AiTaskState>> StepModel(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
+            Result<std::optional<AiTaskState>> StepGraph(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                         DecisionStepTrace *trace) {
+                return trace ? decision_->StepBudgetedWithTrace(input, budget, *trace, &providerFailure_)
+                             : decision_->StepBudgeted(input, budget, &providerFailure_);
+            }
+
+            Result<std::optional<AiTaskState>> StepModel(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                         DecisionStepTrace *trace) {
                 const auto modelWork = ModelWork(*model_);
                 const auto total = graphWork_ + modelWork;
                 if (!budget.Consume(total))
@@ -217,7 +224,7 @@ namespace Horo::AI {
                 std::array<LocalPolicyFeature, LocalLearnedPolicy::MaximumFeatures> features{};
                 const auto output = std::span{features}.first(model_->featureKeys.size());
                 if (!CaptureModelFeatures(*model_, input.blackboard, output))
-                    return decision_->StepBudgeted(input, graphBudget, &providerFailure_);
+                    return StepGraph(input, graphBudget, trace);
                 AiWorkBudget inferenceBudget{model.RequiredWork()};
                 const LocalPolicyUtilityInput policy{model,
                                                      model_->tasks,
@@ -227,7 +234,7 @@ namespace Horo::AI {
                                                      model.TensorSchemaVersion(),
                                                      input.blackboard.CapturedRevision(),
                                                      inferenceBudget};
-                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy);
+                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy, trace);
             }
 
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
@@ -253,6 +260,15 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::ArmDecisionReplayAtSafePoint */
     Result<void> AiSceneRuntime::ArmDecisionReplayAtSafePoint(const AgentHandle agent, const std::uint64_t tick) const {
+        return ArmCookedDecisionEvidence(agent, tick, true);
+    }
+
+    /** @copydoc AiSceneRuntime::ArmDecisionTraceAtSafePoint */
+    Result<void> AiSceneRuntime::ArmDecisionTraceAtSafePoint(const AgentHandle agent, const std::uint64_t tick) const {
+        return ArmCookedDecisionEvidence(agent, tick, false);
+    }
+
+    Result<void> AiSceneRuntime::ArmCookedDecisionEvidence(const AgentHandle agent, const std::uint64_t tick, const bool replay) const {
         if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
             return valid;
         auto *scheduler = active_->scheduler.get();
@@ -269,12 +285,18 @@ namespace Horo::AI {
         if (registered.HasError())
             return Result<void>::Failure(registered.ErrorValue());
         const auto *executor = dynamic_cast<const ScheduledCookedDecision *>(registered.Value());
-        if (!executor || executor->HasModel() || !slot.cookedPlan->IsCurrent())
+        if (!executor || (replay && executor->HasModel()) || !slot.cookedPlan->IsCurrent())
             return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
         try {
             auto trace = std::make_shared<DecisionStepTrace>();
-            active_->decisionReplay.emplace(agent, slot.record.agent.agent, tick, scheduler->populationRevision_, slot.cookedPlan, executor,
-                                            std::move(trace));
+            active_->decisionReplay.emplace(Detail::SceneDecisionReplayPending{.agent = agent,
+                                                                               .subject = slot.record.agent.agent,
+                                                                               .tick = tick,
+                                                                               .schedulerRevision = scheduler->populationRevision_,
+                                                                               .plan = slot.cookedPlan,
+                                                                               .executor = executor,
+                                                                               .trace = std::move(trace),
+                                                                               .replay = replay});
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
@@ -338,7 +360,7 @@ namespace Horo::AI {
         if (found.HasError())
             return Capture::Failure(found.ErrorValue());
         auto &pending = *found.Value();
-        if (pending.trace->DroppedRecords() != 0)
+        if (!pending.replay || pending.trace->DroppedRecords() != 0)
             return Capture::Failure(MakeError(AIErrors::CanonicalStateInvalid));
         const auto &observed = *pending.observed;
         auto canonical = CaptureCanonicalState(scene, maximumCanonicalBytes);

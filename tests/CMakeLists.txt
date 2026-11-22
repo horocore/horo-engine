@@ -3231,6 +3231,8 @@ target_link_libraries(HoroLuaBehaviorTests PRIVATE HoroEngine::GameplayLua)
 add_executable(HoroEditorPlaySessionControllerTests
         unit/editor/EditorPlaySessionControllerTests.cpp
 )
+set_property(SOURCE unit/editor/EditorPlaySessionControllerTests.cpp APPEND PROPERTY
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
 target_sources(HoroEditorPlaySessionControllerTests PRIVATE unit/editor/EditorCharacterSceneProductTests.cpp
         unit/editor/EditorPrefabProductTests.cpp)
 target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE

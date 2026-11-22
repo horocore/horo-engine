@@ -112,7 +112,8 @@ namespace Horo::AI {
         /** @brief Advances one fully reserved root Utility slice with optional model preference. */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedWithLocalPolicy(const DecisionGraphStepInput &input,
                                                                                      AiWorkBudget &budget,
-                                                                                     const LocalPolicyUtilityInput &policy);
+                                                                                     const LocalPolicyUtilityInput &policy,
+                                                                                     DecisionStepTrace *trace = nullptr);
         /** @brief Advances a budgeted step and optionally reports the first raw task callback error.
          * @param input Exact committed observation for the requested tick.
          * @param budget Scheduler-owned allowance for the current slice.

@@ -64,6 +64,7 @@ namespace Horo::AI::Detail {
         const IAiScheduledDecision *executor{}; /**< Observed only while comparing the live evaluator address. */
         std::shared_ptr<DecisionStepTrace> trace;
         std::optional<AiReplayDecisionObservation> observed;
+        bool replay{};
     };
 
     /** @brief Complete spatial candidate prepared against the current owner and detached entity evidence. */

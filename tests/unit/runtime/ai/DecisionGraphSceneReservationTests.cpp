@@ -1441,6 +1441,7 @@ namespace Horo::AI {
         TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",
                   "[ai][decision_reservation][local-policy]") {
             const bool outOfRange = GENERATE(false, true);
+            const bool discardFromProvider = GENERATE(false, true);
             Fixture fixture;
             auto source = UtilitySource();
             source.executionTask = MakeIdentity<TaskId>(9000);
@@ -1494,12 +1495,45 @@ namespace Horo::AI {
             CHECK(fixture.probe.factories == 0);
             REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .localPolicies = policies}).HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{7}, Runtime::SceneDefinitionRevision{1}};
+            builder.Add(Runtime::RuntimeEntityDefinition{.object = Runtime::SceneObjectId{1}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto live = Runtime::RuntimeScene::Create(definition.Value(), scene.binding.scene);
+            REQUIRE(live.HasValue());
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            const auto expected = outOfRange ? fallback : learned;
+            TestSupport::ExpectError(runtime.ArmDecisionReplayAtSafePoint(agent, 1), AIErrors::DecisionAssetActivationInvalid);
+            REQUIRE(runtime.ArmDecisionTraceAtSafePoint(agent, 1).HasValue());
+            if (discardFromProvider)
+                fixture.probe.onStart = [&] {
+                    runtime.DiscardDecisionReplayAtSafePoint(agent, 1);
+                };
             for (const std::uint64_t tick : {1, 2}) {
                 REQUIRE(scheduler->EvaluateAtDecision(tick).Value().failed == 0);
                 REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
+                if (tick == 1) {
+                    const auto view = live.Value()->View();
+                    if (discardFromProvider) {
+                        TestSupport::ExpectError(runtime.TakeDecisionTraceAtSafePoint(view, agent, tick), AIErrors::CanonicalRestoreStale);
+                        continue;
+                    }
+                    TestSupport::ExpectError(runtime.CaptureDecisionReplayAtSafePoint(view, tick, 4096), AIErrors::CanonicalStateInvalid);
+                    const auto captured = runtime.TakeDecisionTraceAtSafePoint(view, agent, tick);
+                    REQUIRE(captured.HasValue());
+                    CHECK(captured.Value()->Header().tick == tick);
+                    CHECK(captured.Value()->Header().planDigest == plan->Digest());
+                    CHECK(captured.Value()->DroppedRecords() == 0);
+                    CHECK(std::ranges::any_of(captured.Value()->Records(), [expected](const DecisionStepRecord &record) {
+                        return record.kind == DecisionStepRecordKind::BehaviorNode && record.task == expected;
+                    }));
+                    CHECK(std::ranges::none_of(captured.Value()->Records(), [feature](const DecisionStepRecord &record) {
+                        return record.key == feature;
+                    }));
+                }
             }
             REQUIRE_FALSE(fixture.probe.calls.empty());
-            CHECK(fixture.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
+            CHECK(fixture.probe.calls.front() == "start:" + std::to_string(expected.Value()));
             CHECK(fixture.probe.starts == 1);
             CHECK(fixture.probe.resumes == 1);
         }

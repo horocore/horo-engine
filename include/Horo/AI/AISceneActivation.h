@@ -647,6 +647,9 @@ namespace Horo::AI {
          * Scheduler budgets, callbacks and evaluation order are unchanged. */
         [[nodiscard]] Result<void> ArmDecisionReplayAtSafePoint(AgentHandle agent, std::uint64_t tick) const;
 
+        /** @brief Arms the same bounded evidence for inspection, including decisions backed by a local policy model. */
+        [[nodiscard]] Result<void> ArmDecisionTraceAtSafePoint(AgentHandle agent, std::uint64_t tick) const;
+
         /** @brief Drops an unconsumed replay arm or observation on the simulation owner.
          * @param agent Exact agent generation originally armed.
          * @param tick Exact fixed tick originally armed.
@@ -727,6 +730,8 @@ namespace Horo::AI {
     private:
         friend class AiSceneActivationCandidate;
         friend class Detail::AiSceneStructuralParticipant;
+
+        [[nodiscard]] Result<void> ArmCookedDecisionEvidence(AgentHandle agent, std::uint64_t tick, bool replay) const;
 
         /** @brief Validates the one exact observed trace without consuming it. */
         [[nodiscard]] Result<Detail::SceneDecisionReplayPending *> FindDecisionTraceAtSafePoint(const Runtime::RuntimeSceneView &scene,

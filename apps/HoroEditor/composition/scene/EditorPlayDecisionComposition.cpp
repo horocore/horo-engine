@@ -210,7 +210,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!debugSample && lastDecisionTraceTick_ != 0 && tick - lastDecisionTraceTick_ < Editor::EditorPlayAgentInspectionTickSpacing)
             return std::nullopt;
         const auto agent = SelectedDecisionAgent();
-        if (!agent || ai_->ArmDecisionReplayAtSafePoint(*agent, tick).HasError())
+        if (!agent || ai_->ArmDecisionTraceAtSafePoint(*agent, tick).HasError())
             return std::nullopt;
         lastDecisionTraceTick_ = tick;
         return agent;
