@@ -293,6 +293,7 @@ namespace {
                                                                          SDL_DestroyWindow};
         REQUIRE(window != nullptr);
         REQUIRE((SDL_GetWindowFlags(window.get()) & SDL_WINDOW_INPUT_FOCUS) == 0);
+        REQUIRE((SDL_GetWindowFlags(window.get()) & SDL_WINDOW_MOUSE_FOCUS) == 0);
         MotionDevice device;
         SdlInputBackend backend;
         backend.BindWindow(SDL_GetWindowID(window.get()));
@@ -300,6 +301,7 @@ namespace {
         const auto &raw = device.Pump(backend);
         const auto id = device.Id(raw);
         CHECK_FALSE(raw.window.focused);
+        CHECK_FALSE(raw.window.pointerInside);
         CHECK(raw.FindGamepad(id)->gyroscope.availability == SensorAvailability::Suspended);
         CHECK(device.enables == 0);
     }

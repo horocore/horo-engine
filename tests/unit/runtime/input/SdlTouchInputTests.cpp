@@ -142,6 +142,8 @@ namespace {
             backend.ProcessEvent(Finger(SDL_EVENT_FINGER_MOTION, 1, 101, 0.9F));
             backend.ProcessEvent(Finger(SDL_EVENT_FINGER_DOWN, 2, 102));
             const auto &cancelled = backend.Commit();
+            CHECK_FALSE(cancelled.window.focused);
+            CHECK(cancelled.window.pointerInside == !unbind);
             CHECK(cancelled.touches[0].cancelled);
             CHECK_FALSE(cancelled.touches[0].contact.down);
             CHECK(cancelled.touches[0].id == retained.touches[0].id);

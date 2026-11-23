@@ -30,7 +30,10 @@ namespace Horo::Input {
          * Unsupported/native-failed devices remain explicit in their copied sample availability. No sensor fallback occurs.
          */
         void SetGamepadGyroscopeEnabled(bool enabled) noexcept;
-        /** @brief Selects the exact window supplying keyboard, pointer, and text events; zero disables window-local input. */
+        /** @brief Selects the exact window supplying keyboard, pointer, and text events.
+         * @param windowId SDL window identity, or zero to detach the current window.
+         * @details Detaching retires focus and pointer hover before the next snapshot is committed.
+         */
         void BindWindow(SDL_WindowID windowId) noexcept;
         void ProcessEvent(const SDL_Event &event);
         void PollEvents();
