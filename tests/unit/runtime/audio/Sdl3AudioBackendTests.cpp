@@ -229,7 +229,8 @@ namespace Horo::Audio::Backend {
 
         TEST_CASE("SDL3 discovers native recording endpoints independently of playback", "[unit][audio][sdl3][capture]") {
             auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
-            const auto first = backend->DiscoverCapture();
+            AudioBackend &capture = *backend;
+            const auto first = capture.DiscoverCapture();
             REQUIRE(first.HasValue());
             const auto &catalog = first.Value().snapshot;
             REQUIRE(ValidateAudioCaptureDeviceSnapshot(catalog));
@@ -248,7 +249,7 @@ namespace Horo::Audio::Backend {
 
             const auto playback = Complete(*backend, Enumerate{});
             CHECK(std::holds_alternative<AudioDeviceSnapshot>(playback.outcome));
-            const auto again = backend->DiscoverCapture();
+            const auto again = capture.DiscoverCapture();
             REQUIRE(again.HasValue());
             CHECK(again.Value().snapshot.devices == catalog.devices);
             CHECK(again.Value().snapshot.revision == catalog.revision);

@@ -28,23 +28,39 @@ def stop(process):
             process.wait(timeout=2)
 
 
-def has_default(env, dump, expected):
+def read_graph(env, dump):
     result = subprocess.run([dump], env=env, capture_output=True, text=True, timeout=2, check=False)
-    if result.returncode:
-        return False
-    for node in json.loads(result.stdout):
+    return [] if result.returncode else json.loads(result.stdout)
+
+
+def has_default(env, dump, key, expected):
+    for node in read_graph(env, dump):
         for entry in node.get("metadata", []):
-            if entry.get("key") == "default.audio.sink" and entry.get("value") == {"name": expected}:
+            if entry.get("key") == key and entry.get("value") == {"name": expected}:
                 return True
     return False
 
 
-def add_default_sink(env, logs, tools, label, priority):
+def add_default_device(env, logs, tools, label, priority, capture=False):
     _, _, client, dump = tools
-    properties = ("{ factory.name=support.null-audio-sink media.class=Audio/Sink object.linger=true "
+    media = "Audio/Source/Virtual" if capture else "Audio/Sink"
+    properties = (f"{{ factory.name=support.null-audio-sink media.class={media} object.linger=true "
                   f"node.name={label} node.description={label} priority.session={priority} audio.position=[ FL FR ] }}")
     subprocess.run([client, "create-node", "adapter", properties], env=env, stdout=logs, stderr=logs, check=True, timeout=3)
-    wait_for(lambda: has_default(env, dump, label), "private session manager did not select the virtual sink")
+    key = "default.audio.source" if capture else "default.audio.sink"
+    wait_for(lambda: has_default(env, dump, key, label), f"private session manager did not select {label}")
+
+
+def remove_device(env, logs, tools, label):
+    _, _, client, dump = tools
+    devices = [node["id"] for node in read_graph(env, dump)
+               if node.get("info", {}).get("props", {}).get("node.name") == label]
+    if len(devices) != 1:
+        raise RuntimeError(f"expected one private PipeWire node named {label}")
+    node_id = devices[0]
+    if not isinstance(node_id, int) or isinstance(node_id, bool) or not 0 < node_id <= 0xFFFFFFFF:
+        raise RuntimeError("invalid private PipeWire node identity")
+    subprocess.run([client, "destroy", str(node_id)], env=env, stdout=logs, stderr=logs, check=True, timeout=3)
 
 
 def start_session(runtime, env, logs, tools, label, processes):
@@ -54,7 +70,7 @@ def start_session(runtime, env, logs, tools, label, processes):
     wait_for(lambda: (runtime / "pipewire-0").is_socket(), "private PipeWire server did not start")
     manager = subprocess.Popen([session], env=env, stdout=logs, stderr=logs)
     processes.append(manager)
-    add_default_sink(env, logs, tools, label, 100)
+    add_default_device(env, logs, tools, label, 100)
     return server, manager
 
 
@@ -73,10 +89,15 @@ def main():
         with (root / "native.log").open("w+") as logs:
             try:
                 server, manager = start_session(runtime, env, logs, tools, "horo-test-a", processes)
+                add_default_device(env, logs, tools, "horo-test-mic-a", 2000, capture=True)
                 backend = subprocess.Popen([executable, "--reporter", "compact"], env=env)
                 processes.append(backend)
+                wait_for((root / "capture-ready").exists, "initial input was not discovered")
+                remove_device(env, logs, tools, "horo-test-mic-a")
+                add_default_device(env, logs, tools, "horo-test-mic-b", 2000, capture=True)
+                (root / "capture-changed").touch()
                 wait_for(lambda: (root / "switch-ready").exists(), "initial output did not reach native rendering")
-                add_default_sink(env, logs, tools, "horo-test-b", 2000)
+                add_default_device(env, logs, tools, "horo-test-b", 2000)
                 (root / "default-changed").touch()
                 wait_for(lambda: (root / "started").exists(), "first stream did not reach native rendering")
                 stop(server)

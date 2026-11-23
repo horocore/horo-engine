@@ -16,6 +16,7 @@
 #include <pipewire/pipewire.h>
 #include <pthread.h>
 #include <spa/param/audio/format-utils.h>
+#include <string_view>
 
 namespace Horo::Audio::Backend {
     namespace {
@@ -69,7 +70,8 @@ namespace Horo::Audio::Backend {
         class PipeWireDriver final : public NativeAudioDriver {
         public:
             PipeWireDriver(const NativeAudioBackendConfig config, std::shared_ptr<PipeWireAudioLibrary> library)
-                : config_(config), library_(std::move(library)), facts_(config.owner) {}
+                : config_(config), library_(std::move(library)),
+                  capture_{.owner = config.owner, .backend = AudioBackendKind::PipeWire, .revision = 1}, facts_(config.owner) {}
 
             AudioBackendKind Kind() const noexcept override {
                 return AudioBackendKind::PipeWire;
@@ -143,7 +145,7 @@ namespace Horo::Audio::Backend {
                     }
                     next.devices.push_back({found->id, node.description.data(), AudioDeviceClass::Unknown});
                 }
-                if (const auto name = DefaultDeviceName()) {
+                if (const auto name = DefaultDeviceName(defaultMetadata_)) {
                     const auto found = std::find_if(registry.begin(), registry.end(), [&name](const auto &entry) {
                         return entry.present && entry.name == *name;
                     });
@@ -165,6 +167,34 @@ namespace Horo::Audio::Backend {
                     if (closed.HasError())
                         return Result<Opened>::Failure(WithCause(closed.ErrorValue(), result.ErrorValue()));
                 }
+                return result;
+            }
+
+            /** @copydoc NativeAudioDriver::DiscoverCapture */
+            Result<AudioCaptureDiscovery> DiscoverCapture() override {
+                using Output = Result<AudioCaptureDiscovery>;
+                if (const auto connected = Connect(); connected.HasError())
+                    return Output::Failure(connected.ErrorValue());
+                Lock lock(loop_);
+                if (!Roundtrip() || captureOverflow_ || !cookieKnown_)
+                    return Output::Failure(MakeError(AudioErrors::DeviceUnavailable, "PipeWire recording discovery did not complete"));
+                AudioCaptureDeviceSnapshot candidate{.owner = config_.owner, .backend = Kind(), .revision = capture_.revision};
+                std::vector<CaptureBinding> bindings;
+                auto nextSlot = nextCaptureSlot_;
+                if (const auto prepared = ReadCaptureSources(candidate, bindings, nextSlot); prepared.HasError())
+                    return Output::Failure(prepared.ErrorValue());
+                if (candidate.devices == capture_.devices && candidate.defaults.multimedia == capture_.defaults.multimedia)
+                    return Output::Success({std::move(candidate), {}});
+                if (candidate.revision == std::numeric_limits<std::uint64_t>::max())
+                    return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
+                ++candidate.revision;
+                auto changes = DescribeAudioCaptureDeviceChanges(capture_, candidate);
+                if (changes.HasError())
+                    return Output::Failure(changes.ErrorValue());
+                auto result = Output::Success({candidate, std::move(changes).Value()});
+                capture_ = std::move(candidate);
+                captureBindings_ = std::move(bindings);
+                nextCaptureSlot_ = nextSlot;
                 return result;
             }
 
@@ -246,7 +276,9 @@ namespace Horo::Audio::Backend {
                 // The last published catalog survives an ordinary close. Open revalidates its
                 // server/serial against fresh native discovery; closing is not device removal.
                 nodes_ = {};
+                sources_ = {};
                 defaultMetadata_ = {};
+                defaultSourceMetadata_ = {};
                 cookieKnown_ = false;
                 selectedSerial_.clear();
                 render_ = {};
@@ -288,12 +320,25 @@ namespace Horo::Audio::Backend {
                 bool present{};
             };
 
+            /** @brief Maps one live native source to a capture-only identity across refreshes. */
+            struct CaptureBinding final {
+                std::string serial;
+                std::uint32_t serverCookie{};
+                AudioCaptureDeviceId id;
+            };
+
             NativeAudioBackendConfig config_;
             std::shared_ptr<PipeWireAudioLibrary> library_;
             AudioDeviceSnapshot snapshot_;
             std::vector<Entry> registry_;
             std::array<Node, MaximumAudioDiscoveredDevices> nodes_{};
             std::array<char, 1024> defaultMetadata_{};
+            AudioCaptureDeviceSnapshot capture_;
+            std::vector<CaptureBinding> captureBindings_;
+            std::array<Node, MaximumAudioDiscoveredDevices> sources_{};
+            std::array<char, 1024> defaultSourceMetadata_{};
+            std::uint32_t nextCaptureSlot_{1};
+            bool captureOverflow_{};
             pw_thread_loop *loop_{};
             pw_context *context_{};
             pw_core *core_{};
@@ -398,18 +443,53 @@ namespace Horo::Audio::Backend {
             }
 
             /** @brief Resolve bounded default metadata on control while the private loop lock protects its snapshot. */
-            std::optional<std::string> DefaultDeviceName() const {
-                if (!defaultMetadata_[0])
+            static std::optional<std::string> DefaultDeviceName(const std::array<char, 1024> &metadata) {
+                if (!metadata[0])
                     return std::nullopt;
-                const auto parsed = nlohmann::json::parse(defaultMetadata_.data(), nullptr, false);
+                const auto parsed = nlohmann::json::parse(metadata.data(), nullptr, false);
                 if (!parsed.is_object() || !parsed.contains("name") || !parsed["name"].is_string())
                     return std::nullopt;
                 return parsed["name"].get<std::string>();
             }
 
+            /** @brief Resolves only an unambiguous source named by the recorder default metadata. */
+            const Node *DefaultCaptureSource() const {
+                const auto name = DefaultDeviceName(defaultSourceMetadata_);
+                if (!name)
+                    return nullptr;
+                const auto isDefault = [&name](const Node &source) {
+                    return source.present && *name == source.name.data();
+                };
+                if (std::ranges::count_if(sources_, isDefault) != 1)
+                    return nullptr;
+                return &*std::ranges::find_if(sources_, isDefault);
+            }
+
+            /** @brief Builds a complete recording catalog while the private loop owns registry and metadata. */
+            Result<void> ReadCaptureSources(AudioCaptureDeviceSnapshot &candidate, std::vector<CaptureBinding> &bindings,
+                                            std::uint32_t &nextSlot) const {
+                const auto *defaultSource = DefaultCaptureSource();
+                for (const auto &source : sources_) {
+                    if (!source.present)
+                        continue;
+                    const auto previous = std::ranges::find_if(captureBindings_, [this, &source](const CaptureBinding &binding) {
+                        return binding.serverCookie == serverCookie_ && binding.serial == source.serial.data();
+                    });
+                    if (previous == captureBindings_.end() && nextSlot == 0)
+                        return Result<void>::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
+                    const auto id = previous == captureBindings_.end() ? AudioCaptureDeviceId{config_.owner, nextSlot++, 1} : previous->id;
+                    bindings.emplace_back(source.serial.data(), serverCookie_, id);
+                    candidate.devices.emplace_back(id, source.description.data(), AudioDeviceClass::Unknown, std::nullopt);
+                    if (&source == defaultSource)
+                        candidate.defaults.multimedia = id;
+                }
+                std::ranges::sort(candidate.devices, {}, &AudioDiscoveredCaptureDevice::id);
+                return Result<void>::Success();
+            }
+
             /** @brief A default name must identify exactly one live node; duplicate presentation names never select by order. */
             bool MatchesCurrentDefault(const Node &selected) const {
-                const auto name = DefaultDeviceName();
+                const auto name = DefaultDeviceName(defaultMetadata_);
                 return name && *name == selected.name.data() && std::count_if(nodes_.begin(), nodes_.end(), [&name](const auto &node) {
                     return node.present && *name == node.name.data();
                 }) == 1;
@@ -451,6 +531,7 @@ namespace Horo::Audio::Backend {
                 failed_.store(false);
                 loss_.Reset();
                 overflow_ = false;
+                captureOverflow_ = false;
                 cookieKnown_ = false;
                 completedSequence_ = 0;
                 {
@@ -613,39 +694,64 @@ namespace Horo::Audio::Backend {
                 auto &self = *static_cast<PipeWireDriver *>(data);
                 if (!properties || !type)
                     return;
-                if (std::strcmp(type, PW_TYPE_INTERFACE_Metadata) == 0 && !self.metadata_) {
-                    const char *name = spa_dict_lookup(properties, PW_KEY_METADATA_NAME);
-                    if (name && std::strcmp(name, "default") == 0) {
-                        self.metadata_ =
-                            static_cast<pw_metadata *>(pw_registry_bind(self.registryObject_, id, type, PW_VERSION_METADATA, 0));
-                        static const pw_metadata_events events{.version = PW_VERSION_METADATA_EVENTS, .property = Metadata};
-                        if (self.metadata_)
-                            pw_metadata_add_listener(self.metadata_, &self.metadataListener_, &events, &self);
-                    }
+                if (std::strcmp(type, PW_TYPE_INTERFACE_Metadata) == 0) {
+                    self.WatchDefaultMetadata(id, *properties);
                     return;
                 }
-                const char *media = spa_dict_lookup(properties, PW_KEY_MEDIA_CLASS);
-                if (std::strcmp(type, PW_TYPE_INTERFACE_Node) != 0 || !media || std::strcmp(media, "Audio/Sink") != 0)
+                if (std::strcmp(type, PW_TYPE_INTERFACE_Node) != 0)
                     return;
-                const auto slot = std::find_if(self.nodes_.begin(), self.nodes_.end(), [](const auto &node) {
+                const char *media = spa_dict_lookup(properties, PW_KEY_MEDIA_CLASS);
+                if (!media)
+                    return;
+                const std::string_view mediaClass{media};
+                if (mediaClass == "Audio/Sink") {
+                    if (StoreNode(self.nodes_, id, *properties, "PipeWire audio output"))
+                        ++self.changes_;
+                    else
+                        self.overflow_ = true;
+                } else if (IsCaptureMediaClass(mediaClass)) {
+                    if (!StoreNode(self.sources_, id, *properties, "PipeWire audio input"))
+                        self.captureOverflow_ = true;
+                }
+            }
+
+            /** @brief Recognizes recording nodes without treating playback monitors as recording devices. */
+            static bool IsCaptureMediaClass(const std::string_view mediaClass) noexcept {
+                return mediaClass == "Audio/Source" || mediaClass == "Audio/Source/Virtual";
+            }
+
+            /** @brief Subscribes once to the server's declared default-device metadata. */
+            void WatchDefaultMetadata(std::uint32_t id, const spa_dict &properties) noexcept {
+                if (metadata_)
+                    return;
+                const char *name = spa_dict_lookup(&properties, PW_KEY_METADATA_NAME);
+                if (!name || std::strcmp(name, "default") != 0)
+                    return;
+                metadata_ =
+                    static_cast<pw_metadata *>(pw_registry_bind(registryObject_, id, PW_TYPE_INTERFACE_Metadata, PW_VERSION_METADATA, 0));
+                static const pw_metadata_events events{.version = PW_VERSION_METADATA_EVENTS, .property = Metadata};
+                if (metadata_)
+                    pw_metadata_add_listener(metadata_, &metadataListener_, &events, this);
+            }
+
+            /** @brief Copies one live native node into its bounded direction-specific inventory. */
+            static bool StoreNode(std::span<Node> nodes, const std::uint32_t id, const spa_dict &properties,
+                                  const char *fallbackLabel) noexcept {
+                const auto slot = std::ranges::find_if(nodes, [](const Node &node) {
                     return !node.present;
                 });
-                if (slot == self.nodes_.end()) {
-                    self.overflow_ = true;
-                    return;
-                }
+                if (slot == nodes.end())
+                    return false;
                 Node node;
                 node.global = id;
-                node.present = Copy(node.serial, spa_dict_lookup(properties, PW_KEY_OBJECT_SERIAL)) &&
-                               Copy(node.name, spa_dict_lookup(properties, PW_KEY_NODE_NAME));
-                if (!Copy(node.description, spa_dict_lookup(properties, PW_KEY_NODE_DESCRIPTION)))
-                    Copy(node.description, "PipeWire audio output");
-                if (!node.present) {
-                    self.overflow_ = true;
-                    return;
-                }
+                if (!Copy(node.serial, spa_dict_lookup(&properties, PW_KEY_OBJECT_SERIAL)) ||
+                    !Copy(node.name, spa_dict_lookup(&properties, PW_KEY_NODE_NAME)))
+                    return false;
+                if (!Copy(node.description, spa_dict_lookup(&properties, PW_KEY_NODE_DESCRIPTION)))
+                    Copy(node.description, fallbackLabel);
+                node.present = true;
                 *slot = node;
-                ++self.changes_;
+                return true;
             }
 
             static void Removed(void *data, const std::uint32_t id) noexcept {
@@ -657,15 +763,22 @@ namespace Horo::Audio::Backend {
                         node.present = false;
                         ++self.changes_;
                     }
+                for (auto &source : self.sources_)
+                    if (source.present && source.global == id)
+                        source.present = false;
             }
 
-            static int Metadata(void *data, std::uint32_t, const char *key, const char *, const char *value) noexcept {
+            static int Metadata(void *data, const std::uint32_t subject, const char *key, const char *, const char *value) noexcept {
                 auto &self = *static_cast<PipeWireDriver *>(data);
                 if (key && std::strcmp(key, "default.audio.sink") == 0) {
                     self.defaultMetadata_ = {};
                     if (value && !Copy(self.defaultMetadata_, value))
                         self.overflow_ = true;
                     ++self.changes_;
+                } else if (subject == PW_ID_CORE && key && std::strcmp(key, "default.audio.source") == 0) {
+                    self.defaultSourceMetadata_ = {};
+                    if (value && !Copy(self.defaultSourceMetadata_, value))
+                        self.captureOverflow_ = true;
                 }
                 return 0;
             }

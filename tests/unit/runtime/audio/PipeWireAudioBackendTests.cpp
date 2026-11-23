@@ -141,6 +141,47 @@ namespace Horo::Audio::Backend {
             while (backend.DrainEvents(events)) {
             }
         }
+
+        /** @brief Verifies the actual PipeWire recorder default and removal before opening playback. */
+        void VerifyCaptureRefresh(AudioBackend &backend, const std::filesystem::path &control) {
+            const auto first = backend.DiscoverCapture();
+            REQUIRE(first.HasValue());
+            const auto &before = first.Value().snapshot;
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(before));
+            REQUIRE(before.devices.size() == 1);
+            CHECK(before.devices.front().displayName == "horo-test-mic-a");
+            CHECK(before.permission == AudioCapturePermission::Unknown);
+            CHECK_FALSE(before.defaults.communications);
+            const auto selected = ResolveAudioCaptureDevice(before, AudioDefaultDeviceRole::Multimedia);
+            REQUIRE(selected.status == AudioDeviceResolutionStatus::Resolved);
+            CHECK(selected.device == before.devices.front().id);
+            REQUIRE(first.Value().changes.size() == 1);
+            CHECK(first.Value().changes.front().kind == AudioCaptureDeviceChangeKind::Added);
+            const auto unchanged = backend.DiscoverCapture();
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().snapshot.revision == before.revision);
+            CHECK(unchanged.Value().changes.empty());
+
+            std::ofstream(control / "capture-ready").put('\n');
+            const auto deadline = Clock::now() + 5s;
+            while (Clock::now() < deadline && !std::filesystem::exists(control / "capture-changed"))
+                std::this_thread::sleep_for(2ms);
+            REQUIRE(std::filesystem::exists(control / "capture-changed"));
+
+            const auto next = backend.DiscoverCapture();
+            REQUIRE(next.HasValue());
+            const auto &after = next.Value().snapshot;
+            REQUIRE(after.devices.size() == 1);
+            CHECK(after.devices.front().displayName == "horo-test-mic-b");
+            CHECK(after.revision > before.revision);
+            CHECK(ResolveAudioCaptureDevice(after, selected.device).status == AudioDeviceResolutionStatus::Unavailable);
+            CHECK(ResolveAudioCaptureDevice(after, AudioDefaultDeviceRole::Multimedia).device == after.devices.front().id);
+            REQUIRE(next.Value().changes.size() == 2);
+            CHECK(next.Value().changes[0].kind == AudioCaptureDeviceChangeKind::Removed);
+            CHECK(next.Value().changes[0].device == selected.device);
+            CHECK(next.Value().changes[1].kind == AudioCaptureDeviceChangeKind::Added);
+            CHECK(next.Value().changes[1].device == after.devices.front().id);
+        }
     }  // namespace
 
     TEST_CASE("PipeWire reports a live default switch and fences explicit new output epochs", "[audio][pipewire][native]") {
@@ -157,11 +198,13 @@ namespace Horo::Audio::Backend {
         const auto probe = Complete<AudioBackendProbe>(*backend, Probe{});
         CHECK(probe.backend == AudioBackendKind::PipeWire);
         CHECK(probe.availability == AudioBackendAvailability::Available);
+        VerifyCaptureRefresh(*backend, control);
 
         RenderTrace oldTrace;
         const auto before = OpenAvailable(*backend, 48000, 1);
         CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
         StartRendering(*backend, before, oldTrace);
+        CHECK(backend->DiscoverCapture().HasError());
         const auto oldEstimate = WaitForLatency(*backend, before);
         CHECK(oldEstimate.has_value());
         if (oldEstimate) {

@@ -21,6 +21,17 @@ namespace Horo::Audio::Backend {
         return impl_->config.owner;
     }
 
+    /** @copydoc NativeAudioBackend::DiscoverCapture */
+    Result<AudioCaptureDiscovery> NativeAudioBackend::DiscoverCapture() {
+        if (impl_->pending || impl_->completion || impl_->state != Impl::State::Closed)
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::RuntimeInactive));
+        try {
+            return impl_->driver->DiscoverCapture();
+        } catch (const std::bad_alloc &) {
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
+        }
+    }
+
     /** @copydoc NativeAudioBackend::Begin */
     Result<OperationId> NativeAudioBackend::Begin(const Request &request, const AudioMonotonicTimestamp &deadline) {
         if (impl_->pending || impl_->completion || !impl_->Valid(request))

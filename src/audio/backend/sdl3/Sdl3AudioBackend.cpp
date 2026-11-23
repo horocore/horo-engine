@@ -46,8 +46,8 @@ namespace Horo::Audio::Backend {
     }
 
     /** @copydoc Sdl3AudioBackend::Impl::DiscoverCapture */
-    Result<Sdl3CaptureDiscovery> Sdl3AudioBackend::Impl::DiscoverCapture() {
-        using Output = Result<Sdl3CaptureDiscovery>;
+    Result<AudioCaptureDiscovery> Sdl3AudioBackend::Impl::DiscoverCapture() {
+        using Output = Result<AudioCaptureDiscovery>;
         if (!Initialize())
             return Output::Failure(MakeError(AudioErrors::CapabilityUnavailable));
         int count{};
@@ -85,11 +85,11 @@ namespace Horo::Audio::Backend {
     }
 
     /** @copydoc Sdl3AudioBackend::DiscoverCapture */
-    Result<Sdl3CaptureDiscovery> Sdl3AudioBackend::DiscoverCapture() {
+    Result<AudioCaptureDiscovery> Sdl3AudioBackend::DiscoverCapture() {
         try {
             return impl_->DiscoverCapture();
         } catch (const std::bad_alloc &) {
-            return Result<Sdl3CaptureDiscovery>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
     }
 

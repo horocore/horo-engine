@@ -199,7 +199,7 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Stages a recording refresh and its identity changes on the control thread. */
-        Result<Sdl3CaptureDiscovery> DiscoverCapture();
+        Result<AudioCaptureDiscovery> DiscoverCapture();
 
         /** @brief Builds a complete candidate using only native identities and previously admitted capture slots. */
         Result<void> ReadCaptureEndpoints(std::span<const SDL_AudioDeviceID> ids, std::vector<CaptureDeviceBinding> &bindings,

@@ -32,6 +32,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] AudioBackendKind Kind() const noexcept override;
         /** @copydoc AudioBackend::Owner */
         [[nodiscard]] AudioRuntimeId Owner() const noexcept override;
+        /** @copydoc AudioBackend::DiscoverCapture */
+        [[nodiscard]] Result<AudioCaptureDiscovery> DiscoverCapture() override;
         /** @copydoc AudioBackend::Begin */
         [[nodiscard]] Result<OperationId> Begin(const Request &request, const AudioMonotonicTimestamp &deadline) override;
         /** @copydoc AudioBackend::CommitRendering */

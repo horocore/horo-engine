@@ -60,6 +60,12 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] virtual Result<AudioBackendProbe> Probe() = 0;
         /** @brief Enumerate complete owned facts preserving unchanged IDs. @return Catalog or failure; no partial publication. */
         [[nodiscard]] virtual Result<AudioDeviceSnapshot> Enumerate() = 0;
+
+        /** @brief Queries capture metadata on a detached control owner without opening or starting recording. */
+        [[nodiscard]] virtual Result<AudioCaptureDiscovery> DiscoverCapture() {
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::OperationUnsupported));
+        }
+
         /** @brief Acquire a stopped float output; failure attempts cleanup and reports unproven retirement through Resources. @param
          * request Preserved intent. @return Candidate. */
         [[nodiscard]] virtual Result<Opened> Open(const Backend::Open &request) = 0;

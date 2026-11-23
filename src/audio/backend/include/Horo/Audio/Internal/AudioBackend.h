@@ -1,17 +1,26 @@
 #pragma once
 
 /** @file AudioBackend.h
- * @brief Non-installed, equal-peer backend protocol for Audio control and native output adapters.
+ * @brief Non-installed, equal-peer protocol for Audio control and native endpoint adapters.
  */
 
 #include "Horo/Audio/AudioBackendCapabilities.h"
 #include "Horo/Audio/AudioCallbackEvents.h"
 #include "Horo/Audio/AudioDeviceNegotiation.h"
+#include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioPlanarBlock.h"
+
+#include <vector>
 
 namespace Horo::Audio::Backend {
     struct AudioCallbackViolation;
     struct AudioCallbackViolationDrain;
+
+    /** @brief An owned recording catalog and the membership changes observed by this refresh. */
+    struct AudioCaptureDiscovery final {
+        AudioCaptureDeviceSnapshot snapshot;
+        std::vector<AudioCaptureDeviceChange> changes;
+    };
 
     /** @brief Runtime-local, non-wrapping operation identity; sequence zero is invalid. */
     struct OperationId final {
@@ -238,6 +247,16 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] virtual AudioBackendKind Kind() const noexcept = 0;
         /** @brief Returns the fixed runtime generation. @return Non-zero Horo runtime owner. */
         [[nodiscard]] virtual AudioRuntimeId Owner() const noexcept = 0;
+
+        /** @brief Refreshes recording discovery on the control owner without opening a device or requesting consent.
+         * @return Complete inventory and its changes, or a typed unsupported or native failure.
+         * @details Each peer owns its capture identities independently of playback. This operation may allocate
+         * and wait for a bounded native control response. It must never run on an audio callback.
+         * A peer may retain an observer until the normal Close operation.
+         */
+        [[nodiscard]] virtual Result<AudioCaptureDiscovery> DiscoverCapture() {
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::OperationUnsupported));
+        }
 
         /**
          * @brief Accepts a bounded owned request without waiting for native completion.

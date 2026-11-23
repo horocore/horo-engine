@@ -23,6 +23,7 @@ namespace Horo::Audio::Backend {
         TEST_CASE("Audio internal backend exposes an asynchronous typed control interface", "[audio][backend]") {
             static_assert(std::is_abstract_v<AudioBackend>);
             static_assert(std::has_virtual_destructor_v<AudioBackend>);
+            static_assert(std::is_same_v<decltype(&AudioBackend::DiscoverCapture), Result<AudioCaptureDiscovery> (AudioBackend::*)()>);
             static_assert(std::is_same_v<decltype(&AudioBackend::Begin),
                                          Result<OperationId> (AudioBackend::*)(const Request &, const AudioMonotonicTimestamp &)>);
             static_assert(
