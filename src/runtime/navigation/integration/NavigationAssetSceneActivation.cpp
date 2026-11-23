@@ -12,7 +12,28 @@ namespace Horo::Navigation {
             std::atomic<std::size_t> providerBytes{};
         };
 
-        /** @brief Pins a portable closure and charges its storage until the last Scene or backend reader releases it. */
+        /** @brief Owns one tile's storage charge across every closure and worker pin that shares the allocation. */
+        struct NavigationAssetRebuildTile final {
+            NavigationAssetRebuildTile(std::shared_ptr<const NavigationCookedTile> tile,
+                                       std::shared_ptr<NavigationAssetWorldAccounting> counters, std::size_t bytes)
+                : contents(std::move(tile)), accounting(std::move(counters)), reservation(bytes) {
+                accounting->providerBytes.fetch_add(reservation);
+            }
+
+            NavigationAssetRebuildTile(const NavigationAssetRebuildTile &) = delete;
+            NavigationAssetRebuildTile &operator=(const NavigationAssetRebuildTile &) = delete;
+
+            ~NavigationAssetRebuildTile() {
+                contents.reset();
+                accounting->providerBytes.fetch_sub(reservation);
+            }
+
+            std::shared_ptr<const NavigationCookedTile> contents;
+            std::shared_ptr<NavigationAssetWorldAccounting> accounting;
+            std::size_t reservation;
+        };
+
+        /** @brief Charges each closure's index independently of the tile allocations it shares. */
         struct NavigationAssetRebuildTiles final {
             using Tiles = std::vector<std::shared_ptr<const NavigationCookedTile>>;
 
@@ -354,10 +375,16 @@ namespace Horo::Navigation {
         }
 
         using RuntimeTilePins = std::shared_ptr<const Detail::NavigationAssetRebuildTiles>;
+        using RebuildTiles = Detail::NavigationAssetRebuildTiles::Tiles;
 
-        /** @brief Charges a detached tile vector using the existing provider accounting. */
-        [[nodiscard]] Result<std::size_t> TileClosureBytes(const Detail::NavigationAssetRebuildTiles::Tiles &tiles, std::size_t budget) {
-            const auto bytes = tiles.capacity() * sizeof(Detail::NavigationAssetRebuildTiles::Tiles::value_type);
+        /** @brief Measures the pointer index, excluding the tile allocations it references. */
+        [[nodiscard]] std::size_t TileIndexBytes(const RebuildTiles &tiles) noexcept {
+            return tiles.capacity() * sizeof(RebuildTiles::value_type);
+        }
+
+        /** @brief Separates the worker's complete portable closure measurement from its native provider charge. */
+        [[nodiscard]] Result<std::size_t> TileClosureBytes(const RebuildTiles &tiles, std::size_t budget) {
+            const auto bytes = TileIndexBytes(tiles);
             if (bytes > budget)
                 return Result<std::size_t>::Failure(MakeError(NavigationErrors::CapacityExceeded));
             auto total = bytes;
@@ -368,6 +395,31 @@ namespace Horo::Navigation {
                 total += tileBytes;
             }
             return Result<std::size_t>::Success(total);
+        }
+
+        /** @brief Inherits charges for exact reused allocations and refunds partially pinned closures on failure. */
+        [[nodiscard]] Result<RuntimeTilePins> PinTileClosure(RebuildTiles tiles, const std::span<const RebuildTiles::value_type> previous,
+                                                             const std::shared_ptr<Detail::NavigationAssetWorldAccounting> &accounting,
+                                                             const std::optional<NavigationProjectProfile> &policy, std::size_t budget) {
+            using Return = Result<RuntimeTilePins>;
+            const auto indexBytes = TileIndexBytes(tiles);
+            if (indexBytes > budget)
+                return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            budget -= indexBytes;
+            for (std::size_t i = 0; i < tiles.size(); ++i) {
+                auto &tile = tiles[i];
+                if (!previous.empty() && tile == previous[i]) {
+                    tile = previous[i];
+                    continue;
+                }
+                const auto bytes = tile->StorageBytes() + sizeof(Detail::NavigationAssetRebuildTile);
+                if (bytes > budget)
+                    return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
+                auto pin = std::make_shared<Detail::NavigationAssetRebuildTile>(std::move(tile), accounting, bytes);
+                tile = {pin, pin->contents.get()};
+                budget -= bytes;
+            }
+            return Return::Success(std::make_shared<Detail::NavigationAssetRebuildTiles>(std::move(tiles), accounting, indexBytes, policy));
         }
 
         /** @brief Retains only the exactly selected non-streamed partition for subsequent rebuild authorizations. */
@@ -383,15 +435,10 @@ namespace Horo::Navigation {
             const auto budget = AvailableProviderBudget(state);
             if (budget.HasError())
                 return Return::Failure(budget.ErrorValue());
-            auto tiles = surfaces.front().partition->tiles;
-            const auto bytes = TileClosureBytes(tiles, budget.Value());
-            if (bytes.HasError())
-                return Return::Failure(bytes.ErrorValue());
             const auto asset = std::ranges::find(assets, surfaces.front().definition, &LoadedNavMeshAsset::id);
             const auto &policy = (asset != assets.end() && asset->contentProvenance) ? asset->contentProvenance->projectProfile
                                                                                      : state.selection.requiredProfile;
-            return Return::Success(
-                std::make_shared<Detail::NavigationAssetRebuildTiles>(std::move(tiles), state.accounting, bytes.Value(), policy));
+            return PinTileClosure(surfaces.front().partition->tiles, {}, state.accounting, policy, budget.Value());
         }
 
         /** @brief Close preparation on shutdown or invalid host bounds, independently of provider availability. */
@@ -547,28 +594,32 @@ namespace Horo::Navigation {
         /** @brief Uses the same accounting for the prepared successor and every active or pinned predecessor. */
         [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> PinRebuildStorage(Detail::RuntimeRebuildAdoption &adoption,
                                                                                          const Detail::NavigationAssetSceneState &state,
-                                                                                         Detail::NavigationAssetRebuildTiles::Tiles tiles,
+                                                                                         RebuildTiles tiles,
                                                                                          std::unique_ptr<INavigationQueryBackend> backend,
                                                                                          std::size_t reserved) {
             using Return = Result<std::unique_ptr<INavigationQueryBackend>>;
-            if (auto budget = AvailableProviderBudget(state, backend != nullptr); budget.HasError() || reserved > budget.Value())
-                return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
             const auto tileBytes = TileClosureBytes(tiles, reserved);
             if (tileBytes.HasError())
                 return Return::Failure(tileBytes.ErrorValue());
+            const auto providerBytes = reserved - tileBytes.Value();
+            const auto budget = AvailableProviderBudget(state, backend != nullptr);
+            if (budget.HasError() || providerBytes > budget.Value())
+                return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
             const auto &policy = state.rebuildTiles->policy;
             if (backend && policy) {
                 const auto capabilities = backend->Capabilities();
                 if (auto admitted = AdmitNavigationProjectProfile(*policy, capabilities, capabilities.revision); admitted.HasError())
                     return Return::Failure(admitted.ErrorValue());
             }
-            adoption.tiles =
-                std::make_shared<Detail::NavigationAssetRebuildTiles>(std::move(tiles), state.accounting, tileBytes.Value(), policy);
+            auto pinned =
+                PinTileClosure(std::move(tiles), state.rebuildTiles->tiles, state.accounting, policy, budget.Value() - providerBytes);
+            if (pinned.HasError())
+                return Return::Failure(pinned.ErrorValue());
+            adoption.tiles = std::move(pinned).Value();
             if (backend) {
-                backend =
-                    std::make_unique<PinnedAssetBackend>(NavigationPreparedAssetBackend{std::move(backend), reserved - tileBytes.Value()},
-                                                         std::vector<Assets::AssetPayloadLease>{}, state.accounting, state.provenance,
-                                                         adoption.tiles);
+                backend = std::make_unique<PinnedAssetBackend>(NavigationPreparedAssetBackend{std::move(backend), providerBytes},
+                                                               std::vector<Assets::AssetPayloadLease>{}, state.accounting, state.provenance,
+                                                               adoption.tiles);
             }
             return Return::Success(std::move(backend));
         }

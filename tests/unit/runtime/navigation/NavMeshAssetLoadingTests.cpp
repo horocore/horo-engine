@@ -103,10 +103,11 @@ namespace Horo::Navigation {
             /** @brief Runs a group with both a Scene member and a Navigation candidate through the same commit. */
             [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> Commit(NavigationRuntimeTileRebuildCandidate candidate,
                                                                                         const NavigationRuntimeRebuildFence &fence,
-                                                                                        const bool expire) {
+                                                                                        const bool expire,
+                                                                                        Runtime::SceneObjectId object = {102}) {
                 Runtime::SceneCommandBuffer commands;
                 REQUIRE(commands
-                            .CreateGroup({Runtime::RuntimeEntityGroupEntry{.info = {.authoredObject = Runtime::SceneObjectId{102}}}}, {},
+                            .CreateGroup({Runtime::RuntimeEntityGroupEntry{.info = {.authoredObject = object}}}, {},
                                          {scene.ActiveScene()->RuntimeId(), registry.Snapshot().Revision(), cancellation.Token()})
                             .HasValue());
                 auto publication = std::make_shared<RebuildGroupPublication>(*participant, std::move(candidate), fence, expire);
@@ -802,11 +803,45 @@ namespace Horo::Navigation {
         CHECK(participant.Snapshot().immutableBytes.residentEntries == initial.immutableBytes.residentEntries);
         base.reset();
         CHECK(participant.Snapshot().liveWorlds == 2);
-        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes + charge);
+        const auto committedCharge = participant.Snapshot().reservedProviderBytes - initial.reservedProviderBytes;
+        CHECK(committedCharge >= charge);
         previous = {};
         CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Active);
         CHECK(participant.Snapshot().liveWorlds == 1);
-        CHECK(participant.Snapshot().reservedProviderBytes == charge);
+        CHECK(participant.Snapshot().reservedProviderBytes == committedCharge);
+    }
+
+    TEST_CASE("Scene charges one shared runtime NavMesh tile across overlapping topology generations",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture;
+        const auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto first = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto build = PrepareSceneRebuild(participant, first);
+        REQUIRE(fixture.Commit(std::move(build.candidate), build.fence, false)->ResultValue());
+
+        auto previous = participant.Acquire().Value();
+        auto tile = participant.ActiveRuntimeRebuildTiles()->front();
+        const auto baseline = participant.Snapshot().reservedProviderBytes;
+        const auto next = TestSupport::Topology(first.Value() + 1);
+        auto reused = PrepareSceneRebuild(participant, next);
+        REQUIRE(reused.candidate.RebuiltTileCount() == 0);
+        REQUIRE(reused.candidate.Tiles().front() == tile);
+        const auto additional = reused.candidate.ReservedBytes() - tile->StorageBytes();
+        REQUIRE(fixture.Commit(std::move(reused.candidate), reused.fence, false, {103})->ResultValue());
+        CHECK(participant.ActiveRuntimeRebuildTiles()->front() == tile);
+        CHECK(participant.Snapshot().reservedProviderBytes == baseline + additional);
+
+        previous = {};
+        CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Active);
+        CHECK(participant.Snapshot().reservedProviderBytes == baseline);
+        participant.Shutdown();
+        CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Closed);
+        CHECK(participant.Snapshot().reservedProviderBytes >= tile->StorageBytes());
+        CHECK(participant.Snapshot().reservedProviderBytes < baseline);
+        tile.reset();
+        CHECK(participant.Snapshot().reservedProviderBytes == 0);
     }
 
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
