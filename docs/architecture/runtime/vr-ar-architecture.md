@@ -625,6 +625,11 @@ Horo does not emulate runtime-owned asynchronous timewarp or reprojection. When
 an optional feature is unavailable, ordinary projection-layer rendering remains
 the explicit fallback.
 
+OpenXR Play binds each custom foveation profile to the exact consented Input
+cutoff and gaze sample. It fences mirror access, queue submission and compositor
+publication when that evidence expires or is revoked. The native swapchain
+restores fixed foveation after acquired image references have retired.
+
 Normal frames do not use device-idle waits. Image acquire, wait, import, render,
 release, and composition submission maintain explicit ownership and
 synchronization. Session or surface loss retires resources only after queued GPU

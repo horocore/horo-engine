@@ -507,7 +507,7 @@ namespace Horo::Tests::OpenXRApplication {
                     step("seal Play GUI phase", play->FinishGui(true));
                     if (hooks.beforePresent)
                         hooks.beforePresent();
-                    if (step("recheck Play before submission", play->RevalidateRenderLighting(number))) {
+                    if (step("recheck Play before submission", play->RevalidateRenderPresentation(number))) {
                         step("submit Vulkan WSI frame", frame.Present());
                         if (hooks.afterPresent)
                             hooks.afterPresent();

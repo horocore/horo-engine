@@ -2203,6 +2203,106 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Signed Play withdraws custom foveation before submission and after image retirement",
+              "[xr][application][play][gaze][foveation][revocation]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true,  6,  Unrequested, Unrequested, Unrequested, false, std::nullopt, OptionalDisable,
+                                   false, {}, nullptr,     false,       false,       true};
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->EyeGazePreview();
+        REQUIRE(preview.ArmEyeGazeRendering());
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        RequireValue(fixture.scheduler->AddParticipant(std::make_unique<AppInputSample>(*fixture.play)));
+        RequireValue(fixture.scheduler->Startup());
+        auto &script = fixture.script;
+        script.clock.sample = 1;
+        script.actions.gaze.sampleTime = 1;
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(fixture.play->ReadEyeGaze());
+
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        {
+            auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(fixture.play->FinishGui(true));
+            RequireValue(frame.Present());
+        }
+        auto &graphics = fixture.vulkan->native.commandState.state;
+        graphics.Complete();
+        RequireValue(fixture.play->ProgressRenderTail());
+        REQUIRE(script.frames.layers == 1);
+        script.frames.prediction += 1'000'000;
+
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(2)));
+        auto frame = RequireValue(fixture.frontend->BeginFrame({2, {8, 8}}));
+        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+        auto &modes = script.swapchain.foveationModes;
+        REQUIRE(modes.back() == XR_FOVEATION_MODE_CUSTOM_HTC);
+        bool nativeAccepted{};
+        SECTION("a revoked grant withdraws the mirror before GUI borrows it") {
+            REQUIRE(fixture.play->MirrorView(2).IsValid());
+            preview.RevokeEyeGaze();
+            CHECK_FALSE(fixture.play->MirrorView(2).IsValid());
+            CHECK_FALSE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            frame.Cancel();
+        }
+        SECTION("a revoked grant after GUI sealing prevents projection submission") {
+            RequireValue(fixture.play->FinishGui(true));
+            REQUIRE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            preview.RevokeEyeGaze();
+            CHECK_FALSE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            frame.Cancel();
+        }
+        SECTION("a new cutoff with the same native gaze timestamp retires the old profile") {
+            RequireValue(fixture.play->FinishGui(true));
+            const auto revision = fixture.play->ReadInspection().trackingRevision;
+            ++script.clock.sample;
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(fixture.play->ReadInspection().trackingRevision != revision);
+            const auto next = fixture.play->ReadEyeGaze();
+            REQUIRE(next);
+            CHECK(next->Time().runtimeSample.Nanoseconds() == script.actions.gaze.sampleTime);
+            CHECK_FALSE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            frame.Cancel();
+        }
+        SECTION("tracking loss at the next cutoff rejects the bound custom profile") {
+            script.actions.gaze.active = XR_FALSE;
+            ++script.clock.sample;
+            RequireValue(fixture.scheduler->RunFrame());
+            CHECK_FALSE(fixture.play->ReadEyeGaze());
+            CHECK_FALSE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            frame.Cancel();
+        }
+        SECTION("loss of focus rejects the bound custom profile") {
+            script.events.Push(XR_SESSION_STATE_VISIBLE);
+            RequireValue(fixture.play->PollEvents());
+            CHECK_FALSE(fixture.play->ReadEyeGaze());
+            CHECK_FALSE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            frame.Cancel();
+        }
+        SECTION("a revoke during native release suppresses the compositor layer") {
+            RequireValue(fixture.play->FinishGui(true));
+            REQUIRE(RequireValue(fixture.play->RevalidateRenderPresentation(2)));
+            RequireValue(frame.Present());
+            nativeAccepted = true;
+            graphics.Complete();
+            script.swapchain.onRelease = [&preview] {
+                preview.RevokeEyeGaze();
+            };
+        }
+        RequireValue(fixture.play->ProgressRenderTail());
+        script.swapchain.onRelease = {};
+        CHECK(script.frames.ends == 2);
+        CHECK(script.frames.layers == 0);
+        CHECK(script.swapchain.releases == 2);
+        CHECK(modes == std::vector{XR_FOVEATION_MODE_FIXED_HTC, XR_FOVEATION_MODE_CUSTOM_HTC, XR_FOVEATION_MODE_FIXED_HTC});
+        CHECK(graphics.accepted.size() == (nativeAccepted ? 2 : 1));
+        CHECK(graphics.waitCalls == 0);
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("XR inspection bounds action metadata and ignores action payload values", "[xr][application][inspection]") {
         const XR::XRSessionId session{{RequireValue(XR::XRRuntimeGeneration::Create(1)), {1, 1}}, {1, 1}};
         XR::XRTrackedDeviceCapabilities features;

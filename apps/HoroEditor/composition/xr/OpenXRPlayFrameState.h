@@ -110,11 +110,25 @@ namespace Horo::Application::Internal {
         std::optional<XR::XRObservedReprojectionHistory> synthesisHistory;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::optional<XR::OpenXRInternal::NativePresentationViews> lastProjectedViews;
-        std::optional<XR::XRRuntimeTime> gazeProfileSample;
+
+        struct GazeProfileEvidence {
+            XR::XRRuntimeTime sample;
+            XR::XRTrackingSnapshotRevision cutoff;
+            [[nodiscard]] bool operator==(const GazeProfileEvidence &) const noexcept = default;
+        };
+
+        struct RenderingGazeSample {
+            XR::XRPoseSample pose;
+            GazeProfileEvidence evidence;
+        };
+
+        std::optional<GazeProfileEvidence> gazeProfile;
         bool gazeProfileUnsupported{};
 
-        [[nodiscard]] std::optional<XR::XRPoseSample> RenderingGaze() const;
+        [[nodiscard]] const XR::XRTrackingSnapshot *GazeCutoff() const noexcept;
+        [[nodiscard]] std::optional<RenderingGazeSample> RenderingGaze() const;
         [[nodiscard]] bool GazeProfileCurrent() const;
+        [[nodiscard]] Result<void> RestoreFixedGazeProfile();
         [[nodiscard]] Result<void> UpdateGazeProfile();
         std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */

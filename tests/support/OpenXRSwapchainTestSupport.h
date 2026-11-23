@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <functional>
 #include <optional>
 
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
@@ -28,6 +29,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t imageIndex{};
         std::uint32_t creates{};
         std::uint32_t releases{};
+        std::function<void()> onRelease;
         std::uint32_t destroys{};
         bool timeout{};
         XrSwapchain timeoutSwapchain{XR_NULL_HANDLE};
@@ -109,8 +111,11 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Release(XrSwapchain, const XrSwapchainImageReleaseInfo *) {
             const auto result = Record("release");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 ++active->releases;
+                if (active->onRelease)
+                    active->onRelease();
+            }
             return result;
         }
 

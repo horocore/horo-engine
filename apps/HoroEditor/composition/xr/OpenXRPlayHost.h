@@ -384,11 +384,11 @@ namespace Horo::Application::Internal {
          * preserves its original error and continues the SAME owned tail even if this logical abort is fenced by loss.
          */
         [[nodiscard]] Result<void> FinishGui(bool accepted);
-        /** @brief Rechecks the exact frame's native lighting scope before mirror use or queue submission.
+        /** @brief Rechecks the exact frame's lighting and gaze authorization before mirror use or queue submission.
          * @param frameNumber Existing RuntimeHost frame identity.
-         * @return False after the frame was canceled for lost lighting authority. All native debt remains owned.
+         * @return False after canceling a frame that lost authorization. All native debt remains owned.
          */
-        [[nodiscard]] Result<bool> RevalidateRenderLighting(std::uint64_t frameNumber);
+        [[nodiscard]] Result<bool> RevalidateRenderPresentation(std::uint64_t frameNumber);
         /** @brief Borrows the exact submitted acquisition's GUI mirror for this canonical App frame.
          * @param frameNumber Same RuntimeHost frame supplied to PrepareRenderFrame; never a new counter.
          * @return Full typed GUI binding or empty for wrong lane, stale frame, loss, cancellation or retirement.

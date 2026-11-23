@@ -169,45 +169,66 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    std::optional<XRPoseSample> OpenXRPlayHost::FrameState::RenderingGaze() const {
+    /** @brief Borrows only the current consented tracking cutoff, without consulting native input. */
+    const XRTrackingSnapshot *OpenXRPlayHost::FrameState::GazeCutoff() const noexcept {
         if (!host.scene_ || !host.scene_->gazeRenderingConsent || host.eventsPending_ ||
             host.input_.play != Editor::EditorPlayState::Playing || !host.sessions_->Snapshot().admitsActions)
+            return nullptr;
+        const auto *snapshot = host.tracking_.Current();
+        return snapshot && snapshot->Session() == session && snapshot->Focus() == XRTrackingFocusState::Focused &&
+                       snapshot->State() == XRTrackingState::Active
+                   ? snapshot
+                   : nullptr;
+    }
+
+    /** @brief Binds the observed gaze to the Input cutoff that admitted it. */
+    std::optional<OpenXRPlayHost::FrameState::RenderingGazeSample> OpenXRPlayHost::FrameState::RenderingGaze() const {
+        if (!GazeCutoff())
             return std::nullopt;
         const auto now = host.clock_.RuntimeNow();
-        const auto *snapshot = host.tracking_.Current();
-        return now.HasValue() && snapshot && host.scene_ && host.scene_->gazeRenderingConsent && !host.eventsPending_ &&
-                       host.sessions_->Snapshot().admitsActions && snapshot->Session() == session
-                   ? host.composition_.session.ReadEyeGaze(*snapshot, now.Value())
-                   : std::nullopt;
+        const auto *snapshot = GazeCutoff();
+        if (!now.HasValue() || !snapshot)
+            return std::nullopt;
+        const auto admitted = host.composition_.session.ReadEyeGaze(*snapshot, now.Value());
+        if (!admitted)
+            return std::nullopt;
+        return RenderingGazeSample{*admitted, {admitted->Time().runtimeSample, snapshot->Revision()}};
     }
 
+    /** @brief Rejects a custom profile when its exact Input evidence no longer admits use. */
     bool OpenXRPlayHost::FrameState::GazeProfileCurrent() const {
-        if (!gazeProfileSample)
+        if (!gazeProfile)
             return true;
         const auto now = RenderingGaze();
-        return now && now->Time().runtimeSample == *gazeProfileSample;
+        return now && now->evidence == *gazeProfile;
     }
 
+    /** @brief Restores the native fixed profile once the swapchain is no longer acquired. */
+    Result<void> OpenXRPlayHost::FrameState::RestoreFixedGazeProfile() {
+        auto restored = color.SetProjectionFoveation(std::nullopt);
+        if (restored.HasValue()) {
+            gazeProfile.reset();
+            lastProjectedViews.reset();
+        }
+        return restored;
+    }
+
+    /** @brief Applies the exact gaze on an idle target, restoring fixed mode when evidence cannot support it. */
     Result<void> OpenXRPlayHost::FrameState::UpdateGazeProfile() {
         const auto decision = host.scene_->projection->plan.Decision(XRCapability::FixedFoveation).state;
         if (decision != XRFeatureDecisionState::OptionalEnabled && decision != XRFeatureDecisionState::Required)
             return Result<void>::Success();
-        if (!gazeProfileUnsupported && lastProjectedViews) {
-            const auto gaze = RenderingGaze();
-            if (const auto centers = gaze ? GazeFoveationCenters(*gaze, *lastProjectedViews) : std::nullopt; centers) {
-                if (auto apply = color.SetProjectionFoveation(centers); apply.HasValue()) {
-                    gazeProfileSample = gaze->Time().runtimeSample;
-                    if (GazeProfileCurrent())
-                        return apply;
-                } else {
-                    gazeProfileUnsupported = true;
-                }
-            }
+        const auto gaze = !gazeProfileUnsupported && lastProjectedViews ? RenderingGaze() : std::nullopt;
+        const auto centers = gaze ? GazeFoveationCenters(gaze->pose, *lastProjectedViews) : std::nullopt;
+        if (!centers)
+            return RestoreFixedGazeProfile();
+        const auto applied = color.SetProjectionFoveation(centers);
+        if (applied.HasError()) {
+            gazeProfileUnsupported = true;
+            return RestoreFixedGazeProfile();
         }
-        auto restored = color.SetProjectionFoveation(std::nullopt);
-        if (restored.HasValue())
-            gazeProfileSample.reset();
-        return restored;
+        gazeProfile = gaze->evidence;
+        return GazeProfileCurrent() ? applied : RestoreFixedGazeProfile();
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::WaitAndImport */
@@ -1010,14 +1031,18 @@ namespace Horo::Application::Internal {
         return Output::Success({frame.frame, std::move(pose).Value()});
     }
 
-    /** @copydoc OpenXRPlayHost::RevalidateRenderLighting */
-    Result<bool> OpenXRPlayHost::RevalidateRenderLighting(const std::uint64_t frameNumber) {
+    /** @copydoc OpenXRPlayHost::RevalidateRenderPresentation */
+    Result<bool> OpenXRPlayHost::RevalidateRenderPresentation(const std::uint64_t frameNumber) {
         using Allowed = Result<bool>;
         if (auto lane = Lane(); lane.HasError())
             return Allowed::Failure(lane.ErrorValue());
         if (!render_ || render_->hostFrameNumber != frameNumber || frames_.Snapshot().phase == XRFramePhase::Idle)
             return Allowed::Failure(MakeError(XRErrors::IdentityStale));
         const Operation operation{*this};
+        if (!render_->GazeProfileCurrent()) {
+            const auto aborted = AbortRenderFrame();
+            return aborted.HasError() ? Allowed::Failure(aborted.ErrorValue()) : Allowed::Success(false);
+        }
         if (FrameLightingAuthorized())
             return Allowed::Success(true);
         auto aborted = AbortForLostFrameLighting();
@@ -1030,6 +1055,11 @@ namespace Horo::Application::Internal {
             !render_->plan || !render_->acquisition || render_->hostFrameNumber != frameNumber ||
             sessions_->Snapshot().state == XRSessionState::Lost)
             return {};
+        if (render_->gazeProfile) {
+            const auto *cutoff = render_->GazeCutoff();
+            if (!cutoff || cutoff->Revision() != render_->gazeProfile->cutoff)
+                return {};
+        }
         const auto mirror = Editor::EditorVulkanXrViewportAccess::Mirror(composition_.viewport, frameNumber, render_->eyeViews[0]);
         return mirror.IsValid() && mirror.sampledView.IsValid() && mirror.sampledView == render_->eyeViews[0]
                    ? mirror
@@ -1068,10 +1098,12 @@ namespace Horo::Application::Internal {
             return retired;
         if (render_ && render_->writer && !eventsPending_ && sessions_->Snapshot().state != XRSessionState::Lost)
             render_->writer->PollOmitted(composition_.frontend);
-        if (eventsPending_ || !render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
+        if (eventsPending_ || !render_)
             return Result<void>::Success();
         if (sessions_->Snapshot().state == XRSessionState::Lost)
             return Result<void>::Success();  // Explicit destructive retirement owns this debt; ordinary End is no longer admitted.
+        if (frames_.Snapshot().phase == XRFramePhase::Idle)
+            return render_->gazeProfile && !render_->GazeProfileCurrent() ? render_->RestoreFixedGazeProfile() : Result<void>::Success();
         if (!render_->guiFinished && !(scene_ && scene_->retiring))
             return Result<void>::Success();
         if (scene_ && scene_->retiring) {
@@ -1109,6 +1141,11 @@ namespace Horo::Application::Internal {
         if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased &&
             frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        // The native image release may invoke a callback that revokes the exact gaze grant.
+        if (render_->rendered && !render_->GazeProfileCurrent()) {
+            if (auto aborted = AbortRenderFrame(); aborted.HasError())
+                return aborted;
+        }
         const bool hasProjection = render_->rendered && render_->plan && render_->acquisition;
         const auto ended = hasProjection ? render_->EndRenderedProjection(state.frame) : render_->compositor.EndEmpty(state.frame);
         if (ended.HasError())
@@ -1133,7 +1170,7 @@ namespace Horo::Application::Internal {
         render_->passthrough.reset();
         render_->nativeLightingScope.reset();
         render_->views.reset();
-        return Result<void>::Success();
+        return render_->gazeProfile && !render_->GazeProfileCurrent() ? render_->RestoreFixedGazeProfile() : Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::AdmitRecordedProjection */

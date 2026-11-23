@@ -3475,7 +3475,7 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (frameState_.xrFramePrepared) {
                     auto &xr = *p_->presentation.composition.xrPlay;
-                    const auto allowed = xr.RevalidateRenderLighting(pacing_.presentingFrameNumber);
+                    const auto allowed = xr.RevalidateRenderPresentation(pacing_.presentingFrameNumber);
                     if (allowed.HasError())
                         return FailRenderFrame(allowed.ErrorValue());
                     if (!allowed.Value()) {
@@ -3538,7 +3538,7 @@ namespace Horo::Editor {
                 const Duration start = pacing_.clock.MonotonicNow();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (std::exchange(frameState_.xrFrameSealed, false)) {
-                    const auto allowed = p_->presentation.composition.xrPlay->RevalidateRenderLighting(pacing_.presentingFrameNumber);
+                    const auto allowed = p_->presentation.composition.xrPlay->RevalidateRenderPresentation(pacing_.presentingFrameNumber);
                     if (allowed.HasError())
                         return FailRenderFrame(allowed.ErrorValue());
                     if (!allowed.Value())
