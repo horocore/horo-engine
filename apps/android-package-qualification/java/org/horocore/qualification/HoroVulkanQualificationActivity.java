@@ -3,6 +3,8 @@ package org.horocore.qualification;
 import android.app.ActivityManager;
 import android.content.ComponentCallbacks2;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import org.horocore.platform.HoroInputActivity;
@@ -122,8 +124,10 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         memory.trim(this, level);
     }
 
-    /** Samples only at resume or from a severity-bearing callback on the main Activity lane. */
+    /** Observes pressure and recovery on the main Activity lane. */
     private static final class MemoryObservation {
+        private static final long RECOVERY_CHECK_DELAY_MS = 5000;
+
         private enum State {
             INACTIVE("inactive"), UNSUPPORTED("unsupported"), UNAVAILABLE("unavailable"),
             NORMAL("normal"), MODERATE("moderate"), LOW("low"), CRITICAL("critical");
@@ -139,12 +143,16 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
             }
         }
 
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private final Runnable recoveryCheck = this::checkRecovery;
         private HoroVulkanQualificationActivity owner;
         private State previous;
         private long revision;
+        private boolean recoveryCheckPending;
 
         void resume(HoroVulkanQualificationActivity activity) {
             if (owner == activity) return;
+            cancelRecoveryCheck();
             if (owner != null) owner.updateMemoryPacing(false);
             owner = activity;
             publish(sample(activity));
@@ -179,8 +187,35 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
             }
         }
 
+        /** A trim notification does not report when pressure clears. Recheck only while conserving. */
+        private void checkRecovery() {
+            recoveryCheckPending = false;
+            if (owner == null) return;
+            if (sample(owner) == State.NORMAL) {
+                publish(State.NORMAL);
+            } else {
+                scheduleRecoveryCheck();
+            }
+        }
+
+        private void scheduleRecoveryCheck() {
+            if (!recoveryCheckPending) recoveryCheckPending = handler.postDelayed(recoveryCheck, RECOVERY_CHECK_DELAY_MS);
+        }
+
+        private void cancelRecoveryCheck() {
+            if (!recoveryCheckPending) return;
+            handler.removeCallbacks(recoveryCheck);
+            recoveryCheckPending = false;
+        }
+
         private void publish(State state) {
-            if (owner != null) owner.updateMemoryPacing(state.conservesAttempts());
+            boolean conserve = owner != null && state.conservesAttempts();
+            if (owner != null) owner.updateMemoryPacing(conserve);
+            if (conserve) {
+                scheduleRecoveryCheck();
+            } else {
+                cancelRecoveryCheck();
+            }
             if (state == previous || revision == Long.MAX_VALUE) return;
             previous = state;
             Log.i("HoroPackageQualification", "host-memory revision=" + ++revision + " state=" + state.diagnostic);
