@@ -81,6 +81,10 @@ namespace {
             std::filesystem::create_directories(logs);
             std::ofstream stream(logs / "horo-engine.jsonl.1", std::ios::binary);
             stream << R"({"headers":{"X-API-Key":"fake-header-material-945"},"message":"retained diagnostic control"})" << '\n';
+            stream << R"({"category":"runtime.save.stage","message":"private-fixture-save-payload",)"
+                      R"("fields":{"stage":"commit","outcome":"succeeded","duration_ns":2,"bytes":9,"retries":0,)"
+                      R"("dropped_work":0,"queue_depth":0,"display":"private-fixture-save-display"}})"
+                   << '\n';
             stream.close();
             Require(!stream.fail(), "could not seed the fixture's retained diagnostic");
         }
@@ -238,8 +242,8 @@ namespace {
         return records;
     }
 
-    /** @brief Inspects decompressed entries so compression cannot hide an environment disclosure. */
-    void CheckBundlePrivacy(const std::filesystem::path &destination) {
+    /** @brief Inspects decompressed entries for disclosures and returns the canonical Save manifest summary. */
+    Json CheckBundlePrivacy(const std::filesystem::path &destination) {
         Require(std::filesystem::file_size(destination) <= 64U * 1024U * 1024U, "test bundle exceeded its input bound");
         std::ifstream bundle(destination, std::ios::binary);
         const std::string archive{std::istreambuf_iterator<char>{bundle}, std::istreambuf_iterator<char>{}};
@@ -260,6 +264,7 @@ namespace {
         } guard{zip};
 
         bool foundRetained = false;
+        Json saveSummary;
         for (mz_uint index = 0; index < mz_zip_reader_get_num_files(&zip); ++index) {
             mz_zip_archive_file_stat entry{};
             Require(mz_zip_reader_file_stat(&zip, index, &entry) != 0, "bundle entry metadata is invalid");
@@ -268,12 +273,31 @@ namespace {
             Require(mz_zip_reader_extract_to_mem(&zip, index, contents.data(), contents.size(), 0) != 0, "bundle entry is unreadable");
             Require(contents.find("fake-cli-secret-731") == std::string::npos, "bundle disclosed an environment credential");
             Require(contents.find("fake-header-material-945") == std::string::npos, "bundle disclosed a retained API key");
+            Require(contents.find("private-fixture-save-") == std::string::npos, "bundle disclosed private Save evidence");
+            if (std::string_view{entry.m_filename} == "manifest.json")
+                saveSummary = Json::parse(Json::parse(contents).at("metadata").at("save.summary").get<std::string>());
             if (std::string_view{entry.m_filename} == "logs/horo-engine.1.jsonl") {
                 foundRetained = contents.find("retained diagnostic control") != std::string::npos &&
                                 contents.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos;
             }
         }
         Require(foundRetained, "expected a redacted retained diagnostic in the bundle");
+        return saveSummary;
+    }
+
+    /** @brief Requires the committed result and manifest to identify the same safe Save data. */
+    void CheckSaveBundleCategories(const Json &result, const Json &saveSummary) {
+        Require(saveSummary.at("observations") == 1, "private Save evidence did not become one numeric observation");
+        const auto &categories = saveSummary.at("data_categories");
+        Require(categories.at("included") == Json::array({"stage_outcomes", "failure_categories", "numeric_totals"}),
+                "bundle's included Save categories changed");
+        Require(categories.at("excluded") ==
+                    Json::array({"save_payload", "display_text", "storage_identity", "local_paths", "provider_text"}),
+                "bundle's excluded Save categories changed");
+        Require(result.at("saveIncludedCategories") == "stage_outcomes, failure_categories, numeric_totals",
+                "terminal result needs the Save inclusion summary");
+        Require(result.at("saveExcludedCategories") == "save_payload, display_text, storage_identity, local_paths, provider_text",
+                "terminal result needs the Save exclusion summary");
     }
 
     /** @brief Verifies declared progress and one correlated summary for a real ZIP in Unicode/space paths. */
@@ -292,7 +316,7 @@ namespace {
         Require(terminal.at("recordVersion") == 1, "terminal record version changed");
         Require(terminal.at("result").at("outputPath") == Utf8Path(destination), "UTF-8 path changed across process boundaries");
         Require(records.front().at("invocationId") == terminal.at("invocationId"), "progress correlation changed");
-        CheckBundlePrivacy(destination);
+        CheckSaveBundleCategories(terminal.at("result"), CheckBundlePrivacy(destination));
         const auto failure = Records(process.Run({"host", "inspect", "--unknown", "--output", "jsonl"}, 2));
         Require(failure.size() == 1, "JSONL admission failure emitted extra records");
         Envelope(failure.front());

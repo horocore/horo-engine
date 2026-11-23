@@ -1,4 +1,5 @@
 #include "Horo/Application/HostObservability.h"
+#include "Horo/Foundation/Telemetry/Operation.h"
 #include "Horo/PlatformServices/PlatformRequest.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveMigration.h"
@@ -8,6 +9,7 @@
 #include "SaveTestUtils.h"
 #include "support/AllocationProbe.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -141,7 +143,7 @@ namespace {
     };
 
     /** @brief Holds the dispatcher outside its queue lock for a bounded deterministic queue-full fixture. */
-    class BlockingSink final : public Telemetry::ISink {
+    class BlockingSink : public Telemetry::ISink {
     public:
         void Export(const Telemetry::Record &, const Telemetry::InstrumentDescriptor *) override {
             std::unique_lock lock(mutex_);
@@ -187,6 +189,74 @@ namespace {
         bool entered_{};
         bool released_{};
     };
+
+#if HORO_ENABLE_TELEMETRY
+    /** @brief Copies typed Save telemetry for assertions after the dispatcher is joined. */
+    class SavePrivacySink final : public BlockingSink {
+    public:
+        struct Metric final {
+            Telemetry::Record record;
+            Telemetry::InstrumentDescriptor descriptor;
+        };
+
+        void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
+            BlockingSink::Export(record, descriptor);
+            if (std::holds_alternative<Telemetry::SpanRecord>(record.payload))
+                spans.push_back(record);
+            if (descriptor && std::holds_alternative<Telemetry::MetricRecord>(record.payload))
+                metrics.emplace_back(record, *descriptor);
+        }
+
+        std::vector<Telemetry::Record> spans;
+        std::vector<Metric> metrics;
+    };
+
+    /** @brief Requires exactly the public span fields and the isolated numeric lineage. */
+    void CheckSaveSpanPrivacy(const Telemetry::Record &record) {
+        CHECK(record.subsystem == "runtime.save");
+        const std::array lineage{Log::MdcField{"save.operation", "81"}, Log::MdcField{"save.parent_operation", "73"}};
+        CHECK(std::ranges::is_permutation(record.context.Fields(), lineage));
+        const auto &span = std::get<Telemetry::SpanRecord>(record.payload);
+        CHECK(span.operationId == 81);
+        CHECK(span.parentOperationId == 73);
+        CHECK(span.status == Telemetry::SpanStatus::Failed);
+        CHECK(span.name == "queue");
+        constexpr std::array<std::string_view, 9> keys{"stage",   "outcome",      "operation",   "duration_ns",     "bytes",
+                                                       "retries", "dropped_work", "queue_depth", "failure_category"};
+        REQUIRE(std::ranges::equal(span.fields, keys, {}, &Telemetry::Field::key));
+        CHECK(span.fields[0].value == Telemetry::FieldValue{std::string{"queue"}});
+        CHECK(span.fields[1].value == Telemetry::FieldValue{std::string{"failed"}});
+        for (const auto &field : std::span{span.fields}.subspan(2))
+            CHECK(std::holds_alternative<std::uint64_t>(field.value));
+    }
+
+    /** @brief Checks the registered vocabulary and resolves each emitted dimension ID against it. */
+    void CheckSaveMetricPrivacy(const SavePrivacySink::Metric &captured, std::string_view name, std::size_t dimensionCount) {
+        const auto &descriptor = captured.descriptor;
+        CAPTURE(name);
+        CHECK(descriptor.name == name);
+        CHECK(descriptor.subsystem == "runtime.save");
+        CHECK(captured.record.context.Fields().empty());
+        const auto &metric = std::get<Telemetry::MetricRecord>(captured.record.payload);
+        REQUIRE(metric.dimensionCount == dimensionCount);
+        REQUIRE(descriptor.dimensions.size() == dimensionCount);
+        if (dimensionCount == 0)
+            return;
+        constexpr std::array<std::string_view, 9> stages{"capture", "encode", "migrate",  "commit",     "restore",
+                                                         "sync",    "queue",  "recovery", "participant"};
+        const auto &stage = descriptor.dimensions.front();
+        CHECK(stage.key == "stage");
+        REQUIRE(std::ranges::equal(stage.allowedValues, stages));
+        CHECK(metric.dimensionValueIds[0] == 7);  // IDs are one-based, so this selects queue.
+        if (dimensionCount == 2) {
+            constexpr std::array<std::string_view, 4> outcomes{"succeeded", "failed", "cancelled", "interrupted"};
+            const auto &outcome = descriptor.dimensions.back();
+            CHECK(outcome.key == "outcome");
+            REQUIRE(std::ranges::equal(outcome.allowedValues, outcomes));
+            CHECK(metric.dimensionValueIds[1] == 2);  // Failed.
+        }
+    }
+#endif
 
     /** @brief Counts accepted terminal logs separately from permitted low-severity dispatcher drops. */
     std::size_t CountTerminalRecords(const std::string_view log) {
@@ -245,6 +315,42 @@ namespace {
                            .slot = Id<SaveGameSlotId>(1)}};
     }
 }  // namespace
+
+TEST_CASE("Save spans and metric dimensions exclude payload, display and provider data", "[save][telemetry][privacy]") {
+#if HORO_ENABLE_TELEMETRY
+    Session session;
+    REQUIRE(session.host);
+    auto sink = std::make_shared<SavePrivacySink>();
+    REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 64}, sink));
+    REQUIRE(session.Register());
+    REQUIRE(sink->Start("test.privacy.barrier"));
+    {
+        const Telemetry::ScopedOperationContext parent{
+            {.operationId = 73,
+             .diagnosticContext =
+                 Log::LogContextSnapshot{{{"save.display", "private display name"}, {"save.payload", "private payload"}}}}};
+        SaveStageObservation observation{SaveTelemetryStage::Queue, 81};
+        REQUIRE(observation.IsActive());
+        const auto error = WrapError(SaveErrors::StoragePermanentIo, MakeError(SaveErrors::CaptureIncomplete, "private provider data"),
+                                     "private save title");
+        observation.Fail(error, {.bytes = 29, .retries = 2, .droppedWork = 1, .queueDepth = 3});
+    }
+    session.registration.reset();
+    sink->Release();
+    REQUIRE(Telemetry::Runtime::Shutdown());
+
+    REQUIRE(sink->spans.size() == 1);
+    CheckSaveSpanPrivacy(sink->spans.front());
+    constexpr std::array<std::string_view, 6> names{"save.stage.outcomes", "save.stage.duration", "save.stage.bytes",
+                                                    "save.stage.retries",  "save.stage.dropped",  "save.queue.depth"};
+    constexpr std::array<std::size_t, 6> dimensions{2, 1, 1, 1, 1, 0};
+    REQUIRE(sink->metrics.size() == names.size());
+    for (std::size_t index = 0; index < names.size(); ++index)
+        CheckSaveMetricPrivacy(sink->metrics[index], names[index], dimensions[index]);
+#else
+    SKIP("Save telemetry is disabled in this build.");
+#endif
+}
 
 TEST_CASE("Save telemetry production storage jobs isolate private ambient context and export retained summaries",
           "[save][telemetry][privacy][bundle]") {

@@ -19,6 +19,12 @@ namespace Horo::Runtime {
     /** @brief Diagnostic root exported as bounded Save summary data by normal host compositions. */
     inline constexpr std::string_view SaveTelemetryDiagnosticNamespace{"runtime.save"};
 
+    /** @brief Fixed category names retained by the Save diagnostic bundle summary. */
+    inline constexpr std::array<std::string_view, 3> SaveBundleIncludedCategories{"stage_outcomes", "failure_categories", "numeric_totals"};
+    /** @brief Fixed private data categories excluded from Save bundle evidence. */
+    inline constexpr std::array<std::string_view, 5> SaveBundleExcludedCategories{"save_payload", "display_text", "storage_identity",
+                                                                                  "local_paths", "provider_text"};
+
     /** @brief Closed production Save stage taxonomy; identities never become metric dimensions. */
     enum class SaveTelemetryStage : std::uint8_t {
         Capture,

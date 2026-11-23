@@ -5,6 +5,7 @@
 #include "Horo/Cli/NavigationCommands.h"
 #include "Horo/Cli/PackageCommands.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "McpServe.h"
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -21,6 +23,17 @@ namespace Horo::Application::Internal {
         std::string Utf8Path(const std::filesystem::path &path) {
             const auto spelling = path.generic_u8string();
             return {spelling.begin(), spelling.end()};
+        }
+
+        /** @brief Formats closed Save category names for the existing scalar CLI result schema. */
+        std::string JoinCategoryNames(const std::span<const std::string_view> categories) {
+            std::string joined;
+            for (const auto category : categories) {
+                if (!joined.empty())
+                    joined += ", ";
+                joined += category;
+            }
+            return joined;
         }
         /** @brief Existing production operation selected by accepted inert metadata. */
         enum class HostCommand {
@@ -164,7 +177,9 @@ namespace Horo::Application::Internal {
                 return Result<Cli::CliCommandResult>::Success(
                     {.fields = {{"outputPath", Utf8Path(result.Value().outputPath)},
                                 {"fileCount", static_cast<std::int64_t>(result.Value().fileCount)},
-                                {"missingOptionalCount", static_cast<std::int64_t>(result.Value().missingOptionalCount)}}});
+                                {"missingOptionalCount", static_cast<std::int64_t>(result.Value().missingOptionalCount)},
+                                {"saveIncludedCategories", JoinCategoryNames(Runtime::SaveBundleIncludedCategories)},
+                                {"saveExcludedCategories", JoinCategoryNames(Runtime::SaveBundleExcludedCategories)}}});
             }
 
             PackageCliHost *packages_{};

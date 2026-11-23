@@ -124,10 +124,9 @@ namespace Horo::Runtime {
                                   {"invalid_rows", summary.invalid},
                                   {"missing_sources", summary.missing},
                                   {"truncated", summary.truncated}};
-            using Json = nlohmann::json;
             output["data_categories"] = {
-                {"included", Json::array({"stage_outcomes", "failure_categories", "numeric_totals"})},
-                {"excluded", Json::array({"save_payload", "display_text", "storage_identity", "local_paths", "provider_text"})},
+                {"included", SaveBundleIncludedCategories},
+                {"excluded", SaveBundleExcludedCategories},
             };
             for (std::size_t category = 0; category < FailureCategories.size(); ++category)
                 output["failure_categories"][FailureCategories[category]] = summary.failures[category];
