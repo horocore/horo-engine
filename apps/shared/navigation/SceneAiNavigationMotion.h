@@ -60,6 +60,10 @@ namespace Horo::Application::Internal {
         void DiscardFeedback() noexcept;
         /** @brief Withdraws an unconsumed solver request without failing the task. */
         void DiscardPrepared() noexcept;
+        /** @brief Withdraws optional route and motion work for the same accepted task.
+         * @param current Exact committed observation at the suspension tick.
+         */
+        void SuspendAtSafePoint(const Navigation::NavigationMovementObservation &current);
 
     private:
         /** @brief Validates one solved intent and admits it to Character without stepping simulation. */

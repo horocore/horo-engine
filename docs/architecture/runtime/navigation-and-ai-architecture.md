@@ -3164,6 +3164,21 @@ admitted crowd qualification. The same replay window carries achieved
 Character motion from canonical Physics. Best-effort path evidence retains
 its diagnostic-only scope and original portable schema.
 
+An opt-in best-effort Headless crowd policy admits work from committed
+gameplay distance, region membership, and gameplay pins. Unknown relevance
+preserves full cadence. Promotion takes effect immediately and demotion needs
+consecutive observations of the same lower tier. Reduced agents run avoidance
+at their authored tick interval. Between solves, and in the path-only tier,
+route maintenance continues with a fresh zero-motion command. Character
+feedback from that scheduled hold does not count as a blockage.
+
+Suspension withdraws pending route and avoidance work, clears transient
+feedback, and preserves the registered agent, goal, deadline, and Character
+binding. The actor stays in other agents' avoidance captures. Promotion
+resumes from its committed position with a fresh route request. This policy
+does not take renderer visibility as input. Qualified fixed-owner crowd
+execution continues to use its recorded complete-capture contract.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/NavigationCrowdAvoidance.h"
+#include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
@@ -121,8 +122,13 @@ namespace Horo::Application::Internal {
             std::unique_ptr<SceneAiNavigationActor> owner;
             std::optional<Navigation::NavigationAgentOwner> target;
             std::optional<Animation::GraphParameterId> motionStartTrigger;
+            Navigation::NavigationCrowdCadence cadence;
+            Navigation::NavigationCrowdWork crowdWork{Navigation::NavigationCrowdWork::Avoidance};
+            std::uint64_t cadenceTick{};
         };
 
+        /** @brief Updates per-registration optional work and withdraws pending work at suspension. */
+        [[nodiscard]] Result<void> ApplyCrowdCadence(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
         [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveActor(
             const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const SceneAiNavigationActor &actor,
             std::optional<Navigation::NavigationAgentOwner> target) const;
@@ -136,6 +142,8 @@ namespace Horo::Application::Internal {
         /** @brief Resolves the exact actor and fresh observation before admitting a detached result. */
         void PublishCrowdResult(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, std::size_t agent,
                                 const Navigation::NavigationAvoidanceOutcome &outcome);
+        /** @brief Publishes any scheduled holds through the same exact-tick Character admission. */
+        void PublishCadenceHolds(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
         /** @brief Withdraws this tick's detached jobs and any unconsumed per-actor requests. */
         void DiscardCrowdTick() noexcept;
         HeadlessNavigationPathScope(std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle,

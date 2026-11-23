@@ -10,6 +10,7 @@
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
+#include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/SceneReplicationCommitSource.h"
@@ -259,10 +260,16 @@ namespace Horo::Application::Internal {
             Navigation::NavigationCrowdQualification admitted;
         };
 
+        struct RelevancePolicy final {
+            Navigation::NavigationCrowdRelevanceProfile profile;
+            std::function<Navigation::NavigationCrowdRelevance(Navigation::CrowdAgentHandle, std::uint64_t)> observe;
+        };
+
         std::shared_ptr<Navigation::INavigationCrowdBackend> solver;
         // Each slot owns independent scratch. Solvers handle overlap with an earlier cancelled tick safely.
         std::vector<std::shared_ptr<Navigation::INavigationCrowdBackend>> workerSolvers;
         std::optional<QualifiedCrowd> qualified;
+        std::optional<RelevancePolicy> relevance;
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
                                                                   const Navigation::NavigationWorldActivationDescriptor &,
@@ -275,6 +282,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Checks the selected execution profile and exact qualified provider agreement. */
         [[nodiscard]] bool HasSolverSelection() const noexcept {
+            if (relevance && (qualified || !relevance->profile.IsValid() || !relevance->observe))
+                return false;
             if (qualified)
                 return !solver && workerSolvers.empty() && qualified->provider && qualified->admitted.IsValid() &&
                        qualified->provider->Qualification() == qualified->admitted;

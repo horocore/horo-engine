@@ -142,6 +142,13 @@ namespace Horo::Navigation {
          */
         [[nodiscard]] bool CancelPending(const NavigationVelocityWork &work) noexcept;
 
+        /** @brief Withdraws retained optional motion and route work at a suspension boundary.
+         * @param current Exact committed observation with no feedback.
+         * @return Success or a typed lifecycle validation error.
+         * @details The movement operation, Character incarnation, goal and budget remain owned by the same registration.
+         */
+        [[nodiscard]] Result<void> SuspendAtSafePoint(const NavigationMovementObservation &current);
+
         /** @brief Retain one exact Character result for the next strictly advancing owner tick.
          * @param feedback Sole movement authority's finite displacement and blockage evidence.
          * @return Success or stale/malformed failure leaving accepted feedback unchanged.

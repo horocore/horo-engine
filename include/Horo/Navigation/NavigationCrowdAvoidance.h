@@ -24,6 +24,7 @@ namespace Horo::Navigation {
         CapacityBusy,
         NumericalFailure,
         NoFeasibleSample,
+        CadenceHold, /**< Gameplay scheduled route maintenance without an avoidance solve this tick. */
     };
 
     /** @brief One agent's Horo-owned preferred-velocity request over an immutable snapshot. */

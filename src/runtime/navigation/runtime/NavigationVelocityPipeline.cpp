@@ -43,7 +43,7 @@ namespace Horo::Navigation {
         using enum NavigationAvoidanceStopReason;
         if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
             ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
-            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > NoFeasibleSample ||
+            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > CadenceHold ||
             (outcome.disposition == Sampled && outcome.stopReason != None) ||
             (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
             return false;
@@ -107,12 +107,14 @@ namespace Horo::Navigation {
             if (!current.path.tick || feedback_->tick != current.path.tick - 1 || feedback_->operation != movement_->Status().id)
                 return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
             const auto progress = ComputeMotionMagnitude(feedback_->achievedDisplacement);
-            const bool stalled = feedback_->blocked && progress <= policy_.minimumProgressMeters && publication_ &&
-                                 publication_->intent.state == NavigationMovementState::Following &&
-                                 publication_->preferredVelocity != Math::Vec3{};
-            nextBlocked = stalled ? std::min(blockedTicks_ + 1, policy_.blockedTicksBeforeRepath) : 0;
-            repath = nextBlocked >= policy_.blockedTicksBeforeRepath &&
-                     (!lastRepathTick_.has_value() || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
+            if (!publication_ || publication_->stopReason != NavigationAvoidanceStopReason::CadenceHold) {
+                const bool stalled = feedback_->blocked && progress <= policy_.minimumProgressMeters && publication_ &&
+                                     publication_->intent.state == NavigationMovementState::Following &&
+                                     publication_->preferredVelocity != Math::Vec3{};
+                nextBlocked = stalled ? std::min(blockedTicks_ + 1, policy_.blockedTicksBeforeRepath) : 0;
+                repath = nextBlocked >= policy_.blockedTicksBeforeRepath &&
+                         (!lastRepathTick_.has_value() || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
+            }
             observation.feedback = NavigationMovementFeedback{feedback_->operation,
                                                               feedback_->path,
                                                               feedback_->tick,
@@ -313,6 +315,17 @@ namespace Horo::Navigation {
         feedback_.reset();
         blockedTicks_ = 0;
         lastRepathTick_.reset();
+    }
+
+    /** @copydoc NavigationVelocityPipeline::SuspendAtSafePoint */
+    Result<void> NavigationVelocityPipeline::SuspendAtSafePoint(const NavigationMovementObservation &current) {
+        if (std::this_thread::get_id() != ownerThread_ || retired_)
+            return Result<void>::Failure(MakeError(NavigationErrors::AdmissionRejected));
+        if (const auto reset = movement_->ResetMotionAtSafePoint(current); reset.HasError())
+            return reset;
+        movement_->CollectRetiredAtSafePoint();
+        ClearMotionHistory();
+        return Result<void>::Success();
     }
 
     /** @copydoc NavigationVelocityPipeline::Retire */

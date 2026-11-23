@@ -1262,10 +1262,12 @@ namespace Horo::Application::CharacterSceneProductTest {
             Dedicated,
             MissedWorker,
             SaturatedWorker,
-            QualifiedCrowd
+            QualifiedCrowd,
+            RelevanceCadence
         };
-        const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated,
-                                       Scenario::Dedicated, Scenario::MissedWorker, Scenario::SaturatedWorker, Scenario::QualifiedCrowd);
+        const auto scenario =
+            GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated, Scenario::Dedicated,
+                     Scenario::MissedWorker, Scenario::SaturatedWorker, Scenario::QualifiedCrowd, Scenario::RelevanceCadence);
         const bool follows = scenario == Scenario::Follow;
         const bool dedicated = scenario == Scenario::Dedicated;
         const bool animated = scenario == Scenario::Animated || dedicated;
@@ -1304,6 +1306,21 @@ namespace Horo::Application::CharacterSceneProductTest {
         Math::Vec3 velocity;
         std::size_t captures{};
         auto policy = std::make_shared<Internal::HeadlessNavigationMotionPolicy>();
+        NavigationCrowdRelevance relevance;
+        std::optional<CrowdAgentHandle> observedAgent;
+        if (scenario == Scenario::RelevanceCadence) {
+            policy->relevance.emplace(NavigationCrowdRelevanceProfile{.fullDistanceMillimeters = 1000,
+                                                                      .reducedDistanceMillimeters = 2000,
+                                                                      .suspensionDistanceMillimeters = 4000,
+                                                                      .reducedIntervalTicks = 3,
+                                                                      .demotionDelayTicks = 1},
+                                      [&observedAgent, &relevance](const CrowdAgentHandle agent, const std::uint64_t) {
+                if (observedAgent)
+                    CHECK(agent == *observedAgent);
+                observedAgent = agent;
+                return relevance;
+            });
+        }
         NativeNavigationProductWorld product;
         decision.probe.onStart = [&] {
             staged =
@@ -1400,6 +1417,35 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto actor = scene->Find({3});
         REQUIRE(actor);
         goal.y = scene->Get(*actor).Value().localTransform->translation.y;
+        if (scenario == Scenario::RelevanceCadence) {
+            for (int frame = 0; frame < 12; ++frame)
+                product.RunFrame();
+            REQUIRE(staged);
+            REQUIRE(observedAgent);
+            relevance = {.anchorDistanceMillimeters = 100'000, .activeSimulationRegion = true};
+            product.RunFrame();
+            product.RunFrame();
+            const auto pathOnlyCaptures = captures;
+            product.RunFrame();
+            CHECK(captures > pathOnlyCaptures);
+            const auto held = position;
+            product.RunFrame();
+            CHECK(position.x == held.x);
+            CHECK(position.z == held.z);
+            relevance.activeSimulationRegion = false;
+            product.RunFrame();
+            product.RunFrame();
+            const auto suspendedCaptures = captures;
+            for (int frame = 0; frame < 4; ++frame)
+                product.RunFrame();
+            CHECK(captures == suspendedCaptures);
+            CHECK(decision.probe.cleanups == 0);
+            relevance.gameplayPinned = true;
+            product.RunFrame();
+            CHECK(captures > suspendedCaptures);
+            CHECK(position.x == held.x);
+            CHECK(position.z == held.z);
+        }
         if (workerDeadline) {
             const auto initial = scene->Get(*actor).Value().localTransform->translation;
             for (std::size_t frame = 0; frame < 6; ++frame)
@@ -1502,6 +1548,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         CAPTURE(goal.y, position.y);
         CHECK(decision.probe.lastTerminal == AI::AiTaskState::Succeeded);
         CHECK(decision.probe.aborts == 0);
+        CHECK(decision.probe.starts == 1);
     }
 #endif
 

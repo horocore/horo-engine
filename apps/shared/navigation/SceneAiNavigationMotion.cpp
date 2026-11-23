@@ -101,6 +101,14 @@ namespace Horo::Application::Internal {
         }
     }
 
+    /** @copydoc SceneAiNavigationMotion::SuspendAtSafePoint */
+    void SceneAiNavigationMotion::SuspendAtSafePoint(const Nav::NavigationMovementObservation &current) {
+        DiscardPrepared();
+        DiscardFeedback();
+        if (auto suspended = velocity_.SuspendAtSafePoint(current); suspended.HasError())
+            Reject(std::move(suspended).ErrorValue());
+    }
+
     /** @copydoc SceneAiNavigationMotion::Observe */
     Result<void> SceneAiNavigationMotion::Observe(const std::uint64_t tick) {
         if (pendingTick_ == 0)
