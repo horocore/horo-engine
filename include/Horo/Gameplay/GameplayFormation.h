@@ -6,6 +6,7 @@
 
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Navigation/NavigationAgentRegistry.h"
+#include "Horo/Navigation/NavigationWorldLifecycle.h"
 
 #include <optional>
 #include <span>
@@ -78,4 +79,44 @@ namespace Horo::Gameplay {
     [[nodiscard]] Result<GameplayFormationPlan> PrepareGameplayFormation(const GameplayFormationRequest &request,
                                                                          const Navigation::NavigationAgentSnapshot &agents,
                                                                          std::span<const GameplayFormationMember> members);
+
+    /** @brief Host-admitted bounds for a detached formation query batch. */
+    struct GameplayFormationQueryPolicy final {
+        Navigation::NavigationQueryRequirement projection{.query = Navigation::NavigationQueryKind::NearestPoint};
+        Navigation::NavigationQueryRequirement path;
+        Math::Vec3 projectionHalfExtents;
+    };
+
+    /** @brief A unique grounded target for the exact member and slot. */
+    struct GameplayFormationGoal final {
+        std::uint32_t slot{};
+        Navigation::CrowdAgentHandle agent;
+        Math::Vec3 groundTarget;
+    };
+
+    /** @brief Owned reachability results to revalidate against live group and topology before movement admission. */
+    struct GameplayFormationResolution final {
+        GameplayFormationId group;
+        std::uint64_t revision{};
+        Navigation::NavigationWorldActivationDescriptor source;
+        GameplayFormationAvailability availability{GameplayFormationAvailability::Dissolved};
+        std::vector<GameplayFormationGoal> goals;
+        std::vector<Navigation::CrowdAgentHandle> unassigned;
+    };
+
+    /** @brief Projects each proposed slot and requires a complete path under that member's registered traversal filter.
+     * @param plan Detached proposals from the owner cutoff.
+     * @param agents Agent records captured at that same cutoff.
+     * @param world Exact pinned world and topology read lease.
+     * @param policy Explicit per-query budgets and finite positive projection extents.
+     * @param cancellation Optional caller cancellation, checked between bounded provider calls.
+     * @return Owned results with unavailable slots marked unassigned, or a typed batch failure.
+     * @details Run as bounded background work. A revoked lease aborts the batch. The caller must recheck
+     *          group, agent and topology generations at the owner cutoff before using a result.
+     */
+    [[nodiscard]] Result<GameplayFormationResolution> ResolveGameplayFormation(const GameplayFormationPlan &plan,
+                                                                               const Navigation::NavigationAgentSnapshot &agents,
+                                                                               const Navigation::NavigationWorldReadLease &world,
+                                                                               const GameplayFormationQueryPolicy &policy,
+                                                                               const CancellationToken &cancellation = {});
 }  // namespace Horo::Gameplay

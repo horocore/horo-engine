@@ -1,6 +1,7 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayFormation.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
@@ -164,6 +165,77 @@ namespace {
     }
 #endif
 }  // namespace
+
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+TEST_CASE("Native formation projects reachable slots and withdraws goals from retired topology", "[gameplay][navigation][formation]") {
+    auto world = NavigationWorldLifecycle::Create(4).Value();
+    Activate(world, Provider());
+    const auto pinned = world.Acquire(World());
+    REQUIRE(pinned.HasValue());
+    auto registry = NavigationAgentRegistry::Create({.maximumAgents = 3}).Value();
+    const NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
+    std::array<NavigationAgentDescriptor, 3> descriptors{};
+    for (std::uint32_t index = 0; index < descriptors.size(); ++index) {
+        descriptors[index].owner = {binding.scene, index + 1, 1};
+        descriptors[index].profile = NavigationAgentProfileId::Create(1).Value();
+        descriptors[index].filter = Request().filter;
+    }
+    auto candidate = registry.PrepareScene(binding, descriptors).Value();
+    candidate->Publish();
+    const auto agents = registry.Snapshot().Value();
+    const std::array members{GameplayFormationMember{agents.Agents()[0].handle, {4, 0.3F, 4}},
+                             GameplayFormationMember{agents.Agents()[1].handle, {3, 0.3F, 4}},
+                             GameplayFormationMember{agents.Agents()[2].handle, {2, 0.3F, 4}}};
+    const std::array offsets{Math::Vec3{1, 0, 0}, Math::Vec3{20, 0, 0}};
+    const auto proposed = PrepareGameplayFormation({.group = GameplayFormationId::Create(1).Value(),
+                                                    .revision = 1,
+                                                    .shape = GameplayFormationShape::Custom,
+                                                    .customSlots = offsets},
+                                                   agents, members);
+    REQUIRE(proposed.HasValue());
+    const GameplayFormationQueryPolicy policy{.projection = {NavigationQueryKind::NearestPoint,
+                                                             NavigationQualityLevel::Balanced,
+                                                             {64, 16, 100}},
+                                              .path = Request().requirement,
+                                              .projectionHalfExtents = {1, 1, 1}};
+    const auto resolved = ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy);
+    if (resolved.HasError())
+        UNSCOPED_INFO(resolved.ErrorValue().code.Value());
+    REQUIRE(resolved.HasValue());
+    CHECK(resolved.Value().availability == GameplayFormationAvailability::Degraded);
+    CHECK(resolved.Value().source == Activation());
+    REQUIRE(resolved.Value().goals.size() == 2);
+    CHECK(resolved.Value().goals[1].agent == members[1].agent);
+    CHECK(resolved.Value().goals[1].groundTarget == Math::Vec3{5, 0, 4});
+    REQUIRE(resolved.Value().unassigned.size() == 1);
+    CHECK(resolved.Value().unassigned.front() == members[2].agent);
+
+    auto disconnected = proposed.Value();
+    disconnected.slots.back().start = {100, 0, 4};
+    disconnected.slots.back().unprojectedTarget = {6, 0, 4};
+    const auto inaccessible = ResolveGameplayFormation(disconnected, agents, pinned.Value(), policy);
+    REQUIRE(inaccessible.HasValue());
+    CHECK(inaccessible.Value().goals.size() == 2);
+    CHECK(inaccessible.Value().unassigned == resolved.Value().unassigned);
+
+    auto blocked = proposed.Value();
+    for (auto &slot : blocked.slots)
+        slot.unprojectedTarget.x += 100.0F;
+    const auto dissolved = ResolveGameplayFormation(blocked, agents, pinned.Value(), policy);
+    REQUIRE(dissolved.HasValue());
+    CHECK(dissolved.Value().availability == GameplayFormationAvailability::Dissolved);
+    CHECK(dissolved.Value().goals.empty());
+    CHECK(dissolved.Value().unassigned.size() == members.size());
+
+    CancellationSource cancelled;
+    cancelled.RequestCancellation();
+    REQUIRE(ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy, cancelled.Token()).HasError());
+    world.BeginShutdown();
+    const auto stale = ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy);
+    REQUIRE(stale.HasError());
+    CHECK(stale.ErrorValue().code.Value() == NavigationErrors::QueryCancelled.code.Value());
+}
+#endif
 
 TEST_CASE("Loaded native module reload and shutdown revoke pending navigation delivery before unload") {
     Fixture fixture;

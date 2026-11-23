@@ -3180,7 +3180,11 @@ Navigation agent publication. A live preferred leader anchors line, column,
 wedge, or custom offsets. Leader loss selects the first live handle in stable
 order. Replaced or disabled agents receive no slot, and a custom layout with
 insufficient slots reports unassigned members. Each plan owns its group revision
-and exact Scene binding. Proposed targets are inputs to reachability queries.
+and exact Scene binding. Background resolution projects each slot through a
+pinned Navigation world and requires a complete path using the member's
+registered traversal filter. Off-mesh or duplicate projected slots leave their
+members unassigned. The result carries the exact topology generation and
+remains subject to owner-cutoff validation before movement admission.
 Character remains the owner of achieved movement.
 
 Gameplay can opt a crowd profile into route-speed modulation by setting
