@@ -1244,9 +1244,15 @@ namespace Horo::Editor::Ui {
         return ComboControl(id, value, itemCount, source, fonts, options);
     }
 
-    /** @copydoc ComboControl(const char*,int*,int,const ComboItemSource&,const Theme::Fonts&,ComboControlOptions) */
-    bool ComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
-                      const ComboControlOptions options) {
+    /** @brief Identifies a dropdown's name and the label protocol used to render it. */
+    struct ComboMetadataName final {
+        const char *label;
+        Detail::EditorControlLabelKind kind;
+    };
+
+    /** @brief Draws the shared dropdown and records the name provided by its caller. */
+    static bool DrawComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
+                                 const ComboControlOptions options, const ComboMetadataName name) {
         IM_ASSERT(source.label);
         bool changed = false;
         ImGui::PushID(id);
@@ -1270,8 +1276,8 @@ namespace Horo::Editor::Ui {
         const auto popupState = popupOpen || fieldActivated
                                     ? UiAccessibilityStateFlag::HasPopup | UiAccessibilityStateFlag::Expanded
                                     : static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::HasPopup);
-        RecordControlMetadata(UiAccessibilityRole::List, id, UiAccessibilityState{popupState},
-                              {.kind = UiAccessibilityValueKind::Integer, .integer = *value});
+        RecordControlMetadata(UiAccessibilityRole::List, name.label, UiAccessibilityState{popupState},
+                              {.kind = UiAccessibilityValueKind::Integer, .integer = *value}, false, name.kind);
 
         auto *dl = ImGui::GetWindowDrawList();
         const ImVec4 controlSurface =
@@ -1343,6 +1349,12 @@ namespace Horo::Editor::Ui {
         ImGui::PopStyleVar(4);
         ImGui::PopID();
         return changed;
+    }
+
+    /** @copydoc ComboControl(const char*,int*,int,const ComboItemSource&,const Theme::Fonts&,ComboControlOptions) */
+    bool ComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
+                      const ComboControlOptions options) {
+        return DrawComboControl(id, value, itemCount, source, fonts, options, {id, Detail::EditorControlLabelKind::FrameworkLabel});
     }
 
     /** @copydoc WrappedText */
@@ -2793,8 +2805,12 @@ namespace Horo::Editor::Ui {
         const PropertyRowLayout layout = BeginPropertyRow(label, fonts);
         ImGui::SetCursorScreenPos({layout.controlX, layout.controlY});
         ImGui::PushItemWidth(layout.controlWidth);
-        const bool changed = ComboControl(id, &value, entries.data(), static_cast<int>(entries.size()), fonts,
-                                          ComboControlOptions{.height = 27.0F, .componentSize = ComponentSize::Medium});
+        const ComboItemSource source{.label = [entries](const int index) {
+            return entries[index];
+        }};
+        const bool changed = DrawComboControl(id, &value, static_cast<int>(entries.size()), source, fonts,
+                                              {.height = 27.0F, .componentSize = ComponentSize::Medium},
+                                              {label, Detail::EditorControlLabelKind::ResolvedText});
         ImGui::PopItemWidth();
         EndPropertyRow(layout);
         return changed;
@@ -2852,6 +2868,13 @@ namespace Horo::Editor::Ui {
             Theme::ScopedTextStyle ts(fonts.sans, InspectorTypography::Field(), Theme::FontPx::Sans);
             result.changed = ImGui::DragFloat("##value", &value, options.speed, options.minimum, options.maximum, options.format);
             result.committed = ImGui::IsItemDeactivatedAfterEdit();
+            const auto state = options.error ? UiAccessibilityStateFlag::Editable | UiAccessibilityStateFlag::Invalid
+                                             : static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Editable);
+            const auto metadata = std::isfinite(value)
+                                      ? UiAccessibilityValueInput{.kind = UiAccessibilityValueKind::Number, .number = value}
+                                      : UiAccessibilityValueInput{};
+            RecordControlMetadata(UiAccessibilityRole::TextField, label, UiAccessibilityState{state}, metadata, false,
+                                  Detail::EditorControlLabelKind::ResolvedText);
         }
         if (options.error)
             ImGui::PopStyleColor(4);

@@ -2226,6 +2226,36 @@ TEST_CASE("Shared text links expose their rendered names and activate through ac
     CHECK(activations == 1);
 }
 
+TEST_CASE("Inspector property metadata uses visible names and typed values", "[unit][editor][gui][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    const std::array entries{"Automatic", "Manual"};
+    int selection = 1;
+    float strength = 0.5F;
+    RenderMetadataFrame([&] {
+        static_cast<void>(Ui::DrawComboPropRow("Mode##label", "##mode", selection, entries, gui.fonts));
+        static_cast<void>(Ui::DrawFloatPropRow("Strength", "##strength", strength, gui.fonts, {.error = true}));
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 2);
+    const auto &mode = frame.controls[0];
+    CHECK(frame.Text(mode.name) == "Mode##label");
+    CHECK(mode.role == UiAccessibilityRole::List);
+    CHECK(mode.value.kind == UiAccessibilityValueKind::Integer);
+    CHECK(mode.value.integer == 1);
+    const auto &field = frame.controls[1];
+    CHECK(frame.Text(field.name) == "Strength");
+    CHECK(field.role == UiAccessibilityRole::TextField);
+    CHECK(field.state.Has(UiAccessibilityStateFlag::Editable));
+    CHECK(field.state.Has(UiAccessibilityStateFlag::Invalid));
+    CHECK(field.value.kind == UiAccessibilityValueKind::Number);
+    CHECK(field.value.number == 0.5);
+}
+
 TEST_CASE("Disabled shared links and selected theme chips retain actual metadata without enabling activation",
           "[unit][editor][gui][input][accessibility][metadata]") {
     using namespace Horo::Editor;
