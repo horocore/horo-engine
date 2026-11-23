@@ -142,6 +142,7 @@ TEST_CASE("Metal presents a GUI frame with a replacement font atlas", "[integrat
         }
     } sdl{};
 
+    REQUIRE(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
     constexpr FramebufferExtent output{256, 256};
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("Horo Metal atlas smoke", output.width, output.height,
                                                                                       SDL_WINDOW_METAL),
@@ -153,6 +154,7 @@ TEST_CASE("Metal presents a GUI frame with a replacement font atlas", "[integrat
     REQUIRE(RegisterMetalRenderBackend(registry, port, bridge).HasValue());
     REQUIRE(registry.Seal().HasValue());
     auto created = RenderFrontend::Create(registry, RenderBackendId{"metal"}, {.requirePresentation = true, .maxFramesInFlight = 2});
+    INFO((created.HasError() ? created.ErrorValue().message : ""));
     REQUIRE(created.HasValue());
     auto frontend = std::move(created).Value();
     REQUIRE(frontend->Resize(output).HasValue());
