@@ -542,11 +542,22 @@ struct XRLocatedViewSet {
 };
 ```
 
-The contract supports a bounded variable number of views. The first production
-slice may admit only primary stereo. A runtime configuration with more views is
-then reported as unsupported before image acquisition; it is never truncated to
-two views. Quad-view and foveated-inset execution can be added later without a
-public contract migration.
+The contract supports a bounded variable number of views. Primary stereo remains
+the baseline. Vulkan Editor Play also supports the opt-in post-1.0
+`FoveatedInsetProjection` profile. Preflight requires an exact four-view runtime
+configuration through OpenXR 1.1 or `XR_VARJO_quad_views`, opaque blending, a
+compatible four-layer color target, and support for four indexed renderer views.
+An incompatible runtime or renderer fails admission before image acquisition.
+The selected profile never falls back to stereo.
+
+Play keeps the native order of left and right peripheral views followed by left
+and right inset views. Each inset must share its peripheral view's pose and fit
+within its field of view. Vulkan renders each full view into its own layer and
+derives each rectangle from the corresponding runtime extent. OpenXR receives
+all four views in one opaque projection layer and owns blending at the inset
+edges. The four-view graph retains no previous-eye depth and does not submit
+synthesis inputs. Physical-device qualification records the tested headset,
+runtime and renderer. See the [OpenXR primary view configuration contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrViewConfigurationType.html).
 
 Reference-space changes, recentering, bounds changes, and world-origin rebasing
 are translated through an explicit adapter. Runtime tracking state never mutates
