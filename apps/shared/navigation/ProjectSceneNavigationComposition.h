@@ -46,6 +46,7 @@ namespace Horo::Application::Internal {
         std::size_t maximumRebuiltTiles{};
         std::size_t maximumOwnedBytes{};
         CancellationToken cancellation;
+        std::shared_ptr<const Navigation::INavigationRuntimeLinkProjector> linkProjector;
     };
 
     /** @brief Explicit lifetime owners for one authoritative world, retained until its Scene participants shut down. */

@@ -59,9 +59,55 @@ namespace Horo::Navigation {
             });
         }
 
+        /** @brief Reprojection can update placement and narrow clearance while preserving authored traversal semantics. */
+        [[nodiscard]] bool MatchesLinkAuthority(const NavMeshOffMeshLink &previous, const NavMeshOffMeshLink &candidate) noexcept {
+            return candidate.authoredLink == previous.authoredLink && candidate.area == previous.area &&
+                   candidate.bidirectional == previous.bidirectional && candidate.radiusMeters > 0 &&
+                   candidate.radiusMeters <= previous.radiusMeters && candidate.startPolygon != candidate.endPolygon;
+        }
+
+        /** @brief Admits persistent authored links under an explicit worker projection authority. */
+        [[nodiscard]] bool CanReproject(const INavigationRuntimeLinkProjector *projector, std::span<const NavMeshOffMeshLink> links) {
+            return projector && std::ranges::all_of(links, [](const auto &link) {
+                return link.authoredLink.IsValid();
+            });
+        }
+
+        /** @brief Reprojects the complete old authored link set under the detached build's remaining scratch ceiling. */
+        [[nodiscard]] Result<void> ReprojectLinks(const NavigationRuntimeTileRebuildRequest &request, const NavigationCookedTile &previous,
+                                                  NavigationTileBuildResult &built, const std::size_t scratch,
+                                                  const CancellationToken &cancel) {
+            const auto &links = previous.Topology().offMeshLinks;
+            if (links.empty())
+                return Result<void>::Success();
+            if (!CanReproject(request.linkProjector, links))
+                return Failure<void>(NavigationErrors::OperationUnsupported);
+            if (links.size() > request.tileLimits.maximumOffMeshLinks || links.size() >= scratch / sizeof(NavMeshOffMeshLink))
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            std::vector<NavMeshOffMeshLink> projected;
+            projected.reserve(links.size());
+            if (projected.capacity() >= scratch / sizeof(NavMeshOffMeshLink))
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            const auto remaining = scratch - projected.capacity() * sizeof(NavMeshOffMeshLink);
+            for (const auto &link : links) {
+                if (cancel.IsCancellationRequested())
+                    return Failure<void>(NavigationErrors::BakeInputCancelled);
+                const auto result = request.linkProjector->Project(request.input, previous.Key(), built, link, remaining, cancel);
+                if (result.HasError())
+                    return Result<void>::Failure(result.ErrorValue());
+                if (!MatchesLinkAuthority(link, result.Value()))
+                    return Failure<void>(NavigationErrors::BakeInputInvalid);
+                projected.push_back(result.Value());
+            }
+            built.offMeshLinks = std::move(projected);
+            return Result<void>::Success();
+        }
+
         /** @brief Builds one detached tile, keeping input scratch and encoding within the operation's budget. */
-        [[nodiscard]] Result<Tile> Build(const INavigationMeshBuilder &builder, const NavigationPreparedTile &prepared,
-                                         NavigationTileBuildLimits limits, const std::size_t available, const CancellationToken &cancel) {
+        [[nodiscard]] Result<Tile> Build(const NavigationRuntimeTileRebuildRequest &request, const INavigationMeshBuilder &builder,
+                                         const NavigationPreparedTile &prepared, const NavigationCookedTile &previous,
+                                         const std::size_t available, const CancellationToken &cancel) {
+            auto limits = request.tileLimits;
             const auto preparedBytes = prepared.triangles.capacity() * sizeof(NavigationTileBuildTriangle) +
                                        prepared.modifiers.capacity() * sizeof(NavigationTileBuildModifier);
             if (preparedBytes >= available)
@@ -87,7 +133,10 @@ namespace Horo::Navigation {
                 return Failure<Tile>(NavigationErrors::OperationUnsupported);
             if (!FitsTopologyLimits(built.Value(), limits))
                 return Failure<Tile>(NavigationErrors::CapacityExceeded);
-            return NavigationCookedTile::Create(prepared, std::move(built).Value(),
+            auto topology = std::move(built).Value();
+            if (auto projected = ReprojectLinks(request, previous, topology, outputBytes / 2, cancel); projected.HasError())
+                return Result<Tile>::Failure(std::move(projected).ErrorValue());
+            return NavigationCookedTile::Create(prepared, std::move(topology),
                                                 std::min<std::size_t>(outputBytes, NavigationTileBuildLimits::MaximumOwnedBytes));
         }
 
@@ -115,16 +164,15 @@ namespace Horo::Navigation {
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
                 const auto &old = request.activeTiles[index];
-                if (prepared.Value().dependencyKey == old->DependencyKey()) {
+                if (const bool revalidateLinks = request.linkProjector && !old->Topology().offMeshLinks.empty();
+                    prepared.Value().dependencyKey == old->DependencyKey() && !revalidateLinks) {
                     if (!FitsTopologyLimits(old->Topology(), request.tileLimits))
                         return Failure<void>(NavigationErrors::CapacityExceeded);
                     return Add(old);
                 }
                 if (rebuilt >= request.maximumRebuiltTiles)
                     return Failure<void>(NavigationErrors::CapacityExceeded);
-                if (!old->Topology().offMeshLinks.empty())
-                    return Failure<void>(NavigationErrors::OperationUnsupported);
-                auto tile = Build(builder, prepared.Value(), request.tileLimits, remaining, cancel);
+                auto tile = Build(request, builder, prepared.Value(), *old, remaining, cancel);
                 if (tile.HasError())
                     return Result<void>::Failure(std::move(tile).ErrorValue());
                 ++rebuilt;

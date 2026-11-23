@@ -29,7 +29,8 @@ namespace Horo::Navigation {
                     .compatibility = request.compatibility,
                     .tileLimits = request.tileLimits,
                     .maximumRebuiltTiles = request.maximumRebuiltTiles,
-                    .maximumOwnedBytes = request.maximumOwnedBytes};
+                    .maximumOwnedBytes = request.maximumOwnedBytes,
+                    .linkProjector = request.linkProjector.get()};
         }
 
         /** @brief Runs exactly one rebuild and transfers its candidate only after successful preparation. */

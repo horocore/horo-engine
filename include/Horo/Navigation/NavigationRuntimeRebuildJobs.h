@@ -19,6 +19,7 @@ namespace Horo::Navigation {
         NavigationTileBuildLimits tileLimits{};
         std::size_t maximumRebuiltTiles{32};
         std::size_t maximumOwnedBytes{64U * 1024U * 1024U};
+        std::shared_ptr<const INavigationRuntimeLinkProjector> linkProjector; /**< Immutable worker-safe link authority, when granted. */
     };
 
     /** @brief Owns one accepted runtime rebuild and its unpublished result on the Scene owner lane.

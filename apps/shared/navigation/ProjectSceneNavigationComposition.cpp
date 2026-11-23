@@ -346,7 +346,8 @@ namespace Horo::Application::Internal {
                                                               .activeTiles = *tiles,
                                                               .compatibility = command.compatibility,
                                                               .maximumRebuiltTiles = command.maximumRebuiltTiles,
-                                                              .maximumOwnedBytes = command.maximumOwnedBytes};
+                                                              .maximumOwnedBytes = command.maximumOwnedBytes,
+                                                              .linkProjector = std::move(command.linkProjector)};
             auto started = world.rebuild->Start(std::move(request), command.cancellation, std::move(reservation).Value());
             if (started.HasValue()) {
                 world.rebuildAuthority = std::move(command.observe);

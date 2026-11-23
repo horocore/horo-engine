@@ -14,6 +14,52 @@ namespace Horo::Navigation {
     namespace {
         using TestSupport::RequireError;
 
+        /** @brief Two disconnected triangles with deliberately reversible local polygon indices. */
+        [[nodiscard]] NavigationTileBuildResult LinkedTopology(const NavMeshTileKey &key, const Math::Aabb &bounds, bool reversed) {
+            const auto area = TestSupport::Id<NavigationAreaId>(1);
+            const auto first = reversed ? 3U : 0U;
+            const auto second = reversed ? 0U : 3U;
+            return {.state = NavigationTileBuildState::Built,
+                    .key = key,
+                    .bounds = bounds,
+                    .vertices = {{1, 0, 1}, {2, 0, 1}, {1, 0, 2}, {4, 0, 1}, {5, 0, 1}, {4, 0, 2}},
+                    .polygons = {{{0, 3}, {0, 3}, area}, {{3, 3}, {3, 3}, area}},
+                    .polygonVertexIndices = {first, first + 1, first + 2, second, second + 1, second + 2},
+                    .polygonAdjacencies = std::vector<std::uint32_t>(6, NavMeshBoundaryAdjacency),
+                    .provenance = {{.producer = TestSupport::Id<NavigationSourceProducerId>(1),
+                                    .contribution = TestSupport::Id<NavigationSourceContributionId>(1),
+                                    .revision = TestSupport::Id<NavigationSourceRevision>(1),
+                                    .sourceDigest = TestSupport::Digest(7),
+                                    .polygons = {0, 2}}}};
+        }
+
+        class LinkedTileBuilder final : public INavigationMeshBuilder {
+        public:
+            [[nodiscard]] Result<NavigationTileBuildResult> BuildTile(const NavigationTileBuildRequest &request,
+                                                                      const CancellationToken &) const override {
+                return Result<NavigationTileBuildResult>::Success(LinkedTopology(request.key, request.bounds, true));
+            }
+        };
+
+        class ObservedLinkProjector final : public INavigationRuntimeLinkProjector {
+        public:
+            bool changeAuthority{};
+            mutable std::size_t calls{};
+
+            [[nodiscard]] Result<NavMeshOffMeshLink> Project(const NavigationBakeInputSnapshot &input, const NavigationBakeTileKey &tile,
+                                                             const NavigationTileBuildResult &topology, const NavMeshOffMeshLink &previous,
+                                                             std::size_t scratch, const CancellationToken &) const override {
+                ++calls;
+                if (tile.tile != topology.key || !topology.offMeshLinks.empty() || !input.Revisions().geometry.IsValid() || scratch == 0)
+                    return Result<NavMeshOffMeshLink>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+                auto projected = previous;
+                std::swap(projected.startPolygon, projected.endPolygon);
+                if (changeAuthority)
+                    projected.authoredLink = TestSupport::Id<NavigationLinkId>(2);
+                return Result<NavMeshOffMeshLink>::Success(projected);
+            }
+        };
+
         /** @brief Produces one portable polygon so worker completion includes detached provider construction. */
         class JobTileBuilder final : public INavigationMeshBuilder {
         public:
@@ -77,7 +123,56 @@ namespace Horo::Navigation {
                     .activeTiles = {std::move(stored).Value()},
                     .compatibility = fixture.compatibility};
         }
+
+        /** @brief Starts with a linked authored tile whose geometry dependency is still current. */
+        [[nodiscard]] NavigationRuntimeOwnedRebuildRequest LinkedRequest() {
+            auto request = Request(TestSupport::Activation());
+            const auto &layout = request.layout.front();
+            const auto prepared = PrepareNavigationBakeTile(*request.input, layout, request.compatibility);
+            REQUIRE(prepared.HasValue());
+            auto topology = LinkedTopology(layout.key.tile, layout.bounds, false);
+            topology.offMeshLinks.emplace_back(Math::Vec3{1, 0, 1}, Math::Vec3{4, 0, 1}, 0.5F, 0U, 1U, topology.polygons.front().area, true,
+                                               TestSupport::Id<NavigationLinkId>(1));
+            auto cooked = NavigationCookedTile::Create(prepared.Value(), std::move(topology));
+            REQUIRE(cooked.HasValue());
+            request.activeTiles.front() = std::move(cooked).Value();
+            return request;
+        }
     }  // namespace
+
+    TEST_CASE("Runtime rebuild jobs reproject linked tiles and fence authored semantics", "[unit][navigation][tile_rebuild][jobs]") {
+        JobSystem workers{{.workerCount = 0}};
+        const auto factory = std::make_shared<JobBackendFactory>();
+        NavigationRuntimeRebuildJobs jobs{workers, std::make_shared<LinkedTileBuilder>(), factory};
+        auto request = LinkedRequest();
+        auto projector = std::make_shared<ObservedLinkProjector>();
+        SECTION("Preserves the link identity as local polygon indices change") {
+            projector->changeAuthority = false;
+        }
+        SECTION("Rejects a replacement identity before provider construction") {
+            projector->changeAuthority = true;
+        }
+        request.linkProjector = projector;
+        const auto accepted = jobs.Start(std::move(request));
+        REQUIRE(accepted.HasValue());
+        workers.Shutdown(ShutdownPolicy::Drain);
+        auto completed = jobs.TakeCompleted();
+        CHECK(projector->calls == 1);
+        if (projector->changeAuthority) {
+            RequireError(completed, NavigationErrors::BakeInputInvalid);
+            CHECK(factory->calls == 0);
+            return;
+        }
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value());
+        CHECK(completed.Value()->RebuiltTileCount() == 1);
+        const auto &links = completed.Value()->Tiles().front()->Topology().offMeshLinks;
+        REQUIRE(links.size() == 1);
+        CHECK(links.front().authoredLink == TestSupport::Id<NavigationLinkId>(1));
+        CHECK(links.front().startPolygon == 1);
+        CHECK(links.front().endPolygon == 0);
+        CHECK(factory->calls == 1);
+    }
 
     TEST_CASE("Navigation rebuild jobs own queued input and leave the provider detached until owner publication",
               "[unit][navigation][tile_rebuild][jobs]") {

@@ -45,6 +45,27 @@ namespace Horo::Navigation {
         std::size_t maximumOwnedBytes_{};
     };
 
+    /** @brief Host-qualified projection of existing authored tile-local links against detached replacement polygons. */
+    class INavigationRuntimeLinkProjector {
+    public:
+        virtual ~INavigationRuntimeLinkProjector() = default;
+
+        /** @brief Projects both endpoints and verifies traversal clearance under the exact post-change source capture.
+         * @param input Immutable post-change geometry and modifier authority.
+         * @param tile Exact scope, surface, profile and coordinates owning the link.
+         * @param topology Detached link-free topology. Polygon identities are local to this replacement tile.
+         * @param previous Authored link whose identity, direction and area must be preserved.
+         * @param maximumScratchBytes Hard ceiling for projection and evidence validation allocations.
+         * @param cancellation Observed around bounded provider calls and work units.
+         * @return One revalidated tile-local link or a typed failure that rejects the complete rebuild.
+         */
+        [[nodiscard]] virtual Result<NavMeshOffMeshLink> Project(const NavigationBakeInputSnapshot &input,
+                                                                 const NavigationBakeTileKey &tile,
+                                                                 const NavigationTileBuildResult &topology,
+                                                                 const NavMeshOffMeshLink &previous, std::size_t maximumScratchBytes,
+                                                                 const CancellationToken &cancellation) const = 0;
+    };
+
     /** @brief Immutable closed grid and captured post-change inputs borrowed for one detached rebuild. */
     struct NavigationRuntimeTileRebuildRequest final {
         NavigationRuntimeRebuildFence expected;
@@ -56,6 +77,7 @@ namespace Horo::Navigation {
         NavigationTileBuildLimits tileLimits{};
         std::size_t maximumRebuiltTiles{32};
         std::size_t maximumOwnedBytes{64U * 1024U * 1024U};
+        const INavigationRuntimeLinkProjector *linkProjector{}; /**< Revalidates existing linked tiles even if grounded inputs match. */
     };
 
     /** @brief Detached provider and its retained storage reservation, separate from the portable tiles. */
@@ -147,7 +169,7 @@ namespace Horo::Navigation {
      * @param factory Host-selected query materializer for nonempty output.
      * @param cancellation Token observed between bounded units and before returning the candidate.
      * @return Detached candidate or typed failure. No cache, asset or live topology is modified.
-     * @note A changed tile containing old traversal links requires separately qualified link reprojection.
+     * @note A changed tile containing authored links requires host-qualified reprojection. Legacy links fail closed.
      */
     [[nodiscard]] Result<NavigationRuntimeTileRebuildCandidate> PrepareRuntimeNavigationTileRebuild(
         const NavigationRuntimeTileRebuildRequest &request, const INavigationMeshBuilder &builder,
