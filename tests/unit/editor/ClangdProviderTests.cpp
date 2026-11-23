@@ -165,6 +165,45 @@ namespace {
         CHECK_FALSE(std::filesystem::exists(project.directory / "draft.cpp"));
     }
 
+    TEST_CASE("Installed Clangd uses a compilation database in a Unicode build directory", "[integration][clangd]") {
+#ifdef _WIN32
+        const auto *installed = _wgetenv(L"HORO_TEST_CLANGD");
+#else
+        const auto *installed = std::getenv("HORO_TEST_CLANGD");
+#endif
+        if (!installed || !*installed)
+            SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
+        TestSupport::SourceProject project;
+        std::filesystem::create_directory(project.directory / "include");
+        project.Put("inline constexpr int fixture = 37;\n", "include/fixture.hpp");
+        constexpr std::string_view source = "#include \"fixture.hpp\"\nint value = fixture;\n";
+        project.Put("int value = 0;\n", "game.cpp");
+        const auto sourcePath = Utf8(project.directory / "game.cpp");
+        const auto commands = nlohmann::json::array({{{"directory", Utf8(project.directory)},
+                                                      {"file", sourcePath},
+                                                      {"arguments", {"clang++", "-std=c++20", "-Iinclude", sourcePath}}}});
+        const auto buildDirectory = project.directory / std::filesystem::path{u8"native build caffè"};
+        std::filesystem::create_directory(buildDirectory);
+        const auto database = buildDirectory / "compile_commands.json";
+        {
+            std::ofstream output{database, std::ios::binary};
+            output << commands.dump();
+            output.close();
+            REQUIRE(output.good());
+        }
+        NativeExternalProcessRunner runner;
+        const ClangdSettings settings{.executable = std::filesystem::path{installed}, .compileCommands = database};
+        SourceFileOpenService sources{project.directory};
+        const auto opened = sources.Open({.path = "game.cpp", .mode = SourceOpenMode::EmbeddedOnly});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot);
+        const auto &base = *opened.Value().sourceSnapshot;
+        const auto file = base.Identity().key.source;
+        const auto diagnostics = CheckClangdPreview(runner, settings, {project.directory, file, base, source}, {});
+        REQUIRE(diagnostics.HasValue());
+        CHECK(diagnostics.Value().items.empty());
+    }
+
     TEST_CASE("Installed Clangd publishes diagnostics, navigates symbols and completes project C++", "[integration][clangd]") {
         const auto *installed = std::getenv("HORO_TEST_CLANGD");
         if (!installed)
