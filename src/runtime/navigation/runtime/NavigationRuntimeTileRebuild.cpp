@@ -228,6 +228,8 @@ namespace Horo::Navigation {
     Result<TileClosure> NavigationRuntimeTileRebuildCandidate::PublishAtSafePoint(NavigationWorldLifecycle &world,
                                                                                   const NavigationRuntimeRebuildFence &current,
                                                                                   const CancellationToken &cancel) && {
+        if (reservation_.state_)
+            return Failure<TileClosure>(NavigationErrors::OperationUnsupported);
         auto tiles = std::exchange(tiles_, {});
         auto backend = std::move(backend_);
         if (cancel.IsCancellationRequested())

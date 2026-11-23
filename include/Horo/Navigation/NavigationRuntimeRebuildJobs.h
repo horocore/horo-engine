@@ -42,9 +42,11 @@ namespace Horo::Navigation {
         /** @brief Admits a single detached rebuild on the background CPU queue.
          * @param request Owned capture. Providers never observe subsequent owner edits.
          * @param parentCancellation Optional Scene or command cancellation ancestry.
+         * @param reservation Optional exclusive Scene budget matching the request fence and maximum owned bytes.
          * @return Success or typed invalid, cancelled or admission failure. Rejection leaves any existing job untouched.
          */
-        [[nodiscard]] Result<void> Start(NavigationRuntimeOwnedRebuildRequest request, const CancellationToken &parentCancellation = {});
+        [[nodiscard]] Result<void> Start(NavigationRuntimeOwnedRebuildRequest request, const CancellationToken &parentCancellation = {},
+                                         NavigationRuntimeRebuildReservation reservation = {});
         /** @brief Transfers the terminal result once without waiting or publishing.
          * @return Empty when idle or unfinished, the prepared candidate, or an owned typed terminal failure.
          */

@@ -3,6 +3,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 #include "Horo/Navigation/NavigationRuntimeQueues.h"
+#include "Horo/Navigation/NavigationRuntimeRebuildJobs.h"
 #include "Horo/Navigation/NavigationRuntimeTileRebuild.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <semaphore>
 #include <span>
 #include <thread>
 #include <utility>
@@ -48,6 +50,31 @@ namespace Horo::Navigation {
                 auto owned = std::move(provider).Value();
                 return Prepared::Success({std::move(owned.backend), owned.reservedProviderBytes});
             }
+        };
+
+        /** @brief Stops a real provider preparation at a known running-worker boundary. */
+        class PausedSceneRebuildFactory final : public INavigationRuntimeRebuildBackendFactory {
+        public:
+            [[nodiscard]] bool WaitUntilRunning() const {
+                return entered_.try_acquire_for(std::chrono::seconds{5});
+            }
+
+            void Resume() const {
+                resume_.release();
+            }
+
+            [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
+                const NavigationWorldActivationDescriptor &activation, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
+                const std::size_t budget, const CancellationToken &cancellation) const override {
+                entered_.release();
+                resume_.acquire();
+                return factory_.Prepare(activation, tiles, budget, cancellation);
+            }
+
+        private:
+            SceneRebuildFactory factory_;
+            mutable std::binary_semaphore entered_{0};
+            mutable std::binary_semaphore resume_{0};
         };
 
         /** @brief Supplies a rebuild to the real Scene group transaction and can withdraw authority after staging. */
@@ -87,8 +114,8 @@ namespace Horo::Navigation {
             CancellationSource cancellation;
             NavigationAssetSceneActivationParticipant *participant{};
 
-            RuntimeRebuildSceneFixture() {
-                const NavigationAssetSceneLimits limits{.maximumLiveWorlds = 2, .maximumReservedProviderBytes = 3 * ProviderReservation};
+            explicit RuntimeRebuildSceneFixture(const std::size_t budget = 3 * ProviderReservation) {
+                const NavigationAssetSceneLimits limits{.maximumLiveWorlds = 2, .maximumReservedProviderBytes = budget};
                 auto navigation =
                     std::make_unique<NavigationAssetSceneActivationParticipant>(*cache, Target(), NativeFactory, limits, std::nullopt,
                                                                                 NavigationAssetSceneSelection{.runtimeRebuild = true});
@@ -139,9 +166,9 @@ namespace Horo::Navigation {
             NavigationRuntimeTileRebuildCandidate candidate;
         };
 
-        /** @brief Produces a real Recast successor from the fixture's currently published closure. */
-        [[nodiscard]] RuntimeRebuildAttempt PrepareSceneRebuild(const NavigationAssetSceneActivationParticipant &participant,
-                                                                NavigationGeneration next) {
+        /** @brief Captures a bounded rebuild request for the fixture's currently published closure. */
+        [[nodiscard]] NavigationRuntimeOwnedRebuildRequest CaptureSceneRebuild(const NavigationAssetSceneActivationParticipant &participant,
+                                                                               NavigationGeneration next) {
             const auto world = participant.ActiveWorld();
             REQUIRE(world);
             const auto previous = world->ActiveDescriptor();
@@ -152,22 +179,33 @@ namespace Horo::Navigation {
             const auto &tile = *base->front();
             const auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
             REQUIRE(descriptor.HasValue());
-            const std::array layout{NavigationBakeTile{tile.Key(), tile.Topology().bounds, descriptor.Value().tileSizeMeters}};
             TestSupport::IncrementalBakeFixture geometry;
-            const auto source = CaptureRebuildExclusion(geometry, tile.Key(), descriptor.Value().geometry);
+            auto source = CaptureRebuildExclusion(geometry, tile.Key(), descriptor.Value().geometry);
             const NavigationRuntimeRebuildFence fence{previous.Value(), source->Revisions(), 1, 1, 1};
-            const NavigationRuntimeTileRebuildRequest request{.expected = fence,
-                                                              .nextTopology = next,
-                                                              .input = *source,
-                                                              .layout = layout,
-                                                              .activeTiles = *base,
-                                                              .compatibility = geometry.compatibility};
+            return {.expected = fence,
+                    .nextTopology = next,
+                    .input = std::move(source),
+                    .layout = {{tile.Key(), tile.Topology().bounds, descriptor.Value().tileSizeMeters}},
+                    .activeTiles = *base,
+                    .compatibility = geometry.compatibility};
+        }
+
+        /** @brief Produces a real Recast successor synchronously for Scene barrier tests. */
+        [[nodiscard]] RuntimeRebuildAttempt PrepareSceneRebuild(const NavigationAssetSceneActivationParticipant &participant,
+                                                                NavigationGeneration next) {
+            const auto owned = CaptureSceneRebuild(participant, next);
+            const NavigationRuntimeTileRebuildRequest request{.expected = owned.expected,
+                                                              .nextTopology = owned.nextTopology,
+                                                              .input = *owned.input,
+                                                              .layout = owned.layout,
+                                                              .activeTiles = owned.activeTiles,
+                                                              .compatibility = owned.compatibility};
             const auto builder = CreateRecastDetourNavigationMeshBuilder();
             REQUIRE(builder.HasValue());
             const SceneRebuildFactory factory;
             auto candidate = PrepareRuntimeNavigationTileRebuild(request, *builder.Value(), factory);
             REQUIRE(candidate.HasValue());
-            return {fence, std::move(candidate).Value()};
+            return {owned.expected, std::move(candidate).Value()};
         }
 
         /** @brief Queries opposite sides of the runtime exclusion using the current provider's exact identity. */
@@ -842,6 +880,72 @@ namespace Horo::Navigation {
         CHECK(participant.Snapshot().reservedProviderBytes < baseline);
         tile.reset();
         CHECK(participant.Snapshot().reservedProviderBytes == 0);
+    }
+
+    TEST_CASE("Scene reserves worker rebuild memory before submission and transfers the charge at the barrier",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        constexpr std::size_t sceneBudget = 128U * 1024U * 1024U;
+        RuntimeRebuildSceneFixture fixture{sceneBudget};
+        auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto initial = participant.Snapshot();
+        const auto next = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto request = CaptureSceneRebuild(participant, next);
+        const auto fence = request.expected;
+        const auto limit = request.maximumOwnedBytes;
+        JobSystem workers{{.workerCount = 0}};
+        NavigationRuntimeRebuildJobs jobs{workers, CreateRecastDetourNavigationMeshBuilder().Value(),
+                                          std::make_shared<SceneRebuildFactory>()};
+        TestSupport::RequireError(participant.ReserveRuntimeRebuild(fence, sceneBudget), NavigationErrors::CapacityExceeded);
+        auto reserved = participant.ReserveRuntimeRebuild(fence, limit);
+        REQUIRE(reserved.HasValue());
+        TestSupport::RequireError(participant.ReserveRuntimeRebuild(fence, limit), NavigationErrors::AdmissionRejected);
+        REQUIRE(jobs.Start(std::move(request), {}, std::move(reserved).Value()).HasValue());
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes + limit);
+        workers.Shutdown(ShutdownPolicy::Drain);
+        auto completed = jobs.TakeCompleted();
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value());
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes + limit);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds + 1);
+        auto candidate = std::move(completed).Value().value();
+        TestSupport::RequireError(std::move(candidate).PublishAtSafePoint(*world, fence), NavigationErrors::OperationUnsupported);
+        REQUIRE(fixture.Commit(std::move(candidate), fence, false)->ResultValue());
+        CHECK(world->ActiveDescriptor().Value().topology == next);
+        CHECK(participant.Snapshot().reservedProviderBytes < initial.reservedProviderBytes + limit);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds);
+    }
+
+    TEST_CASE("Cancelling a running Scene rebuild retains its reservation until worker storage releases",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture{128U * 1024U * 1024U};
+        auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto initial = participant.Snapshot();
+        const auto next = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto request = CaptureSceneRebuild(participant, next);
+        const auto limit = request.maximumOwnedBytes;
+        auto reserved = participant.ReserveRuntimeRebuild(request.expected, limit);
+        REQUIRE(reserved.HasValue());
+        JobSystem workers{{.workerCount = 1}};
+        const auto factory = std::make_shared<PausedSceneRebuildFactory>();
+        NavigationRuntimeRebuildJobs jobs{workers, CreateRecastDetourNavigationMeshBuilder().Value(), factory};
+        REQUIRE(jobs.Start(std::move(request), {}, std::move(reserved).Value()).HasValue());
+        const auto running = factory->WaitUntilRunning();
+        jobs.Cancel();
+        const auto duringCancellation = participant.Snapshot().reservedProviderBytes;
+        const auto unfinished = jobs.TakeCompleted();
+        factory->Resume();
+        workers.Shutdown(ShutdownPolicy::Drain);
+        REQUIRE(running);
+        REQUIRE(unfinished.HasValue());
+        CHECK_FALSE(unfinished.Value());
+        CHECK(duringCancellation == initial.reservedProviderBytes + limit);
+        TestSupport::RequireError(jobs.TakeCompleted(), NavigationErrors::BakeInputCancelled);
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds);
     }
 
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",

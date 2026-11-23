@@ -19,6 +19,32 @@ namespace Horo::Navigation {
         constexpr auto operator<=>(const NavigationRuntimeRebuildFence &) const noexcept = default;
     };
 
+    /** @brief Exclusive Scene admission held through worker execution and any unpublished result. */
+    class NavigationRuntimeRebuildReservation final {
+    public:
+        /** @brief Leaves the request under standalone caller-owned budgeting. */
+        NavigationRuntimeRebuildReservation() noexcept = default;
+        NavigationRuntimeRebuildReservation(NavigationRuntimeRebuildReservation &&) noexcept = default;
+        NavigationRuntimeRebuildReservation &operator=(NavigationRuntimeRebuildReservation &&) noexcept = default;
+        NavigationRuntimeRebuildReservation(const NavigationRuntimeRebuildReservation &) = delete;
+        NavigationRuntimeRebuildReservation &operator=(const NavigationRuntimeRebuildReservation &) = delete;
+
+    private:
+        friend class NavigationAssetSceneActivationParticipant;
+        friend class NavigationRuntimeRebuildJobs;
+        friend class NavigationRuntimeTileRebuildCandidate;
+        struct State;
+
+        /** @brief Checks whether the request may use the detached budget. */
+        [[nodiscard]] bool Matches(const NavigationRuntimeRebuildFence &expected, std::size_t bytes) const noexcept {
+            return !state_ || (expected_ == expected && maximumOwnedBytes_ == bytes);
+        }
+
+        std::shared_ptr<const State> state_;
+        NavigationRuntimeRebuildFence expected_;
+        std::size_t maximumOwnedBytes_{};
+    };
+
     /** @brief Immutable closed grid and captured post-change inputs borrowed for one detached rebuild. */
     struct NavigationRuntimeTileRebuildRequest final {
         NavigationRuntimeRebuildFence expected;
@@ -90,6 +116,7 @@ namespace Horo::Navigation {
 
     private:
         friend class NavigationAssetSceneActivationParticipant;
+        friend class NavigationRuntimeRebuildJobs;
         friend Result<NavigationRuntimeTileRebuildCandidate> PrepareRuntimeNavigationTileRebuild(
             const NavigationRuntimeTileRebuildRequest &, const INavigationMeshBuilder &, const INavigationRuntimeRebuildBackendFactory &,
             const CancellationToken &);
@@ -105,11 +132,13 @@ namespace Horo::Navigation {
 
         NavigationRuntimeRebuildFence expected_;
         NavigationGeneration next_;
+        NavigationRuntimeRebuildReservation reservation_; /**< Destroyed after detached provider and tiles. */
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles_;
         std::unique_ptr<INavigationQueryBackend> backend_;
         std::size_t rebuiltTiles_{};
         std::size_t reservedBytes_{};
         Sha256Digest predecessorTiles_{};
+        bool preparedByJob_{};
     };
 
     /** @brief Rebuilds changed dependency keys and prepares a complete immutable replacement without publishing it.

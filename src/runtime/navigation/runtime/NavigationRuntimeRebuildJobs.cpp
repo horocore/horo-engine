@@ -8,6 +8,7 @@ namespace Horo::Navigation {
     namespace {
         /** @brief Transfers one worker-written candidate to the owner after its job terminalizes. */
         struct CompletedRebuild final {
+            NavigationRuntimeRebuildReservation reservation;
             std::optional<NavigationRuntimeTileRebuildCandidate> candidate;
             std::atomic<bool> ready{}; /**< Set after the worker writes; read before the owner moves the candidate. */
         };
@@ -67,7 +68,8 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationRuntimeRebuildJobs::Start */
     Result<void> NavigationRuntimeRebuildJobs::Start(NavigationRuntimeOwnedRebuildRequest request,
-                                                     const CancellationToken &parentCancellation) {
+                                                     const CancellationToken &parentCancellation,
+                                                     NavigationRuntimeRebuildReservation reservation) {
         if (pending_)
             return Result<void>::Failure(MakeError(NavigationErrors::AdmissionRejected));
         if (parentCancellation.IsCancellationRequested())
@@ -76,8 +78,11 @@ namespace Horo::Navigation {
             return Result<void>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         if (!HasOwnedLayout(request))
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        if (!reservation.Matches(request.expected, request.maximumOwnedBytes))
+            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         try {
             auto pending = std::make_unique<Pending>(parentCancellation);
+            pending->transfer->reservation = std::move(reservation);
             auto submitted = jobs_.SubmitResult({.parentCancellation = pending->cancel.Token(), .priority = JobPriority::Background},
                                                 [request = std::move(request), transfer = pending->transfer, builder = builder_,
                                                  factory = factory_](const CancellationToken &cancel) mutable {
@@ -110,6 +115,8 @@ namespace Horo::Navigation {
             return Return::Failure(std::move(*terminal.error));
         if (!pending->transfer->ready.load())
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+        pending->transfer->candidate->reservation_ = std::move(pending->transfer->reservation);
+        pending->transfer->candidate->preparedByJob_ = true;
         return Return::Success(std::move(pending->transfer->candidate));
     }
 

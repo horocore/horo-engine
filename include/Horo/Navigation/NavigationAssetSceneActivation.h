@@ -50,8 +50,8 @@ namespace Horo::Navigation {
 
     /** @brief Separate immutable tile cache and per-world provider reservation accounting. */
     struct NavigationAssetWorldSnapshot final {
-        std::size_t liveWorlds{};            /**< Includes retired query-pinned and detached prepared worlds. */
-        std::size_t reservedProviderBytes{}; /**< Never refunded while the backend remains query-pinned. */
+        std::size_t liveWorlds{};            /**< Active, retired or detached provider slots, including admitted rebuild jobs. */
+        std::size_t reservedProviderBytes{}; /**< Provider, rebuild and portable storage charged through final release. */
         Assets::AssetPayloadCacheSnapshot immutableBytes;
     };
 
@@ -118,8 +118,15 @@ namespace Horo::Navigation {
          */
         [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<const NavigationCookedTile>>> ActiveRuntimeRebuildTiles()
             const noexcept;
+        /** @brief Reserves one detached rebuild budget before submitting work on the opted-in Scene.
+         * @param expected Exact active predecessor and authorized source fence.
+         * @param maximumOwnedBytes Hard worker budget for scratch and detached output.
+         * @return Exclusive transferable reservation or a typed stale, unavailable or capacity failure.
+         */
+        [[nodiscard]] Result<NavigationRuntimeRebuildReservation> ReserveRuntimeRebuild(const NavigationRuntimeRebuildFence &expected,
+                                                                                        std::size_t maximumOwnedBytes);
         /** @brief Adopts a detached rebuild as a staged Scene structural candidate.
-         * @param rebuild Consumed candidate from the active opted-in closure.
+         * @param rebuild Consumed candidate from the active opted-in closure. Worker candidates require this Scene's reservation.
          * @param observe Owned authority observation called during admission and immediately before publication.
          * @param cancellation Optional cancellation observed at both boundaries.
          * @return Candidate rolling back its stage on destruction, or a typed failure preserving the active world.
