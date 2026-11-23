@@ -5062,6 +5062,7 @@ target_compile_features(HoroRenderDisplayTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderDisplayTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroFramePacingTests
         unit/runtime/renderer/FramePacingTests.cpp
+        unit/runtime/renderer/DynamicResolutionTests.cpp
 )
 target_compile_features(HoroFramePacingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFramePacingTests PRIVATE HoroEngine::RenderApi)
