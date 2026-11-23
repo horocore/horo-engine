@@ -1528,10 +1528,14 @@ namespace Horo::Tests::VulkanEditor {
         CameraViewportFixture fixture;
         auto scene = fixture.View(0);
         scene.lights = {};
-        host.viewport->RequestExtent({320, 240});
+        constexpr auto size = Host::CameraQualificationExtent;
+        host.viewport->RequestExtent(size);
         host.viewport->RequestGrid({.visible = false});
-        host.SynchronizeViewport(scene);
+        host.SynchronizeViewport(scene, size);
         constexpr std::array objectIds{RenderMotionObjectId{1}};
+        const auto sampler = host.frontend->CreateSampler({});
+        Check(sampler);
+        Check(host.frontend->ProcessResourceRequests());
         const auto waitIdle = host.viewportObservation->DeviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle");
         for (std::uint64_t number = 1; number <= 5; ++number) {
             CAPTURE(number);
@@ -1551,6 +1555,11 @@ namespace Horo::Tests::VulkanEditor {
             REQUIRE(waitIdle(host.viewportObservation->Queue()) == VK_SUCCESS);
             Check(host.frontend->ProcessResourceRequests());
         }
+        const auto pixels = ReadViewportColor(host, sampler.Value().handle);
+        REQUIRE(pixels.size() == size.width * size.height * 4);
+        const auto center = (size.width * (size.height / 2) + (size.width / 2)) * 4;
+        CHECK(pixels[center + 3] == 255);
+        CHECK_FALSE(std::ranges::equal(std::span{pixels}.first(3), std::span{pixels}.subspan(center, 3)));
         REQUIRE(host.Drain());
     }
 

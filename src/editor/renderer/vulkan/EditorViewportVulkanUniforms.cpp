@@ -104,13 +104,14 @@ namespace Horo::Editor {
         auto attempted = history_.BeginFrame({.compatibility = Compatibility(pass.extent, source_.sceneDomain),
                                               .frameId = frame.value,
                                               .predecessorFrameId = lastAcceptedFrame_,
-                                              .camera = {viewProjection},
+                                              .camera = {viewProjection, JitterUv()},
                                               .disocclusion = {images->linearDepth.texture, images->motion.texture},
                                               .invalidation = {.cameraCut = ProjectionChanges(projection_)},
                                               .objects = samples.Value()});
         if (attempted.HasError())
             return Result<void>::Failure(attempted.ErrorValue());
         pending_ = std::move(attempted).Value();
+        pendingJitter_ = reconstructionPlan.has_value();
         return Result<void>::Success();
     }
 
@@ -119,7 +120,7 @@ namespace Horo::Editor {
         const Render::FramebufferExtent extent, const std::uint64_t scene) const {
         const auto color = owner.resources_.ColorTexture();
         const auto surfaceGeneration = (std::uint64_t{color.slot} << 32) | color.generation;
-        // This owner admits one immutable desktop guide recipe and an unjittered, fixed-extent raster.
+        // This owner admits one immutable desktop guide recipe and subpixel sequence.
         constexpr std::uint64_t desktopGuideContract = 1;
         return {
             .view = owner.LightingViewIdentity(),
@@ -149,6 +150,14 @@ namespace Horo::Editor {
         return !SameMotionProjection(projection, acceptedProjection_);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::JitterUv */
+    Math::Vec2 EditorViewportRendererVulkan::TemporalGuidePrograms::JitterUv() const noexcept {
+        if (!reconstructionPlan)
+            return {};
+        const auto &sample = reconstructionPlan->dispatch.constants.sample;
+        return {sample[0], sample[1]};
+    }
+
     /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded */
     void EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded(const Render::RenderTimelinePoint signal) noexcept {
         if (pending_)
@@ -158,6 +167,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Finish */
     void EditorViewportRendererVulkan::TemporalGuidePrograms::Finish(const bool presented) noexcept {
         source_ = {};
+        const bool jittered = std::exchange(pendingJitter_, false);
         if (!pending_) {
             if (presented)
                 lastAcceptedFrame_ = 0;
@@ -169,6 +179,10 @@ namespace Horo::Editor {
             if (accepted.HasValue() && accepted.Value() && history_.Publish(*pending_).HasValue()) {
                 lastAcceptedFrame_ = pending_->frameId;
                 acceptedProjection_ = projection_;
+                if (jittered) {
+                    acceptedJitter_ = pending_->camera.currentJitterUv;
+                    nextJitterPhase_ = (nextJitterPhase_ + 1) % EditorVulkanTemporalJitterPhases;
+                }
                 pending_.reset();
                 return;
             }
@@ -221,10 +235,8 @@ namespace Horo::Editor {
                                                                                  const Render::RenderMotionCameraPair &camera,
                                                                                  const Render::RenderMotionObjectPair &object) const {
         const auto &localToWorld = object.currentLocalToWorld;
-        auto raster = Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld);
-        // Match the ordinary Vulkan raster's top-left orientation.
-        for (std::size_t column = 0; column < 4; ++column)
-            raster.values[column * 4 + 1] *= -1;
+        const auto raster =
+            EditorVulkanRasterProjection(Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld), camera.currentJitterUv);
         const auto localToView = Math::Multiply(view, localToWorld);
         std::array<std::byte, MaximumUniformBytes> depthBytes{};
         const auto depthBlock = std::span{depthBytes}.first(linearDepth.uniformBytes);
@@ -244,12 +256,12 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(
         const Render::Detail::VulkanEditorGraphicsBridge &bridge, const ShaderResources &program, const EditorViewportExtent extent,
         const Render::FrameToken frame, const DrawSlot &slot, const Render::RenderStaticMeshInstance &instance,
-        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow) {
+        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow, const Math::Vec2 jitterUv) {
         auto mvp = BuildRenderMvp(scene.camera, instance.localToWorld, static_cast<float>(extent.width) / extent.height,
                                   Math::ClipDepthRange::ZeroToOne);
         if (mvp.HasError())
             return Result<void>::Failure(mvp.ErrorValue());
-        Math::Mat4 clipFromLocal = std::move(mvp).Value();
+        auto clipFromLocal = EditorVulkanRasterProjection(std::move(mvp).Value(), jitterUv);
         const auto inverse = Math::TryInverseAffine(instance.localToWorld);
         if (inverse.HasError())
             return Result<void>::Failure(inverse.ErrorValue());
@@ -257,9 +269,6 @@ namespace Horo::Editor {
         for (std::size_t row = 0; row < 4; ++row)
             for (std::size_t column = 0; column < 4; ++column)
                 normal.values[column * 4 + row] = inverse.Value().values[row * 4 + column];
-        // Vulkan's positive-height viewport has top-left framebuffer origin; flip only the clip-space Y component.
-        for (std::size_t column = 0; column < 4; ++column)
-            clipFromLocal.values[column * 4 + 1] *= -1;
         // DXC lowers the HLSL viewport MVP to a transposed SPIR-V matrix. Pack that matrix before reflecting its native strides.
         for (std::size_t row = 0; row < 4; ++row)
             for (std::size_t column = row + 1; column < 4; ++column)

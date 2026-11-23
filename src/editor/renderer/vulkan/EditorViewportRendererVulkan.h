@@ -409,6 +409,16 @@ namespace Horo::Editor {
             std::optional<Render::NativeReconstructionScenePlan> reconstructionPlan;
             [[nodiscard]] Render::TemporalHistoryCompatibility Compatibility(Render::FramebufferExtent extent, std::uint64_t scene) const;
             [[nodiscard]] bool ProjectionChanges(const Render::RenderProjectionDescriptor &projection) const noexcept;
+            /** @brief Returns the shader's exact current raster offset, or zero on a plain color frame. */
+            [[nodiscard]] Math::Vec2 JitterUv() const noexcept;
+
+            [[nodiscard]] std::uint32_t JitterPhase() const noexcept {
+                return nextJitterPhase_;
+            }
+
+            [[nodiscard]] Math::Vec2 AcceptedJitterUv() const noexcept {
+                return acceptedJitter_;
+            }
 
             [[nodiscard]] std::uint64_t SceneDomain() const noexcept {
                 return source_.sceneDomain;
@@ -439,6 +449,9 @@ namespace Horo::Editor {
             Render::RenderProjectionDescriptor projection_;
             Render::RenderProjectionDescriptor acceptedProjection_;
             std::uint64_t lastAcceptedFrame_{};
+            Math::Vec2 acceptedJitter_;
+            std::uint32_t nextJitterPhase_{};
+            bool pendingJitter_{};
         };
 
         /** @brief Owns one immutable canvas consumer and its slot-local mesh bindings. */
@@ -566,7 +579,8 @@ namespace Horo::Editor {
                                                         const ShaderResources &program, EditorViewportExtent extent,
                                                         Render::FrameToken frame, const DrawSlot &slot,
                                                         const Render::RenderStaticMeshInstance &instance,
-                                                        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow);
+                                                        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow,
+                                                        Math::Vec2 jitterUv);
             [[nodiscard]] static Result<void> WriteShadowParameters(const ShaderResources &program, std::span<std::byte> bytes,
                                                                     const Render::RenderSceneView &scene,
                                                                     const Render::DirectionalShadowFrame *shadow);

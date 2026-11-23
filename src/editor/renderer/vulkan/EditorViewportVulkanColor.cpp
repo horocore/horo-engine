@@ -170,8 +170,10 @@ namespace Horo::Editor {
         ReconstructionFrameRequest request{
             .compatibility = current,
             .resourceOwner = color.owner,
-            .timing = {.frameId = frameId, .predecessorFrameId = previous ? previous->frameId : 0},
+            .timing = {.frameId = frameId, .predecessorFrameId = previous ? previous->frameId : 0, .jitterSample = state.JitterPhase()},
             .projection = pass.scene.camera.projection,
+            .currentJitterUv = EditorVulkanTemporalJitter(state.JitterPhase(), pass.extent),
+            .previousJitterUv = state.AcceptedJitterUv(),
             .color = {color, resources_.SceneColorDescriptor(), current.view, frameId},
             .positiveLinearDepth = guideInput(images->linearDepth.texture, RenderTextureFormat::R32Float),
             .motion = guideInput(images->motion.texture, RenderTextureFormat::Rg32Float),

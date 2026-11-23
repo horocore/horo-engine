@@ -423,6 +423,40 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @brief Evaluates one component of the bounded low-discrepancy sequence. */
+    static float RadicalInverse(std::uint32_t index, const std::uint32_t base) noexcept {
+        const float inverse = 1.0F / static_cast<float>(base);
+        float weight = inverse;
+        float result = 0.0F;
+        while (index != 0) {
+            result += static_cast<float>(index % base) * weight;
+            index /= base;
+            weight *= inverse;
+        }
+        return result;
+    }
+
+    /** @copydoc EditorVulkanTemporalJitter */
+    Math::Vec2 EditorVulkanTemporalJitter(const std::uint32_t sample, const Render::FramebufferExtent renderExtent) noexcept {
+        if (!renderExtent.IsValid())
+            return {};
+        const std::uint32_t index = sample % EditorVulkanTemporalJitterPhases + 1;
+        return {(RadicalInverse(index, 2) - 0.5F) / static_cast<float>(renderExtent.width),
+                (RadicalInverse(index, 3) - 0.5F) / static_cast<float>(renderExtent.height)};
+    }
+
+    /** @copydoc EditorVulkanRasterProjection */
+    Math::Mat4 EditorVulkanRasterProjection(Math::Mat4 canonical, const Math::Vec2 jitterUv) noexcept {
+        const Math::Vec2 offset{2.0F * jitterUv.x, 2.0F * jitterUv.y};
+        for (std::size_t column = 0; column < 4; ++column) {
+            const auto row = column * 4;
+            const float w = canonical.values[row + 3];
+            canonical.values[row] += offset.x * w;
+            canonical.values[row + 1] = -canonical.values[row + 1] + offset.y * w;
+        }
+        return canonical;
+    }
+
     /** @copydoc PackEditorVulkanTemporalDepth */
     Result<std::size_t> PackEditorVulkanTemporalDepth(const Render::MaterialBindingLayout &layout, const Math::Mat4 &rasterLocalToClip,
                                                       const Math::Mat4 &localToView, std::span<std::byte> destination) {

@@ -127,6 +127,21 @@ namespace Horo::Editor {
      */
     [[nodiscard]] Result<Render::RenderGraphicsPipelineState> EditorVulkanTemporalInputPipelineState(EditorVulkanTemporalInput input);
 
+    /** @brief Number of subpixel samples repeated by the desktop temporal sequence. */
+    inline constexpr std::uint32_t EditorVulkanTemporalJitterPhases = 8;
+
+    /** @brief Computes a centered base-2/base-3 temporal phase in top-left texture UV.
+     * @param sample Zero-based sequence index, wrapped to the fixed phase count.
+     * @param renderExtent Actual unscaled raster size in pixels.
+     * @return Less than half a pixel of displacement per axis, or zero for an empty raster. */
+    [[nodiscard]] Math::Vec2 EditorVulkanTemporalJitter(std::uint32_t sample, Render::FramebufferExtent renderExtent) noexcept;
+
+    /** @brief Converts canonical clip Y to Vulkan and offsets raster coverage in texture UV.
+     * @param canonical Unjittered local-to-clip matrix in upward-Y clip space.
+     * @param jitterUv Displacement on the top-left texture sampling grid.
+     * @return Raster matrix with unchanged homogeneous depth and W. */
+    [[nodiscard]] Math::Mat4 EditorVulkanRasterProjection(Math::Mat4 canonical, Math::Vec2 jitterUv) noexcept;
+
     /** @brief Packs the linear-depth draw using the same raster clip transform as scene geometry.
      * @param layout Validated guide uniform layout. @param rasterLocalToClip Jittered Vulkan raster transform.
      * @param localToView Canonical camera-space transform. @param destination Caller-owned uniform bytes.

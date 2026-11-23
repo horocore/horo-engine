@@ -1,10 +1,13 @@
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorVulkanShaderAssets.h"
+#include "EditorVulkanViewportShader.h"
 #include "support/ShaderReflectionCookTestSupport.h"
 
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -69,6 +72,41 @@ TEST_CASE("Optional packaged Vulkan XR motion requires its own complete authenti
     CHECK(LoadPackagedVulkanMultiviewMotionShader(bundle.root).HasError());
     bundle.WriteCook("multiview-vulkan", projection, "runtime");
     CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasValue());
+}
+
+TEST_CASE("Vulkan temporal raster jitter stays subpixel and preserves clip depth", "[editor][vulkan][temporal]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    constexpr Render::FramebufferExtent extent{320, 160};
+    const auto first = EditorVulkanTemporalJitter(0, extent);
+    CHECK(first.x == 0.0F);
+    CHECK(first.y * extent.height == Catch::Approx(-1.0F / 6.0F));
+    const auto wrapped = EditorVulkanTemporalJitter(EditorVulkanTemporalJitterPhases, extent);
+    CHECK(wrapped.x == first.x);
+    CHECK(wrapped.y == first.y);
+    const auto empty = EditorVulkanTemporalJitter(2, {});
+    CHECK(empty.x == 0.0F);
+    CHECK(empty.y == 0.0F);
+    for (std::uint32_t phase = 0; phase < EditorVulkanTemporalJitterPhases; ++phase) {
+        const auto jitter = EditorVulkanTemporalJitter(phase, extent);
+        CHECK(std::abs(jitter.x * extent.width) < 0.5F);
+        CHECK(std::abs(jitter.y * extent.height) < 0.5F);
+    }
+
+    auto clip = Math::Mat4::Identity();
+    clip.values[3] = 2.0F;
+    clip.values[12] = 0.5F;
+    clip.values[13] = 0.25F;
+    const Math::Vec2 jitter{0.125F, -0.0625F};
+    const auto raster = EditorVulkanRasterProjection(clip, jitter);
+    CHECK(raster.values[0] == 1.5F);
+    CHECK(raster.values[1] == -0.25F);
+    CHECK(raster.values[12] == 0.75F);
+    CHECK(raster.values[13] == -0.375F);
+    for (std::size_t column = 0; column < 4; ++column) {
+        CHECK(raster.values[column * 4 + 2] == clip.values[column * 4 + 2]);
+        CHECK(raster.values[column * 4 + 3] == clip.values[column * 4 + 3]);
+    }
 }
 
 TEST_CASE("Selected XR projection rejects incomplete and foreign environment programs", "[editor][shader-cook][assets][xr]") {

@@ -51,7 +51,8 @@ namespace Horo::Editor {
         auto drawScene = scene;
         drawScene.lights = std::span{forwardDrawLights_}.first(selection.Value().count);
         const auto &drawShadow = remapped.Value();
+        const auto jitter = temporalGuides_ ? temporalGuides_->JitterUv() : Math::Vec2{};
         return ProgramResources::WriteDraw(bridge_, SceneProgram(), resources_.AllocatedExtent(), frame, draw, instance, drawScene,
-                                           drawShadow ? &*drawShadow : nullptr);
+                                           drawShadow ? &*drawShadow : nullptr, jitter);
     }
 }  // namespace Horo::Editor
