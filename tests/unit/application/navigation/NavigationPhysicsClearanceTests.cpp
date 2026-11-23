@@ -3,7 +3,9 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "ProjectNavigationLinkClearance.h"
+#include "navigation/IncrementalBakeFixture.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 
 namespace Horo::Application::Internal {
@@ -39,6 +41,31 @@ namespace Horo::Application::Internal {
         cancelled.RequestCancellation();
         Physics::Test::RequireError(MeasureProjectNavigationLinkClearance(unavailable, publication, Request(), cancelled.Token()),
                                     Navigation::NavigationErrors::BakeInputCancelled);
+    }
+
+    TEST_CASE("Rebuild clearance evidence fences projected endpoints and requires both directions", "[navigation][physics][tile_rebuild]") {
+        namespace Nav = Navigation;
+        const Nav::TestSupport::IncrementalBakeFixture fixture;
+        const auto input = fixture.Input();
+        const auto tile = fixture.Tiles().front().key;
+        const Nav::NavMeshOffMeshLink link{.start = {1, 0, 1}, .end = {4, 0, 1}, .radiusMeters = 1, .bidirectional = true};
+        const ProjectNavigationClearanceSample
+            forward{tile.scope, {input->Fingerprint(), tile.profile, {tile.surface, link.start}, {tile.surface, link.end}, 0.75F, 2}};
+        const ProjectNavigationClearanceSample
+            reverse{tile.scope, {input->Fingerprint(), tile.profile, {tile.surface, link.end}, {tile.surface, link.start}, 0.6F, 2}};
+        Physics::Test::RequireError(ApplyProjectNavigationLinkClearance(*input, tile, link, std::span{&forward, 1}),
+                                    Nav::NavigationErrors::OperationUnsupported);
+        std::array rows{forward, reverse};
+        const auto clear = ApplyProjectNavigationLinkClearance(*input, tile, link, rows);
+        REQUIRE(clear.HasValue());
+        CHECK(clear.Value().radiusMeters == 0.6F);
+        rows.back().evidence.end.position.x += 0.01F;
+        Physics::Test::RequireError(ApplyProjectNavigationLinkClearance(*input, tile, link, rows),
+                                    Nav::NavigationErrors::OperationUnsupported);
+        rows.back() = reverse;
+        rows.front().evidence.bakeFingerprint = {};
+        Physics::Test::RequireError(ApplyProjectNavigationLinkClearance(*input, tile, link, rows),
+                                    Nav::NavigationErrors::OperationUnsupported);
     }
 
 #if HORO_TEST_PHYSICS_NATIVE

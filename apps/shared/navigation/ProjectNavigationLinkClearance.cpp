@@ -3,6 +3,7 @@
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -58,6 +59,33 @@ namespace Horo::Application::Internal {
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
             return Result<bool>::Success(completion.result.hitCount == 0 && !completion.result.truncated);
         }
+
+        /** @brief Matches an ordered measurement without relaxing either projected endpoint or its source authority. */
+        [[nodiscard]] bool MatchesPair(const ProjectNavigationClearanceSample &sample, const Navigation::NavigationBakeInputSnapshot &input,
+                                       const Navigation::NavigationBakeTileKey &tile, const Math::Vec3 start,
+                                       const Math::Vec3 end) noexcept {
+            const auto &row = sample.evidence;
+            return sample.scope == tile.scope && row.bakeFingerprint == input.Fingerprint() && row.profile == tile.profile &&
+                   row.start.surface == tile.surface && row.end.surface == tile.surface && row.start.position == start &&
+                   row.end.position == end;
+        }
+
+        /** @brief Selects the widest actually measured corridor with adequate clearance for the captured profile. */
+        [[nodiscard]] float MeasuredRadius(const Navigation::NavigationBakeInputSnapshot &input,
+                                           const Navigation::NavigationBakeTileKey &tile,
+                                           const Navigation::NavigationAgentBuildGeometry &profile,
+                                           std::span<const ProjectNavigationClearanceSample> rows, Math::Vec3 start, Math::Vec3 end) {
+            float radius{};
+            for (const auto &sample : rows) {
+                const auto &row = sample.evidence;
+                if (MatchesPair(sample, input, tile, start, end) && std::isfinite(row.heightMeters) &&
+                    row.heightMeters >= profile.heightMeters && std::isfinite(row.radiusMeters) &&
+                    row.radiusMeters >= profile.radiusMeters) {
+                    radius = std::max(radius, row.radiusMeters);
+                }
+            }
+            return radius;
+        }
     }  // namespace
 
     /** @copydoc MeasureProjectNavigationLinkClearance */
@@ -87,5 +115,25 @@ namespace Horo::Application::Internal {
             return Evidence::Failure(MakeError(Navigation::NavigationErrors::BakeInputCancelled));
         return Evidence::Success(Navigation::NavigationLinkClearanceEvidence{request.bakeFingerprint, request.profile, request.start,
                                                                              request.end, request.radiusMeters, request.heightMeters});
+    }
+
+    /** @copydoc ApplyProjectNavigationLinkClearance */
+    Result<Navigation::NavMeshOffMeshLink> ApplyProjectNavigationLinkClearance(const Navigation::NavigationBakeInputSnapshot &input,
+                                                                               const Navigation::NavigationBakeTileKey &tile,
+                                                                               Navigation::NavMeshOffMeshLink projected,
+                                                                               std::span<const ProjectNavigationClearanceSample> evidence) {
+        using Link = Result<Navigation::NavMeshOffMeshLink>;
+        const auto profiles = input.Profiles();
+        const auto profile = std::ranges::find(profiles, tile.profile, &Navigation::NavigationResolvedBakeProfile::id);
+        if (profile == profiles.end() || !std::isfinite(projected.radiusMeters))
+            return Link::Failure(MakeError(Navigation::NavigationErrors::BakeInputInvalid));
+        const auto &geometry = profile->buildGeometry;
+        auto radius = MeasuredRadius(input, tile, geometry, evidence, projected.start, projected.end);
+        if (projected.bidirectional)
+            radius = std::min(radius, MeasuredRadius(input, tile, geometry, evidence, projected.end, projected.start));
+        projected.radiusMeters = std::min(projected.radiusMeters, radius);
+        if (projected.radiusMeters < geometry.radiusMeters)
+            return Link::Failure(MakeError(Navigation::NavigationErrors::OperationUnsupported));
+        return Link::Success(projected);
     }
 }  // namespace Horo::Application::Internal

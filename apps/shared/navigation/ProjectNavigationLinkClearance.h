@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Navigation/NavigationLinkValidation.h"
+#include "Horo/Navigation/NavigationTileDependencies.h"
 #include "Horo/Physics/PhysicsQueryEventCapability.h"
 
 namespace Horo::Application::Internal {
@@ -27,6 +28,12 @@ namespace Horo::Application::Internal {
         float heightMeters{};
     };
 
+    /** @brief A measured pair bound to its owning persisted Scene scope. */
+    struct ProjectNavigationClearanceSample final {
+        Navigation::NavigationBakeScopeId scope;
+        Navigation::NavigationLinkClearanceEvidence evidence;
+    };
+
     /** @brief Measures a straight upright capsule corridor in one owner-thread Physics publication.
      * @param capability Query access issued to the exact current Physics world.
      * @param publication Owner-captured tick, Scene and coordinate binding.
@@ -39,4 +46,15 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::optional<Navigation::NavigationLinkClearanceEvidence>> MeasureProjectNavigationLinkClearance(
         const Physics::PhysicsQueryEventCapability &capability, const ProjectNavigationClearancePublication &publication,
         const ProjectNavigationClearanceRequest &request, const CancellationToken &cancellation = {});
+
+    /** @brief Limits a detached authored link to owner-measured clearance for its exact projected pair.
+     * @param input Pinned post-change geometry authority and agent geometry.
+     * @param tile Exact declaring scope, surface and profile.
+     * @param projected Candidate link whose endpoints have already been projected into new polygons.
+     * @param evidence Owned immutable measurements for this rebuild. A bidirectional link requires both ordered pairs.
+     * @return Verified link with a bounded radius, or a typed failure that rejects the detached generation.
+     */
+    [[nodiscard]] Result<Navigation::NavMeshOffMeshLink> ApplyProjectNavigationLinkClearance(
+        const Navigation::NavigationBakeInputSnapshot &input, const Navigation::NavigationBakeTileKey &tile,
+        Navigation::NavMeshOffMeshLink projected, std::span<const ProjectNavigationClearanceSample> evidence);
 }  // namespace Horo::Application::Internal

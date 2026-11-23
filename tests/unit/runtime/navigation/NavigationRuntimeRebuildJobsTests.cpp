@@ -174,6 +174,27 @@ namespace Horo::Navigation {
         CHECK(factory->calls == 1);
     }
 
+    TEST_CASE("Navigation rebuild jobs charge owned evidence before detached preparation", "[unit][navigation][tile_rebuild][jobs]") {
+        JobSystem workers{{.workerCount = 0}};
+        const auto factory = std::make_shared<JobBackendFactory>();
+        NavigationRuntimeRebuildJobs jobs{workers, std::make_shared<JobTileBuilder>(), factory};
+        auto request = Request(TestSupport::Activation());
+        const std::size_t total = request.maximumOwnedBytes;
+        request.retainedInputBytes = total;
+        RequireError(jobs.Start(request), NavigationErrors::CapacityExceeded);
+        CHECK_FALSE(jobs.Busy());
+
+        constexpr std::size_t measuredBytes = 1024U * 1024U;
+        request.retainedInputBytes = measuredBytes;
+        const auto started = jobs.Start(std::move(request));
+        REQUIRE(started.HasValue());
+        workers.Shutdown(ShutdownPolicy::Drain);
+        const auto completed = jobs.TakeCompleted();
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value());
+        CHECK(completed.Value()->ReservedBytes() == total - measuredBytes);
+    }
+
     TEST_CASE("Navigation rebuild jobs own queued input and leave the provider detached until owner publication",
               "[unit][navigation][tile_rebuild][jobs]") {
         JobSystem workers{{.workerCount = 0}};

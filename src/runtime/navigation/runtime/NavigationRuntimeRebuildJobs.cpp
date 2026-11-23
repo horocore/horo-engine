@@ -29,7 +29,7 @@ namespace Horo::Navigation {
                     .compatibility = request.compatibility,
                     .tileLimits = request.tileLimits,
                     .maximumRebuiltTiles = request.maximumRebuiltTiles,
-                    .maximumOwnedBytes = request.maximumOwnedBytes,
+                    .maximumOwnedBytes = request.maximumOwnedBytes - request.retainedInputBytes,
                     .linkProjector = request.linkProjector.get()};
         }
 
@@ -79,6 +79,8 @@ namespace Horo::Navigation {
             return Result<void>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         if (!HasOwnedLayout(request))
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        if (request.retainedInputBytes >= request.maximumOwnedBytes)
+            return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         if (!reservation.Matches(request.expected, request.maximumOwnedBytes))
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         try {

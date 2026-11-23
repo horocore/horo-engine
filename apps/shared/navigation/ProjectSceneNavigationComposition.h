@@ -5,6 +5,7 @@
 #include "Horo/Navigation/NavigationRuntimeRebuildJobs.h"
 #include "Horo/Navigation/NavigationSceneActivation.h"
 #include "Horo/Platform/ProjectReadFiles.h"
+#include "ProjectNavigationLinkClearance.h"
 
 namespace Horo::Navigation {
     class NavigationDefinition;
@@ -47,6 +48,7 @@ namespace Horo::Application::Internal {
         std::size_t maximumOwnedBytes{};
         CancellationToken cancellation;
         std::shared_ptr<const Navigation::INavigationRuntimeLinkProjector> linkProjector;
+        std::vector<ProjectNavigationClearanceSample> linkClearance; /**< Owned rows measured before worker submission. */
     };
 
     /** @brief Explicit lifetime owners for one authoritative world, retained until its Scene participants shut down. */

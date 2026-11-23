@@ -4,6 +4,7 @@
 #include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationDefinitionSerialization.h"
+#include "ProjectNavigationLinkClearance.h"
 
 #include <algorithm>
 #include <bit>
@@ -150,9 +151,41 @@ namespace Horo::Application::Internal {
             return Layout::Success(std::move(layout));
         }
 
+        /** @brief Applies frozen Physics evidence after the worker selects replacement polygon endpoints. */
+        class ProjectMeasuredLinkProjector final : public Nav::INavigationRuntimeLinkProjector {
+        public:
+            ProjectMeasuredLinkProjector(std::shared_ptr<const Nav::INavigationRuntimeLinkProjector> projection,
+                                         std::vector<ProjectNavigationClearanceSample> clearance)
+                : projection_(std::move(projection)), clearance_(std::move(clearance)) {}
+
+            /** @brief Consumes the optional worker projection and its immutable measurements together. */
+            [[nodiscard]] static std::shared_ptr<const Nav::INavigationRuntimeLinkProjector> Take(
+                ProjectSceneNavigationRebuildCommand &command) {
+                if (!command.linkProjector)
+                    return {};
+                return std::make_shared<ProjectMeasuredLinkProjector>(std::move(command.linkProjector), std::move(command.linkClearance));
+            }
+
+            [[nodiscard]] Result<Nav::NavMeshOffMeshLink> Project(const Nav::NavigationBakeInputSnapshot &input,
+                                                                  const Nav::NavigationBakeTileKey &tile,
+                                                                  const Nav::NavigationTileBuildResult &topology,
+                                                                  const Nav::NavMeshOffMeshLink &previous, std::size_t maximumScratchBytes,
+                                                                  const CancellationToken &cancellation) const override {
+                auto link = projection_->Project(input, tile, topology, previous, maximumScratchBytes, cancellation);
+                if (link.HasError())
+                    return link;
+                return ApplyProjectNavigationLinkClearance(input, tile, std::move(link).Value(), clearance_);
+            }
+
+        private:
+            std::shared_ptr<const Nav::INavigationRuntimeLinkProjector> projection_;
+            std::vector<ProjectNavigationClearanceSample> clearance_;
+        };
+
         /** @brief Rejects incomplete host commands before reserving the rebuild slot. */
         [[nodiscard]] bool ValidRebuildCommand(const ProjectSceneNavigationRebuildCommand &command) noexcept {
-            return command.input && command.observe && command.maximumRebuiltTiles != 0;
+            return command.input && command.observe && command.maximumRebuiltTiles != 0 &&
+                   (command.linkClearance.empty() || command.linkProjector);
         }
 
         Result<std::unique_ptr<Assets::AssetPayloadCache>> CreateNavigationTileCache(const Nav::NavigationProjectProfile &policy) {
@@ -331,6 +364,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::BakeInputInvalid));
         if (command.cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::BakeInputCancelled));
+        const auto clearanceRows = command.linkClearance.capacity();
+        if (clearanceRows > Nav::NavigationLinkValidationLimits::MaximumClearanceRows)
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+        const auto clearanceBytes = clearanceRows * sizeof(ProjectNavigationClearanceSample);
         auto reservation = world.assets->ReserveRuntimeRebuild(command.expected, command.maximumOwnedBytes);
         if (reservation.HasError())
             return Result<void>::Failure(std::move(reservation).ErrorValue());
@@ -347,7 +384,8 @@ namespace Horo::Application::Internal {
                                                               .compatibility = command.compatibility,
                                                               .maximumRebuiltTiles = command.maximumRebuiltTiles,
                                                               .maximumOwnedBytes = command.maximumOwnedBytes,
-                                                              .linkProjector = std::move(command.linkProjector)};
+                                                              .linkProjector = ProjectMeasuredLinkProjector::Take(command),
+                                                              .retainedInputBytes = clearanceBytes};
             auto started = world.rebuild->Start(std::move(request), command.cancellation, std::move(reservation).Value());
             if (started.HasValue()) {
                 world.rebuildAuthority = std::move(command.observe);

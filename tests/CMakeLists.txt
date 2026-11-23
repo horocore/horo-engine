@@ -2014,6 +2014,7 @@ add_test(NAME HoroNavigationSceneAgentLifecyclePublicConsumer COMMAND HoroNaviga
 if(TARGET HoroProjectNavigationLinkClearanceInternal)
     add_executable(HoroNavigationPhysicsClearanceTests unit/application/navigation/NavigationPhysicsClearanceTests.cpp)
     target_compile_features(HoroNavigationPhysicsClearanceTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationPhysicsClearanceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_compile_definitions(HoroNavigationPhysicsClearanceTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
     target_link_libraries(HoroNavigationPhysicsClearanceTests PRIVATE HoroProjectNavigationLinkClearanceInternal)
     horo_register_catch_test(HoroNavigationPhysicsClearanceTests LABELS "unit;navigation;physics;headless")
