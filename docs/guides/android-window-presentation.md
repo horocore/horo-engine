@@ -59,16 +59,17 @@ while readiness remains true. Presentation readiness and Activity permission are
 separate: frame execution additionally requires Running and Resumed states.
 
 The qualification host enforces a 16 ms baseline interval between frame
-attempts on its monotonic clock. Android Battery Saver and severe-or-higher
-thermal pressure each select a 32 ms interval. The thermal reason takes
-precedence while both apply. The host returns to the baseline from the last
-actual attempt once neither active signal requests conservation. Pause and
+attempts on its monotonic clock. Android Battery Saver, low or critical memory,
+and severe-or-higher thermal pressure each select a 32 ms interval.
+The diagnostic reports thermal pressure first, memory pressure next, and
+Battery Saver last. The host returns to the baseline from the last
+actual attempt once the active signals clear. Pause and
 presentation loss stop attempts, and resume starts without a backlog. The
 policy gates frame attempts after input
 commit and leaves display refresh, simulation scheduling and authored
 settings to their existing owners.
-The deployment report can carry the native owner's selected pacing mode
-alongside Android's distinct thermal observation.
+The deployment report carries the native owner's selected pacing mode
+alongside the distinct Android observations when those facts are available.
 
 The Vulkan qualification Activity observes Android's thermal status while it
 is resumed. Its optional deployment evidence contains a process-local
@@ -82,9 +83,10 @@ At resume, the Activity samples Android's system low-memory state once.
 While resumed, Android's legacy running trim levels can publish
 `moderate`, `low`, or `critical`. UI-hidden events describe visibility
 and background trim levels describe the process's reclaim priority.
-Android 14 and later use the resume snapshot alone because the platform
-omits the legacy running levels. The deployment report contains the typed
-state and its process-local revision.
+Android 14 and later use the resume snapshot because the platform no longer
+delivers the legacy running levels. Memory conservation clears on pause.
+The next resume sample decides whether to request it again. The deployment
+report contains the typed state and its process-local revision.
 
 The resumed Vulkan Activity reads Android Battery Saver on entry and whenever
 the protected power-mode broadcast arrives. The observer reads the current

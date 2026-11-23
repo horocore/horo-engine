@@ -99,7 +99,7 @@ namespace Horo::AndroidQualification {
         if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
             state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
             return false;
-        const bool conserving = mode == Mode::PowerConservation || mode == Mode::ThermalConservation;
+        const bool conserving = mode > Mode::Baseline && mode <= Mode::MemoryConservation;
         const auto interval = conserving ? conservationInterval_ : minimumInterval_;
         if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < interval))
             return false;
@@ -127,7 +127,7 @@ namespace Horo::AndroidQualification {
     /** @copydoc FramePacingMailbox::Publish */
     void FramePacingMailbox::Publish(const Token token, const FramePacing::Mode mode) noexcept {
         auto previous = state_.load(std::memory_order_acquire);
-        if ((token & Flags) != Active || (previous & ~ModeBits) != token || mode > FramePacing::Mode::ThermalConservation)
+        if ((token & Flags) != Active || (previous & ~ModeBits) != token || mode > FramePacing::Mode::MemoryConservation)
             return;
         // Callbacks for one token are serialized. CAS failure means this owner was withdrawn.
         static_cast<void>(state_.compare_exchange_strong(previous, token | static_cast<Token>(mode), std::memory_order_acq_rel));

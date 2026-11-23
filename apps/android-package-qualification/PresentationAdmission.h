@@ -43,10 +43,11 @@ namespace Horo::AndroidQualification {
         enum class Mode : std::uint8_t {
             Baseline = 0,
             PowerConservation = 1,
-            ThermalConservation = 2
+            ThermalConservation = 2,
+            MemoryConservation = 3
         };
 
-        /** @brief Sets the baseline and optional thermal cadence for the host's render attempts.
+        /** @brief Sets the baseline and optional conservation cadence for the host's render attempts.
          * @param minimumInterval Baseline minimum time between attempts.
          * @param conservationInterval Optional longer delay when the current Activity requests conservation. */
         explicit FramePacing(Clock::duration minimumInterval, Clock::duration conservationInterval = {}) noexcept;

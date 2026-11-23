@@ -14,7 +14,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static final PowerObservation power = new PowerObservation();
     private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
     private enum PacingMode {
-        BASELINE(0), POWER_CONSERVATION(1), THERMAL_CONSERVATION(2);
+        BASELINE(0), POWER_CONSERVATION(1), THERMAL_CONSERVATION(2), MEMORY_CONSERVATION(3);
 
         final int wireValue;
 
@@ -25,6 +25,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
 
     private long pacingToken;
     private boolean conserveThermalPacing;
+    private boolean conserveMemoryPacing;
     private boolean conservePowerPacing;
     private PacingMode pacingMode = PacingMode.BASELINE;
 
@@ -47,6 +48,11 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         updatePacingMode();
     }
 
+    private synchronized void updateMemoryPacing(boolean conserve) {
+        conserveMemoryPacing = conserve;
+        updatePacingMode();
+    }
+
     synchronized void updatePowerPacing(boolean conserve) {
         conservePowerPacing = conserve;
         updatePacingMode();
@@ -54,15 +60,18 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
 
     private synchronized void clearPacing() {
         conserveThermalPacing = false;
+        conserveMemoryPacing = false;
         conservePowerPacing = false;
         updatePacingMode();
     }
 
-    /** Both observations are reduced while the Activity's native callback monitor is held. */
+    /** Reduces the observations while the Activity's native callback monitor is held. */
     private void updatePacingMode() {
         PacingMode selected = PacingMode.BASELINE;
         if (conserveThermalPacing) {
             selected = PacingMode.THERMAL_CONSERVATION;
+        } else if (conserveMemoryPacing) {
+            selected = PacingMode.MEMORY_CONSERVATION;
         } else if (conservePowerPacing) {
             selected = PacingMode.POWER_CONSERVATION;
         }
@@ -124,14 +133,19 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
             State(String diagnostic) {
                 this.diagnostic = diagnostic;
             }
+
+            boolean conservesAttempts() {
+                return this == LOW || this == CRITICAL;
+            }
         }
 
-        private Object owner;
+        private HoroVulkanQualificationActivity owner;
         private State previous;
         private long revision;
 
         void resume(HoroVulkanQualificationActivity activity) {
             if (owner == activity) return;
+            if (owner != null) owner.updateMemoryPacing(false);
             owner = activity;
             publish(sample(activity));
         }
@@ -166,6 +180,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         }
 
         private void publish(State state) {
+            if (owner != null) owner.updateMemoryPacing(state.conservesAttempts());
             if (state == previous || revision == Long.MAX_VALUE) return;
             previous = state;
             Log.i("HoroPackageQualification", "host-memory revision=" + ++revision + " state=" + state.diagnostic);

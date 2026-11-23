@@ -97,7 +97,7 @@ namespace Horo::AndroidQualification {
         private:
             /** @brief UI-lane producer. A late Java callback can only compare its revoked token. */
             static void JNICALL Observe(JNIEnv *, jobject, jlong token, const jint mode) noexcept {
-                if (token > 0 && mode >= 0 && mode <= static_cast<jint>(FramePacing::Mode::ThermalConservation))
+                if (token > 0 && mode >= 0 && mode <= static_cast<jint>(FramePacing::Mode::MemoryConservation))
                     PacingPublications.Publish(static_cast<FramePacingMailbox::Token>(token), static_cast<FramePacing::Mode>(mode));
             }
 
@@ -141,7 +141,7 @@ namespace Horo::AndroidQualification {
 
         /** @brief Closed diagnostic vocabulary for the native frame owner's current attempt policy. */
         const char *PacingModeName(const FramePacing::Mode mode) noexcept {
-            constexpr std::array names{"baseline", "power-conservation", "thermal-conservation"};
+            constexpr std::array names{"baseline", "power-conservation", "thermal-conservation", "memory-conservation"};
             return names[static_cast<std::size_t>(mode)];
         }
 

@@ -254,11 +254,11 @@ namespace Horo::AndroidQualification::Tests {
 
         std::size_t attempts{};
         for (auto elapsed = 49ms; elapsed <= 10048ms; elapsed += 1ms)
-            attempts += pacing.TryAdmit(foreground, start + elapsed, ThermalConservation);
+            attempts += pacing.TryAdmit(foreground, start + elapsed, MemoryConservation);
         CHECK(attempts == 312);
 
         Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
-        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, ThermalConservation));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, MemoryConservation));
         fixture.Commit();
         CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min));
         Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
@@ -275,20 +275,20 @@ namespace Horo::AndroidQualification::Tests {
         const auto first = mailbox.Acquire();
         REQUIRE(first != 0);
         CHECK(mailbox.Acquire() == 0);
-        mailbox.Publish(first, ThermalConservation);
-        CHECK(mailbox.Read(first) == ThermalConservation);
+        mailbox.Publish(first, MemoryConservation);
+        CHECK(mailbox.Read(first) == MemoryConservation);
         mailbox.Revoke(first);
         const auto replacement = mailbox.Acquire();
         REQUIRE(replacement > first);
         std::thread late{[&] {
-            mailbox.Publish(first, ThermalConservation);
+            mailbox.Publish(first, MemoryConservation);
             mailbox.Publish(0, ThermalConservation);
         }};
         late.join();
         CHECK(mailbox.Read(first) == Baseline);
         CHECK(mailbox.Read(replacement) == Baseline);
         mailbox.Publish(replacement, PowerConservation);
-        mailbox.Publish(replacement, static_cast<FramePacing::Mode>(3));
+        mailbox.Publish(replacement, static_cast<FramePacing::Mode>(4));
         CHECK(mailbox.Read(replacement) == PowerConservation);
         mailbox.Publish(replacement, ThermalConservation);
         mailbox.Revoke(first);
