@@ -1,3 +1,4 @@
+#include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <semaphore>
 #include <span>
 #include <thread>
 #include <utility>
@@ -118,7 +120,148 @@ namespace Horo::Navigation {
             const std::array motions{Motion(records[0], 0.0F), Motion(records[1], 1.0F)};
             return {.agents = std::move(agents), .dynamic = CaptureDynamic(binding), .motions = motions, .profiles = {Profile()}};
         }
+
+        [[nodiscard]] NavigationCrowdSnapshot BatchCapture() {
+            const auto binding = Binding();
+            const std::array descriptors{Agent(binding, 10), Agent(binding, 20), Agent(binding, 30)};
+            const auto agents = CaptureAgents(binding, descriptors);
+            const auto records = agents.Agents();
+            const std::array motions{Motion(records[0], 8.0F), Motion(records[1], -4.0F), Motion(records[2], 9.0F)};
+            const std::array profiles{Profile()};
+            return BuildNavigationCrowdSnapshot(agents, CaptureDynamic(binding), motions, profiles, {}, 8).Value();
+        }
+
+        class BatchTestProvider final : public INavigationCrowdBackend {
+        public:
+            enum class Behavior {
+                Solve,
+                Wait,
+                Signal,
+                Fail,
+                Invalid
+            };
+            using Gate = std::counting_semaphore<2>;
+
+            explicit BatchTestProvider(Behavior behavior = Behavior::Solve, std::shared_ptr<Gate> gate = {})
+                : behavior_(behavior), gate_(std::move(gate)) {}
+
+            Result<NavigationAvoidanceOutcome> Solve(const NavigationCrowdSnapshot &capture,
+                                                     const NavigationAvoidanceRequest &request) override {
+                using enum Behavior;
+                using Output = Result<NavigationAvoidanceOutcome>;
+                if (behavior_ == Signal)
+                    gate_->release();
+                if (behavior_ == Fail || (behavior_ == Wait && !gate_->try_acquire_for(std::chrono::seconds{3})))
+                    return Output::Failure(MakeError(NavigationErrors::ProviderFailed));
+                return Output::Success({.desiredVelocity = capture.Agents()[request.agentIndex].velocity,
+                                        .disposition = NavigationAvoidanceDisposition::Sampled,
+                                        .stopReason = NavigationAvoidanceStopReason::None,
+                                        .binding = capture.Binding(),
+                                        .dynamicRevision = capture.DynamicRevision(),
+                                        .captureTick = capture.CaptureTick() + static_cast<std::uint64_t>(behavior_ == Invalid)});
+            }
+
+        private:
+            Behavior behavior_;
+            std::shared_ptr<Gate> gate_;
+        };
     }  // namespace
+
+    TEST_CASE("crowd jobs collect only once in fixed cell and agent order", "[unit][navigation][crowd][jobs]") {
+        using enum BatchTestProvider::Behavior;
+        const auto capture = BatchCapture();
+        const std::array<NavigationAvoidanceRequest, 3> requests{{{.agentIndex = 2}, {.agentIndex = 1}, {.agentIndex = 0}}};
+        const auto gate = std::make_shared<BatchTestProvider::Gate>(0);
+        const std::array<std::shared_ptr<INavigationCrowdBackend>, 2> providers{std::make_shared<BatchTestProvider>(Wait, gate),
+                                                                                std::make_shared<BatchTestProvider>(Signal, gate)};
+        JobSystem jobs({.workerCount = 2});
+        auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
+        REQUIRE(batch.HasValue());
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const auto taken = batch.Value()->TryTake(capture, 8);
+        REQUIRE(taken.HasValue());
+        REQUIRE(taken.Value());
+        const auto &results = *taken.Value();
+        REQUIRE(results.size() == 3);
+        CHECK(results[0].agentIndex == 1);
+        CHECK(results[1].agentIndex == 0);
+        CHECK(results[2].agentIndex == 2);
+        CHECK(results[0].outcome.binding == capture.Binding());
+        RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::AdmissionRejected);
+    }
+
+    TEST_CASE("crowd batches withdraw every result on stale capture or cancellation", "[unit][navigation][crowd][jobs]") {
+        const auto capture = BatchCapture();
+        const std::array requests{NavigationAvoidanceRequest{.agentIndex = 0}, NavigationAvoidanceRequest{.agentIndex = 1}};
+        const std::array<std::shared_ptr<INavigationCrowdBackend>, 1> providers{std::make_shared<BatchTestProvider>()};
+        JobSystem jobs({.workerCount = 0});
+        CancellationSource scene;
+        auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers, scene.Token());
+        REQUIRE(batch.HasValue());
+        const auto pending = batch.Value()->TryTake(capture, 8);
+        REQUIRE(pending.HasValue());
+        CHECK_FALSE(pending.Value());
+        SECTION("another capture has the same scene generation and tick") {
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            RequireError(batch.Value()->TryTake(BatchCapture(), 8), NavigationErrors::StaleSnapshot);
+        }
+        SECTION("the target tick has passed") {
+            RequireError(batch.Value()->TryTake(capture, 9), NavigationErrors::StaleSnapshot);
+        }
+        SECTION("scene cancellation revokes even completed work") {
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            scene.RequestCancellation();
+            RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::QueryCancelled);
+        }
+        SECTION("scheduler shutdown cancels a queued batch") {
+            jobs.Shutdown(ShutdownPolicy::Cancel);
+            const auto cancelled = batch.Value()->TryTake(capture, 8);
+            REQUIRE(cancelled.HasError());
+            CHECK(IsJobCancelled(cancelled.ErrorValue()));
+        }
+        RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::AdmissionRejected);
+    }
+
+    TEST_CASE("crowd batches reject partial provider outcomes and shared scratch", "[unit][navigation][crowd][jobs]") {
+        using enum BatchTestProvider::Behavior;
+        const auto capture = BatchCapture();
+        const std::array requests{NavigationAvoidanceRequest{.agentIndex = 0}, NavigationAvoidanceRequest{.agentIndex = 1}};
+        JobSystem jobs({.workerCount = 0});
+        const auto valid = std::make_shared<BatchTestProvider>();
+        SECTION("providers must have distinct scratch") {
+            const std::array<std::shared_ptr<INavigationCrowdBackend>, 2> providers{valid, valid};
+            RequireError(NavigationCrowdBatch::Submit(jobs, capture, requests, providers), NavigationErrors::CapabilityDescriptorInvalid);
+        }
+        SECTION("one group fails after another produced a valid result") {
+            const std::array<std::shared_ptr<INavigationCrowdBackend>, 2> providers{valid, std::make_shared<BatchTestProvider>(Fail)};
+            auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
+            REQUIRE(batch.HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::ProviderFailed);
+        }
+        SECTION("malformed provenance is not publishable") {
+            const std::array<std::shared_ptr<INavigationCrowdBackend>, 1> providers{std::make_shared<BatchTestProvider>(Invalid)};
+            auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
+            REQUIRE(batch.HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::OutcomeDescriptorInvalid);
+        }
+    }
+
+    TEST_CASE("crowd admission withdraws work when a later group cannot enqueue", "[unit][navigation][crowd][jobs]") {
+        const auto capture = BatchCapture();
+        const std::array requests{NavigationAvoidanceRequest{.agentIndex = 0}, NavigationAvoidanceRequest{.agentIndex = 1}};
+        const std::array<std::shared_ptr<INavigationCrowdBackend>, 2> providers{std::make_shared<BatchTestProvider>(),
+                                                                                std::make_shared<BatchTestProvider>()};
+        JobSystem jobs({.workerCount = 0, .maxQueuedJobs = 1});
+        const auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
+        REQUIRE(batch.HasError());
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const auto observed = jobs.SnapshotIfChanged(0);
+        REQUIRE(observed);
+        REQUIRE(observed->jobs.size() == 1);
+        CHECK(observed->jobs.front().state == JobState::Cancelled);
+    }
 
     TEST_CASE("crowd snapshot orders planar cells and equal-distance neighbors for both declared modes",
               "[unit][navigation][crowd][snapshot]") {

@@ -1,5 +1,7 @@
 #include "Horo/Navigation/NavigationVelocityPipeline.h"
 
+#include "NavigationCrowdOutcomeValidation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -12,38 +14,34 @@ namespace Horo::Navigation {
             return std::hypot(static_cast<double>(value.x), static_cast<double>(value.y), static_cast<double>(value.z));
         }
 
-        /** @brief Validate the authored planar solver envelope before advancing movement. */
-        bool ValidEnvelope(const NavigationAvoidanceRequest &request, const float step) noexcept {
-            return std::isfinite(request.maximumSpeedMetersPerSecond) && request.maximumSpeedMetersPerSecond > 0 &&
-                   std::isfinite(request.maximumAccelerationMetersPerSecondSquared) &&
-                   request.maximumAccelerationMetersPerSecondSquared > 0 && std::isfinite(request.horizonSeconds) &&
-                   request.horizonSeconds > 0 && std::isfinite(step) && step > 0 && request.stepSeconds == step;
-        }
-
-        /** @brief Validate a worker sample against its captured finite planar envelope before publication.
-         * @param outcome Worker-produced sample or explicit stop.
-         * @param request Owner-issued speed and acceleration limits.
-         * @param capturedVelocity Velocity at the immutable capture.
-         * @return True only for a bounded sample or a well-formed explicit stop.
-         */
-        bool ValidOutcome(const NavigationAvoidanceOutcome &outcome, const NavigationAvoidanceRequest &request,
-                          const Math::Vec3 capturedVelocity) noexcept {
-            using enum NavigationAvoidanceDisposition;
-            using enum NavigationAvoidanceStopReason;
-            if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
-                ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
-                (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > NoFeasibleSample ||
-                (outcome.disposition == Sampled && outcome.stopReason != None) ||
-                (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
-                return false;
-            if (const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
-                                                    static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
-                outcome.disposition == Sampled &&
-                planarDelta > static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds + 0.00001)
-                return false;
-            return true;
-        }
     }  // namespace
+
+    /** @copydoc Detail::ValidCrowdEnvelope */
+    bool Detail::ValidCrowdEnvelope(const NavigationAvoidanceRequest &request, const float step) noexcept {
+        return std::isfinite(request.maximumSpeedMetersPerSecond) && request.maximumSpeedMetersPerSecond > 0 &&
+               std::isfinite(request.maximumAccelerationMetersPerSecondSquared) && request.maximumAccelerationMetersPerSecondSquared > 0 &&
+               std::isfinite(request.horizonSeconds) && request.horizonSeconds > 0 && std::isfinite(step) && step > 0 &&
+               request.stepSeconds == step;
+    }
+
+    /** @copydoc Detail::ValidCrowdOutcome */
+    bool Detail::ValidCrowdOutcome(const NavigationAvoidanceOutcome &outcome, const NavigationAvoidanceRequest &request,
+                                   const Math::Vec3 capturedVelocity) noexcept {
+        using enum NavigationAvoidanceDisposition;
+        using enum NavigationAvoidanceStopReason;
+        if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
+            ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
+            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > NoFeasibleSample ||
+            (outcome.disposition == Sampled && outcome.stopReason != None) ||
+            (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
+            return false;
+        if (const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
+                                                static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
+            outcome.disposition == Sampled &&
+            planarDelta > static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds + 0.00001)
+            return false;
+        return true;
+    }
 
     /** @copydoc NavigationVelocityPipeline::Create */
     Result<std::unique_ptr<NavigationVelocityPipeline>> NavigationVelocityPipeline::Create(NavigationMovementController &movement,
@@ -129,7 +127,7 @@ namespace Horo::Navigation {
             snapshot.CaptureTick() != current.path.tick || (lastTick_.has_value() && current.path.tick <= *lastTick_) ||
             request.agentIndex >= snapshot.Agents().size() || snapshot.Agents()[request.agentIndex].handle != agent_)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
-        if (current.feedback || !ValidEnvelope(request, current.stepSeconds))
+        if (current.feedback || !Detail::ValidCrowdEnvelope(request, current.stepSeconds))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         if (current.position != snapshot.Agents()[request.agentIndex].position)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
@@ -189,7 +187,7 @@ namespace Horo::Navigation {
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (const auto valid = movement_->ValidateIntentAtSafePoint(pending_->preferred, observation); valid.HasError())
             return Return::Failure(valid.ErrorValue());
-        if (!ValidOutcome(outcome, pending_->request, current.Agents()[pending_->request.agentIndex].velocity))
+        if (!Detail::ValidCrowdOutcome(outcome, pending_->request, current.Agents()[pending_->request.agentIndex].velocity))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         auto intent = pending_->preferred;
         intent.desiredVelocity = intent.state == NavigationMovementState::Following && intent.desiredVelocity != Math::Vec3{}

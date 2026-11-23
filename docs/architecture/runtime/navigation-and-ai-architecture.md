@@ -3114,6 +3114,13 @@ The shared application motion owner splits preparation from solver completion.
 It retains one exact request, rechecks AI execution before admitting motion, and
 withdraws unconsumed work on retirement. The inline host uses these same phases.
 
+`NavigationCrowdBatch` groups best-effort requests by the capture's ordered
+spatial cells and schedules contiguous whole-cell ranges on independent,
+host-selected solver instances. The Navigation owner can collect the result once,
+at the capture's fixed tick and with the same snapshot. Pending work, cancellation,
+stale capture, or an invalid solver result cannot expose a partial batch.
+Collection passes detached results to the per-agent publication checks.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

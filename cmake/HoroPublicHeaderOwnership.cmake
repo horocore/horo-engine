@@ -1091,6 +1091,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationBakeJobs.h
+    Horo/Navigation/NavigationCrowdBatch.h
     Horo/Navigation/NavigationCrowdSnapshot.h
     Horo/Navigation/NavigationCrowdAvoidance.h
     Horo/Navigation/NavigationDynamicRegistry.h

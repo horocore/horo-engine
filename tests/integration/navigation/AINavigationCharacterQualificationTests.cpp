@@ -1,6 +1,7 @@
 #include "AiSceneTestSupport.h"
 #include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/AINavigationMovementTask.h"
+#include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "SceneAiNavigationMotion.h"
 #include "navigation/NavigationRuntimeQualificationFixture.h"
 
@@ -15,6 +16,23 @@ namespace Horo::Navigation {
                 return Result<NavigationAvoidanceOutcome>::Failure(MakeError(NavigationErrors::ProviderFailed));
             }
         };
+
+        /** @brief Executes the exact fixture work on a real Detour worker and collects its detached result. */
+        NavigationAvoidanceOutcome SolveOnWorker(Qualification::Host &host, const NavigationCrowdSnapshot &capture,
+                                                 const NavigationAvoidanceRequest &request) {
+            const std::array requests{request};
+            const std::array providers{std::shared_ptr<INavigationCrowdBackend>{std::move(host.crowd)}};
+            JobSystem jobs({.workerCount = 1});
+            auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
+            REQUIRE(batch.HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            const auto result = batch.Value()->TryTake(capture, capture.CaptureTick());
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value());
+            REQUIRE(result.Value()->size() == 1);
+            REQUIRE(result.Value()->front().agentIndex == request.agentIndex);
+            return result.Value()->front().outcome;
+        }
     }  // namespace
 
     TEST_CASE("AI movement arrives through real avoidance and committed Character displacement",
@@ -131,8 +149,7 @@ namespace Horo::Navigation {
         REQUIRE(work.HasValue());
         REQUIRE(work.Value());
         CHECK(actor.Motion()->Prepare(actual.Value(), capture, {.stepSeconds = Qualification::StepSeconds}).HasError());
-        const auto solved = host.crowd->Solve(capture, work.Value()->request);
-        REQUIRE(solved.HasValue());
+        const auto solved = Result<NavigationAvoidanceOutcome>::Success(SolveOnWorker(host, capture, work.Value()->request));
         auto mismatched = *work.Value();
         ++mismatched.sequence;
         CHECK(actor.Motion()->Complete(mismatched, solved, actual.Value(), capture).HasError());
