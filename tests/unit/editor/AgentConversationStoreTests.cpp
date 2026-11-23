@@ -39,6 +39,7 @@ namespace Horo::Agent {
 
             Project() {
                 REQUIRE(std::filesystem::create_directory(root));
+                root = std::filesystem::canonical(root);
             }
 
             ~Project() {
@@ -443,7 +444,7 @@ namespace Horo::Agent {
         REQUIRE_FALSE(beginReceipt.error);
         REQUIRE(session.View().conversations.size() == 1);
         const auto started = *beginReceipt.started;
-        const auto &user = session.View().conversations.front().messages.front();
+        const auto user = session.View().conversations.front().messages.front();
         CHECK(user.text == "visible prompt with [redacted]");
         REQUIRE(user.references.size() == 1);
         CHECK(user.references.front().identity == 17);
@@ -462,7 +463,7 @@ namespace Horo::Agent {
         session.Shutdown();
         const auto reopened = project.Open();
         REQUIRE(reopened.Availability() == Availability::Ready);
-        const auto &answer = reopened.Conversations().front().messages.back();
+        const auto answer = reopened.Conversations().front().messages.back();
         CHECK(answer.id == started.response);
         CHECK(answer.text == "Visible answer");
         CHECK(answer.usage.outputTokens == 5);
@@ -537,7 +538,7 @@ namespace Horo::Agent {
         REQUIRE_FALSE(committed.error);
         REQUIRE(committed.started);
         REQUIRE(session.View().conversations.size() == 1);
-        const auto &messages = session.View().conversations.front().messages;
+        const auto messages = session.View().conversations.front().messages;
         REQUIRE(messages.size() == 2);
         CHECK(messages.front().text == review.Value().Prompt());
         CHECK(messages.back().text == review.Value().Response());
@@ -749,7 +750,7 @@ namespace Horo::Agent {
         session.Shutdown();
         const auto reopened = project.Open();
         REQUIRE(reopened.Conversations().size() == 1);
-        const auto &response = reopened.Conversations().front().messages.back();
+        const auto response = reopened.Conversations().front().messages.back();
         CHECK(response.id == recovery.turn.response);
         CHECK(response.state == expected);
         CHECK(response.text == preview.Value().Answer());
@@ -779,7 +780,7 @@ namespace Horo::Agent {
         REQUIRE_FALSE(accepted.error);
         REQUIRE(accepted.started);
         const AgentHistoryRecoveryTurn recovery{accepted.project, *accepted.started};
-        const auto &saved = session.View().conversations.front().messages;
+        const auto saved = session.View().conversations.front().messages;
         REQUIRE(saved.size() == 2);
         CHECK(saved.front().text == review.Value().Prompt());
         CHECK(saved.back().state == MessageState::Streaming);
