@@ -84,11 +84,12 @@ namespace Horo::Navigation {
         /** @brief Collects complete results once in dispatch order without waiting on a job.
          * @param current Exact retained capture currently eligible for publication.
          * @param tick Navigation publication tick.
+         * @param longestJobNanoseconds Optional output written on successful collection. Measures worker execution without queue wait.
          * @return Complete ordered results, empty while pending, or the typed rejection with no partial results.
          * @details Callers still validate the exact live per-agent work and Character binding before publishing motion.
          */
-        [[nodiscard]] Result<std::optional<std::vector<NavigationCrowdBatchResult>>> TryTake(const NavigationCrowdSnapshot &current,
-                                                                                             std::uint64_t tick);
+        [[nodiscard]] Result<std::optional<std::vector<NavigationCrowdBatchResult>>> TryTake(
+            const NavigationCrowdSnapshot &current, std::uint64_t tick, std::uint64_t *longestJobNanoseconds = nullptr);
 
         /** @brief Withholds all results and cooperatively cancels the batch, including an unconsumed successful batch. */
         void Cancel() noexcept;
@@ -98,7 +99,7 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<void> SubmitGroups(const JobSystem &jobs, std::span<const std::size_t> cellEnds,
                                                 std::span<const std::shared_ptr<INavigationCrowdBackend>> providers);
         /** @brief Observes terminal states through the scheduler's synchronized job records. */
-        [[nodiscard]] Result<bool> ObserveJobs() const;
+        [[nodiscard]] Result<bool> ObserveJobs(std::uint64_t *longestJobNanoseconds) const;
 
         std::shared_ptr<State> state_;
         std::vector<JobHandle> jobs_;

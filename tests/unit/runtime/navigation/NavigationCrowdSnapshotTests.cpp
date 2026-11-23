@@ -1,5 +1,6 @@
 #include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
+#include "Horo/Navigation/NavigationCrowdDiagnostics.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
@@ -288,6 +289,46 @@ namespace Horo::Navigation {
         RequireError(CreateDeterministicCrowdBackend(foreign), NavigationErrors::CapabilityDescriptorInvalid);
     }
 
+    TEST_CASE("crowd diagnostics bound detached rows and expire with the source", "[unit][navigation][crowd]") {
+        NavigationCrowdDebugSource source;
+        const auto topology = Id<NavigationGeneration>(42);
+        {
+            const auto capture = BatchCapture({}, 1);
+            source.Retain(capture, topology);
+            const auto metrics = SummarizeNavigationCrowd(capture);
+            CHECK(metrics.activeAgents == 3);
+            CHECK(metrics.groups >= 2);
+            CHECK(metrics.neighborFacts == capture.NeighborIndices().size());
+        }
+        const auto stamp = source.Stamp();
+        REQUIRE(stamp);
+        CHECK(stamp->topology == topology);
+        const auto debug = source.Read(*stamp, {.groups = 1, .agents = 1});
+        REQUIRE(debug.HasValue());
+        REQUIRE(debug.Value().groups.size() == 1);
+        REQUIRE(debug.Value().agents.size() == 1);
+        CHECK(debug.Value().groups.front().firstAgent == 0);
+        CHECK(debug.Value().groups.front().shownAgents == 1);
+        CHECK(debug.Value().metrics.activeAgents == 3);
+        CHECK(debug.Value().truncated);
+        auto outdated = *stamp;
+        outdated.binding = Binding(7, 11, 13);
+        RequireError(source.Read(outdated), NavigationErrors::StaleSnapshot);
+        outdated = *stamp;
+        outdated.topology = Id<NavigationGeneration>(43);
+        RequireError(source.Read(outdated), NavigationErrors::StaleSnapshot);
+        outdated = *stamp;
+        outdated.dynamicRevision = Id<NavigationDynamicRegistryRevision>(stamp->dynamicRevision.Value() + 1);
+        RequireError(source.Read(outdated), NavigationErrors::StaleSnapshot);
+        outdated = *stamp;
+        ++outdated.tick;
+        RequireError(source.Read(outdated), NavigationErrors::StaleSnapshot);
+        RequireError(source.Read(*stamp, {.groups = 0}), NavigationErrors::CapabilityDescriptorInvalid);
+        source.Clear();
+        RequireError(source.Read(*stamp), NavigationErrors::StaleSnapshot);
+        CHECK(debug.Value().agents.front().handle.IsValid());
+    }
+
     TEST_CASE("crowd jobs collect only once in fixed cell and agent order", "[unit][navigation][crowd][jobs]") {
         using enum BatchTestProvider::Behavior;
         const auto capture = BatchCapture();
@@ -299,7 +340,8 @@ namespace Horo::Navigation {
         auto batch = NavigationCrowdBatch::Submit(jobs, capture, requests, providers);
         REQUIRE(batch.HasValue());
         jobs.Shutdown(ShutdownPolicy::Drain);
-        const auto taken = batch.Value()->TryTake(capture, 8);
+        auto duration = std::numeric_limits<std::uint64_t>::max();
+        const auto taken = batch.Value()->TryTake(capture, 8, &duration);
         REQUIRE(taken.HasValue());
         REQUIRE(taken.Value());
         const auto &results = *taken.Value();
@@ -308,6 +350,7 @@ namespace Horo::Navigation {
         CHECK(results[1].agentIndex == 0);
         CHECK(results[2].agentIndex == 2);
         CHECK(results[0].outcome.binding == capture.Binding());
+        CHECK(duration < std::numeric_limits<std::uint64_t>::max());
         RequireError(batch.Value()->TryTake(capture, 8), NavigationErrors::AdmissionRejected);
     }
 

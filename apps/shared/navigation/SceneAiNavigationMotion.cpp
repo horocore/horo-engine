@@ -2,6 +2,8 @@
 
 #include "ScenePhysicsHost.h"
 
+#include <algorithm>
+#include <chrono>
 #include <new>
 #include <utility>
 
@@ -21,7 +23,7 @@ namespace Horo::Application::Internal {
     /** @copydoc SceneAiNavigationMotion::Submit */
     Result<std::optional<Nav::NavigationVelocityPublication>> SceneAiNavigationMotion::Submit(
         const Nav::NavigationMovementObservation &current, const Nav::NavigationCrowdSnapshot &capture,
-        const Nav::NavigationAvoidanceRequest &request, Nav::INavigationCrowdBackend &solver) {
+        const Nav::NavigationAvoidanceRequest &request, Nav::INavigationCrowdBackend &solver, std::uint64_t *longestSolveNanoseconds) {
         using Publication = Result<std::optional<Nav::NavigationVelocityPublication>>;
         auto work = Prepare(current, capture, request);
         if (work.HasError())
@@ -29,7 +31,15 @@ namespace Horo::Application::Internal {
         if (!work.Value())
             return Publication::Success(std::nullopt);
         const auto &prepared = *work.Value();
-        auto submitted = Complete(prepared, solver.Solve(capture, prepared.request), current, capture);
+        using Clock = std::chrono::steady_clock;
+        const auto start = longestSolveNanoseconds ? Clock::now() : Clock::time_point{};
+        auto outcome = solver.Solve(capture, prepared.request);
+        if (longestSolveNanoseconds) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+            if (elapsed > 0)
+                *longestSolveNanoseconds = std::max(*longestSolveNanoseconds, static_cast<std::uint64_t>(elapsed));
+        }
+        auto submitted = Complete(prepared, std::move(outcome), current, capture);
         if (submitted.HasError())
             return Publication::Failure(std::move(submitted).ErrorValue());
         return Publication::Success(std::move(submitted).Value());

@@ -272,6 +272,7 @@ namespace Horo::Application::Internal {
         std::optional<QualifiedCrowd> qualified;
         std::optional<RelevancePolicy> relevance;
         std::optional<Navigation::NavigationCrowdWorkBudget> workerBudget; /**< Optional best-effort admission and recovery envelope. */
+        bool crowdDiagnostics{}; /**< Opts into capture retention and timing; debug rows are built on demand. */
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
                                                                   const Navigation::NavigationWorldActivationDescriptor &,
@@ -510,6 +511,9 @@ namespace Horo::Application::Internal {
     /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
     [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(
         const Network::INetworkModeService &service) noexcept;
+    /** @brief Copies bounded crowd geometry on the exact live world owner after a fixed tick. */
+    [[nodiscard]] Result<Navigation::NavigationCrowdDebugSnapshot> InspectHeadlessCrowdDebug(
+        const Network::INetworkModeService &service, std::uint64_t tick, Navigation::NavigationCrowdDebugLimits limits = {});
 
     /** @brief Stages an exact running decision node's MoveTo or Follow within the configured decision evaluation.
      * @param service Borrowed service for this exact authoritative World.

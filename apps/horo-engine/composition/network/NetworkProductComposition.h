@@ -35,6 +35,20 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Bounded, mode-independent counters for one published crowd motion tick. */
+    struct HeadlessCrowdMetrics final {
+        std::uint64_t tick{};
+        std::uint64_t solveNanoseconds{};
+        std::size_t activeAgents{};
+        std::size_t groups{};
+        std::size_t neighborFacts{};
+        std::uint64_t neighborsOmitted{};
+        std::uint64_t boundariesOmitted{};
+        std::size_t fallbacks{};
+        std::size_t stalled{};
+        std::size_t repaths{};
+    };
+
     /** @brief Fixed-size observation of the current authority world with counters from its last committed decision tick. */
     struct HeadlessAiHealth final {
         std::uint64_t decisionTick{};
@@ -47,6 +61,7 @@ namespace Horo::Application::Internal {
         std::size_t perceptionListeners{};
         bool degraded{};
         std::optional<HeadlessCrowdPressure> crowdPressure;
+        std::optional<HeadlessCrowdMetrics> crowdMetrics;
     };
 
     using NetworkAiHealthSource = std::function<std::optional<HeadlessAiHealth>(Network::NetworkModeWorld, std::uint64_t)>;

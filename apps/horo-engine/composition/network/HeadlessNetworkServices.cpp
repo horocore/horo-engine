@@ -687,8 +687,10 @@ namespace Horo::Application::Internal {
         /** @brief Copies only finite counters from the selected world's latest committed AI work. */
         HeadlessAiHealth CollectAiHealth(const WorldRecord &record, const std::uint64_t committedTick) {
             HeadlessAiHealth health;
-            if (record.navigationPath)
+            if (record.navigationPath) {
                 health.crowdPressure = record.navigationPath->CrowdPressure(committedTick);
+                health.crowdMetrics = record.navigationPath->CrowdMetrics(committedTick);
+            }
             if (const auto perception = record.perception.Current())
                 health.perceptionListeners = perception->ListenerCount();
             const auto scheduler = record.ai->TaskSchedulerAtSafePoint();
@@ -1010,6 +1012,16 @@ namespace Horo::Application::Internal {
         const Network::INetworkModeService &service) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->NavigationContext() : nullptr;
+    }
+
+    /** @copydoc InspectHeadlessCrowdDebug */
+    Result<Navigation::NavigationCrowdDebugSnapshot> InspectHeadlessCrowdDebug(const Network::INetworkModeService &service,
+                                                                               const std::uint64_t tick,
+                                                                               const Navigation::NavigationCrowdDebugLimits limits) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        if (!world)
+            return Result<Navigation::NavigationCrowdDebugSnapshot>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        return world->CrowdDebug(tick, limits);
     }
 
     /** @copydoc StageHeadlessNavigationMotion */

@@ -679,6 +679,14 @@ namespace Horo::Application::Internal {
                       << " missed_cutoff=" << crowd.missedCutoff << " provider_pressure=" << crowd.providerPressure << '\n';
         }
 
+        /** @brief Prints fixed-cardinality profiling counters for the committed crowd tick. */
+        void PrintCrowdMetrics(const HeadlessCrowdMetrics &crowd) {
+            std::cout << "horo-engine: crowd metrics tick=" << crowd.tick << " agents=" << crowd.activeAgents << " groups=" << crowd.groups
+                      << " neighbor_facts=" << crowd.neighborFacts << " neighbors_omitted=" << crowd.neighborsOmitted
+                      << " boundaries_omitted=" << crowd.boundariesOmitted << " solve_ns=" << crowd.solveNanoseconds
+                      << " fallbacks=" << crowd.fallbacks << " stalled=" << crowd.stalled << " repaths=" << crowd.repaths << '\n';
+        }
+
         /** @brief Prints one fixed-size health line per selected and published authority world. */
         void PrintProductAiHealth(const NetworkProductHost &runtime, const ProductWorlds &worlds) {
             for (std::size_t index = 0; index < worlds.count; ++index) {
@@ -693,6 +701,8 @@ namespace Horo::Application::Internal {
                           << " perception_listeners=" << health->perceptionListeners << '\n';
                 if (health->crowdPressure)
                     PrintCrowdPressure(*health->crowdPressure);
+                if (health->crowdMetrics)
+                    PrintCrowdMetrics(*health->crowdMetrics);
             }
         }
 

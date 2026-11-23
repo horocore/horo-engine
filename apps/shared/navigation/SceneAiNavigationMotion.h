@@ -25,11 +25,13 @@ namespace Horo::Application::Internal {
         /** @brief Admits safe desired motion immediately before Character for this fixed tick.
          * @param current Committed pre-Character observation. @param capture Complete same-tick crowd evidence.
          * @param request Selected avoidance envelope. @param solver Host-selected bounded avoidance provider.
+         * @param longestSolveNanoseconds Optional in/out maximum of observed solver durations.
          * @return The admitted publication, empty when the task has retired, or the typed failure retained on the task.
          */
         [[nodiscard]] Result<std::optional<Navigation::NavigationVelocityPublication>> Submit(
             const Navigation::NavigationMovementObservation &current, const Navigation::NavigationCrowdSnapshot &capture,
-            const Navigation::NavigationAvoidanceRequest &request, Navigation::INavigationCrowdBackend &solver);
+            const Navigation::NavigationAvoidanceRequest &request, Navigation::INavigationCrowdBackend &solver,
+            std::uint64_t *longestSolveNanoseconds = nullptr);
 
         /** @brief Prepares an owned solver request on the Scene lane without submitting Character motion.
          * @param current Committed pre-Character observation. @param capture Exact owned crowd snapshot.

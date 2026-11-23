@@ -1306,6 +1306,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         Math::Vec3 velocity;
         std::size_t captures{};
         auto policy = std::make_shared<Internal::HeadlessNavigationMotionPolicy>();
+        policy->crowdDiagnostics = workerPressure;
         NavigationCrowdRelevance relevance;
         std::optional<CrowdAgentHandle> observedAgent;
         if (scenario == Scenario::RelevanceCadence) {
@@ -1462,8 +1463,21 @@ namespace Horo::Application::CharacterSceneProductTest {
                 REQUIRE(pressured->crowdPressure);
                 CHECK(pressured->crowdPressure->queuePressure);
                 CHECK(pressured->degraded);
+                REQUIRE(pressured->crowdMetrics);
+                CHECK(pressured->crowdMetrics->tick == product.tick);
+                CHECK(pressured->crowdMetrics->activeAgents == 1);
+                CHECK(pressured->crowdMetrics->neighborFacts == 0);
+                CHECK(pressured->crowdMetrics->solveNanoseconds == 0);
+                CHECK(pressured->crowdMetrics->fallbacks == 1);
+                const auto debug = Internal::InspectHeadlessCrowdDebug(product.PhysicsService(), product.tick, {.groups = 1, .agents = 1});
+                REQUIRE(debug.HasValue());
+                CHECK(debug.Value().stamp.tick == product.tick);
+                CHECK(debug.Value().groups.size() == 1);
+                CHECK(debug.Value().agents.size() == 1);
+                CHECK_FALSE(debug.Value().truncated);
                 REQUIRE(blocker->RequestCancel().HasValue());
                 product.RunFrame();
+                CHECK(Internal::InspectHeadlessCrowdDebug(product.PhysicsService(), debug.Value().stamp.tick).HasError());
                 const auto late = product.scheduled->AiHealth(world);
                 REQUIRE(late);
                 REQUIRE(late->crowdPressure);

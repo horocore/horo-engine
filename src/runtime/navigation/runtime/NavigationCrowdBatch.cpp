@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <new>
 #include <unordered_set>
@@ -228,7 +229,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCrowdBatch::ObserveJobs */
-    Result<bool> NavigationCrowdBatch::ObserveJobs() const {
+    Result<bool> NavigationCrowdBatch::ObserveJobs(std::uint64_t *longestJobNanoseconds) const {
         bool ready = true;
         for (const auto &job : jobs_) {
             const auto observed = job.Snapshot();
@@ -238,12 +239,20 @@ namespace Horo::Navigation {
             }
             if (const auto &terminal = *observed->terminalResult; terminal.state != JobState::Succeeded)
                 return Result<bool>::Failure(terminal.error ? *terminal.error : MakeError(NavigationErrors::ProviderFailed));
+            if (longestJobNanoseconds && observed->timing.startedAt && observed->timing.finishedAt) {
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(*observed->timing.finishedAt - *observed->timing.startedAt)
+                        .count();
+                if (elapsed > 0)
+                    *longestJobNanoseconds = std::max(*longestJobNanoseconds, static_cast<std::uint64_t>(elapsed));
+            }
         }
         return Result<bool>::Success(ready);
     }
 
     /** @copydoc NavigationCrowdBatch::TryTake */
-    Collection NavigationCrowdBatch::TryTake(const NavigationCrowdSnapshot &current, const std::uint64_t tick) {
+    Collection NavigationCrowdBatch::TryTake(const NavigationCrowdSnapshot &current, const std::uint64_t tick,
+                                             std::uint64_t *longestJobNanoseconds) {
         if (!state_)
             return Collection::Failure(MakeError(NavigationErrors::AdmissionRejected));
         if (state_->cancel.Token().IsCancellationRequested()) {
@@ -255,7 +264,8 @@ namespace Horo::Navigation {
             Cancel();
             return Collection::Failure(MakeError(NavigationErrors::StaleSnapshot));
         }
-        auto observed = ObserveJobs();
+        std::uint64_t measured{};
+        auto observed = ObserveJobs(longestJobNanoseconds ? &measured : nullptr);
         if (observed.HasError()) {
             Cancel();
             return Collection::Failure(std::move(observed).ErrorValue());
@@ -267,6 +277,8 @@ namespace Horo::Navigation {
             return Collection::Failure(MakeError(NavigationErrors::QueryCancelled));
         }
         auto completed = std::move(state_->results);
+        if (longestJobNanoseconds)
+            *longestJobNanoseconds = measured;
         state_.reset();
         jobs_.clear();
         return Collection::Success(std::move(completed));

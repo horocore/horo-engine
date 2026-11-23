@@ -36,6 +36,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record_->navigationPath->Context();
         }
 
+        /** @copydoc InspectHeadlessCrowdDebug */
+        Result<Navigation::NavigationCrowdDebugSnapshot> CrowdDebug(const std::uint64_t tick,
+                                                                    const Navigation::NavigationCrowdDebugLimits limits) const {
+            using Debug = Result<Navigation::NavigationCrowdDebugSnapshot>;
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed ||
+                record_->fixedReserved || !record_->navigationPath || tick == 0)
+                return Debug::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            if (const auto native = record_->native.Borrow();
+                native.HasError() || native.Value().physics.PublishedTick().completedTick != tick)
+                return Debug::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            return record_->navigationPath->CrowdDebug(tick, limits);
+        }
+
         Result<void> StageNavigationMotion(AI::AiTaskContinuation task, Navigation::NavigationMovementRequest request,
                                            const std::uint64_t tick) const {
             if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->decisionMotion ||

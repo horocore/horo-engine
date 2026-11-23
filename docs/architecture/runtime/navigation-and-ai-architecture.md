@@ -3192,6 +3192,20 @@ gradually within the authored ceilings. Each tick uses only its latest demand
 and makes one admission attempt. Authority-world health exposes bounded wait,
 deferral, truncation, queue, provider and cutoff counters for the committed tick.
 
+An authority host can opt into crowd profiling in the motion policy. The
+committed health report exposes aggregate agents, spatial groups, neighbor
+facts, omitted facts, safety stops and blocked-progress recovery. Solver
+duration measures the longest observed inline solve or completed worker job,
+or the qualified owner pass. Worker duration excludes time spent queued.
+These measurements stay outside replay digests.
+
+The host pins at most one existing immutable capture and copies spatial group
+and agent rows only on request. Positive caller limits are capped at 128 groups
+and 512 agents. Rows follow capture cell and agent order, and the result
+marks omitted rows. It carries the exact Scene, topology, dynamic overlay
+and tick identities. Retiring or replacing the source invalidates subsequent
+reads. A failed or withdrawn fixed tick discards its profiling and debug source.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

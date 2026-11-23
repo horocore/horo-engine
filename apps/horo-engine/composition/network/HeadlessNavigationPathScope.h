@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/NavigationCrowdAvoidance.h"
+#include "Horo/Navigation/NavigationCrowdDiagnostics.h"
 #include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
@@ -25,7 +26,8 @@ namespace Horo::AI {
 
 namespace Horo::Navigation {
     struct NavigationCrowdQualification;
-}
+    struct NavigationVelocityPublication;
+}  // namespace Horo::Navigation
 
 namespace Horo::Application::Internal {
     struct HeadlessNavigationPathPolicy;
@@ -97,6 +99,11 @@ namespace Horo::Application::Internal {
                            const CancellationToken &cancellation);
         /** @brief Reads pressure counters only for the exact committed owner tick. */
         [[nodiscard]] std::optional<HeadlessCrowdPressure> CrowdPressure(std::uint64_t tick) const noexcept;
+        /** @brief Reads the exact committed tick's aggregate crowd measurements. */
+        [[nodiscard]] std::optional<HeadlessCrowdMetrics> CrowdMetrics(std::uint64_t tick) const noexcept;
+        /** @brief Projects bounded diagnostic rows for the live capture on demand. */
+        [[nodiscard]] Result<Navigation::NavigationCrowdDebugSnapshot> CrowdDebug(std::uint64_t tick,
+                                                                                  Navigation::NavigationCrowdDebugLimits limits) const;
         /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;
@@ -133,6 +140,10 @@ namespace Horo::Application::Internal {
 
         /** @brief Updates per-registration optional work and withdraws pending work at suspension. */
         [[nodiscard]] Result<void> ApplyCrowdCadence(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
+        /** @brief Records aggregate capture facts only for a host that enables the observer. */
+        void RetainCrowdDiagnostics(const Navigation::NavigationCrowdSnapshot &capture) noexcept;
+        /** @brief Counts only results accepted through Character's normal admission. */
+        void ObserveCrowdPublication(const Navigation::NavigationVelocityPublication &publication) noexcept;
         [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveActor(
             const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const SceneAiNavigationActor &actor,
             std::optional<Navigation::NavigationAgentOwner> target) const;
@@ -170,6 +181,8 @@ namespace Horo::Application::Internal {
         std::vector<Actor> actors_;
         std::vector<Navigation::NavigationCrowdMotionSample> samples_;
         std::unique_ptr<CrowdTick> crowdTick_;
+        Navigation::NavigationCrowdDebugSource crowdDebug_;
+        std::optional<HeadlessCrowdMetrics> crowdMetrics_;
         std::uint64_t motionTick_{};
         float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <limits>
 #include <new>
 
@@ -305,7 +306,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Solve the entire captured population, including stationary requests for inactive motion owners. */
         Result<void> SolveQualified(const HeadlessNavigationMotionPolicy &policy, const Nav::NavigationGeneration topology,
-                                    const float step, const CancellationToken &cancellation) {
+                                    const float step, const CancellationToken &cancellation, std::uint64_t *solveNanoseconds) {
             const auto &qualified = *policy.qualified;
             if (capture.Agents().size() > qualified.admitted.maximumAgents)
                 return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
@@ -321,8 +322,13 @@ namespace Horo::Application::Internal {
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
             }
+            using Clock = std::chrono::steady_clock;
+            const auto start = solveNanoseconds ? Clock::now() : Clock::time_point{};
             auto solved =
                 Nav::NavigationCrowdBatch::RunQualified(capture, requests, *qualified.provider, qualified.admitted, topology, cancellation);
+            if (solveNanoseconds)
+                *solveNanoseconds =
+                    static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
             if (solved.HasError())
                 return Result<void>::Failure(std::move(solved).ErrorValue());
             qualifiedResults = std::move(solved).Value();
@@ -331,9 +337,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Retains admitted work. A full queue leaves the prepared tick eligible for a stop command. */
         Result<void> Schedule(const JobSystem &jobs, const HeadlessNavigationMotionPolicy &policy, const Nav::NavigationGeneration topology,
-                              const float step, const CancellationToken &cancellation) {
+                              const float step, const CancellationToken &cancellation, std::uint64_t *solveNanoseconds) {
             if (policy.qualified)
-                return SolveQualified(policy, topology, step, cancellation);
+                return SolveQualified(policy, topology, step, cancellation, solveNanoseconds);
             auto providers = std::span{policy.workerSolvers};
             if (policy.workerBudget) {
                 if (auto planned = PlanBudget(*policy.workerBudget, providers.size()); planned.HasError())
@@ -361,9 +367,9 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Consumes either owner-ordered results or the complete detached worker batch. */
-        Collection Collect(const std::uint64_t tick) {
+        Collection Collect(const std::uint64_t tick, std::uint64_t *solveNanoseconds) {
             if (batch)
-                return batch->TryTake(capture, tick);
+                return batch->TryTake(capture, tick, solveNanoseconds);
             return Collection::Success(std::move(qualifiedResults));
         }
 
@@ -449,6 +455,8 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNavigationPathScope::BeginMotionTick */
     void HeadlessNavigationPathScope::BeginMotionTick(const std::uint64_t tick, const float stepSeconds) noexcept {
         DiscardCrowdTick();
+        crowdDebug_.Clear();
+        crowdMetrics_.reset();
         motionTick_ = tick;
         motionStep_ = stepSeconds;
     }
@@ -540,8 +548,34 @@ namespace Horo::Application::Internal {
             const auto &snapshot = captured.Value();
             if (!snapshot.IsValid() || snapshot.Binding() != context_->Binding().scene || snapshot.CaptureTick() != motionTick_)
                 return Capture::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+            if (policy.crowdDiagnostics)
+                RetainCrowdDiagnostics(snapshot);
         }
         return captured;
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::RetainCrowdDiagnostics */
+    void HeadlessNavigationPathScope::RetainCrowdDiagnostics(const Nav::NavigationCrowdSnapshot &capture) noexcept {
+        crowdDebug_.Retain(capture, activation_.topology);
+        const auto counts = Nav::SummarizeNavigationCrowd(capture);
+        crowdMetrics_ = HeadlessCrowdMetrics{.tick = capture.CaptureTick(),
+                                             .activeAgents = counts.activeAgents,
+                                             .groups = counts.groups,
+                                             .neighborFacts = counts.neighborFacts,
+                                             .neighborsOmitted = counts.neighborsOmitted,
+                                             .boundariesOmitted = counts.boundariesOmitted};
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::ObserveCrowdPublication */
+    void HeadlessNavigationPathScope::ObserveCrowdPublication(const Nav::NavigationVelocityPublication &publication) noexcept {
+        if (!crowdMetrics_)
+            return;
+        auto &metrics = *crowdMetrics_;
+        const bool safetyStop = publication.disposition == Nav::NavigationAvoidanceDisposition::CollisionSafeStop &&
+                                publication.stopReason != Nav::NavigationAvoidanceStopReason::CadenceHold;
+        metrics.fallbacks += static_cast<std::size_t>(safetyStop);
+        metrics.stalled += static_cast<std::size_t>(publication.recovery != Nav::NavigationCrowdRecovery::Clear);
+        metrics.repaths += static_cast<std::size_t>(publication.recovery == Nav::NavigationCrowdRecovery::RepathRequested);
     }
 
     /** @copydoc HeadlessNavigationPathScope::ApplyCrowdCadence */
@@ -607,7 +641,10 @@ namespace Horo::Application::Internal {
             }
             // Motion-stage failures are delivered by the binding to this actor's task.
             if (actor.crowdWork == Nav::NavigationCrowdWork::Avoidance) {
-                (void)motion->Submit(current.Value(), capture.Value(), limits, *policy.solver);
+                auto publication = motion->Submit(current.Value(), capture.Value(), limits, *policy.solver,
+                                                  crowdMetrics_ ? &crowdMetrics_->solveNanoseconds : nullptr);
+                if (publication.HasValue() && publication.Value())
+                    ObserveCrowdPublication(*publication.Value());
             } else if (auto prepared = motion->Prepare(current.Value(), capture.Value(), limits); prepared.HasValue() && prepared.Value()) {
                 const auto outcome = CrowdHold(capture.Value(), Nav::NavigationAvoidanceStopReason::CadenceHold);
                 (void)motion->Complete(*prepared.Value(), Result<Nav::NavigationAvoidanceOutcome>::Success(outcome), current.Value(),
@@ -649,7 +686,8 @@ namespace Horo::Application::Internal {
         if (tick.pending.empty())
             return Result<void>::Success();
         std::ranges::sort(tick.pending, std::ranges::less{}, &CrowdTick::Pending::AgentIndex);
-        auto scheduled = tick.Schedule(jobs, policy, activation_.topology, motionStep_, cancellation);
+        auto scheduled = tick.Schedule(jobs, policy, activation_.topology, motionStep_, cancellation,
+                                       crowdMetrics_ ? &crowdMetrics_->solveNanoseconds : nullptr);
         if (scheduled.HasError())
             DiscardCrowdTick();
         return scheduled;
@@ -673,7 +711,7 @@ namespace Horo::Application::Internal {
                 return;
             }
         }
-        const auto completed = tick.Collect(motionTick_);
+        const auto completed = tick.Collect(motionTick_, crowdMetrics_ ? &crowdMetrics_->solveNanoseconds : nullptr);
         tick.ObserveCapacity(completed);
         if (completed.HasError()) {
             PublishDeferredHolds(scene, policy);
@@ -695,6 +733,23 @@ namespace Horo::Application::Internal {
         if (revoked_ || !crowdTick_ || !crowdTick_->pressure || crowdTick_->pressure->tick != tick)
             return std::nullopt;
         return crowdTick_->pressure;
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::CrowdMetrics */
+    std::optional<HeadlessCrowdMetrics> HeadlessNavigationPathScope::CrowdMetrics(const std::uint64_t tick) const noexcept {
+        if (revoked_ || !crowdMetrics_ || crowdMetrics_->tick != tick)
+            return std::nullopt;
+        const auto current = lifecycle_->ActiveDescriptor();
+        return current.HasValue() && current.Value() == activation_ ? crowdMetrics_ : std::nullopt;
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::CrowdDebug */
+    Result<Nav::NavigationCrowdDebugSnapshot> HeadlessNavigationPathScope::CrowdDebug(const std::uint64_t tick,
+                                                                                      const Nav::NavigationCrowdDebugLimits limits) const {
+        const auto stamp = crowdDebug_.Stamp();
+        if (!stamp || !CrowdMetrics(tick))
+            return Result<Nav::NavigationCrowdDebugSnapshot>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        return crowdDebug_.Read(*stamp, limits);
     }
 
     /** @copydoc HeadlessNavigationPathScope::PublishCrowdResult */
@@ -720,6 +775,8 @@ namespace Horo::Application::Internal {
         }
         const auto accepted =
             motion->Complete(found->work, Result<Nav::NavigationAvoidanceOutcome>::Success(selectedOutcome), current.Value(), tick.capture);
+        if (accepted.HasValue())
+            ObserveCrowdPublication(accepted.Value());
         if (accepted.HasValue() && (selectedOutcome.disposition == Nav::NavigationAvoidanceDisposition::Sampled ||
                                     selectedOutcome.stopReason == Nav::NavigationAvoidanceStopReason::NoFeasibleSample))
             actor.crowdWaitingSince = 0;
@@ -767,6 +824,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessNavigationPathScope::DiscardMotionFeedback */
     void HeadlessNavigationPathScope::DiscardMotionFeedback() noexcept {
+        crowdMetrics_.reset();
+        crowdDebug_.Clear();
         DiscardCrowdTick();
         for (auto &actor : actors_)
             if (auto *motion = actor.owner->Motion())
@@ -832,6 +891,8 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNavigationPathScope::Revoke */
     void HeadlessNavigationPathScope::Revoke() noexcept {
         revoked_ = true;
+        crowdMetrics_.reset();
+        crowdDebug_.Clear();
         DiscardCrowdTick();
         actors_.clear();
         context_->Revoke();
