@@ -1,0 +1,444 @@
+#include "Horo/Physics/CharacterWorld.h"
+#include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsSceneActivation.h"
+#include "../../PhysicsSceneActivationInternal.h"
+#include "../../internal/PhysicsSceneHostAccess.h"
+
+#include <algorithm>
+#include <cassert>
+#include <limits>
+#include <ranges>
+#include <thread>
+#include <utility>
+
+namespace Horo::Physics::Detail {
+    /** @copydoc PhysicsSceneHostAccess::Borrow */
+    Result<PhysicsSceneHostScope> PhysicsSceneHostAccess::Borrow(PhysicsSceneActivationCandidate &candidate) {
+        // The authority check rejects foreign threads before inspecting mutable publication state.
+        if (auto valid = candidate.ValidatePublication(); valid.HasError())
+            return Result<PhysicsSceneHostScope>::Failure(valid.ErrorValue());
+        if (!candidate.published_)
+            return Result<PhysicsSceneHostScope>::Failure(
+                MakeError(PhysicsErrors::InvalidState, "Host world access requires the aggregate publication barrier."));
+        return Result<PhysicsSceneHostScope>::Success({*candidate.physics_, *candidate.character_,
+                                                       Runtime::SceneRuntimeId{candidate.character_->Descriptor().sceneGeneration},
+                                                       candidate.CharacterBindings(), candidate.BodyBindings()});
+    }
+}  // namespace Horo::Physics::Detail
+
+namespace Horo::Physics {
+    namespace {
+        bool ActiveScenePair(const PhysicsWorld *physics, const Character::CharacterWorld *character) noexcept {
+            return physics && character &&
+                   (physics->State() == PhysicsWorldState::ActiveSolver || physics->State() == PhysicsWorldState::ActiveNull) &&
+                   character->State() == Character::CharacterWorldState::Active;
+        }
+    }  // namespace
+
+    /** @copydoc PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate */
+    PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
+        : physics_(std::move(data.physics)), character_(std::move(data.character)), runtime_(data.runtime), authority_(data.authority),
+          evidence_(data.evidence), bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
+          constraintBindings_(std::move(data.constraintBindings)), characterBindings_(std::move(data.characterBindings)),
+          placements_(std::move(data.placements)), structuralRegistration_(std::move(data.structuralRegistration)),
+          structuralState_(std::move(data.structuralState)) {
+        physics_->SetQuarantineSink(*this);
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Retire(BodyHandle) */
+    void PhysicsSceneActivationCandidate::Retire(const BodyHandle body) noexcept {
+        if (const auto found = std::ranges::find_if(bodyBindings_,
+                                                    [body](const auto &binding) {
+            return binding.handle == body;
+        });
+            found != bodyBindings_.end())
+            bodyBindings_.erase(found);
+        std::erase_if(shapeBindings_, [body](const auto &binding) {
+            return binding.body == body;
+        });
+        if (structuralState_) {
+            std::erase_if(structuralState_->authoredBodies, [body](const auto &binding) {
+                return binding.handle == body;
+            });
+            std::erase_if(structuralState_->authoredShapes, [body](const auto &binding) {
+                return binding.body == body;
+            });
+            std::erase_if(structuralState_->bodies, [body](const auto &binding) {
+                return binding.handle == body;
+            });
+            std::erase_if(structuralState_->shapes, [body](const auto &binding) {
+                return binding.body == body;
+            });
+            if (structuralState_->revision == std::numeric_limits<std::uint64_t>::max())
+                structuralState_->closed = true;
+            else
+                ++structuralState_->revision;
+        }
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Retire(ConstraintHandle) */
+    void PhysicsSceneActivationCandidate::Retire(const ConstraintHandle constraint) noexcept {
+        std::erase_if(constraintBindings_, [constraint](const auto &binding) {
+            return binding.handle == constraint;
+        });
+        if (structuralState_) {
+            std::erase_if(structuralState_->authoredConstraints, [constraint](const auto &binding) {
+                return binding.handle == constraint;
+            });
+            std::erase_if(structuralState_->constraints, [constraint](const auto &binding) {
+                return binding.handle == constraint;
+            });
+            if (structuralState_->revision == std::numeric_limits<std::uint64_t>::max())
+                structuralState_->closed = true;
+            else
+                ++structuralState_->revision;
+        }
+    }
+
+    std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(ConstructionData data) {
+        return std::make_unique<PhysicsSceneActivationCandidate>(std::move(data));
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate */
+    PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate() {
+        Shutdown();
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Publish */
+    void PhysicsSceneActivationCandidate::Publish() noexcept {
+        published_ = true;
+        if (structuralRegistration_ && structuralState_ && !structuralState_->closed)
+            structuralRegistration_->active = structuralState_;
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::ValidatePublication */
+    Result<void> PhysicsSceneActivationCandidate::ValidatePublication() const {
+        if (authority_ == nullptr || !authority_->IsCurrent(evidence_))
+            return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        if (structuralState_ && structuralState_->closed)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityRevoked));
+        if (runtime_ == nullptr || runtime_->State() != PhysicsRuntimeState::Ready)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "The Physics runtime is no longer available."));
+        if (!ActiveScenePair(physics_.get(), character_.get()))
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Shutdown */
+    void PhysicsSceneActivationCandidate::Shutdown() noexcept {
+        published_ = false;
+        if (structuralState_)
+            structuralState_->closed = true;
+        if (structuralRegistration_ && structuralRegistration_->active == structuralState_)
+            structuralRegistration_->active.reset();
+        if (character_)
+            character_->Shutdown();
+        if (physics_)
+            physics_->Shutdown();
+        bodyBindings_.clear();
+        shapeBindings_.clear();
+        constraintBindings_.clear();
+        characterBindings_.clear();
+        placements_.clear();
+        if (structuralState_) {
+            structuralState_->bodies.clear();
+            structuralState_->shapes.clear();
+            structuralState_->constraints.clear();
+            structuralState_->authoredBodies.clear();
+            structuralState_->authoredShapes.clear();
+            structuralState_->authoredConstraints.clear();
+        }
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::WorldIdentity */
+    PhysicsWorldId PhysicsSceneActivationCandidate::WorldIdentity() const noexcept {
+        return physics_ ? physics_->Identity() : PhysicsWorldId{};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::BodyBindings */
+    std::span<const PhysicsSceneBodyBinding> PhysicsSceneActivationCandidate::BodyBindings() const noexcept {
+        return structuralState_ ? std::span<const PhysicsSceneBodyBinding>{structuralState_->authoredBodies} : bodyBindings_;
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::ShapeBindings */
+    std::span<const PhysicsSceneShapeBinding> PhysicsSceneActivationCandidate::ShapeBindings() const noexcept {
+        return structuralState_ ? std::span<const PhysicsSceneShapeBinding>{structuralState_->authoredShapes} : shapeBindings_;
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::ConstraintBindings */
+    std::span<const PhysicsSceneConstraintBinding> PhysicsSceneActivationCandidate::ConstraintBindings() const noexcept {
+        return structuralState_ ? std::span<const PhysicsSceneConstraintBinding>{structuralState_->authoredConstraints}
+                                : constraintBindings_;
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindBody */
+    std::optional<BodyHandle> PhysicsSceneActivationCandidate::FindBody(const Runtime::SceneObjectId object,
+                                                                        const Runtime::PhysicsBodySlotId body) const noexcept {
+        const auto bindings = BodyBindings();
+        const auto found = std::ranges::find_if(bindings, [object, body](const auto &binding) {
+            return binding.object == object && binding.body == body;
+        });
+        return found == bindings.end() ? std::nullopt : std::optional<BodyHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindShape */
+    std::optional<ShapeHandle> PhysicsSceneActivationCandidate::FindShape(const Runtime::SceneObjectId object,
+                                                                          const Runtime::PhysicsColliderSlotId collider) const noexcept {
+        const auto bindings = ShapeBindings();
+        const auto found = std::ranges::find_if(bindings, [object, collider](const auto &binding) {
+            return binding.object == object && binding.collider == collider;
+        });
+        return found == bindings.end() ? std::nullopt : std::optional<ShapeHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindConstraint */
+    std::optional<ConstraintHandle> PhysicsSceneActivationCandidate::FindConstraint(
+        const Runtime::SceneObjectId object, const Runtime::PhysicsConstraintSlotId constraint) const noexcept {
+        const auto bindings = ConstraintBindings();
+        const auto found = std::ranges::find_if(bindings, [object, constraint](const auto &binding) {
+            return binding.object == object && binding.constraint == constraint;
+        });
+        return found == bindings.end() ? std::nullopt : std::optional<ConstraintHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeBody */
+    std::optional<BodyHandle> PhysicsSceneActivationCandidate::FindRuntimeBody(const Runtime::EntityRef entity,
+                                                                               const Runtime::PhysicsBodySlotId body) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->bodies, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == body;
+        });
+        return found == structuralState_->bodies.end() ? std::nullopt : std::optional<BodyHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeShape */
+    std::optional<ShapeHandle> PhysicsSceneActivationCandidate::FindRuntimeShape(
+        const Runtime::EntityRef entity, const Runtime::PhysicsColliderSlotId collider) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->shapes, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == collider;
+        });
+        return found == structuralState_->shapes.end() ? std::nullopt : std::optional<ShapeHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeConstraint */
+    std::optional<ConstraintHandle> PhysicsSceneActivationCandidate::FindRuntimeConstraint(
+        const Runtime::EntityRef entity, const Runtime::PhysicsConstraintSlotId constraint) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->constraints, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == constraint;
+        });
+        return found == structuralState_->constraints.end() ? std::nullopt : std::optional<ConstraintHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationAuthority::PhysicsSceneActivationAuthority */
+    PhysicsSceneActivationAuthority::PhysicsSceneActivationAuthority() noexcept : ownerThread_(std::this_thread::get_id()) {}
+
+    /** @copydoc PhysicsSceneActivationAuthority::Capture */
+    PhysicsSceneActivationEvidence PhysicsSceneActivationAuthority::Capture() const noexcept {
+        return current_;
+    }
+
+    /** @copydoc PhysicsSceneActivationAuthority::IsCurrent */
+    bool PhysicsSceneActivationAuthority::IsCurrent(const PhysicsSceneActivationEvidence evidence) const noexcept {
+        return std::this_thread::get_id() == ownerThread_ && evidence == current_;
+    }
+
+    /** @copydoc PhysicsSceneActivationAuthority::Advance */
+    Result<void> PhysicsSceneActivationAuthority::Advance(std::uint64_t &generation) const {
+        if (std::this_thread::get_id() != ownerThread_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (generation == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
+        ++generation;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsSceneActivationAuthority::AdvanceCollisionFilterGeneration */
+    Result<void> PhysicsSceneActivationAuthority::AdvanceCollisionFilterGeneration() {
+        return Advance(current_.collisionFilterGeneration);
+    }
+
+    /** @copydoc PhysicsSceneActivationAuthority::AdvanceOriginGeneration */
+    Result<void> PhysicsSceneActivationAuthority::AdvanceOriginGeneration() {
+        return Advance(current_.originGeneration);
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::PhysicsPlayWorldSession */
+    PhysicsPlayWorldSession::PhysicsPlayWorldSession(PhysicsRuntime &runtime, PhysicsSceneActivationSettings settings) noexcept
+        : ownerThread_(std::this_thread::get_id()), participant_(runtime, authority_, std::move(settings)) {}
+
+    /** @copydoc PhysicsPlayWorldSession::~PhysicsPlayWorldSession */
+    PhysicsPlayWorldSession::~PhysicsPlayWorldSession() {
+        assert(std::this_thread::get_id() == ownerThread_);
+        Retire(pending_);
+        Retire(active_);
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::CheckOwner */
+    Result<void> PhysicsPlayWorldSession::CheckOwner() const {
+        if (std::this_thread::get_id() != ownerThread_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::CheckSafePoint */
+    Result<void> PhysicsPlayWorldSession::CheckSafePoint(const Runtime::RuntimePhase phase) const {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::InvalidState, "Play-world publication and stop require CommitDeferredLifecycleChanges."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::Retire */
+    void PhysicsPlayWorldSession::Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) const noexcept {
+        if (candidate)
+            candidate->Shutdown();
+        candidate.reset();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::ActivePhysics */
+    const PhysicsSceneActivationCandidate *PhysicsPlayWorldSession::ActivePhysics() const noexcept {
+        return static_cast<const PhysicsSceneActivationCandidate *>(active_.get());
+    }
+
+    PhysicsSceneActivationCandidate *PhysicsPlayWorldSession::ActivePhysics() noexcept {
+        return static_cast<PhysicsSceneActivationCandidate *>(active_.get());
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::Prepare */
+    Result<void> PhysicsPlayWorldSession::Prepare(const Runtime::RuntimeSceneDefinition &definition,
+                                                  const Runtime::RuntimeSceneView &scene) {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (pending_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "A play-world candidate is already pending."));
+        auto prepared = participant_.Prepare(definition, scene);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        pendingScene_ = scene.RuntimeId();
+        pendingDefinition_ = definition.Id();
+        pendingRevision_ = definition.Revision();
+        pendingAssets_ = scene.AssetRegistryRevision();
+        pending_ = std::move(prepared).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::Commit */
+    Result<void> PhysicsPlayWorldSession::Commit(const Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView &source) {
+        if (const Result<void> safePoint = CheckSafePoint(phase); safePoint.HasError())
+            return safePoint;
+        if (!pending_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "No play-world candidate is pending."));
+        if (!source.IsCurrent() || source.RuntimeId() != pendingScene_ || source.DefinitionId() != pendingDefinition_ ||
+            source.DefinitionRevision() != pendingRevision_ || source.AssetRegistryRevision() != pendingAssets_) {
+            Retire(pending_);
+            pendingScene_ = {};
+            pendingDefinition_ = {};
+            pendingRevision_ = {};
+            pendingAssets_ = {};
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::QuerySnapshotStale, "The play-world source scene changed before publication."));
+        }
+        if (const Result<void> valid = pending_->ValidatePublication(); valid.HasError()) {
+            Retire(pending_);
+            pendingScene_ = {};
+            pendingDefinition_ = {};
+            pendingRevision_ = {};
+            pendingAssets_ = {};
+            return valid;
+        }
+        pending_->Publish();
+        std::unique_ptr<Runtime::SceneActivationCandidate> old = std::move(active_);
+        active_ = std::move(pending_);
+        activeScene_ = pendingScene_;
+        pendingScene_ = {};
+        pendingDefinition_ = {};
+        pendingRevision_ = {};
+        pendingAssets_ = {};
+        Retire(old);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::Stop */
+    Result<void> PhysicsPlayWorldSession::Stop(const Runtime::RuntimePhase phase) {
+        if (const Result<void> safePoint = CheckSafePoint(phase); safePoint.HasError())
+            return safePoint;
+        Retire(pending_);
+        Retire(active_);
+        pendingScene_ = {};
+        pendingDefinition_ = {};
+        pendingRevision_ = {};
+        pendingAssets_ = {};
+        activeScene_ = {};
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::AdvanceFixedTick */
+    Result<void> PhysicsPlayWorldSession::AdvanceFixedTick(const PhysicsFixedTickInput &input) {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (!active_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "No play world is active."));
+        if (input.sceneGeneration != activeScene_.value)
+            return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale, "The play-world scene generation changed."));
+        return ActivePhysics()->physics_->AdvanceFixedTick(input);
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::PublishedTick */
+    Result<PhysicsPublishedTick> PhysicsPlayWorldSession::PublishedTick() const {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return Result<PhysicsPublishedTick>::Failure(owner.ErrorValue());
+        if (!active_)
+            return Result<PhysicsPublishedTick>::Failure(MakeError(PhysicsErrors::InvalidState, "No play world is active."));
+        return Result<PhysicsPublishedTick>::Success(ActivePhysics()->physics_->PublishedTick());
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::ResolveBody */
+    Result<BodyHandle> PhysicsPlayWorldSession::ResolveBody(const Runtime::SceneObjectId object,
+                                                            const Runtime::PhysicsBodySlotId body) const {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return Result<BodyHandle>::Failure(owner.ErrorValue());
+        if (!active_)
+            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::InvalidState, "No play world is active."));
+        const std::optional<BodyHandle> found = ActivePhysics()->FindBody(object, body);
+        if (!found)
+            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::HandleStale, "The authored body has no active play binding."));
+        return Result<BodyHandle>::Success(*found);
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::ValidateBody */
+    Result<void> PhysicsPlayWorldSession::ValidateBody(const BodyHandle &handle) const {
+        if (const Result<void> owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (!active_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "No play world is active."));
+        if (const Result<void> valid = ValidatePhysicsHandleOwner(handle, ActivePhysics()->WorldIdentity()); valid.HasError())
+            return valid;
+        if (std::ranges::none_of(ActivePhysics()->BodyBindings(), [&handle](const PhysicsSceneBodyBinding &binding) {
+            return binding.handle == handle;
+        }))
+            return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::WorldIdentity */
+    PhysicsWorldId PhysicsPlayWorldSession::WorldIdentity() const noexcept {
+        return active_ ? ActivePhysics()->WorldIdentity() : PhysicsWorldId{};
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::IsActive */
+    bool PhysicsPlayWorldSession::IsActive() const noexcept {
+        return active_ != nullptr;
+    }
+
+    /** @copydoc PhysicsPlayWorldSession::HasPendingCandidate */
+    bool PhysicsPlayWorldSession::HasPendingCandidate() const noexcept {
+        return pending_ != nullptr;
+    }
+}  // namespace Horo::Physics

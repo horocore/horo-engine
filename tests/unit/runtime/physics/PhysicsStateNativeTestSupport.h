@@ -1,10 +1,10 @@
 #pragma once
 
 #include "AllocationProbe.h"
-#include "CanonicalPhysicsRuntimeInternal.h"
-#include "CanonicalPhysicsStateCapture.h"
-#include "CanonicalPhysicsStateRestore.h"
-#include "PhysicsStateSolverStorage.h"
+#include "canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
+#include "state/canonical/build/CanonicalPhysicsStateCapture.h"
+#include "state/canonical/build/CanonicalPhysicsStateRestore.h"
+#include "state/solver/PhysicsStateSolverStorage.h"
 #include "PhysicsTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>

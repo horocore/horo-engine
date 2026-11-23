@@ -1,4 +1,4 @@
-#include "CanonicalWorldSettings.h"
+#include "canonical/solver/CanonicalWorldSettings.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
 #include <catch2/catch_test_macros.hpp>

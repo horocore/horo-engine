@@ -5,7 +5,7 @@
 #include "EditorPlaySavePhysicsContent.h"
 #include "Horo/Runtime/Scene/PersistentEntityIdentity.h"
 #include "PhysicsSceneActivationTestSupport.h"
-#include "PhysicsSceneStateTarget.h"
+#include "scene_state/PhysicsSceneStateTarget.h"
 #include "PhysicsStateWorldTestSupport.h"
 #include "ScenePhysicsHost.h"
 

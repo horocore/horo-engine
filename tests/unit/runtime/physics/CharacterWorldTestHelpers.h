@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CharacterControllerRegistry.h"
+#include "character/controller/CharacterControllerRegistry.h"
 #include "Horo/Physics/CharacterMetrics.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "PhysicsTestUtils.h"

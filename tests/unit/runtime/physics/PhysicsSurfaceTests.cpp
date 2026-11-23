@@ -3,7 +3,7 @@
 #include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/SurfaceMaterial.h"
-#include "PhysicsEventProjection.h"
+#include "events/PhysicsEventProjection.h"
 #include "PhysicsTestUtils.h"
 
 #include <array>

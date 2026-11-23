@@ -2,7 +2,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorld.h"
-#include "PhysicsEventProjection.h"
+#include "events/PhysicsEventProjection.h"
 #include "PhysicsReferenceSceneCorpus.h"
 #include "PhysicsTestUtils.h"
 

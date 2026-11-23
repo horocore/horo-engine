@@ -1,4 +1,4 @@
-#include "CanonicalPhysicsStateFpControl.h"
+#include "state/canonical/abi/CanonicalPhysicsStateFpControl.h"
 #include "PhysicsStateWorldTestSupport.h"
 
 #include <algorithm>

@@ -5,16 +5,16 @@
  * implementation units.
  */
 
-#include "CanonicalPhysicsRuntime.h"
-#include "CanonicalPhysicsStateBuild.h"
+#include "canonical/runtime/CanonicalPhysicsRuntime.h"
+#include "state/canonical/build/CanonicalPhysicsStateBuild.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
-#include "PhysicsEventProjection.h"
-#include "PhysicsStateConstructionStorage.h"
-#include "PhysicsStateRuntimeInventory.h"
-#include "PhysicsWorldTickHelpers.h"
+#include "events/PhysicsEventProjection.h"
+#include "state/construction/storage/PhysicsStateConstructionStorage.h"
+#include "state/runtime/PhysicsStateRuntimeInventory.h"
+#include "world/lifecycle/PhysicsWorldTickHelpers.h"
 
 #include <algorithm>
 #include <array>

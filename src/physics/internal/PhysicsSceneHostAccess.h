@@ -3,7 +3,7 @@
 /** @file PhysicsSceneHostAccess.h
  * @brief Non-installed application-owner access to the one aggregate-owned published Physics/Character pair.
  */
-#include "../PhysicsSceneStateTarget.h"
+#include "../scene_state/PhysicsSceneStateTarget.h"
 #include "CharacterSceneFixedAccess.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 

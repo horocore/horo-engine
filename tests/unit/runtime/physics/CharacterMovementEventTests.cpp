@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "CharacterFastPathStorage.h"
+#include "character/controller/CharacterFastPathStorage.h"
 #include "CharacterFoundationQualificationTestHelpers.h"
 #include "CharacterReferenceSceneCorpusTestHelpers.h"
 #include "Horo/Physics/CharacterCapability.h"

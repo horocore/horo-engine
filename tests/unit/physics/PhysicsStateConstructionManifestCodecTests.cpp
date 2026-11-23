@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "PhysicsStateConstructionManifestCodec.h"
+#include "state/construction/manifest/codec/PhysicsStateConstructionManifestCodec.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

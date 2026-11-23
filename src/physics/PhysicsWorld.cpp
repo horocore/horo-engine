@@ -1,6 +1,6 @@
-#include "PhysicsStateConstructionPlans.h"
-#include "PhysicsWorldBindingValidation.h"
-#include "PhysicsWorldContainmentInternal.h"
+#include "state/construction/plans/PhysicsStateConstructionPlans.h"
+#include "world/settings/PhysicsWorldBindingValidation.h"
+#include "world/lifecycle/PhysicsWorldContainmentInternal.h"
 #include "PhysicsWorldInternal.h"
 
 #include <limits>

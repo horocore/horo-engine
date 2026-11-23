@@ -1,6 +1,6 @@
 #include "AllocationProbe.h"
-#include "PhysicsStateConstructionCodec.h"
-#include "PhysicsStateConstructionStorage.h"
+#include "state/construction/codec/PhysicsStateConstructionCodec.h"
+#include "state/construction/storage/PhysicsStateConstructionStorage.h"
 
 #include <algorithm>
 #include <array>

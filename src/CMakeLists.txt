@@ -1377,9 +1377,9 @@ target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/scene/physics_validation>)
 
 add_library(HoroPhysicsModel STATIC
-        physics/SurfaceMaterial.cpp
+        physics/model/surfaces/SurfaceMaterial.cpp
         physics/PhysicsErrors.cpp
-        physics/PhysicsFilterIdentity.cpp
+        physics/model/identity/PhysicsFilterIdentity.cpp
         runtime/scene/PhysicsSceneComponents.cpp
         runtime/scene/CharacterSceneComponents.cpp
 )
@@ -1630,84 +1630,84 @@ target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
-        physics/PhysicsWorldBindingValidation.h
-        physics/CharacterEventProjectionInternal.h
-        physics/CharacterEventProjection.cpp
-        physics/CharacterSurfaceInternal.h
-        physics/CharacterWorldEvents.cpp
-        physics/CharacterClearanceQuery.cpp
-        physics/CharacterControllerContracts.cpp
-        physics/CharacterQueryContext.cpp
-        physics/CharacterDebugSnapshot.cpp
-        physics/CharacterDebugStorageInternal.h
-        physics/CharacterPhysicsQueryAdapter.cpp
-        physics/CharacterPlatformAttachmentValidation.cpp
-        physics/CharacterPlatformAttachmentValidation.h
-        physics/CharacterDiagnostics.cpp
-        physics/CharacterErrors.cpp
-        physics/CharacterMetrics.cpp
-        physics/CharacterControllerRegistry.h
-        physics/CharacterFastPathStorage.h
-        physics/CharacterCapability.cpp
-        physics/CharacterCapabilityInternal.h
-        physics/CharacterWorld.cpp
-        physics/CharacterWorldCommandPipeline.cpp
-        physics/CharacterWorldCommandInternal.h
-        physics/CharacterWorldMovementInternal.h
-        physics/CharacterWorldSweepInternal.h
-        physics/CharacterWorldStepInternal.h
-        physics/CharacterWorldPlatformInternal.h
-        physics/CharacterWorldCarryInternal.h
-        physics/CharacterSweepPlanesInternal.h
-        physics/CharacterWorldInternal.h
-        physics/CharacterWorldPlacementInternal.h
-        physics/CharacterWorldShapeInternal.h
-        physics/CharacterWorldSettings.cpp
-        physics/GenerationalSlotStorage.h
-        physics/PhysicsBodyDescriptor.cpp
-        physics/PhysicsBodyDynamics.cpp
-        physics/PhysicsCapabilities.cpp
-        physics/PhysicsCollisionSchema.cpp
-        physics/PhysicsCollisionCooker.cpp
-        physics/PhysicsCollisionArtifact.cpp
-        physics/PhysicsConstraintDescriptor.cpp
-        physics/PhysicsCompoundArtifact.cpp
-        physics/PhysicsCompoundCook.cpp
-        physics/PhysicsConvexHullCook.cpp
-        physics/PhysicsConvexHullArtifact.cpp
-        physics/PhysicsTriangleMeshCook.cpp
-        physics/PhysicsTriangleMeshArtifact.cpp
-        physics/PhysicsHeightFieldCook.cpp
-        physics/PhysicsHeightFieldArtifact.cpp
-        physics/PhysicsCookedShapeCache.cpp
-        physics/PhysicsCookedShapeDescriptor.cpp
-        physics/PhysicsStaticTileAdmission.cpp
-        physics/PhysicsDiagnostics.cpp
-        physics/PhysicsDebugSnapshot.cpp
-        physics/PhysicsDeterminismPolicy.cpp
-        physics/PhysicsEventProjection.cpp
-        physics/PhysicsEventProjection.h
-        physics/PhysicsHandleRegistry.h
-        physics/PhysicsIdentity.cpp
-        physics/PhysicsMetrics.cpp
-        physics/PhysicsMaterialAsset.cpp
-        physics/PhysicsMassProperties.cpp
-        physics/PhysicsPose.cpp
-        physics/PhysicsQuery.cpp
-        physics/PhysicsSaturatingAdd.h
-        physics/PhysicsShapeDescriptor.cpp
-        physics/PhysicsStepPolicy.cpp
-        physics/PhysicsTransformAuthority.cpp
-        physics/PhysicsTransformContracts.cpp
+        physics/world/settings/PhysicsWorldBindingValidation.h
+        physics/character/events/CharacterEventProjectionInternal.h
+        physics/character/events/CharacterEventProjection.cpp
+        physics/character/query/CharacterSurfaceInternal.h
+        physics/character/events/CharacterWorldEvents.cpp
+        physics/character/query/CharacterClearanceQuery.cpp
+        physics/character/controller/CharacterControllerContracts.cpp
+        physics/character/query/CharacterQueryContext.cpp
+        physics/character/diagnostics/CharacterDebugSnapshot.cpp
+        physics/character/diagnostics/CharacterDebugStorageInternal.h
+        physics/character/query/CharacterPhysicsQueryAdapter.cpp
+        physics/character/platform/CharacterPlatformAttachmentValidation.cpp
+        physics/character/platform/CharacterPlatformAttachmentValidation.h
+        physics/character/diagnostics/CharacterDiagnostics.cpp
+        physics/character/controller/CharacterErrors.cpp
+        physics/character/diagnostics/CharacterMetrics.cpp
+        physics/character/controller/CharacterControllerRegistry.h
+        physics/character/controller/CharacterFastPathStorage.h
+        physics/character/controller/CharacterCapability.cpp
+        physics/character/controller/CharacterCapabilityInternal.h
+        physics/character/runtime/CharacterWorld.cpp
+        physics/character/runtime/CharacterWorldCommandPipeline.cpp
+        physics/character/runtime/CharacterWorldCommandInternal.h
+        physics/character/movement/CharacterWorldMovementInternal.h
+        physics/character/movement/CharacterWorldSweepInternal.h
+        physics/character/movement/CharacterWorldStepInternal.h
+        physics/character/platform/CharacterWorldPlatformInternal.h
+        physics/character/platform/CharacterWorldCarryInternal.h
+        physics/character/query/CharacterSweepPlanesInternal.h
+        physics/character/runtime/CharacterWorldInternal.h
+        physics/character/movement/CharacterWorldPlacementInternal.h
+        physics/character/movement/CharacterWorldShapeInternal.h
+        physics/character/controller/CharacterWorldSettings.cpp
+        physics/model/identity/GenerationalSlotStorage.h
+        physics/model/body/PhysicsBodyDescriptor.cpp
+        physics/model/body/PhysicsBodyDynamics.cpp
+        physics/model/identity/PhysicsCapabilities.cpp
+        physics/collision/PhysicsCollisionSchema.cpp
+        physics/collision/PhysicsCollisionCooker.cpp
+        physics/collision/PhysicsCollisionArtifact.cpp
+        physics/model/body/PhysicsConstraintDescriptor.cpp
+        physics/collision/polyhedral/PhysicsCompoundArtifact.cpp
+        physics/collision/polyhedral/PhysicsCompoundCook.cpp
+        physics/collision/polyhedral/PhysicsConvexHullCook.cpp
+        physics/collision/polyhedral/PhysicsConvexHullArtifact.cpp
+        physics/collision/surfaces/PhysicsTriangleMeshCook.cpp
+        physics/collision/surfaces/PhysicsTriangleMeshArtifact.cpp
+        physics/collision/surfaces/PhysicsHeightFieldCook.cpp
+        physics/collision/surfaces/PhysicsHeightFieldArtifact.cpp
+        physics/collision/PhysicsCookedShapeCache.cpp
+        physics/collision/PhysicsCookedShapeDescriptor.cpp
+        physics/scene/publication/PhysicsStaticTileAdmission.cpp
+        physics/model/diagnostics/PhysicsDiagnostics.cpp
+        physics/model/diagnostics/PhysicsDebugSnapshot.cpp
+        physics/model/identity/PhysicsDeterminismPolicy.cpp
+        physics/events/PhysicsEventProjection.cpp
+        physics/events/PhysicsEventProjection.h
+        physics/model/identity/PhysicsHandleRegistry.h
+        physics/model/identity/PhysicsIdentity.cpp
+        physics/model/diagnostics/PhysicsMetrics.cpp
+        physics/model/surfaces/PhysicsMaterialAsset.cpp
+        physics/model/body/PhysicsMassProperties.cpp
+        physics/model/body/PhysicsPose.cpp
+        physics/world/query/PhysicsQuery.cpp
+        physics/model/diagnostics/PhysicsSaturatingAdd.h
+        physics/model/body/PhysicsShapeDescriptor.cpp
+        physics/world/settings/PhysicsStepPolicy.cpp
+        physics/world/settings/PhysicsTransformAuthority.cpp
+        physics/world/settings/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
-        physics/PhysicsWorldQuery.cpp
-        physics/PhysicsQueryEventCapability.cpp
+        physics/world/query/PhysicsWorldQuery.cpp
+        physics/world/query/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
-        physics/PhysicsWorldScene.cpp
-        physics/PhysicsWorldTickHelpers.h
-        physics/PhysicsWorldBudgets.cpp
+        physics/world/lifecycle/PhysicsWorldScene.cpp
+        physics/world/lifecycle/PhysicsWorldTickHelpers.h
+        physics/world/settings/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
-        physics/PhysicsWorldSettings.cpp
+        physics/world/settings/PhysicsWorldSettings.cpp
 )
 add_library(HoroEngine::Physics ALIAS HoroPhysics)
 target_compile_features(HoroPhysics PUBLIC cxx_std_20)
@@ -1729,46 +1729,46 @@ target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayCharact
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayCharacterIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
-        physics/CanonicalPhysicsRuntime.cpp
-        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
-        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
-        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
-        physics/CanonicalPhysicsRuntimeDebug.cpp
-        physics/CanonicalPhysicsRuntimeContainment.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeEvents.cpp
-        physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
-        physics/CanonicalPhysicsRuntimeQueryResident.cpp
-        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
-        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
-        physics/CanonicalPhysicsRuntimeReadback.cpp
-        physics/CanonicalPhysicsRuntimeScene.cpp
-        physics/CanonicalSolver.cpp
-        physics/CanonicalWorldSettings.cpp)
+        physics/canonical/runtime/CanonicalPhysicsRuntime.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeContinuousCollision.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeSceneBatch.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeContainment.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeEvents.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQuery.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryAuthority.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeReadback.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeScene.cpp
+        physics/canonical/solver/CanonicalSolver.cpp
+        physics/canonical/solver/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
-        physics/CanonicalPhysicsRuntime.cpp
-        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
-        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
-        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
-        physics/CanonicalPhysicsRuntimeDebug.cpp
-        physics/CanonicalPhysicsRuntimeContainment.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeEvents.cpp
-        physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
-        physics/CanonicalPhysicsRuntimeQueryResident.cpp
-        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
-        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
-        physics/CanonicalPhysicsRuntimeReadback.cpp
-        physics/CanonicalPhysicsRuntimeScene.cpp
-        physics/CanonicalSolver.cpp
-        physics/CanonicalWorldSettings.cpp
+        physics/canonical/runtime/CanonicalPhysicsRuntime.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeContinuousCollision.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeSceneBatch.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeContainment.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeEvents.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQuery.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryAuthority.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeReadback.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeScene.cpp
+        physics/canonical/solver/CanonicalSolver.cpp
+        physics/canonical/solver/CanonicalWorldSettings.cpp
         PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/GR-;/EHs-c->;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti;-fno-exceptions>")
 else()
-    target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
+    target_sources(HoroPhysics PRIVATE physics/canonical/runtime/CanonicalPhysicsRuntimeOmitted.cpp physics/canonical/solver/CanonicalSolverOmitted.cpp)
 endif()
 
 # Portable Project catalogue authority; solver activation remains outside this target.
@@ -1805,14 +1805,14 @@ target_include_directories(HoroCharacterScenePlacementInternal INTERFACE "$<BUIL
 target_link_libraries(HoroCharacterScenePlacementInternal INTERFACE HoroEngine::Physics)
 
 add_library(HoroPhysicsSceneIntegration STATIC
-        physics/PhysicsCellAttachments.cpp
+        physics/scene/publication/PhysicsCellAttachments.cpp
         physics/PhysicsSceneActivation.cpp
-        physics/PhysicsSceneStructural.cpp
-        physics/PhysicsSceneActivationPlan.cpp
-        physics/PhysicsSceneSurfaceProjection.cpp
-        physics/CharacterSceneActivationPlan.cpp
-        physics/PhysicsSceneActivationCapabilities.cpp
-        physics/PhysicsSceneActivationLifecycle.cpp)
+        physics/scene/publication/PhysicsSceneStructural.cpp
+        physics/scene/activation/PhysicsSceneActivationPlan.cpp
+        physics/scene/publication/PhysicsSceneSurfaceProjection.cpp
+        physics/scene/activation/CharacterSceneActivationPlan.cpp
+        physics/scene/activation/PhysicsSceneActivationCapabilities.cpp
+        physics/scene/activation/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload

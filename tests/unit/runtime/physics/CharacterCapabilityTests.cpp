@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "CharacterCapabilityInternal.h"
+#include "character/controller/CharacterCapabilityInternal.h"
 #include "CharacterWorldTestHelpers.h"
 #include "Horo/Physics/PhysicsWorld.h"
 

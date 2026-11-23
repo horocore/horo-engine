@@ -1,7 +1,7 @@
 #include "AllocationProbe.h"
-#include "PhysicsStateConstructionManifestCodec.h"
-#include "PhysicsStateEnvelope.h"
-#include "PhysicsStateRestartInput.h"
+#include "state/construction/manifest/codec/PhysicsStateConstructionManifestCodec.h"
+#include "state/envelope/PhysicsStateEnvelope.h"
+#include "state/restart/PhysicsStateRestartInput.h"
 
 #include <algorithm>
 #include <array>

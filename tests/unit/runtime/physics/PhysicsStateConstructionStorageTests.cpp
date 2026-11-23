@@ -1,6 +1,6 @@
 #include "AllocationProbe.h"
 #include "Horo/Physics/PhysicsErrors.h"
-#include "PhysicsStateConstructionStorage.h"
+#include "state/construction/storage/PhysicsStateConstructionStorage.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

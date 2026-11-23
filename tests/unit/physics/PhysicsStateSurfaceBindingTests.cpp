@@ -1,4 +1,4 @@
-#include "PhysicsStateSurfaceBinding.h"
+#include "state/validation/PhysicsStateSurfaceBinding.h"
 
 #include <catch2/catch_test_macros.hpp>
 

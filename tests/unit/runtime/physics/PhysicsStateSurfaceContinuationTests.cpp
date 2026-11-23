@@ -1,4 +1,4 @@
-#include "PhysicsStateSurfaceBinding.h"
+#include "state/validation/PhysicsStateSurfaceBinding.h"
 #include "PhysicsStateWorldTestSupport.h"
 
 #include <algorithm>

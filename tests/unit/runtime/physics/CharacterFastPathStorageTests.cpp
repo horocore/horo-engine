@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "CharacterFastPathStorage.h"
+#include "character/controller/CharacterFastPathStorage.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
