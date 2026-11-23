@@ -69,13 +69,39 @@ namespace Horo::Application::Internal {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
+    namespace {
+        /** @brief Verifies real Physics evidence survives the worker's exact-pair admission. */
+        void CheckMeasuredLink(const Navigation::NavigationBakeInputSnapshot &input, const Navigation::NavigationBakeTileKey &tile,
+                               const ProjectNavigationClearanceRequest &request,
+                               const Navigation::NavigationLinkClearanceEvidence &evidence) {
+            CHECK(evidence.bakeFingerprint == request.bakeFingerprint);
+            CHECK(evidence.start == request.start);
+            CHECK(evidence.end == request.end);
+            CHECK(evidence.heightMeters == request.heightMeters);
+            const ProjectNavigationClearanceSample sample{tile.scope, evidence};
+            const Navigation::NavMeshOffMeshLink link{.start = request.start.position,
+                                                      .end = request.end.position,
+                                                      .radiusMeters = request.radiusMeters + 0.25F};
+            const auto admitted = ApplyProjectNavigationLinkClearance(input, tile, link, std::span{&sample, 1});
+            REQUIRE(admitted.HasValue());
+            CHECK(admitted.Value().radiusMeters == request.radiusMeters);
+        }
+    }  // namespace
+
     TEST_CASE("Native Physics measures Navigation link endpoints and the continuous corridor in the exact publication",
               "[navigation][physics]") {
         using namespace Physics;
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
         REQUIRE(world->Activate(PhysicsWorldId::Create(71).Value()).HasValue());
-        const auto request = Request();
+        const Navigation::TestSupport::IncrementalBakeFixture fixture;
+        const auto input = fixture.Input();
+        const auto tile = fixture.Tiles().front().key;
+        auto request = Request();
+        request.bakeFingerprint = input->Fingerprint();
+        request.profile = tile.profile;
+        request.radiusMeters = fixture.profile.buildGeometry.radiusMeters;
+        request.heightMeters = fixture.profile.buildGeometry.heightMeters;
         auto blocking = false;
         SECTION("Clear endpoint pair and sweep") {
             CHECK_FALSE(blocking);
@@ -101,11 +127,7 @@ namespace Horo::Application::Internal {
             CHECK_FALSE(measured.Value());
         } else {
             REQUIRE(measured.Value());
-            CHECK(measured.Value()->bakeFingerprint == request.bakeFingerprint);
-            CHECK(measured.Value()->start == request.start);
-            CHECK(measured.Value()->end == request.end);
-            CHECK(measured.Value()->radiusMeters == request.radiusMeters);
-            CHECK(measured.Value()->heightMeters == request.heightMeters);
+            CheckMeasuredLink(*input, tile, request, *measured.Value());
         }
         ++publication.revision;
         Test::RequireError(MeasureProjectNavigationLinkClearance(access, publication, request), PhysicsErrors::QuerySnapshotStale);
