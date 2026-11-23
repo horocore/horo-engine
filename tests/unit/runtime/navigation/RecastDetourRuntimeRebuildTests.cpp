@@ -3,6 +3,7 @@
 #include "Horo/Navigation/NavigationRuntimeTileRebuild.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
 #include "navigation/NavigationDataQualificationCorpus.h"
+#include "navigation/RecastDetourCookedLinkFixture.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -14,6 +15,7 @@
 
 namespace Horo::Navigation {
     namespace {
+        using TestSupport::CookedLinkFixture;
         using TestSupport::Id;
         using TestSupport::RequireError;
 
@@ -47,8 +49,9 @@ namespace Horo::Navigation {
         /** @brief Composes real Detour preparation, optionally under an intentionally insufficient provider budget. */
         class NativeFactory final : public INavigationRuntimeRebuildBackendFactory {
         public:
-            explicit NativeFactory(const NavigationDefinition &definition, std::size_t providerBudget = 1024U * 1024U)
-                : definition_(definition), providerBudget_(providerBudget) {}
+            explicit NativeFactory(const NavigationDefinition &definition, std::size_t providerBudget = 1024U * 1024U,
+                                   bool allowAuthoredTraversal = false)
+                : definition_(definition), providerBudget_(providerBudget), allowAuthoredTraversal_(allowAuthoredTraversal) {}
 
             [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
                 const NavigationWorldActivationDescriptor &descriptor, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
@@ -67,7 +70,8 @@ namespace Horo::Navigation {
                                                                      .queryLimits = {128, 32, 100},
                                                                      .maximumConcurrentQueries = 1,
                                                                      .maximumOwnedBytes = std::min(providerBudget_, maximumOwnedBytes),
-                                                                     .capabilityRevision = 12});
+                                                                     .capabilityRevision = 12,
+                                                                     .allowAuthoredTraversal = allowAuthoredTraversal_});
                 using Return = Result<NavigationPreparedRuntimeRebuildBackend>;
                 if (backend.HasError())
                     return Return::Failure(std::move(backend).ErrorValue());
@@ -78,7 +82,88 @@ namespace Horo::Navigation {
         private:
             const NavigationDefinition &definition_;
             std::size_t providerBudget_;
+            bool allowAuthoredTraversal_;
         };
+
+        /** @brief Reprojects fixture endpoints with Detour under an explicitly granted or rejected clearance observation. */
+        class FixtureLinkProjection final : public INavigationRuntimeLinkProjector {
+        public:
+            FixtureLinkProjection(const CookedLinkFixture &fixture, const NavigationPreparedTile &tile, bool clear) noexcept
+                : fixture_(fixture), tile_(tile), clear_(clear) {}
+
+            [[nodiscard]] Result<NavMeshOffMeshLink> Project(const NavigationBakeInputSnapshot &, const NavigationBakeTileKey &key,
+                                                             const NavigationTileBuildResult &topology, const NavMeshOffMeshLink &previous,
+                                                             const std::size_t bytes, const CancellationToken &cancel) const override {
+                using Link = Result<NavMeshOffMeshLink>;
+                if (!clear_ || key != tile_.tile.key)
+                    return Link::Failure(MakeError(NavigationErrors::OperationUnsupported));
+                const auto cooked = NavigationCookedTile::Create(tile_, topology, bytes / 2);
+                if (cooked.HasError())
+                    return Link::Failure(cooked.ErrorValue());
+                const std::array tiles{cooked.Value()};
+                auto info = fixture_.Info();
+                info.topology = Id<NavigationGeneration>(info.topology.Value() + 1);
+                info.tiles = tiles;
+                info.maximumOwnedBytes = std::min(info.maximumOwnedBytes, bytes / 2);
+                const auto provider = CreateRecastDetourCookedNavigationQueryBackend(info);
+                if (provider.HasError())
+                    return Link::Failure(provider.ErrorValue());
+                return ProjectEndpoints(*provider.Value(), info, previous, cancel);
+            }
+
+        private:
+            /** @brief Samples candidate polygon identities under the original link's finite reach. */
+            [[nodiscard]] static Result<NavMeshOffMeshLink> ProjectEndpoints(const INavigationQueryBackend &provider,
+                                                                             const RecastDetourCookedProviderCreateInfo &info,
+                                                                             NavMeshOffMeshLink link, const CancellationToken &cancel) {
+                const auto point = [&](const Math::Vec3 position) {
+                    const auto radius = link.radiusMeters;
+                    return provider.ProjectPoint({.world = info.world,
+                                                  .topology = info.topology,
+                                                  .point = position,
+                                                  .halfExtents = {radius, radius, radius},
+                                                  .requirement = {NavigationQueryKind::NearestPoint, NavigationQualityLevel::Balanced,
+                                                                  info.queryLimits}},
+                                                 cancel);
+                };
+                const auto start = point(link.start);
+                if (start.HasError())
+                    return Result<NavMeshOffMeshLink>::Failure(start.ErrorValue());
+                const auto end = point(link.end);
+                if (end.HasError())
+                    return Result<NavMeshOffMeshLink>::Failure(end.ErrorValue());
+                link.start = start.Value().hit.position;
+                link.end = end.Value().hit.position;
+                link.startPolygon = start.Value().hit.provenance.polygonIndex;
+                link.endPolygon = end.Value().hit.provenance.polygonIndex;
+                return Result<NavMeshOffMeshLink>::Success(link);
+            }
+
+            const CookedLinkFixture &fixture_;
+            const NavigationPreparedTile &tile_;
+            bool clear_;
+        };
+
+        /** @brief Captures detached collider islands whose grounded topology alone cannot cross the gap. */
+        [[nodiscard]] TestSupport::IncrementalBakeFixture SeparatedGround() {
+            TestSupport::IncrementalBakeFixture source;
+            source.vertices = {{0, 0, 0}, {0, 0, 8}, {3, 0, 8}, {3, 0, 0}, {4, 0, 0}, {4, 0, 8}, {8, 0, 8}, {8, 0, 0}};
+            const auto area = Id<NavigationAreaId>(1);
+            source.triangles = {{{0, 2, 3}, area}, {{0, 1, 2}, area}, {{4, 6, 7}, area}, {{4, 5, 6}, area}};
+            source.revisions.geometry = Id<NavigationSourceSnapshotRevision>(2);
+            return source;
+        }
+
+        /** @brief Verifies the native route uses exactly one authored traversal. */
+        [[nodiscard]] NavigationLinkId RouteLink(const NavigationWorldReadLease &lease, const NavigationPathRequest &request) {
+            const auto route = lease.Backend().FindPath(request, lease.Cancellation());
+            REQUIRE(route.HasValue());
+            REQUIRE(route.Value().status == NavigationPathStatus::Reachable);
+            REQUIRE(route.Value().portals.size() == 1);
+            const auto &portal = route.Value().portals.front();
+            CHECK(portal.kind == NavigationPathPortalKind::OffMeshLink);
+            return portal.link;
+        }
 
         /** @brief Uses the exact acquired generation and its cooperative retirement token. */
         [[nodiscard]] NavigationPathStatus PathStatus(const NavigationWorldReadLease &lease, const NavigationFilterId filter,
@@ -168,6 +253,56 @@ namespace Horo::Navigation {
             }
         };
     }  // namespace
+
+    TEST_CASE("Native linked rebuild publishes a complete route and preserves the predecessor after rejected clearance",
+              "[unit][navigation][provider][path][traversal][tile_rebuild]") {
+        const CookedLinkFixture fixture;
+        auto request = fixture.Request();
+        const NavigationWorldActivationDescriptor original{Id<NavigationSceneRuntimeId>(1), Id<NavigationSceneGeneration>(1), request.world,
+                                                           request.topology};
+        auto world = NavigationWorldLifecycle::Create(1).Value();
+        REQUIRE(world.Stage(original, fixture.Open()).HasValue());
+        REQUIRE(world.CommitAtSafePoint(original.scene, original.sceneGeneration).HasValue());
+        const auto previous = world.Acquire(original.world).Value();
+
+        const auto source = SeparatedGround();
+        const auto input = source.Input();
+        const std::array layout{fixture.input.tile};
+        const auto tile = PrepareNavigationBakeTile(*input, layout.front(), source.compatibility).Value();
+        const FixtureLinkProjection denied{fixture, tile, false};
+        const FixtureLinkProjection allowed{fixture, tile, true};
+        const NativeFactory factory{fixture.definition, 1024U * 1024U, true};
+        const auto builder = CreateRecastDetourNavigationMeshBuilder().Value();
+        const NavigationRuntimeRebuildFence fence{original, input->Revisions(), 1, 1, 2};
+        NavigationRuntimeTileRebuildRequest rebuild{.expected = fence,
+                                                    .nextTopology = Id<NavigationGeneration>(original.topology.Value() + 1),
+                                                    .input = *input,
+                                                    .layout = layout,
+                                                    .activeTiles = fixture.tiles,
+                                                    .compatibility = source.compatibility,
+                                                    .linkProjector = &denied};
+        RequireError(PrepareRuntimeNavigationTileRebuild(rebuild, *builder, factory), NavigationErrors::OperationUnsupported);
+        CHECK(world.ActiveDescriptor().Value() == original);
+        CHECK_FALSE(previous.IsRevoked());
+        const auto retained = RouteLink(previous, request);
+
+        rebuild.linkProjector = &allowed;
+        auto prepared = PrepareRuntimeNavigationTileRebuild(rebuild, *builder, factory);
+        CAPTURE((prepared.HasError() ? prepared.ErrorValue().message : "ready"));
+        REQUIRE(prepared.HasValue());
+        REQUIRE(prepared.Value().RebuiltTileCount() == 1);
+        CHECK(world.ActiveDescriptor().Value() == original);
+        auto published = std::move(prepared).Value().PublishAtSafePoint(world, fence);
+        REQUIRE(published.HasValue());
+        CHECK(previous.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        const auto current = world.Acquire(original.world).Value();
+        REQUIRE(current.Descriptor().topology == rebuild.nextTopology);
+        const auto &projected = published.Value().front()->Topology().offMeshLinks.front();
+        request.topology = current.Descriptor().topology;
+        request.start = projected.start;
+        request.destination = projected.end;
+        CHECK(RouteLink(current, request) == retained);
+    }
 
     TEST_CASE("Native local tile rebuild preparation failure preserves the prior generation",
               "[unit][navigation][provider][tile_rebuild]") {
