@@ -82,7 +82,7 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::Bind(std::size_t role, RenderTextureViewHandle scene, RenderTextureViewHandle display,
                                                    std::size_t slotIndex, std::size_t previous) {
         auto &slot = slots_[slotIndex];
-        auto &binding = slot.bindings[role][previous];
+        auto &binding = slot.bindings[activeSceneBinding_][role][previous];
         if (binding)
             return Result<void>::Success();
         auto &program = programs_[role];
@@ -119,14 +119,15 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportColorPipeline::ClearBindings */
     Result<void> EditorViewportColorPipeline::ClearBindings() {
         for (auto &slot : slots_)
-            for (std::size_t role = 0; role < 2; ++role)
-                for (auto &binding : slot.bindings[role]) {
-                    if (!binding)
-                        continue;
-                    if (const auto released = programs_[role].materials->Release(binding->Id()); released.HasError())
-                        return released;
-                    binding.reset();
-                }
+            for (auto &source : slot.bindings)
+                for (std::size_t role = 0; role < source.size(); ++role)
+                    for (auto &binding : source[role]) {
+                        if (!binding)
+                            continue;
+                        if (const auto released = programs_[role].materials->Release(binding->Id()); released.HasError())
+                            return released;
+                        binding.reset();
+                    }
         return Result<void>::Success();
     }
 
@@ -144,13 +145,23 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PrepareBindings(RenderTextureViewHandle scene, RenderTextureViewHandle display) {
         if (!candidate_ || !scene.IsValid() || !display.IsValid())
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
-        if (scene != boundScene_ || display != boundDisplay_) {
+        if (display != boundDisplay_) {
             if (const auto cleared = ClearBindings(); cleared.HasError())
                 return cleared;
+            sceneBindings_ = {};
+            boundDisplay_ = display;
+        }
+        auto source = std::ranges::find(sceneBindings_, scene, &SceneBinding::view);
+        if (source == sceneBindings_.end())
+            source = std::ranges::find(sceneBindings_, RenderTextureViewHandle{}, &SceneBinding::view);
+        if (source == sceneBindings_.end())
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        activeSceneBinding_ = static_cast<std::size_t>(source - sceneBindings_.begin());
+        if (!source->ready) {
+            source->view = scene;
             if (const auto prepared = PrepareAllBindings(scene, display); prepared.HasError())
                 return prepared;
-            boundScene_ = scene;
-            boundDisplay_ = display;
+            source->ready = true;
         }
         for (std::size_t role = 0; role < 2; ++role) {
             if (const auto written = WriteParameters(role); written.HasError())
@@ -161,7 +172,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorPipeline::Material */
     const std::shared_ptr<const ResidentMaterialBinding> &EditorViewportColorPipeline::Material(std::size_t role) const noexcept {
-        return slots_[candidateSlot_].bindings[role][PreviousSlot()];
+        return slots_[candidateSlot_].bindings[activeSceneBinding_][role][PreviousSlot()];
     }
 
     /** @copydoc EditorViewportColorPipeline::Mesh */

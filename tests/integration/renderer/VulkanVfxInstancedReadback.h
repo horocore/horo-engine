@@ -180,6 +180,12 @@ namespace Horo::Render::Test::VfxInstanced {
         void ResetDraws() noexcept {
             drawCount_ = 0;
             drawCountOverflow_ = false;
+            dispatchCount_ = 0;
+        }
+
+        /** @brief Counts actual direct native compute commands in the current observation window. */
+        std::size_t DispatchCount() const noexcept {
+            return dispatchCount_;
         }
 
         /** @brief Returns actual forwarded indexed command counts, checked outside every native callback. */
@@ -250,7 +256,18 @@ namespace Horo::Render::Test::VfxInstanced {
                 self.drawIndexed_ = std::bit_cast<PFN_vkCmdDrawIndexed>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DrawIndexed);
             }
+            if (std::strcmp(name, "vkCmdDispatch") == 0) {
+                self.dispatch_ = std::bit_cast<PFN_vkCmdDispatch>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&Dispatch);
+            }
             return actual;
+        }
+
+        /** @brief Observes a forwarded compute dispatch on the actual selected device. */
+        static VKAPI_ATTR void VKAPI_CALL Dispatch(VkCommandBuffer command, std::uint32_t x, std::uint32_t y, std::uint32_t z) noexcept {
+            auto &self = *active_;
+            self.dispatch_(command, x, y, z);
+            ++self.dispatchCount_;
         }
 
         /** @brief Forwards real indexed draws unchanged and records only bounded arguments, never a GPU verdict. */
@@ -387,6 +404,8 @@ namespace Horo::Render::Test::VfxInstanced {
         PFN_vkDestroyImageView destroyView_{};
         PFN_vkCmdBeginRendering beginRendering_{};
         PFN_vkCmdDrawIndexed drawIndexed_{};
+        PFN_vkCmdDispatch dispatch_{};
+        std::size_t dispatchCount_{};
         VkInstance instance_{};
         VkPhysicalDevice physical_{};
         VkDevice device_{};

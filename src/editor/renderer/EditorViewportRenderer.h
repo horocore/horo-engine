@@ -180,6 +180,11 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Stages optional view history for the frozen viewport and exact host frame before graph preparation. */
+        [[nodiscard]] virtual Result<void> PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &, std::uint64_t) {
+            return Result<void>::Success();
+        }
+
         /** @brief Executes one prepared editor frame through the existing frontend frame/submission owner.
          * @param frame Exact active frontend scope. @param passes Frozen borrowed scene/output descriptors.
          * @return Original execution failure; no second frame, backend selection or submission authority is created.

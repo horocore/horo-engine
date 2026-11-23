@@ -50,6 +50,13 @@ namespace Horo::Editor {
          * @return Success only when the selected native programs and their material tables are ready. */
         [[nodiscard]] Result<void> PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
                                                                 std::span<const Render::CookedNativeReconstructionKernel> kernels = {});
+        /** @brief Admits temporal shaders and the scene-linear color recipe before resident viewport allocation. */
+        [[nodiscard]] Result<void> PrepareTemporalColor(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
+                                                        const Render::ExposureSettings &settings, const TemporalGuideCook &linearDepth,
+                                                        const TemporalGuideCook &motion,
+                                                        std::span<const Render::CookedNativeReconstructionKernel> kernels);
+        /** @copydoc IEditorViewportRenderer::PrepareTemporalFrame */
+        [[nodiscard]] Result<void> PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &pass, std::uint64_t frameId) override;
         ~EditorViewportRendererVulkan() override;
         /** @copydoc IEditorViewportRenderer::RequestImageCapture */
         [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
@@ -396,6 +403,17 @@ namespace Horo::Editor {
             ShaderResources motion;
             std::shared_ptr<Render::IResidentNativeReconstructionKernel> seedKernel;
             std::shared_ptr<Render::IResidentNativeReconstructionKernel> historyKernel;
+            std::shared_ptr<Render::NativeReconstructionViewHistory> reconstruction;
+            Render::TemporalHistoryCompatibility reconstructionCompatibility;
+            /** @brief Staged plan consumed by the next graph. The history owner retains accepted work. */
+            std::optional<Render::NativeReconstructionScenePlan> reconstructionPlan;
+            [[nodiscard]] Render::TemporalHistoryCompatibility Compatibility(Render::FramebufferExtent extent, std::uint64_t scene) const;
+            [[nodiscard]] bool ProjectionChanges(const Render::RenderProjectionDescriptor &projection) const noexcept;
+
+            [[nodiscard]] std::uint64_t SceneDomain() const noexcept {
+                return source_.sceneDomain;
+            }
+
             std::array<std::vector<GuideDraw>, std::tuple_size_v<FrameSlots>> draws;
 
         private:
@@ -570,6 +588,13 @@ namespace Horo::Editor {
         /** @brief Populates the cold candidate with the complete temporal compute family, independent of inventory order. */
         [[nodiscard]] Result<void> PrepareTemporalKernels(TemporalGuidePrograms &candidate,
                                                           std::span<const Render::CookedNativeReconstructionKernel> kernels);
+        [[nodiscard]] Result<std::unique_ptr<TemporalGuidePrograms>> MakeTemporalGuidePrograms(
+            const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+            std::span<const Render::CookedNativeReconstructionKernel> kernels);
+        [[nodiscard]] Result<void> PrepareColorRecipe(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
+                                                      const Render::ExposureSettings &settings,
+                                                      EditorViewportResources::ColorReconstruction reconstruction,
+                                                      std::shared_ptr<Render::IResidentNativeReconstructionKernel> spatial = {});
         /** @brief Validates exact selected viewport resources and projection for the active same-extent graph. */
         [[nodiscard]] Result<Render::NativeReconstructionDispatchPlan> PrepareSpatialDispatch(
             Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass) const;

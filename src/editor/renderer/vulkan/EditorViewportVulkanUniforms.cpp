@@ -100,16 +100,33 @@ namespace Horo::Editor {
         if (samples.HasError())
             return Result<void>::Failure(samples.ErrorValue());
 
+        projection_ = pass.scene.camera.projection;
+        auto attempted = history_.BeginFrame({.compatibility = Compatibility(pass.extent, source_.sceneDomain),
+                                              .frameId = frame.value,
+                                              .predecessorFrameId = lastAcceptedFrame_,
+                                              .camera = {viewProjection},
+                                              .disocclusion = {images->linearDepth.texture, images->motion.texture},
+                                              .invalidation = {.cameraCut = ProjectionChanges(projection_)},
+                                              .objects = samples.Value()});
+        if (attempted.HasError())
+            return Result<void>::Failure(attempted.ErrorValue());
+        pending_ = std::move(attempted).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility */
+    Render::TemporalHistoryCompatibility EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility(
+        const Render::FramebufferExtent extent, const std::uint64_t scene) const {
         const auto color = owner.resources_.ColorTexture();
         const auto surfaceGeneration = (std::uint64_t{color.slot} << 32) | color.generation;
         // This owner admits one immutable desktop guide recipe and an unjittered, fixed-extent raster.
         constexpr std::uint64_t desktopGuideContract = 1;
-        const TemporalHistoryCompatibility compatibility{
+        return {
             .view = owner.LightingViewIdentity(),
             .provider = {desktopGuideContract},
             .mode = {desktopGuideContract},
-            .renderExtent = pass.extent,
-            .targetExtent = pass.extent,
+            .renderExtent = extent,
+            .targetExtent = extent,
             .providerGeneration = desktopGuideContract,
             .modeGeneration = desktopGuideContract,
             .surfaceGeneration = surfaceGeneration,
@@ -120,22 +137,16 @@ namespace Horo::Editor {
             .deviceGeneration = owner.frontend_.Capabilities().support.deviceIncarnation,
             .projectionGeneration = desktopGuideContract,
             .jitterGeneration = desktopGuideContract,
-            .sceneOriginGeneration = source_.sceneDomain,
+            .sceneOriginGeneration = scene,
             .motionGeneration = desktopGuideContract,
             .recipeGeneration = desktopGuideContract,
         };
-        projection_ = pass.scene.camera.projection;
-        auto attempted = history_.BeginFrame({.compatibility = compatibility,
-                                              .frameId = frame.value,
-                                              .predecessorFrameId = lastAcceptedFrame_,
-                                              .camera = {viewProjection},
-                                              .disocclusion = {images->linearDepth.texture, images->motion.texture},
-                                              .invalidation = {.cameraCut = !SameMotionProjection(projection_, acceptedProjection_)},
-                                              .objects = samples.Value()});
-        if (attempted.HasError())
-            return Result<void>::Failure(attempted.ErrorValue());
-        pending_ = std::move(attempted).Value();
-        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::ProjectionChanges */
+    bool EditorViewportRendererVulkan::TemporalGuidePrograms::ProjectionChanges(
+        const Render::RenderProjectionDescriptor &projection) const noexcept {
+        return !SameMotionProjection(projection, acceptedProjection_);
     }
 
     /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded */

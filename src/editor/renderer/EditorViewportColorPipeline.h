@@ -108,12 +108,15 @@ namespace Horo::Editor {
         /** @brief Publishes staged final states only at actual encoded-and-accepted host completion. */
         void PublishBufferStates() noexcept;
 
+        static constexpr std::size_t SceneBindingCount = 3;  // Direct scene plus a pair of temporal history outputs.
+        using PassBindings = std::array<std::array<std::shared_ptr<const Render::ResidentMaterialBinding>, SlotCount + 1>, 2>;
+
         struct Slot final {
             Render::RenderBufferHandle histogram;
             Render::RenderBufferHandle seed;
             Render::RenderBufferHandle output;
             std::array<Render::RenderBufferHandle, 2> uniform;
-            std::array<std::array<std::shared_ptr<const Render::ResidentMaterialBinding>, SlotCount + 1>, 2> bindings;
+            std::array<PassBindings, SceneBindingCount> bindings;
             Render::ExposureState produced;
         };
 
@@ -217,7 +220,14 @@ namespace Horo::Editor {
         std::optional<Render::ColorTransformSelection> selection_;
         std::array<Render::RenderBufferHandle, 2> geometry_;
         Render::RenderMeshHandle mesh_;
-        Render::RenderTextureViewHandle boundScene_;
+
+        struct SceneBinding final {
+            Render::RenderTextureViewHandle view;
+            bool ready{};
+        };
+
+        std::array<SceneBinding, SceneBindingCount> sceneBindings_;
+        std::size_t activeSceneBinding_{};
         Render::RenderTextureViewHandle boundDisplay_;
         std::uint64_t materialRevision_{};
         EditorViewportColorStatus status_{EditorViewportColorStatus::Unavailable};

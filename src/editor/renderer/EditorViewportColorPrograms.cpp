@@ -260,8 +260,10 @@ namespace Horo::Editor {
             auto &program = programs_[role];
             if (const auto retained = std::ranges::any_of(slots_,
                                                           [role](const auto &slot) {
-                return std::ranges::any_of(slot.bindings[role], [](const auto &binding) {
-                    return binding != nullptr;
+                return std::ranges::any_of(slot.bindings, [role](const auto &source) {
+                    return std::ranges::any_of(source[role], [](const auto &binding) {
+                        return binding != nullptr;
+                    });
                 });
             });
                 retained)
@@ -287,17 +289,18 @@ namespace Horo::Editor {
         std::optional<Error> first;
         bool bindingsRetained = false;
         for (auto &slot : slots_)
-            for (std::size_t role = 0; role < 2; ++role)
-                for (auto &binding : slot.bindings[role]) {
-                    if (!binding)
-                        continue;
-                    const auto released = programs_[role].materials->Release(binding->Id());
-                    Remember(first, released);
-                    if (released.HasValue())
-                        binding.reset();
-                    else
-                        bindingsRetained = true;
-                }
+            for (auto &source : slot.bindings)
+                for (std::size_t role = 0; role < source.size(); ++role)
+                    for (auto &binding : source[role]) {
+                        if (!binding)
+                            continue;
+                        const auto released = programs_[role].materials->Release(binding->Id());
+                        Remember(first, released);
+                        if (released.HasValue())
+                            binding.reset();
+                        else
+                            bindingsRetained = true;
+                    }
         for (auto &slot : slots_) {
             RetireOwned(slot.histogram, first);
             if (bindingsRetained)
@@ -358,7 +361,8 @@ namespace Horo::Editor {
         acceptedStateCount_ = 0;
         pendingStateCount_ = 0;
         tablesUsed_ = false;
-        boundScene_ = {};
+        sceneBindings_ = {};
+        activeSceneBinding_ = 0;
         boundDisplay_ = {};
         status_ = EditorViewportColorStatus::Closed;
         return Result<void>::Success();

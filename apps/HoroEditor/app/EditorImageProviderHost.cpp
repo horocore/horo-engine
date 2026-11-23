@@ -290,7 +290,7 @@ namespace Horo::Editor {
         const bool activate = values[3].has_value();
         const auto &mode = activate ? values[3] : values[0];
         if (supplied != 3 || !values[1] || !values[2] || !mode || (activate && values[0]) ||
-            (*mode != "spatial" && (activate || *mode != "taau")))
+            (*mode != "spatial" && *mode != (activate ? "taa" : "taau")))
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
             EditorImageProviderInspection request{*mode == "spatial" ? ReconstructionKind::Spatial : ReconstructionKind::Temporal,
@@ -310,7 +310,7 @@ namespace Horo::Editor {
                                                                        const DurableFileSystem &files,
                                                                        const Security::ArtifactVerifier &verifier) {
         using Outcome = Result<EditorImageProviderAvailability>;
-        if (request.activateSpatial || (request.mode != ReconstructionKind::Spatial && request.mode != ReconstructionKind::Temporal))
+        if (request.activateViewport || (request.mode != ReconstructionKind::Spatial && request.mode != ReconstructionKind::Temporal))
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
             const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
@@ -336,7 +336,7 @@ namespace Horo::Editor {
                                                                         const DurableFileSystem &files,
                                                                         const Security::ArtifactVerifier &verifier) {
         using Outcome = Result<EditorSignedSpatialProvider>;
-        if (!request.activateSpatial || request.mode != ReconstructionKind::Spatial)
+        if (!request.activateViewport || request.mode != ReconstructionKind::Spatial)
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
             const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
@@ -371,7 +371,7 @@ namespace Horo::Editor {
                                                                           const Security::ArtifactVerifier &verifier) {
         using Outcome = Result<EditorSignedTemporalProvider>;
         using namespace NativeReconstructionRelease;
-        if (request.activateSpatial || request.mode != ReconstructionKind::Temporal)
+        if (request.mode != ReconstructionKind::Temporal)
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
             const auto manifest = ReadCheckedManifest(request, expected, files, verifier);

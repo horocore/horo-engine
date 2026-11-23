@@ -1483,6 +1483,77 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
+    TEST_CASE("Native Vulkan viewport resolves temporal color before display encoding", "[native-smoke][vulkan][gui][temporal-color]") {
+        const auto *assets = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
+        const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
+        const auto *colorRoot = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
+        if (!assets || !stage || !colorRoot)
+            SKIP("Supply the viewport, temporal and Vulkan color packages.");
+        Host host{true, true};
+        if (!host.frontend->Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            SKIP("The selected Vulkan device cannot realize native reconstruction.");
+        auto cooked = LoadPackagedVulkanViewportShader(assets);
+        Check(cooked);
+        host.viewport = std::make_unique<EditorViewportRendererVulkan>(*host.frontend, *host.bridge, std::move(cooked).Value());
+        Check(host.viewport->Initialize());
+        const NativeDurableFileSystem files;
+        const auto root = std::filesystem::path{stage} / "assets/shaders/editor";
+        const auto read = [&](std::string_view name) {
+            auto bytes = files.ReadFileBounded(root / name, NativeReconstructionRelease::MaximumPayloadBytes);
+            Check(bytes, name);
+            return std::move(bytes).Value();
+        };
+        const auto depth = read("viewport-linear-depth-vulkan.horoshdr");
+        const auto depthLayout = read("viewport-linear-depth-vulkan.reflection.json");
+        const auto motion = read("viewport-motion-vulkan.horoshdr");
+        const auto motionLayout = read("viewport-motion-vulkan.reflection.json");
+        auto sceneCook = LoadEditorVulkanSceneLinearCook(read("viewport-scene-linear-vulkan.horoshdr"),
+                                                         read("viewport-scene-linear-vulkan.reflection.json"));
+        Check(sceneCook);
+        auto package = Render::Internal::LoadColorOutputCookPackage(colorRoot, ShaderTargetBackend::Vulkan);
+        Check(package);
+        const EditorViewportColorInputs inputs{
+            .package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(package).Value())};
+        const std::array kernels{ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalSeed),
+                                 ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalHistory)};
+        Check(host.viewport->PrepareTemporalColor(std::move(sceneCook).Value(), inputs, {}, {depth, depthLayout}, {motion, motionLayout},
+                                                  kernels));
+        const auto view = host.frontend->CreateRenderViewIdentity();
+        Check(view);
+        Check(host.viewport->BindLightingViewIdentity(view.Value()));
+        const EditorViewportLightingProfile lighting;
+        const auto selected = host.frontend->ResolveLightPreparation(lighting.requested, lighting.fallback, {});
+        Check(selected);
+        Check(host.viewport->RequestLightingProfile(lighting, selected.Value()));
+        CameraViewportFixture fixture;
+        auto scene = fixture.View(0);
+        scene.lights = {};
+        host.viewport->RequestExtent({320, 240});
+        host.viewport->RequestGrid({.visible = false});
+        host.SynchronizeViewport(scene);
+        constexpr std::array objectIds{RenderMotionObjectId{1}};
+        const auto waitIdle = host.viewportObservation->DeviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle");
+        for (std::uint64_t number = 1; number <= 5; ++number) {
+            CAPTURE(number);
+            constexpr std::uint64_t fallbackFrame = 3;
+            const bool tracked = number != fallbackFrame;
+            if (tracked)
+                Check(host.viewport->PrepareTemporalMotion({1, objectIds}));
+            Check(host.viewport->PrepareTemporalFrame(host.ViewportPass(scene), number));
+            host.PrepareScene(scene);
+            auto frame = host.Frame(number);
+            host.viewportObservation->ResetDraws();
+            host.ExecuteSceneAndGui(frame, scene);
+            CHECK(host.viewportObservation->DispatchCount() == (tracked ? 1 : 0));
+            Check(frame.Present(), "submit the viewport color and GUI");
+            host.viewport->FinishColorFrame(true);
+            CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == number);
+            REQUIRE(waitIdle(host.viewportObservation->Queue()) == VK_SUCCESS);
+            Check(host.frontend->ProcessResourceRequests());
+        }
+        REQUIRE(host.Drain());
+    }
+
     TEST_CASE("Native Vulkan replaces a font atlas after presentation and preserves the active atlas on rejection",
               "[native-smoke][vulkan][gui][font-atlas]") {
         Host host;

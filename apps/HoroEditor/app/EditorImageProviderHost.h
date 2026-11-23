@@ -21,12 +21,12 @@ namespace Horo::Render {
 }
 
 namespace Horo::Editor {
-    /** @brief Independent invocation paths for explicit inspection or supported spatial activation. */
+    /** @brief Independent invocation paths for explicit inspection or supported viewport activation. */
     struct EditorImageProviderInspection final {
         Render::ReconstructionKind mode;
         std::filesystem::path productRoot;
         std::filesystem::path trustedPublishers;
-        bool activateSpatial{};
+        bool activateViewport{};
     };
 
     /** @brief Current executable release identity compared to the signed installed inventory. */
@@ -66,7 +66,7 @@ namespace Horo::Editor {
         EditorSignedProviderShader motion;
     };
 
-    /** @brief Parses explicit and mutually exclusive inspection or spatial activation arguments. @param args Process arguments including
+    /** @brief Parses explicit and mutually exclusive inspection or viewport activation arguments. @param args Process arguments including
      * argv[0].
      * @return A complete request, no request, or a typed invalid-input failure. */
     [[nodiscard]] Result<std::optional<EditorImageProviderInspection>> ParseEditorImageProviderInspection(std::span<char *const> args);

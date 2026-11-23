@@ -126,7 +126,8 @@ TEST_CASE("Editor image provider inspection accepts one explicit route and indep
     CHECK(ParseEditorImageProviderInspection(args).HasError());
 }
 
-TEST_CASE("Editor image provider activation is explicit and admits only the spatial route", "[renderer][image-provider][editor]") {
+TEST_CASE("Editor image provider activation explicitly selects spatial or same-extent temporal output",
+          "[renderer][image-provider][editor]") {
     const auto root = std::filesystem::temp_directory_path().lexically_normal();
     std::array options{std::string{"HoroEditor"}, std::string{"--activate-image-provider=spatial"},
                        "--image-provider-root=" + root.string(), "--image-provider-trust=" + (root / "trust.json").string(),
@@ -139,9 +140,15 @@ TEST_CASE("Editor image provider activation is explicit and admits only the spat
     update();
     const auto selected = RequireValue(ParseEditorImageProviderInspection(std::span{args}.first(4)));
     REQUIRE(selected);
-    CHECK(selected->activateSpatial);
+    CHECK(selected->activateViewport);
     CHECK(selected->mode == ReconstructionKind::Spatial);
     CHECK(ParseEditorImageProviderInspection(args).HasError());
+    options[1] = "--activate-image-provider=taa";
+    update();
+    const auto temporal = RequireValue(ParseEditorImageProviderInspection(std::span{args}.first(4)));
+    REQUIRE(temporal);
+    CHECK(temporal->activateViewport);
+    CHECK(temporal->mode == ReconstructionKind::Temporal);
     options[1] = "--activate-image-provider=taau";
     update();
     CHECK(ParseEditorImageProviderInspection(std::span{args}.first(4)).HasError());
@@ -186,7 +193,7 @@ TEST_CASE("Editor image provider inspection admits only signed matching product 
     SECTION("Activation refuses a scene material missing from the signed inventory") {
         WriteSigned(installed, data, signer);
         auto activate = request;
-        activate.activateSpatial = true;
+        activate.activateViewport = true;
         const auto rejected = LoadEditorSignedSpatialProvider(*renderer.frontend, activate, expected, files, verifier);
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.invalid_inventory");
@@ -201,7 +208,7 @@ TEST_CASE("Editor image provider inspection admits only signed matching product 
         installed.Write(payload, "xyz");
         installed.Write(reflection, "{}");
         auto activate = request;
-        activate.activateSpatial = true;
+        activate.activateViewport = true;
         const auto rejected = LoadEditorSignedSpatialProvider(*renderer.frontend, activate, expected, files, verifier);
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.artifact_mismatch");

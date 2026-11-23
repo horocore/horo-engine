@@ -1533,7 +1533,7 @@ namespace Horo::Editor {
 
         /** @brief Admits explicit color/lighting asset options only on the currently implemented native product route. */
         Result<void> ValidateColorBackendSelection(const EditorGuiOptions &options) {
-            if (options.imageProviderInspection && options.imageProviderInspection->activateSpatial &&
+            if (options.imageProviderInspection && options.imageProviderInspection->activateViewport &&
                 (options.rendererBackend != "vulkan" || !options.color.root))
                 return Result<void>::Failure(MakeError(Render::NativeReconstructionErrors::Unsupported));
             if (options.rendererBackend == "vulkan" && options.color.root && !options.color.lookRoot && !options.lightingRoot &&
@@ -1548,6 +1548,11 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_RENDER_VULKAN)
         [[nodiscard]] Result<EditorSignedSpatialProvider> LoadSelectedEditorSpatialProvider(Render::RenderFrontend &frontend,
                                                                                             const EditorImageProviderInspection &request);
+        [[nodiscard]] Result<void> PrepareSelectedEditorTemporalProvider(EditorViewportRendererVulkan &viewport,
+                                                                         Render::RenderFrontend &frontend,
+                                                                         const EditorImageProviderInspection &request,
+                                                                         const EditorViewportColorInputs &inputs,
+                                                                         const Render::ExposureSettings &settings);
 
         /** @brief Prepares the explicit Vulkan manual color recipe on the normal selected viewport. */
         Result<Render::RenderLightPreparationReadiness> PrepareVulkanEditorColor(EditorViewportRendererVulkan &viewport,
@@ -1564,7 +1569,12 @@ namespace Horo::Editor {
             const auto inputs = LoadEditorVulkanManualColorInputs(*root.Value());
             if (inputs.HasError())
                 return Outcome::Failure(inputs.ErrorValue());
-            if (options.imageProviderInspection && options.imageProviderInspection->activateSpatial) {
+            if (options.imageProviderInspection && options.imageProviderInspection->activateViewport) {
+                if (options.imageProviderInspection->mode == Render::ReconstructionKind::Temporal) {
+                    const auto temporal = PrepareSelectedEditorTemporalProvider(viewport, frontend, *options.imageProviderInspection,
+                                                                                inputs.Value(), options.color.exposure);
+                    return temporal.HasError() ? Outcome::Failure(temporal.ErrorValue()) : Outcome::Success({});
+                }
                 auto selected = LoadSelectedEditorSpatialProvider(frontend, *options.imageProviderInspection);
                 if (selected.HasError())
                     return Outcome::Failure(selected.ErrorValue());
@@ -1648,7 +1658,7 @@ namespace Horo::Editor {
             if (composition.xrSession) {
                 if (options.cameraPreviewCrossFade)
                     return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
-                if ((options.imageProviderInspection && options.imageProviderInspection->activateSpatial) || options.color.root ||
+                if ((options.imageProviderInspection && options.imageProviderInspection->activateViewport) || options.color.root ||
                     options.color.lookRoot || options.color.settingsRequested || options.lightingRoot)
                     return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
                 if (options.rendererBackend != "vulkan" || !composition.vulkanGraphicsBridge)
@@ -1748,6 +1758,30 @@ namespace Horo::Editor {
         }
 
 #if defined(HORO_HAS_RENDER_VULKAN)
+        /** @brief Uses one verified inventory to admit the normal viewport's exact temporal and scene-linear programs. */
+        Result<void> PrepareSelectedEditorTemporalProvider(EditorViewportRendererVulkan &viewport, Render::RenderFrontend &frontend,
+                                                           const EditorImageProviderInspection &request,
+                                                           const EditorViewportColorInputs &inputs,
+                                                           const Render::ExposureSettings &settings) {
+            const auto product = EditorImageProviderProduct();
+            if (product.HasError())
+                return Result<void>::Failure(product.ErrorValue());
+            const NativeDurableFileSystem files;
+            const auto trust = EditorImageProviderTrust(files, request);
+            if (trust.HasError())
+                return Result<void>::Failure(trust.ErrorValue());
+            const auto installed = LoadEditorSignedTemporalProvider(frontend, request, product.Value(), files, trust.Value());
+            if (installed.HasError())
+                return Result<void>::Failure(installed.ErrorValue());
+            const auto &family = installed.Value();
+            auto scene = LoadEditorVulkanSceneLinearCook(family.sceneLinear.payload, family.sceneLinear.reflection);
+            if (scene.HasError())
+                return Result<void>::Failure(scene.ErrorValue());
+            return viewport.PrepareTemporalColor(std::move(scene).Value(), inputs, settings,
+                                                 {family.linearDepth.payload, family.linearDepth.reflection},
+                                                 {family.motion.payload, family.motion.reflection}, family.kernels);
+        }
+
         /** @brief Reads the exact independently signed provider and scene stage on the selected Vulkan owner. */
         Result<EditorSignedSpatialProvider> LoadSelectedEditorSpatialProvider(Render::RenderFrontend &frontend,
                                                                               const EditorImageProviderInspection &request) {
@@ -1828,7 +1862,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(frontendResult.ErrorValue());
             }
             composition.frontend = std::move(frontendResult).Value();
-            if (options.imageProviderInspection && !options.imageProviderInspection->activateSpatial) {
+            if (options.imageProviderInspection && !options.imageProviderInspection->activateViewport) {
                 if (auto report = ReportEditorImageProvider(*composition.frontend, *options.imageProviderInspection); report.HasError())
                     return report;
             }
@@ -3040,14 +3074,17 @@ namespace Horo::Editor {
             }
 
             /** @brief Uses the exact post-GUI descriptors while frontend resources are still outside a native frame. */
-            Result<void> PrepareViewportLightingFrame() {
+            Result<void> PrepareViewportLightingFrame(const std::uint64_t frameId) {
                 DropRetiredMountedViewport();
                 const auto &world = frameState_.preparedPasses.world;
                 const auto view = world.owner.IsValid() ? world.view : p_->presentation.viewportRenderer.LightingViewIdentity();
                 for (const auto &descriptor : std::span{frameState_.preparedPasses.descriptors}.first(frameState_.preparedPasses.count)) {
                     if (!descriptor.staticMesh)
                         continue;
-                    const auto prepared = p_->presentation.viewportRenderer.PrepareLightingFrame(*descriptor.staticMesh, view);
+                    auto &renderer = p_->presentation.viewportRenderer;
+                    if (const auto temporal = renderer.PrepareTemporalFrame(*descriptor.staticMesh, frameId); temporal.HasError())
+                        return temporal;
+                    const auto prepared = renderer.PrepareLightingFrame(*descriptor.staticMesh, view);
                     if (prepared.HasError())
                         return prepared;
                 }
@@ -3082,7 +3119,7 @@ namespace Horo::Editor {
                 if (!available.Value())
                     return Result<bool>::Success(false);
                 PrepareColorClock(context);
-                if (const auto preparedLighting = PrepareViewportLightingFrame(); preparedLighting.HasError()) {
+                if (const auto preparedLighting = PrepareViewportLightingFrame(context.frameNumber); preparedLighting.HasError()) {
                     p_->presentation.viewportRenderer.FinishColorFrame(false);
                     if (preparedLighting.ErrorValue().code.Value() == ViewportColorErrors::Pending.code.Value())
                         return Result<bool>::Success(false);

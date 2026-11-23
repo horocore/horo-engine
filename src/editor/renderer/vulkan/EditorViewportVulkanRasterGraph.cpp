@@ -64,6 +64,8 @@ namespace Horo::Editor {
                                                     MaximumCapturePasses + TemporalGuidePasses>
                 workloads;
             std::optional<std::size_t> spatialWork;
+            std::optional<std::size_t> temporalWork;
+            std::optional<NativeReconstructionHistoryStates> temporalInitial;
             std::size_t count{};
             std::size_t guidePasses{};
         };
@@ -88,15 +90,16 @@ namespace Horo::Editor {
         class RasterGraphAuthor final {
         public:
             RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color, bool spatial,
-                              bool cameraCrossFade = false, bool capture = false)
+                              bool cameraCrossFade = false, bool capture = false, bool temporal = false)
                 : ownedBuilder(Take(RenderGraphBuilder::Create(
-                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + (capture ? 1 : 0),
+                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial || temporal ? 1 : 0) + (capture ? 1 : 0),
                        .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) + (spatial ? 1 : 0) +
-                                       (cameraCrossFade ? 5 : 0) + (capture ? 1 : 0) + TemporalGuidePasses,
+                                       (cameraCrossFade ? 5 : 0) + (capture ? 1 : 0) + TemporalGuidePasses + (temporal ? 4 : 0),
                        .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) + (spatial ? 2 : 0) +
-                                    (cameraCrossFade ? 8 : 0) + (capture ? 2 : 0),
-                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + (capture ? 1 : 0)}))),
-                  builder(*ownedBuilder), queue(graphics), spatial_(spatial) {}
+                                    (cameraCrossFade ? 8 : 0) + (capture ? 2 : 0) +
+                                    (temporal ? RenderGraphNativeReconstruction::ImageCount : 0),
+                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial || temporal ? 1 : 0) + (capture ? 1 : 0)}))),
+                  builder(*ownedBuilder), queue(graphics), spatial_(spatial || temporal) {}
 
             /** @brief Appends the renderer-owned scene to the paint program's existing sampled canvas graph. */
             RasterGraphAuthor(RenderGraphBuilder &scene, RenderQueueId graphics) noexcept : builder(scene), queue(graphics) {}
@@ -163,6 +166,16 @@ namespace Horo::Editor {
                 work.images[static_cast<std::size_t>(CurrentColor)] = {scene, sceneView};
                 work.images[static_cast<std::size_t>(OutputColor)] = {resolved, resolvedView};
                 return {pass, std::move(work)};
+            }
+
+            RenderGraphPassWorkload ReconstructTemporal(const NativeReconstructionGraphSources &sources,
+                                                        const NativeReconstructionScenePlan &plan,
+                                                        const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
+                const auto pass = Pass(RenderPassKind::Compute, RenderQueueRole::Compute);
+                auto bound = Take(BindNativeReconstructionGraphDispatch(builder, pass, sources, plan, kernel));
+                const auto imports = std::span{bound.historyImports}.first(bound.historyImportCount);
+                initial.insert(initial.end(), imports.begin(), imports.end());
+                return {pass, std::move(bound.workload)};
             }
 
             void ColorScene(EditorViewportColorGraph &graph, const EditorViewportColorPipeline &color, RenderGraphResourceId scene,
@@ -244,7 +257,9 @@ namespace Horo::Editor {
         std::array<std::array<RasterVariant, 2>, 8> slots;
         std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>> cameraCrossFadeSlots;
         std::optional<EditorViewportResources::CameraCrossFadeAttachments> cameraCrossFadeAttachments;
-        std::array<std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>>, EditorViewportColorPipeline::SlotCount> colorSlots;
+        static constexpr std::size_t TemporalRecipes = 1 + 2 * std::tuple_size_v<NativeReconstructionViewHistory::ImagePairs>;
+        std::array<std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>>, EditorViewportColorPipeline::SlotCount * TemporalRecipes>
+            colorSlots;
         std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>> captureSlots;
         std::uint64_t captureId{};
         std::size_t captureColorSlot{};
@@ -254,6 +269,30 @@ namespace Horo::Editor {
         std::optional<EditorViewportResources::TemporalAttachments> temporal;
         std::uint32_t atlasPasses{};
         bool shadowDraws{};
+
+        const NativeReconstructionScenePlan *TemporalPlan() const noexcept {
+            return guidePrograms && guidePrograms->reconstructionPlan ? &*guidePrograms->reconstructionPlan : nullptr;
+        }
+
+        std::size_t ColorSlot(const EditorViewportColorPipeline &pipeline) const noexcept {
+            const auto *plan = TemporalPlan();
+            const auto base = pipeline.CandidateSlot() * TemporalRecipes;
+            if (!plan)
+                return base;
+            constexpr auto output = static_cast<std::size_t>(NativeReconstructionImage::OutputColor);
+            const bool second = plan->images[output].texture == temporal->history.back().color.texture;
+            return base + 1 + 2 * static_cast<std::size_t>(second) + static_cast<std::size_t>(plan->previousStates.has_value());
+        }
+
+        bool MatchesColorStates(const RasterVariant &variant, const EditorViewportColorPipeline &pipeline) const noexcept {
+            if (!variant.color.MatchesInitialStates(pipeline))
+                return false;
+            const auto *plan = TemporalPlan();
+            if (!plan || !plan->previousStates)
+                return !variant.temporalInitial;
+            return variant.temporalInitial && variant.temporalInitial->color == plan->previousStates->color &&
+                   variant.temporalInitial->depth == plan->previousStates->depth;
+        }
 
         /** @brief Captures the live mesh bindings used by every raster in the new graph generation. */
         void BindMeshes(const EditorViewportResources &resources, const RenderSceneView &scene) {
@@ -384,11 +423,20 @@ namespace Horo::Editor {
         RenderGraphResourceId AppendColorTail(RasterGraphAuthor &author, RasterVariant &variant, const OverlaySlot *overlay,
                                               const RasterOutput &scene, const RenderGraphResourceId atlas,
                                               const EditorViewportColorPipeline &pipeline,
-                                              const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
+                                              const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel,
+                                              const NativeReconstructionGraphSources &sources) {
             const auto displayResource = author.Attach(display);
             const auto output = author.Attach(presentation);
             auto toneMapInput = scene.color;
-            if (kernel) {
+            if (const auto *plan = TemporalPlan()) {
+                const auto &temporalKernel = plan->previousStates ? guidePrograms->historyKernel : guidePrograms->seedKernel;
+                auto work = author.ReconstructTemporal(sources, *plan, temporalKernel);
+                constexpr auto resolved = static_cast<std::size_t>(NativeReconstructionImage::OutputColor);
+                toneMapInput = std::get<RenderGraphNativeReconstruction>(work.workload).images[resolved].resource;
+                variant.temporalInitial = plan->previousStates;
+                variant.temporalWork = variant.count;
+                variant.workloads[variant.count++] = std::move(work);
+            } else if (kernel) {
                 toneMapInput = author.Attach(spatial);
                 variant.spatialWork = variant.count;
                 variant.workloads[variant.count++] = author.Reconstruct(scene.color, scene.colorView, toneMapInput, spatialView, kernel);
@@ -450,7 +498,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Places both guide prepasses before the ordinary scene clears and publishes its own depth. */
-        void AuthorTemporalGuides(RasterGraphAuthor &author, RasterVariant &variant, const RasterOutput &output, std::size_t slot) {
+        NativeReconstructionGraphSources AuthorTemporalGuides(RasterGraphAuthor &author, RasterVariant &variant, const RasterOutput &output,
+                                                              std::size_t slot) {
             const auto &draws = guidePrograms->draws[slot];
             if (draws.size() < meshes.size())
                 throw BuildFailure{MakeError(RendererErrors::ViewportStaleTarget)};
@@ -460,6 +509,7 @@ namespace Horo::Editor {
             AuthorGuide(author, variant, depth, draws, &TemporalGuidePrograms::GuideDraw::linearDepth, {}, 0);
             // Values outside the normalized UV range mark pixels without a valid predecessor.
             AuthorGuide(author, variant, motion, draws, &TemporalGuidePrograms::GuideDraw::motion, {2.0F, 2.0F, 0.0F, 1.0F}, 1);
+            return {output.color, depth.color, motion.color};
         }
 
         struct FrameRecipe final {
@@ -475,18 +525,25 @@ namespace Horo::Editor {
             variant.guidePasses = temporal && guidePrograms && !meshes.empty() ? TemporalGuidePasses : 0;
             variant.count = variant.guidePasses + atlasPasses + 1;
             const auto draws = std::max<std::size_t>(1, meshes.size() + (frame.overlay ? 1 : 0));
-            RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr, false, capture != nullptr};
+            RasterGraphAuthor author{draws,
+                                     variant.count,
+                                     queue,
+                                     pipeline != nullptr,
+                                     kernel != nullptr,
+                                     false,
+                                     capture != nullptr,
+                                     TemporalPlan() != nullptr};
             const auto atlas = author.Attach(attachments.atlas);
             const RasterOutput output{author.Attach(attachments.color), author.Attach(attachments.depth), attachments.colorView,
                                       attachments.depthView};
-            if (variant.guidePasses)
-                AuthorTemporalGuides(author, variant, output, frame.index);
+            const auto sources =
+                variant.guidePasses ? AuthorTemporalGuides(author, variant, output, frame.index) : NativeReconstructionGraphSources{};
             AuthorAtlas(author, variant, frame.slot, atlas, variant.guidePasses);
             AuthorScene(author, variant, frame.slot, atlas, output, frame.overlay && !pipeline, variant.guidePasses + atlasPasses);
             auto finalColor = output.color;
             if (pipeline) {
                 const auto *overlay = frame.overlay ? &frame.slot.overlay : nullptr;
-                finalColor = AppendColorTail(author, variant, overlay, output, atlas, *pipeline, kernel);
+                finalColor = AppendColorTail(author, variant, overlay, output, atlas, *pipeline, kernel, sources);
             }
             if (capture)
                 variant.workloads[variant.count++] = author.Capture(finalColor, *capture);
@@ -550,8 +607,8 @@ namespace Horo::Editor {
         /** @brief Warms each bounded native-slot pairing only for the current material pair and its actual table state. */
         void PrepareColorSlot(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline &pipeline,
                               const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
-            auto &slot = colorSlots[pipeline.CandidateSlot()];
-            if (slot && (*slot)[0][0].color.MatchesInitialStates(pipeline))
+            auto &slot = colorSlots[ColorSlot(pipeline)];
+            if (slot && MatchesColorStates((*slot)[0][0], pipeline))
                 return;
             auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
             for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
@@ -568,7 +625,7 @@ namespace Horo::Editor {
                 return cameraCrossFadeSlots ? &(*cameraCrossFadeSlots)[slot][index] : nullptr;
             if (!pipeline)
                 return &slots[slot][index];
-            auto &prepared = colorSlots[pipeline->CandidateSlot()];
+            auto &prepared = colorSlots[ColorSlot(*pipeline)];
             return prepared ? &(*prepared)[slot][index] : nullptr;
         }
 
@@ -576,9 +633,9 @@ namespace Horo::Editor {
         void PrepareCaptureSlots(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline *pipeline,
                                  const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel,
                                  const EditorGraphViewportImageCapture::Copy &capture) {
-            const std::size_t colorSlot = pipeline ? pipeline->CandidateSlot() : 0;
+            const std::size_t colorSlot = pipeline ? ColorSlot(*pipeline) : 0;
             if (captureSlots && captureId == capture.id && captureColorSlot == colorSlot &&
-                (!pipeline || (*captureSlots)[0][0].color.MatchesInitialStates(*pipeline)))
+                (!pipeline || MatchesColorStates((*captureSlots)[0][0], *pipeline)))
                 return;
             auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
             for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
@@ -935,8 +992,23 @@ namespace Horo::Editor {
             return Result<void>::Failure(reserved.ErrorValue());
         const std::array submissions{RenderGraphQueueSubmission{reserved.Value(), {0, variant.count}}};
         recordedEver_ = true;
-        const auto recorded = frame.ExecuteSubmittedGraph(*variant.graph, std::span{variant.workloads}.first(variant.count), submissions);
-        if (recorded.HasValue() && variant.guidePasses)
+        const auto workloads = std::span{variant.workloads}.first(variant.count);
+        const auto execute = [&]() {
+            if (!variant.temporalWork)
+                return frame.ExecuteSubmittedGraph(*variant.graph, workloads, submissions);
+            auto &temporal = *temporalGuides_;
+            if (!temporal.reconstructionPlan)
+                return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+            auto &work = std::get<RenderGraphNativeReconstruction>(variant.workloads[*variant.temporalWork].workload);
+            work.dispatch = temporal.reconstructionPlan->dispatch;
+            const std::array histories{temporal.reconstruction};
+            const auto result = frame.ExecuteNativeReconstructionScene(*variant.graph, workloads, submissions, histories);
+            if (result.HasValue())
+                temporal.reconstructionPlan.reset();
+            return result;
+        };
+        const auto recorded = execute();
+        if (recorded.HasValue() && variant.guidePasses && (variant.temporalWork || !color_))
             temporalGuides_->Recorded(reserved.Value().signal);
         if (recorded.HasValue() && color_)
             RecordViewportColor(reserved.Value().signal);

@@ -1,6 +1,7 @@
 #include "ColorOutputPackage.h"
 #include "EditorViewportColorPipeline.h"
 #include "EditorViewportRendererVulkan.h"
+#include "Horo/Runtime/Render/TemporalHistoryErrors.h"
 #include "RenderFrontendResourceAccess.h"
 
 #include <algorithm>
@@ -125,12 +126,80 @@ namespace Horo::Editor {
         return color_ ? sceneLinearShader_ : shader_;
     }
 
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalFrame */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &pass,
+                                                                    const std::uint64_t frameId) {
+        using namespace Render;
+        if (!color_ || !temporalGuides_ || !temporalGuides_->seedKernel || !temporalGuides_->SceneDomain() || pass.scene.instances.empty())
+            return Result<void>::Success();
+        auto &state = *temporalGuides_;
+        const auto images = resources_.TemporalImages();
+        if (!images || state.reconstructionPlan)
+            return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+        const auto current = state.Compatibility(pass.extent, state.SceneDomain());
+        const auto busy = [](const Error &error) {
+            return error.code.Value() == TemporalHistoryErrors::FrameAlreadyPending.code.Value();
+        };
+        if (state.reconstruction) {
+            const auto polled = state.reconstruction->Poll(frontend_, state.reconstructionCompatibility);
+            if (polled.HasError())
+                return Result<void>::Failure(polled.ErrorValue());
+            if (current != state.reconstructionCompatibility) {
+                const auto reset =
+                    state.reconstruction->Reset(frontend_, current, images->history, TemporalHistoryResetCause::ViewReplacement);
+                if (reset.HasError())
+                    return busy(reset.ErrorValue()) ? Result<void>::Success() : reset;
+            }
+        } else {
+            auto created = NativeReconstructionViewHistory::Create(frontend_, current, images->history);
+            if (created.HasError())
+                return Result<void>::Failure(created.ErrorValue());
+            state.reconstruction = std::move(created).Value();
+        }
+        state.reconstructionCompatibility = current;
+        const auto previous = state.reconstruction->Published(current);
+        const auto color = resources_.ColorTexture();
+        const auto guideInput = [&](RenderTextureHandle texture, RenderTextureFormat format) {
+            return ReconstructionTextureInput{texture,
+                                              {.extent = pass.extent,
+                                               .format = format,
+                                               .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
+                                              current.view,
+                                              frameId};
+        };
+        ReconstructionFrameRequest request{
+            .compatibility = current,
+            .resourceOwner = color.owner,
+            .timing = {.frameId = frameId, .predecessorFrameId = previous ? previous->frameId : 0},
+            .projection = pass.scene.camera.projection,
+            .color = {color, resources_.SceneColorDescriptor(), current.view, frameId},
+            .positiveLinearDepth = guideInput(images->linearDepth.texture, RenderTextureFormat::R32Float),
+            .motion = guideInput(images->motion.texture, RenderTextureFormat::Rg32Float),
+            .output = {.descriptor = resources_.SpatialColorDescriptor(), .writeUsage = RenderGraphUsageKind::Storage},
+        };
+        if (previous && state.ProjectionChanges(request.projection))
+            request.reset = TemporalHistoryResetCause::ProjectionChange;
+        constexpr NativeReconstructionTemporalSettings tuning{.historyWeight = 0.75F,
+                                                              .absoluteDepthTolerance = 0.01F,
+                                                              .relativeDepthTolerance = 0.02F};
+        auto staged = state.reconstruction->Stage(frontend_, request,
+                                                  {resources_.ColorTextureView(), images->linearDepth.view, images->motion.view}, tuning);
+        if (staged.HasError())
+            return busy(staged.ErrorValue()) ? Result<void>::Success() : Result<void>::Failure(staged.ErrorValue());
+        state.reconstructionPlan = std::move(staged).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportRendererVulkan::PrepareViewportColor */
     Result<void> EditorViewportRendererVulkan::PrepareViewportColor(Render::RenderViewId view, Render::FramebufferExtent extent) {
         if (const auto ready = color_->Prepare(view, extent, colorFrameDelta_); ready.HasError())
             return ready;
-        const auto bound = color_->PrepareBindings(spatial_ ? resources_.SpatialTextureView() : resources_.ColorTextureView(),
-                                                   resources_.DisplayTextureView());
+        auto source = spatial_ ? resources_.SpatialTextureView() : resources_.ColorTextureView();
+        if (temporalGuides_ && temporalGuides_->reconstructionPlan) {
+            constexpr auto output = static_cast<std::size_t>(Render::NativeReconstructionImage::OutputColor);
+            source = temporalGuides_->reconstructionPlan->images[output].view;
+        }
+        const auto bound = color_->PrepareBindings(source, resources_.DisplayTextureView());
         if (bound.HasError())
             color_->Finish(false);
         return bound;
@@ -144,8 +213,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::FinishColorFrame */
     void EditorViewportRendererVulkan::FinishColorFrame(const bool presented) noexcept {
-        if (temporalGuides_)
+        if (temporalGuides_) {
+            if (std::exchange(temporalGuides_->reconstructionPlan, std::nullopt))
+                static_cast<void>(temporalGuides_->reconstruction->CancelStaged());
             temporalGuides_->Finish(presented);
+        }
         if (const auto signal = imageCapture_.UnconfirmedSignal(); signal.IsValid()) {
             const auto *port = bridge_.Port();
             bool accepted = false;

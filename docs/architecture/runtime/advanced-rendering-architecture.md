@@ -439,6 +439,13 @@ and trusted-publisher paths in `HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT` and
 `HORO_EDITOR_VULKAN_ASSET_ROOT` for the normal installed raster assets and
 `HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE` for the exact Vulkan manual package.
 
+The same-size temporal viewport uses `--activate-image-provider=taa` with the
+same Vulkan, trust, product and color arguments. The signed inventory supplies
+scene color, both motion and depth guides, and the seed and history kernels.
+The viewport resolves temporal color before display encoding and advances
+history after accepted GPU work completes. When a tracked scene or ready
+history slot is unavailable, the color pipeline uses the current scene color.
+
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned
 registries:

@@ -101,12 +101,22 @@ namespace Horo::Editor {
                                                                   const EditorViewportColorInputs &inputs,
                                                                   const Render::ExposureSettings &settings,
                                                                   const Render::CookedNativeReconstructionKernel *spatial) {
-        if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
-            !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
-            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
         auto nativeSpatial = PrepareReconstructionKernel(spatial, Render::NativeReconstructionEntry::Spatial);
         if (nativeSpatial.HasError())
             return Result<void>::Failure(nativeSpatial.ErrorValue());
+        using enum EditorViewportResources::ColorReconstruction;
+        return PrepareColorRecipe(std::move(scene), inputs, settings, spatial ? Spatial : None, std::move(nativeSpatial).Value());
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareColorRecipe */
+    Result<void> EditorViewportRendererVulkan::PrepareColorRecipe(EditorVulkanSceneLinearCook scene,
+                                                                  const EditorViewportColorInputs &inputs,
+                                                                  const Render::ExposureSettings &settings,
+                                                                  const EditorViewportResources::ColorReconstruction reconstruction,
+                                                                  std::shared_ptr<Render::IResidentNativeReconstructionKernel> spatial) {
+        if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
+            !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
         auto color = MakeViewportColor(inputs, settings);
         if (color.HasError())
             return Result<void>::Failure(color.ErrorValue());
@@ -119,11 +129,11 @@ namespace Horo::Editor {
         candidate->sceneLinearProgram.metadata = std::move(scene.metadata);
         if (const auto prepared = PrepareProgram(*candidate); prepared.HasError())
             return prepared;
-        if (const auto enabled = resources_.EnableColorPipeline(spatial != nullptr); enabled.HasError())
+        if (const auto enabled = resources_.EnableColorPipeline(reconstruction); enabled.HasError())
             return enabled;
         AdoptProgram(*candidate);
         color_ = std::move(color).Value();
-        spatial_ = std::move(nativeSpatial).Value();
+        spatial_ = std::move(spatial);
         return Result<void>::Success();
     }
 
@@ -153,35 +163,68 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::PrepareTemporalGuidePrograms(
         const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
         const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+        auto candidate = MakeTemporalGuidePrograms(linearDepth, motion, kernels);
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        if (const auto enabled = resources_.EnableTemporalGuideTargets(); enabled.HasError())
+            return enabled;
+        temporalGuides_ = std::move(candidate).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalColor */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalColor(
+        EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs, const Render::ExposureSettings &settings,
+        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+        if (kernels.empty())
+            return Result<void>::Failure(MakeError(Render::NativeReconstructionErrors::InvalidArtifact));
+        auto candidate = MakeTemporalGuidePrograms(linearDepth, motion, kernels);
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        try {
+            const auto prepared =
+                PrepareColorRecipe(std::move(scene), inputs, settings, EditorViewportResources::ColorReconstruction::Temporal);
+            if (prepared.HasError())
+                return prepared;
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
+        }
+        temporalGuides_ = std::move(candidate).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::MakeTemporalGuidePrograms */
+    Result<std::unique_ptr<EditorViewportRendererVulkan::TemporalGuidePrograms>> EditorViewportRendererVulkan::MakeTemporalGuidePrograms(
+        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
         using namespace Render;
+        using Outcome = Result<std::unique_ptr<TemporalGuidePrograms>>;
         if (const auto boundary = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
-            return Result<void>::Failure(boundary.ErrorValue());
+            return Outcome::Failure(boundary.ErrorValue());
         if (!initialized_ || recordedEver_ || resources_.ColorTexture().IsValid() ||
             !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
-            return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+            return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         auto history = RenderMotionHistoryTracker::Create({RenderMaterialPass::MaximumDraws});
         if (history.HasError())
-            return Result<void>::Failure(history.ErrorValue());
+            return Outcome::Failure(history.ErrorValue());
         try {
             auto candidate = std::make_unique<TemporalGuidePrograms>(*this, std::move(history).Value());
             if (const auto compute = PrepareTemporalKernels(*candidate, kernels); compute.HasError())
-                return compute;
+                return Outcome::Failure(compute.ErrorValue());
             if (const auto depth =
                     ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->linearDepth, EditorVulkanTemporalInput::LinearDepth,
                                                                   linearDepth, device_.frames);
                 depth.HasError())
-                return depth;
+                return Outcome::Failure(depth.ErrorValue());
             if (const auto vectors =
                     ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->motion, EditorVulkanTemporalInput::Motion, motion,
                                                                   device_.frames);
                 vectors.HasError())
-                return vectors;
-            if (const auto enabled = resources_.EnableTemporalGuideTargets(); enabled.HasError())
-                return enabled;
-            temporalGuides_ = std::move(candidate);
-            return Result<void>::Success();
+                return Outcome::Failure(vectors.ErrorValue());
+            return Outcome::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
-            return Result<void>::Failure(
+            return Outcome::Failure(
                 MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate the viewport temporal guide programs."));
         }
     }
