@@ -211,6 +211,17 @@ namespace Horo::Tests::OpenXRApplication {
                 QuadPlayStereoRenderer
             };
 
+            enum class ProjectionTiming {
+                Synthetic,
+                Unsupported,
+                Supported
+            };
+
+            explicit ApplicationFixture(ProjectionTiming timing)
+                : ApplicationFixture(true, 5, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
+                                     XR::XRProjectFeaturePolicy::Unrequested, false, std::nullopt, XR::XRProjectFeaturePolicy::Unrequested,
+                                     false, {}, nullptr, false, false, false, 2, false, timing) {}
+
             explicit ApplicationFixture(ProjectionFixture mode)
                 : ApplicationFixture(true, 5, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
                                      XR::XRProjectFeaturePolicy::Unrequested, false, std::nullopt, XR::XRProjectFeaturePolicy::Unrequested,
@@ -227,7 +238,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
                                         const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false,
                                         const bool anchorPersistence = false, const bool fixedFoveation = false,
-                                        const std::uint32_t maximumProjectionViews = 2, const bool quadPlay = false)
+                                        const std::uint32_t maximumProjectionViews = 2, const bool quadPlay = false,
+                                        const ProjectionTiming timing = ProjectionTiming::Synthetic)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
@@ -310,7 +322,7 @@ namespace Horo::Tests::OpenXRApplication {
                 }, handGestures},
                                                                            settings, product.Candidate(), *product.policy);
                 if (render) {
-                    vulkan = std::make_unique<ApplicationVulkanFixture>();
+                    vulkan = std::make_unique<ApplicationVulkanFixture>(timing == ProjectionTiming::Supported);
                     activeGraphics = &vulkan->port;
                     REQUIRE(renderers
                                 .Register(
@@ -319,7 +331,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                                                                          Render::RenderBackendId{"vulkan"},
                                                                                                          [this] {
                         vulkan->port.ReleaseDrainedChild();
-                    }, maximumProjectionViews)})
+                    }, maximumProjectionViews, timing == ProjectionTiming::Synthetic)})
                                 .HasValue());
                 } else {
                     REQUIRE(Render::RegisterNullRenderBackend(renderers).HasValue());
@@ -4559,6 +4571,60 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.events.exits == 1);
         CHECK(fixture.script.events.ends == 1);
         CHECK(fixture.script.native.liveSessions == 0);
+    }
+
+    TEST_CASE("Signed Play scales projection rectangles only from completed GPU timestamps", "[xr][application][play][frame][timing]") {
+        using Timing = ApplicationFixture::ProjectionTiming;
+        const auto timing = GENERATE(Timing::Unsupported, Timing::Supported);
+        const bool supported = timing == Timing::Supported;
+        ApplicationFixture fixture{timing};
+        auto scene = PublishPlay(fixture);
+        auto &script = fixture.script;
+        auto &graphics = fixture.vulkan->native.commandState.state;
+        graphics.queryResults = {100, 1, 9'500'100, 1};
+        constexpr std::uint64_t cancelledFrame = 3;
+        constexpr std::uint64_t firstScaledFrame = 7;
+        constexpr int recommended = 1024;
+        constexpr int scaled = recommended * 95 / 100;
+        std::uint32_t observations{};
+        for (std::uint64_t number = 1; number <= firstScaledFrame; ++number) {
+            CAPTURE(number, supported);
+            script.clock.sample = script.frames.prediction - script.frames.period / 2;
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(number)));
+            auto frame = RequireValue(fixture.frontend->BeginFrame({number, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(fixture.play->FinishGui(true));
+            if (number == cancelledFrame) {
+                frame.Cancel();
+            } else {
+                RequireValue(frame.Present());
+                RequireValue(fixture.play->ProgressRenderTail());
+                CHECK(graphics.queryReads == observations);
+                CHECK(script.frames.ends == number - 1);
+                graphics.Complete();
+                if (supported)
+                    ++observations;
+            }
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(script.frames.ends == number);
+            CHECK(script.swapchain.releases == number);
+            CHECK(graphics.queryReads == observations);
+            if (number == cancelledFrame) {
+                CHECK(script.frames.layers == 0);
+            } else {
+                REQUIRE(script.frames.layers == 1);
+                REQUIRE(script.frames.views == 2);
+                const auto expected = supported && number == firstScaledFrame ? scaled : recommended;
+                for (const auto &eye : std::span{script.frames.encoded}.first(2)) {
+                    CHECK(eye.subImage.imageRect.extent.width == expected);
+                    CHECK(eye.subImage.imageRect.extent.height == expected);
+                }
+            }
+            script.frames.prediction += script.frames.period;
+        }
+        CHECK(graphics.waitCalls == 0);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("Real installed Play admits only the exact native queue-accepted projection", "[xr][application][play][frame][submission]") {

@@ -16,7 +16,8 @@ namespace Horo::Render::VulkanExternalTest {
             *lastImportedSource{};  // Synchronous test-only observation, never an owner.
 
         explicit ExternalGraphBackend(NativeGraphFixture &fixture, RenderBackendId backend = RenderBackendId{"xr-bridge-test"},
-                                      std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2)
+                                      std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2,
+                                      bool syntheticCapabilities = true)
             : fixture_(&fixture), releaseDrainedChildren_(std::move(releaseDrainedChildren)) {
             capabilities_.backend = std::move(backend);
             capabilities_.support.deviceIncarnation = 11;
@@ -39,7 +40,7 @@ namespace Horo::Render::VulkanExternalTest {
             capabilities_.supportsExplicitMaterialSubmissions = true;
             capabilities_.supportsMaterialPassBatches = true;
             capabilities_.supportsMaterialRasterGraph = true;
-            capabilities_.support.synthetic = true;
+            capabilities_.support.synthetic = syntheticCapabilities;
             if (fixture.graph.MultiviewSupport().instancedTargetRouting)
                 capabilities_.support.features.Enable(RenderCapability::InstancedViewRouting);
             capabilities_.supportsSubmissionObservation = true;
@@ -235,13 +236,15 @@ namespace Horo::Render::VulkanExternalTest {
     class ExternalGraphProvider final : public IRenderBackendProvider {
     public:
         explicit ExternalGraphProvider(NativeGraphFixture &fixture, RenderBackendId backend = RenderBackendId{"xr-bridge-test"},
-                                       std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2)
+                                       std::function<void()> releaseDrainedChildren = {}, std::uint32_t maximumProjectionViews = 2,
+                                       bool syntheticCapabilities = true)
             : fixture_(&fixture), backend_(std::move(backend)), releaseDrainedChildren_(std::move(releaseDrainedChildren)),
-              maximumProjectionViews_(maximumProjectionViews) {}
+              maximumProjectionViews_(maximumProjectionViews), syntheticCapabilities_(syntheticCapabilities) {}
 
         Result<std::unique_ptr<IRenderBackend>> Create() const override {
             return Result<std::unique_ptr<IRenderBackend>>::Success(
-                std::make_unique<ExternalGraphBackend>(*fixture_, backend_, releaseDrainedChildren_, maximumProjectionViews_));
+                std::make_unique<ExternalGraphBackend>(*fixture_, backend_, releaseDrainedChildren_, maximumProjectionViews_,
+                                                       syntheticCapabilities_));
         }
 
     private:
@@ -249,6 +252,7 @@ namespace Horo::Render::VulkanExternalTest {
         RenderBackendId backend_;
         std::function<void()> releaseDrainedChildren_;
         std::uint32_t maximumProjectionViews_;
+        bool syntheticCapabilities_;
     };
 
 }  // namespace Horo::Render::VulkanExternalTest

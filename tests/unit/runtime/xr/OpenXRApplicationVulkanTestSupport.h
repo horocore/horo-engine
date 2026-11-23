@@ -65,6 +65,23 @@ namespace Horo::Tests::OpenXRApplication {
             return native_.graph.WasSubmissionAccepted(signal, deviceIncarnation);
         }
 
+        Result<bool> SupportsGraphGpuDuration(Render::RenderQueueId queue) const override {
+            return native_.graph.SupportsGraphGpuDuration(queue);
+        }
+
+        Result<bool> ArmGraphGpuDuration(Render::FrameToken frame, Render::RenderTimelinePoint signal) override {
+            return native_.graph.ArmGraphGpuDuration(frame, signal);
+        }
+
+        void DisarmGraphGpuDuration(Render::FrameToken frame, Render::RenderTimelinePoint signal) noexcept override {
+            native_.graph.DisarmGraphGpuDuration(frame, signal);
+        }
+
+        Result<RenderNative::VulkanGraphGpuDuration> ObserveGraphGpuDuration(Render::RenderTimelinePoint signal,
+                                                                             std::uint64_t incarnation) override {
+            return native_.graph.ObserveGraphGpuDuration(signal, incarnation);
+        }
+
         bool SupportsStereoCoverageReadback() const noexcept override {
             return native_.graph.SupportsStereoCoverageReadback();
         }
@@ -150,10 +167,10 @@ namespace Horo::Tests::OpenXRApplication {
 
     struct ApplicationVulkanFixture final {
         ShaderDriverScope shader;
-        Render::VulkanGraphTest::NativeGraphFixture native{true};
+        Render::VulkanGraphTest::NativeGraphFixture native;
         GraphGraphicsPort port{native};
 
-        ApplicationVulkanFixture() {
+        explicit ApplicationVulkanFixture(bool timestamps = false) : native(true, timestamps) {
             native.resourceState.state.sizedAllocations = true;
             native.encoded.expectedIndexCount = 36;  // Canonical authored box from MakeHierarchyScene.
             VkPhysicalDeviceProperties properties{};
