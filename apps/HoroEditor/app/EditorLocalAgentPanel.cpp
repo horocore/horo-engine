@@ -1320,8 +1320,10 @@ namespace Horo::Editor {
                                             processes = processes_](const std::stop_token stop) -> PatchWorker::Reply {
                     using Check = Result<Language::LanguageDiagnostics>;
                     if (stop.stop_requested())
-                        return PatchDiagnostics{plan, file, Check::Failure(MakeError(Proposals::Errors::StaleBase))};
+                        return PatchDiagnostics{plan, file, Check::Failure(MakeError(SourceDocumentErrors::Cancelled))};
                     const auto &preview = std::get<Proposals::FilePreview>(plan->entries[file]);
+                    if (preview.before.Revision() && !preview.before.IsCurrent())
+                        return PatchDiagnostics{plan, file, Check::Failure(MakeError(SourceDocumentErrors::Stale))};
                     if (script)
                         return PatchDiagnostics{plan, file, Language::CheckHoroScriptSyntaxText(*preview.after)};
                     return PatchDiagnostics{plan, file,
@@ -1337,8 +1339,12 @@ namespace Horo::Editor {
                                    const ILocalizationService &locale, const Theme::Fonts &fonts) const {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 if (result.HasError()) {
-                    const auto *label = script ? "source_patch_syntax_unavailable" : "source_patch_cpp_unavailable";
-                    Ui::WrappedText(width, LocalizedText(locale, label), Theme::ConsoleWarning(), fonts);
+                    const auto &error = result.ErrorValue();
+                    const auto *actionFailure = script ? "source_patch_syntax_unavailable" : "source_patch_cpp_unavailable";
+                    const auto &staleBase = SourceDocumentErrors::Stale;
+                    const bool stale = ErrorChainContains(error, staleBase.domain, staleBase.code);
+                    Ui::WrappedText(width, LocalizedText(locale, stale ? "source_validation_stale" : actionFailure),
+                                    Theme::ConsoleWarning(), fonts);
                     return;
                 }
                 const auto &items = result.Value().items;

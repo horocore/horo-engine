@@ -116,6 +116,44 @@ namespace {
         CHECK(PrepareClangdProvider(sources, settings).HasValue());
     }
 
+    TEST_CASE("Isolated Clangd refuses stale bases and distinguishes worker cancellation") {
+        TestSupport::SourceProject project;
+        project.Put("int original = 0;\n", "game.cpp");
+        SourceFileOpenService owner{project.directory};
+        const auto opened = owner.Open({.path = "game.cpp", .mode = SourceOpenMode::EmbeddedOnly});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot);
+        const auto &base = *opened.Value().sourceSnapshot;
+        const auto identity = base.Identity();
+        auto destination = identity.key.source;
+        std::stop_source stop;
+        const ErrorCodeDescriptor *expected = &SourceDocumentErrors::Stale;
+
+        SECTION("Live source published another revision") {
+            REQUIRE(owner.Documents().Edit(identity.instance, {base.Revision(), 0, 0, "// live edit\n"}).HasValue());
+        }
+        SECTION("Saved source changed outside the editor") {
+            project.Put("int external = 1;\n", "game.cpp");
+            REQUIRE(base.IsCurrent());
+            SECTION("Edit preview") {
+                // The preview keeps the original path for an in-place edit.
+            }
+            SECTION("Rename preview") {
+                destination = SourceDocumentId::Parse("renamed.cpp").Value();
+            }
+        }
+        SECTION("The preview worker was cancelled") {
+            stop.request_stop();
+            expected = &SourceDocumentErrors::Cancelled;
+        }
+
+        NativeExternalProcessRunner runner;
+        const auto result = CheckClangdPreview(runner, {}, {project.directory, destination, base, "int proposed = 2;\n"}, stop.get_token());
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().domain.Value() == expected->domain.Value());
+        CHECK(result.ErrorValue().code.Value() == expected->code.Value());
+    }
+
     TEST_CASE("Isolated Clangd diagnostics use proposed C++ bytes and leave the live buffer and disk intact", "[integration][clangd]") {
         const auto *installed = std::getenv("HORO_TEST_CLANGD");
         if (!installed)

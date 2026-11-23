@@ -44,16 +44,26 @@ namespace Horo::Editor::Language {
         /** @brief Stages a detached draft or edits only the isolated source owner's buffer. */
         Result<SourceDocumentSnapshot> OpenPreview(SourceFileOpenService &sources, const ClangdPreviewSource &preview) {
             using Output = Result<SourceDocumentSnapshot>;
-            if (!preview.base.Revision() || preview.path != preview.base.Identity().key.source)
+            if (!preview.base.Revision())
                 return sources.StageNew(preview.path, std::string{preview.text});
-            auto opened = sources.Open({.path = std::filesystem::u8path(preview.path.Value()), .mode = SourceOpenMode::EmbeddedOnly});
+            const auto original = preview.base.Identity().key.source;
+            const auto &encoded = original.Value();
+            const std::filesystem::path originalPath{std::u8string{encoded.begin(), encoded.end()}};
+            auto opened = sources.Open({.path = originalPath, .mode = SourceOpenMode::EmbeddedOnly});
             if (opened.HasError())
                 return Output::Failure(std::move(opened).ErrorValue());
             const auto &base = opened.Value().sourceSnapshot;
-            if (!base || base->Identity().key.source != preview.path || base->DiskBase() != preview.base.DiskBase())
+            if (!base || base->Identity().key.source != original || base->DiskBase() != preview.base.DiskBase())
                 return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+            if (preview.path != original)
+                return sources.StageNew(preview.path, std::string{preview.text});
             return sources.Documents().Edit(base->Identity().instance,
                                             {base->Revision(), 0, base->Text().size(), std::string{preview.text}});
+        }
+
+        /** @brief Detects superseded source publications while allowing previews for new files. */
+        bool HasStalePreviewBase(const SourceDocumentSnapshot &base) noexcept {
+            return base.Revision() && !base.IsCurrent();
         }
 
         /** @brief Accepts only diagnostics correlated by the isolated connection to the detached revision. */
@@ -63,12 +73,18 @@ namespace Horo::Editor::Language {
             using Clock = ProjectLanguageWorkspace::Clock;
             const auto deadline = Clock::now() + PreviewDeadline;
             for (auto now = Clock::now(); now < deadline; now = Clock::now()) {
-                if (stop.stop_requested() || (base.Revision() && !base.IsCurrent()))
+                if (stop.stop_requested())
                     return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
-                for (auto &result : workspace.Poll(std::span{&detached, 1}, now))
-                    if (auto *diagnostics = std::get_if<LanguageDiagnostics>(&result.payload);
-                        diagnostics && result.context.source.SharesStateWith(detached))
-                        return Output::Success(std::move(*diagnostics));
+                if (HasStalePreviewBase(base))
+                    return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+                for (auto &result : workspace.Poll(std::span{&detached, 1}, now)) {
+                    auto *diagnostics = std::get_if<LanguageDiagnostics>(&result.payload);
+                    if (!diagnostics || !result.context.source.SharesStateWith(detached))
+                        continue;
+                    if (HasStalePreviewBase(base))
+                        return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+                    return Output::Success(std::move(*diagnostics));
+                }
                 if (const auto *error = workspace.ProviderError(ClangdProviderId))
                     return Output::Failure(*error);
                 std::this_thread::sleep_for(std::chrono::milliseconds{5});
@@ -226,8 +242,10 @@ namespace Horo::Editor::Language {
     Result<LanguageDiagnostics> CheckClangdPreview(IExternalProcessRunner &runner, ClangdSettings settings,
                                                    const ClangdPreviewSource &source, std::stop_token stop) {
         using Output = Result<LanguageDiagnostics>;
-        if (stop.stop_requested() || (source.base.Revision() && !source.base.IsCurrent()))
+        if (stop.stop_requested())
             return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
+        if (HasStalePreviewBase(source.base))
+            return Output::Failure(MakeError(SourceDocumentErrors::Stale));
         if (source.text.size() > MaximumPreviewBytes)
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         SourceFileOpenService sources{source.projectRoot};

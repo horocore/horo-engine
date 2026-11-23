@@ -43,7 +43,7 @@ namespace Horo::Editor::Language {
      * @param settings Trusted Clangd discovery choices. Background indexing is disabled for previews.
      * @param source Exact proposed file and current base evidence.
      * @param stop Cooperative worker retirement.
-     * @return A versioned diagnostic result projected onto the proposed bytes, or a typed failure.
+     * @return Versioned diagnostics, Stale if the observed base changed, or another typed failure.
      * @details Call off the editor lane. No preview is saved and the active language session is untouched.
      */
     [[nodiscard]] Result<LanguageDiagnostics> CheckClangdPreview(IExternalProcessRunner &runner, ClangdSettings settings,
