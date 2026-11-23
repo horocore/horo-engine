@@ -58,6 +58,20 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRLocomotionBinding::AllowsReducedMotionTeleport */
+    bool OpenXRLocomotionBinding::AllowsReducedMotionTeleport() const noexcept {
+        return std::holds_alternative<OpenXRStickMoveBinding>(translation) || std::holds_alternative<OpenXRArmSwingBinding>(translation);
+    }
+
+    /** @copydoc OpenXRLocomotionBinding::SelectedTeleport */
+    const OpenXRTeleportBinding *OpenXRLocomotionBinding::SelectedTeleport(const XRLocomotionComfortSettings &comfort) const noexcept {
+        if (const auto *primary = std::get_if<OpenXRTeleportBinding>(&translation))
+            return primary;
+        if (comfort.reducedMotion && comfort.teleportWhenReduced && reducedMotionTeleport && AllowsReducedMotionTeleport())
+            return &*reducedMotionTeleport;
+        return nullptr;
+    }
+
     /** @copydoc OpenXRApplicationBindings::PreparedActionCount */
     std::size_t OpenXRApplicationBindings::PreparedActionCount() const noexcept {
         constexpr std::array roles{XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController};

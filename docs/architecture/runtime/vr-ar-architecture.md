@@ -963,6 +963,15 @@ loss and origin changes reset the pose history and require a neutral tick before
 resuming. Teleport checks a destination through the installed gameplay query owner,
 with the Character placement check still deciding whether the root can move.
 
+An installed OpenXR product can declare a `reducedMotionTeleport` route alongside
+stick or arm-swing movement in its signed `locomotion` bindings. This route uses
+a declared digital action, an authored controller aim pose and a bounded ray.
+Play selects it only when both project preferences `xr.locomotion.reduced_motion`
+and `xr.locomotion.teleport_when_reduced` are enabled. An independently authored
+primary `teleport` route remains available regardless of those preferences.
+Room-scale correction keeps its physical tracking policy. The existing gameplay
+query and Character placement owners decide whether a requested teleport is safe.
+
 When artificial locomotion/rotation exists, disable controls where gameplay permits,
 snap-turn configuration, speed/handedness, seated/standing/recenter behavior, motion-
 reduction controls and declared teleport/continuous availability remain visible across

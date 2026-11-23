@@ -236,17 +236,18 @@ namespace Horo::Application::Internal {
         using TranslationOutcome = Result<OpenXRTranslationBinding>;
 
         /** @brief Validates the exact digital teleport action and its bounded aim ray. */
-        TranslationOutcome TeleportBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+        Result<OpenXRTeleportBinding> TeleportBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            using Outcome = Result<OpenXRTeleportBinding>;
             if (!Foundation::HasAllowedFields(entry, {"action", "maximumDistanceMeters"}))
-                return TranslationOutcome::Failure(InvalidBindings());
+                return Outcome::Failure(InvalidBindings());
             const auto action = LocomotionAction(entry.at("action"), Input::ActionValueType::Digital, bindings);
             const auto distance = LocomotionNumber(entry.at("maximumDistanceMeters"));
             if (!action || !distance || *distance <= 0.0F || *distance > 100.0F)
-                return TranslationOutcome::Failure(InvalidBindings());
+                return Outcome::Failure(InvalidBindings());
             const auto declaration = std::ranges::find(bindings.schema.actions, *action, &XR::XRActionDeclaration::action);
             if (!HasLocomotionPose(bindings, declaration->role, XR::XRTrackedPoseKind::Aim))
-                return TranslationOutcome::Failure(InvalidBindings());
-            return TranslationOutcome::Success(OpenXRTeleportBinding{*action, declaration->role, *distance});
+                return Outcome::Failure(InvalidBindings());
+            return Outcome::Success({*action, declaration->role, *distance});
         }
 
         /** @brief Validates the discontinuity limit for physical room-scale correction. */
@@ -293,13 +294,36 @@ namespace Horo::Application::Internal {
             const std::array selected{hasStick, swing != entry.end(), room != entry.end(), teleport != entry.end()};
             if (std::ranges::count(selected, true) != 1)
                 return TranslationOutcome::Failure(InvalidBindings());
-            if (teleport != entry.end())
-                return TeleportBinding(*teleport, bindings);
+            if (teleport != entry.end()) {
+                auto binding = TeleportBinding(*teleport, bindings);
+                return binding.HasValue() ? TranslationOutcome::Success(std::move(binding).Value())
+                                          : TranslationOutcome::Failure(binding.ErrorValue());
+            }
             if (room != entry.end())
                 return RoomScaleBinding(*room);
             if (swing != entry.end())
                 return ArmSwingBinding(*swing, bindings);
             return StickBinding(entry, bindings);
+        }
+
+        /** @brief Attaches explicitly authored alternatives only after the primary translation has been admitted. */
+        Result<void> AddLocomotionOptions(const Json &entry, const OpenXRApplicationBindings &bindings,
+                                          OpenXRLocomotionBinding &selection) {
+            if (const auto turn = entry.find("snapTurn"); turn != entry.end()) {
+                auto parsed = SnapTurn(*turn, bindings);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                selection.turn.emplace(std::move(parsed).Value());
+            }
+            if (const auto teleport = entry.find("reducedMotionTeleport"); teleport != entry.end()) {
+                if (!selection.AllowsReducedMotionTeleport())
+                    return Result<void>::Failure(InvalidBindings());
+                auto parsed = TeleportBinding(*teleport, bindings);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                selection.reducedMotionTeleport.emplace(std::move(parsed).Value());
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Copies opt-in authored motions for one actor without choosing a player or establishing authority. */
@@ -308,7 +332,8 @@ namespace Horo::Application::Internal {
             if (entry == root.end())
                 return Result<void>::Success();
             if (!Foundation::HasAllowedFields(*entry, {"actor", "speedMetersPerSecond"},
-                                              {"moveAction", "deadZone", "armSwing", "roomScale", "teleport", "snapTurn"}) ||
+                                              {"moveAction", "deadZone", "armSwing", "roomScale", "teleport", "snapTurn",
+                                               "reducedMotionTeleport"}) ||
                 !Number(entry->at("actor"), std::numeric_limits<std::uint64_t>::max()))
                 return Result<void>::Failure(InvalidBindings());
             const auto speed = LocomotionNumber(entry->at("speedMetersPerSecond"));
@@ -318,12 +343,8 @@ namespace Horo::Application::Internal {
             if (translation.HasError())
                 return Result<void>::Failure(translation.ErrorValue());
             OpenXRLocomotionBinding selection{entry->at("actor").get<std::uint64_t>(), *speed, std::move(translation).Value()};
-            if (const auto turn = entry->find("snapTurn"); turn != entry->end()) {
-                auto parsed = SnapTurn(*turn, bindings);
-                if (parsed.HasError())
-                    return Result<void>::Failure(parsed.ErrorValue());
-                selection.turn.emplace(std::move(parsed).Value());
-            }
+            if (auto options = AddLocomotionOptions(*entry, bindings, selection); options.HasError())
+                return options;
             bindings.locomotion.emplace(std::move(selection));
             return Result<void>::Success();
         }

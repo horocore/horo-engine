@@ -469,6 +469,11 @@ namespace Horo::Application::Internal {
             return profile;
         }
 
+        /** @brief Allows a teleport only when both Character query and staging ports are present. */
+        bool HasTeleportDispatch(const OpenXRPlayTeleportStep *teleport) noexcept {
+            return teleport && teleport->target && teleport->stage;
+        }
+
         struct TrackedPosition final {
             XRDeviceId device;
             Math::Vec3 position;
@@ -536,8 +541,9 @@ namespace Horo::Application::Internal {
 
         CancelAuthoredLocomotion();
         const auto &route = *AuthoredLocomotion();
-        auto teleport =
-            std::holds_alternative<OpenXRTeleportBinding>(route.translation) ? std::make_shared<AuthoredTeleportPorts>(*this) : nullptr;
+        const auto *selectedTeleport = route.SelectedTeleport(evidence.comfort);
+        const bool primaryTeleport = std::holds_alternative<OpenXRTeleportBinding>(route.translation);
+        auto teleport = selectedTeleport ? std::make_shared<AuthoredTeleportPorts>(*this, *selectedTeleport, primaryTeleport) : nullptr;
         auto policy = XRLocomotionPolicy::Create(MakeAuthoredProfile(route, evidence.comfort), scope.cutoff.session, scope.player,
                                                  evidence.assignmentRevision, teleport);
         if (policy.HasError())
@@ -664,14 +670,15 @@ namespace Horo::Application::Internal {
                                                       const Runtime::FixedStepContext &step, std::uint64_t characterTick,
                                                       const OpenXRPlayTeleportStep *teleport, Math::Quaternion heading) {
         auto &driver = *authoredCharacter_;
-        if (driver.teleport && (!teleport || !teleport->target || !teleport->stage))
+        const bool hasDispatch = HasTeleportDispatch(teleport);
+        if (driver.teleport && driver.teleport->primary && !hasDispatch)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
-        const auto dispatch = teleport ? std::optional{TeleportDispatch{*teleport, evidence, heading}} : std::nullopt;
+        const auto dispatch = hasDispatch ? std::optional{TeleportDispatch{*teleport, evidence, heading}} : std::nullopt;
         const auto clear = [](AuthoredTeleportPorts *ports) noexcept {
             ports->dispatch = nullptr;
         };
         std::unique_ptr<AuthoredTeleportPorts, decltype(clear)> binding{driver.teleport.get(), clear};
-        if (binding)
+        if (binding && dispatch)
             binding->dispatch = &*dispatch;
 
         const auto frame = driver.policy.EvaluateFrame(sample, evidence.tracking);
@@ -684,8 +691,7 @@ namespace Horo::Application::Internal {
     Result<std::optional<XRLocomotionTeleport>> OpenXRPlayHost::AuthoredTeleportPorts::Resolve(const XRLocomotionSample &) const {
         using Destination = Result<std::optional<XRLocomotionTeleport>>;
         if (!dispatch)
-            return Destination::Failure(MakeError(XRErrors::OperationUnavailable));
-        const auto &route = std::get<OpenXRTeleportBinding>(play.AuthoredLocomotion()->translation);
+            return primary ? Destination::Failure(MakeError(XRErrors::OperationUnavailable)) : Destination::Success(std::nullopt);
         const auto devices = dispatch->evidence.tracking.Devices();
         const auto device = std::ranges::find(devices, route.role, &XRTrackedDeviceRecord::role);
         if (device == devices.end() || device->state != XRTrackedDeviceState::Tracked)
@@ -740,9 +746,8 @@ namespace Horo::Application::Internal {
             PopulatePhysicalGripMotion(sample, current.tracking, input_.sampledWorldPlacement, placement);
         else if (std::holds_alternative<OpenXRRoomScaleBinding>(authored.translation))
             PopulateRoomScaleMotion(sample, current.tracking, input_.sampledWorldPlacement, placement);
-        else
-            sample.teleportPressed =
-                input_.port->ReadCollectedButton(std::get<OpenXRTeleportBinding>(authored.translation).action).value_or(false);
+        if (const auto &teleport = authoredCharacter_->teleport)
+            sample.teleportPressed = input_.port->ReadCollectedButton(teleport->route.action).value_or(false);
         return sample;
     }
 

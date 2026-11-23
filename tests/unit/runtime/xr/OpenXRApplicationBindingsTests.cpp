@@ -28,6 +28,30 @@ namespace Horo::Tests::OpenXRAction {
         }
     }  // namespace
 
+    TEST_CASE("Application XR selects only a signed reduced-motion teleport alternative", "[xr][host][input][comfort]") {
+        using namespace Application::Internal;
+        const OpenXRTeleportBinding teleport{Input::ActionId{"teleport"}, XRTrackedDeviceRole::LeftController, 6.0F};
+        OpenXRLocomotionBinding route{.translation = OpenXRStickMoveBinding{Input::ActionId{"move"}, 0.15F}};
+        const XRLocomotionComfortSettings comfort{.reducedMotion = true, .teleportWhenReduced = true};
+        CHECK(route.SelectedTeleport(comfort) == nullptr);
+
+        route.reducedMotionTeleport = teleport;
+        CHECK(route.SelectedTeleport({.reducedMotion = true}) == nullptr);
+        CHECK(route.SelectedTeleport({.teleportWhenReduced = true}) == nullptr);
+        CHECK(route.SelectedTeleport(comfort) == &*route.reducedMotionTeleport);
+
+        route.translation = OpenXRArmSwingBinding{1.25F, 120'000'000};
+        CHECK(route.SelectedTeleport(comfort) == &*route.reducedMotionTeleport);
+        route.translation = OpenXRRoomScaleBinding{0.4F, 120'000'000};
+        CHECK(route.SelectedTeleport(comfort) == nullptr);
+
+        route.translation = teleport;
+        const auto *primary = std::get_if<OpenXRTeleportBinding>(&route.translation);
+        REQUIRE(primary);
+        CHECK(route.SelectedTeleport({}) == primary);
+        CHECK(route.SelectedTeleport(comfort) == primary);
+    }
+
     TEST_CASE("Application XR bindings join the actual Input registry after native attachment without issuing a session",
               "[xr][host][input]") {
         ActionFixture fixture{false};

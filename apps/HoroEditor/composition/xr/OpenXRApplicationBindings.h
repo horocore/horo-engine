@@ -2,6 +2,7 @@
 /** @file OpenXRApplicationBindings.h
  * @brief Non-installed installer-declared physical bindings joined to the canonical live Input action registry.
  */
+#include "Horo/XR/XRLocomotionComfort.h"
 #include "OpenXRActionBindings.h"
 
 #include <variant>
@@ -114,6 +115,16 @@ namespace Horo::Application::Internal {
         float speedMetersPerSecond{};
         OpenXRTranslationBinding translation;
         std::optional<OpenXRSnapTurnBinding> turn;
+        std::optional<OpenXRTeleportBinding> reducedMotionTeleport;
+
+        /** @brief Reports whether a second route can replace artificial continuous movement. */
+        [[nodiscard]] bool AllowsReducedMotionTeleport() const noexcept;
+
+        /** @brief Selects the signed primary teleport or an explicitly enabled reduced-motion alternative.
+         * @param comfort Immutable project preferences captured for this Play host.
+         * @return A borrowed signed route for this binding's lifetime, or null when no teleport is selected.
+         */
+        [[nodiscard]] const OpenXRTeleportBinding *SelectedTeleport(const XR::XRLocomotionComfortSettings &comfort) const noexcept;
     };
 
     /** @brief Installer-owned immutable bindings, distinct from signature/native-code admission and dynamic Input policy.

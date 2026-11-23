@@ -571,13 +571,16 @@ namespace Horo::Application::Internal {
         };
 
         struct AuthoredTeleportPorts final : XR::IXRLocomotionDestinationOwner, XR::IXRLocomotionTeleportOwner {
-            explicit AuthoredTeleportPorts(const OpenXRPlayHost &play) noexcept : play(play) {}
+            AuthoredTeleportPorts(const OpenXRPlayHost &play, const OpenXRTeleportBinding &route, bool primary) noexcept
+                : play(play), route(route), primary(primary) {}
 
             [[nodiscard]] Result<std::optional<XR::XRLocomotionTeleport>> Resolve(const XR::XRLocomotionSample &) const override;
             [[nodiscard]] Result<XR::XRLocomotionAdmission> QueueTeleport(const XR::XRLocomotionIntent &,
                                                                           const Character::CharacterTeleportRequest &request,
                                                                           const CancellationToken &lifetime) override;
             const OpenXRPlayHost &play;
+            const OpenXRTeleportBinding &route; /**< Borrowed from the immutable binding catalog retained by Play. */
+            const bool primary;                 /**< Requires gameplay dispatch for an authored primary teleport route. */
             const TeleportDispatch *dispatch{};
         };
 

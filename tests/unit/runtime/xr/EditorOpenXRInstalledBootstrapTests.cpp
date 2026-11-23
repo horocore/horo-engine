@@ -1,6 +1,7 @@
 #include "EditorOpenXRBootstrap.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
 
+#include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <type_traits>
 
@@ -18,6 +19,41 @@ namespace Horo::Editor::Tests {
                 arguments.push_back(value.data());
             return EditorOpenXRBootstrap::Create(arguments, fixture.Root(), std::filesystem::canonical(fixture.storage.Path()) / "cache",
                                                  Runtime::SceneObjectId{1});
+        }
+
+        /** @brief Provides distinct signed movement and teleport actions with a controller aim pose. */
+        nlohmann::json ReducedMotionTeleportDocument() {
+            auto root = nlohmann::json::parse(InstalledProductFixture::BindingDocument());
+            const auto role = static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController);
+            const auto digital = static_cast<unsigned>(Input::ActionValueType::Digital);
+            const auto axis = static_cast<unsigned>(Input::ActionValueType::Axis2D);
+            auto move = root["actions"].front();
+            move["id"] = "locomotion.move";
+            move["label"] = "Move";
+            move["type"] = axis;
+            move["required"] = false;
+            root["actions"].push_back(move);
+            root["profiles"].push_back({{"id", 2}, {"path", "/interaction_profiles/oculus/touch_controller"}});
+            root["controls"].push_back(
+                {{"profile", 2}, {"id", 2}, {"role", role}, {"type", digital}, {"path", "/user/hand/left/input/x/click"}});
+            root["controls"].push_back(
+                {{"profile", 2}, {"id", 3}, {"role", role}, {"type", axis}, {"path", "/user/hand/left/input/thumbstick"}});
+            root["suggestions"].push_back({{"action", "select"}, {"profile", 2}, {"control", 2}});
+            root["suggestions"].push_back({{"action", "locomotion.move"}, {"profile", 2}, {"control", 3}});
+            for (const auto profile : {1, 2}) {
+                root["poses"].push_back({{"profile", profile},
+                                         {"set", 1},
+                                         {"role", role},
+                                         {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                         {"path", "/user/hand/left/input/aim/pose"},
+                                         {"label", "Aim"}});
+            }
+            root["locomotion"] = {{"actor", 17},
+                                  {"moveAction", "locomotion.move"},
+                                  {"speedMetersPerSecond", 2.5},
+                                  {"deadZone", 0.15},
+                                  {"reducedMotionTeleport", {{"action", "select"}, {"maximumDistanceMeters", 6}}}};
+            return root;
         }
     }  // namespace
 
@@ -325,5 +361,52 @@ namespace Horo::Editor::Tests {
         CHECK(route.speedMetersPerSecond == 2.5F);
         REQUIRE(route.turn);
         CHECK(route.turn->action == Input::ActionId{"locomotion.turn"});
+    }
+
+    TEST_CASE("Signed XR locomotion validates the reduced-motion teleport alternative", "[xr][host][bootstrap][install][comfort]") {
+        auto root = ReducedMotionTeleportDocument();
+        auto &route = root["locomotion"];
+        bool valid = true;
+        SECTION("A signed digital action and aim are admitted with stick movement") {
+            // Keep the complete movement and teleport declaration.
+        }
+        SECTION("The alternative cannot select an analog action") {
+            route["reducedMotionTeleport"]["action"] = "locomotion.move";
+            valid = false;
+        }
+        SECTION("The alternative requires an authored controller aim") {
+            root["poses"].clear();
+            valid = false;
+        }
+        SECTION("The alternative cannot exceed the approved ray distance") {
+            route["reducedMotionTeleport"]["maximumDistanceMeters"] = 100.1;
+            valid = false;
+        }
+        SECTION("Physical room-scale correction cannot be replaced by the alternative") {
+            route.erase("moveAction");
+            route.erase("deadZone");
+            route["roomScale"] = {{"maximumSampleDistanceMeters", 0.4}, {"maximumTrackingGapMilliseconds", 120}};
+            valid = false;
+        }
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, root.dump()};
+        const auto candidate = fixture.Candidate();
+        const auto loaded =
+            Application::Internal::ReadInstalledOpenXRBindings(candidate.component,
+                                                               RequireValue(Packages::PackagePath::Parse("runtime/xr/bindings.json")));
+        REQUIRE(loaded.HasValue() == valid);
+        if (valid) {
+            const Input::InputContextId gameplay{"gameplay"};
+            const Input::ActionDescriptor select{Input::ActionId{"select"}, Input::ActionValueType::Digital, gameplay, true, {}};
+            const Input::ActionDescriptor move{Input::ActionId{"locomotion.move"}, Input::ActionValueType::Axis2D, gameplay, false, {}};
+            const std::array registered{select, move};
+            REQUIRE(loaded.Value()->ValidateRegisteredActions(registered).HasValue());
+            REQUIRE(loaded.Value()->locomotion);
+            const auto &selection = *loaded.Value()->locomotion;
+            CHECK(selection.SelectedTeleport({}) == nullptr);
+            const auto *alternative = selection.SelectedTeleport({.reducedMotion = true, .teleportWhenReduced = true});
+            REQUIRE(alternative);
+            CHECK(alternative->action == Input::ActionId{"select"});
+            CHECK(alternative->maximumDistanceMeters == 6.0F);
+        }
     }
 }  // namespace Horo::Editor::Tests
