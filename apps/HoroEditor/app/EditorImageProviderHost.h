@@ -27,6 +27,7 @@ namespace Horo::Editor {
         std::filesystem::path productRoot;
         std::filesystem::path trustedPublishers;
         bool activateViewport{};
+        bool scaleViewport{}; /**< Explicit upscaling activation rather than same-size temporal rendering. */
     };
 
     /** @brief Current executable release identity compared to the signed installed inventory. */
@@ -64,6 +65,7 @@ namespace Horo::Editor {
         EditorSignedProviderShader sceneLinear;
         EditorSignedProviderShader linearDepth;
         EditorSignedProviderShader motion;
+        std::optional<Render::CookedNativeReconstructionKernel> upscaleFallback;
     };
 
     /** @brief Parses explicit and mutually exclusive inspection or viewport activation arguments. @param args Process arguments including

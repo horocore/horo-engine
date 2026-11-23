@@ -81,7 +81,8 @@ namespace Horo::Editor {
         enum class ColorReconstruction : std::uint8_t {
             None,
             Spatial,
-            Temporal
+            Temporal,
+            TemporalUpscale,
         };
         /** @brief Enables canonical scene/display/presentation separation before allocating the first viewport target.
          * @param reconstruction Explicit additional reconstruction attachments for that generation.
@@ -92,6 +93,12 @@ namespace Horo::Editor {
         /** @brief Enables temporal guide and history storage for the ordinary color target. */
         [[nodiscard]] Result<void> EnableTemporalGuideTargets();
 
+        /** @brief Target-size raster attachments used to depth-test overlays when the scene is rendered smaller. */
+        struct DisplayDepthAttachments final {
+            Render::NativeReconstructionSceneImage scratch;
+            Render::NativeReconstructionSceneImage depth;
+        };
+
         /** @brief The exact resident guide and history images from one completely prepared viewport generation. */
         struct TemporalAttachments final {
             Render::NativeReconstructionSceneImage linearDepth;
@@ -101,6 +108,10 @@ namespace Horo::Editor {
 
         /** @brief Borrows the guide and ping-pong images of the published viewport extent, if temporal resources were selected. */
         [[nodiscard]] std::optional<TemporalAttachments> TemporalImages() const noexcept;
+        /** @brief Borrows the target-size overlay depth generation for a scaled temporal viewport. */
+        [[nodiscard]] std::optional<DisplayDepthAttachments> DisplayDepthImages() const noexcept;
+        /** @brief Returns the published size of the scene raster before reconstruction. */
+        [[nodiscard]] Render::FramebufferExtent SceneExtent() const noexcept;
         /** @brief Output access used by the selected compositor. */
         enum class CameraCrossFadeOutput : std::uint8_t {
             Sampled,
@@ -185,6 +196,8 @@ namespace Horo::Editor {
             TemporalImage motion;
             std::array<TemporalImage, 2> historyColor;
             std::array<TemporalImage, 2> historyDepth;
+            TemporalImage displayDepthScratch;
+            TemporalImage displayDepth;
         };
 
         struct ViewportTargetResources {
@@ -239,8 +252,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceColorPipelineTargets(ViewportTargetResources &resources);
         /** @brief Advances the selected optional reconstruction resources before publishing color. */
         [[nodiscard]] Result<bool> AdvanceReconstructionTargets(ViewportTargetResources &resources, Render::FramebufferExtent extent);
+        /** @brief Reserves the optional spatial output for the actual display extent. */
+        [[nodiscard]] Result<bool> AdvanceSpatialOutput(ViewportTargetResources &resources, Render::FramebufferExtent extent);
         /** @brief Advances all temporal images through the same asynchronous publication as the viewport target. */
-        [[nodiscard]] Result<bool> AdvanceTemporalTargets(TemporalTarget &temporal, Render::FramebufferExtent extent);
+        [[nodiscard]] Result<bool> AdvanceTemporalTargets(TemporalTarget &temporal, Render::FramebufferExtent renderExtent,
+                                                          Render::FramebufferExtent targetExtent);
+        /** @brief Computes the mode's scene resolution relative to the authoritatively allocated display extent. */
+        [[nodiscard]] Render::FramebufferExtent SceneExtent(Render::FramebufferExtent display) const noexcept;
+        /** @brief Reports whether the current attachment policy owns temporal resources. */
+        [[nodiscard]] bool UsesTemporalTargets() const noexcept;
         /** @brief Retires partially prepared and ready temporal generations through the frontend resource owner. */
         void ReleaseTemporalTargets(TemporalTarget &temporal) noexcept;
         [[nodiscard]] Result<void> SynchronizeShadowResources();

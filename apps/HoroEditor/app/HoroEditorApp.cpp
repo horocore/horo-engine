@@ -1779,7 +1779,8 @@ namespace Horo::Editor {
                 return Result<void>::Failure(scene.ErrorValue());
             return viewport.PrepareTemporalColor(std::move(scene).Value(), inputs, settings,
                                                  {family.linearDepth.payload, family.linearDepth.reflection},
-                                                 {family.motion.payload, family.motion.reflection}, family.kernels);
+                                                 {family.motion.payload, family.motion.reflection}, family.kernels,
+                                                 family.upscaleFallback ? &*family.upscaleFallback : nullptr);
         }
 
         /** @brief Reads the exact independently signed provider and scene stage on the selected Vulkan owner. */

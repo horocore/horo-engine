@@ -117,7 +117,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility */
     Render::TemporalHistoryCompatibility EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility(
-        const Render::FramebufferExtent extent, const std::uint64_t scene) const {
+        const Render::FramebufferExtent output, const std::uint64_t scene) const {
         const auto color = owner.resources_.ColorTexture();
         const auto surfaceGeneration = (std::uint64_t{color.slot} << 32) | color.generation;
         // This owner admits one immutable desktop guide recipe and subpixel sequence.
@@ -126,8 +126,8 @@ namespace Horo::Editor {
             .view = owner.LightingViewIdentity(),
             .provider = {desktopGuideContract},
             .mode = {desktopGuideContract},
-            .renderExtent = extent,
-            .targetExtent = extent,
+            .renderExtent = owner.resources_.SceneExtent(),
+            .targetExtent = output,
             .providerGeneration = desktopGuideContract,
             .modeGeneration = desktopGuideContract,
             .surfaceGeneration = surfaceGeneration,
@@ -205,7 +205,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Upload */
     Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::Upload(const Render::FrameToken frame, const std::uint32_t slot,
-                                                                             const Render::StaticMeshPassDescriptor &pass) {
+                                                                             const Render::StaticMeshPassDescriptor &pass,
+                                                                             const bool displayDepth) {
         const auto &instances = pass.scene.instances;
         if (slot >= draws.size() || instances.size() > draws[slot].size())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
@@ -222,8 +223,8 @@ namespace Horo::Editor {
         const auto cameraPair =
             pending_ ? pending_->camera : Render::RenderMotionCameraPair{.currentUnjitteredViewProjection = projection.Value()};
         for (std::size_t index = 0; index < instances.size(); ++index)
-            if (const auto uploaded =
-                    UploadDraw(frame, draws[slot][index], view.Value(), cameraPair, MotionForDraw(index, instances[index].localToWorld));
+            if (const auto uploaded = UploadDraw(frame, draws[slot][index], view.Value(), cameraPair,
+                                                 MotionForDraw(index, instances[index].localToWorld), displayDepth);
                 uploaded.HasError())
                 return uploaded;
         return Result<void>::Success();
@@ -233,23 +234,35 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDraw(const Render::FrameToken frame, const GuideDraw &draw,
                                                                                  const Math::Mat4 &view,
                                                                                  const Render::RenderMotionCameraPair &camera,
-                                                                                 const Render::RenderMotionObjectPair &object) const {
+                                                                                 const Render::RenderMotionObjectPair &object,
+                                                                                 const bool displayDepth) const {
         const auto &localToWorld = object.currentLocalToWorld;
-        const auto raster =
-            EditorVulkanRasterProjection(Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld), camera.currentJitterUv);
+        const auto unjittered = Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld);
+        const auto raster = EditorVulkanRasterProjection(unjittered, camera.currentJitterUv);
         const auto localToView = Math::Multiply(view, localToWorld);
-        std::array<std::byte, MaximumUniformBytes> depthBytes{};
-        const auto depthBlock = std::span{depthBytes}.first(linearDepth.uniformBytes);
-        if (const auto packed = PackEditorVulkanTemporalDepth(linearDepth.layout, raster, localToView, depthBlock); packed.HasError())
-            return Result<void>::Failure(packed.ErrorValue());
+        if (const auto depth = UploadDepth(frame, draw.linearDepth, raster, localToView); depth.HasError())
+            return depth;
+        if (displayDepth) {
+            const auto overlay = UploadDepth(frame, draw.displayDepth, EditorVulkanRasterProjection(unjittered, {}), localToView);
+            if (overlay.HasError())
+                return overlay;
+        }
         std::array<std::byte, MaximumUniformBytes> motionBytes{};
         const auto motionBlock = std::span{motionBytes}.first(motion.uniformBytes);
         if (const auto packed = PackEditorVulkanTemporalMotion(motion.layout, raster, camera, object, motionBlock); packed.HasError())
             return Result<void>::Failure(packed.ErrorValue());
-        auto *port = owner.bridge_.Port();
-        if (const auto uploaded = port->WriteFrameBuffer(frame, draw.linearDepth.instance, depthBlock); uploaded.HasError())
-            return uploaded;
-        return port->WriteFrameBuffer(frame, draw.motion.instance, motionBlock);
+        return owner.bridge_.Port()->WriteFrameBuffer(frame, draw.motion.instance, motionBlock);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDepth */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDepth(const Render::FrameToken frame, const DrawSlot &draw,
+                                                                                  const Math::Mat4 &raster,
+                                                                                  const Math::Mat4 &localToView) const {
+        std::array<std::byte, MaximumUniformBytes> storage{};
+        const auto bytes = std::span{storage}.first(linearDepth.uniformBytes);
+        if (const auto packed = PackEditorVulkanTemporalDepth(linearDepth.layout, raster, localToView, bytes); packed.HasError())
+            return Result<void>::Failure(packed.ErrorValue());
+        return owner.bridge_.Port()->WriteFrameBuffer(frame, draw.instance, bytes);
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */

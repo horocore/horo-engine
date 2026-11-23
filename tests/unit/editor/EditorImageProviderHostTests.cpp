@@ -126,8 +126,7 @@ TEST_CASE("Editor image provider inspection accepts one explicit route and indep
     CHECK(ParseEditorImageProviderInspection(args).HasError());
 }
 
-TEST_CASE("Editor image provider activation explicitly selects spatial or same-extent temporal output",
-          "[renderer][image-provider][editor]") {
+TEST_CASE("Editor image provider activation explicitly selects spatial, TAA or TAAU", "[renderer][image-provider][editor]") {
     const auto root = std::filesystem::temp_directory_path().lexically_normal();
     std::array options{std::string{"HoroEditor"}, std::string{"--activate-image-provider=spatial"},
                        "--image-provider-root=" + root.string(), "--image-provider-trust=" + (root / "trust.json").string(),
@@ -149,9 +148,14 @@ TEST_CASE("Editor image provider activation explicitly selects spatial or same-e
     REQUIRE(temporal);
     CHECK(temporal->activateViewport);
     CHECK(temporal->mode == ReconstructionKind::Temporal);
+    CHECK_FALSE(temporal->scaleViewport);
     options[1] = "--activate-image-provider=taau";
     update();
-    CHECK(ParseEditorImageProviderInspection(std::span{args}.first(4)).HasError());
+    const auto upscaled = RequireValue(ParseEditorImageProviderInspection(std::span{args}.first(4)));
+    REQUIRE(upscaled);
+    CHECK(upscaled->activateViewport);
+    CHECK(upscaled->mode == ReconstructionKind::Temporal);
+    CHECK(upscaled->scaleViewport);
 }
 
 TEST_CASE("Editor image provider inspection admits only signed matching product inventory", "[renderer][image-provider][editor]") {
@@ -296,6 +300,13 @@ TEST_CASE("Editor inspects and retains the complete signed temporal shader famil
         CHECK(prepared.availability.support.readiness == ImageProviderReadiness::CapabilityUnavailable);
         CHECK(prepared.kernels[0].entry == NativeReconstructionEntry::TemporalSeed);
         CHECK(prepared.kernels[1].entry == NativeReconstructionEntry::TemporalHistory);
+        CHECK_FALSE(prepared.upscaleFallback);
+        auto upscale = temporal;
+        upscale.activateViewport = true;
+        upscale.scaleViewport = true;
+        const auto scaled = RequireValue(LoadEditorSignedTemporalProvider(*renderer.frontend, upscale, expected, files, verifier));
+        REQUIRE(scaled.upscaleFallback);
+        CHECK(scaled.upscaleFallback->entry == NativeReconstructionEntry::Spatial);
         const auto verify = [&data](std::string_view path, const std::vector<std::uint8_t> &bytes) {
             const auto record = std::ranges::find(data.artifacts, path, &ReleaseArtifactRecord::path);
             REQUIRE(record != data.artifacts.end());

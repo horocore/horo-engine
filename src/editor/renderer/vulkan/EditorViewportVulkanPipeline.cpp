@@ -100,6 +100,13 @@ namespace Horo::Editor {
             if (const auto vectors = ProgramResources::CreateUniformSlot(owner.frontend_, motion, draw.motion, identity, motion.pipeline);
                 vectors.HasError())
                 return vectors;
+            if (prepareDisplayDepth) {
+                const auto displayIdentity = identity + owner.device_.frames * Render::RenderMaterialPass::MaximumDraws;
+                const auto overlay = ProgramResources::CreateUniformSlot(owner.frontend_, linearDepth, draw.displayDepth, displayIdentity,
+                                                                         linearDepth.pipeline);
+                if (overlay.HasError())
+                    return overlay;
+            }
         }
         return Result<void>::Success();
     }
@@ -115,6 +122,7 @@ namespace Horo::Editor {
             while (frame.size() > keep) {
                 retire(motion, frame.back().motion);
                 retire(linearDepth, frame.back().linearDepth);
+                retire(linearDepth, frame.back().displayDepth);
                 frame.pop_back();
             }
     }

@@ -290,11 +290,12 @@ namespace Horo::Editor {
         const bool activate = values[3].has_value();
         const auto &mode = activate ? values[3] : values[0];
         if (supplied != 3 || !values[1] || !values[2] || !mode || (activate && values[0]) ||
-            (*mode != "spatial" && *mode != (activate ? "taa" : "taau")))
+            (*mode != "spatial" && *mode != "taau" && !(activate && *mode == "taa")))
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
             EditorImageProviderInspection request{*mode == "spatial" ? ReconstructionKind::Spatial : ReconstructionKind::Temporal,
-                                                  std::filesystem::path{*values[1]}, std::filesystem::path{*values[2]}, activate};
+                                                  std::filesystem::path{*values[1]}, std::filesystem::path{*values[2]}, activate,
+                                                  activate && *mode == "taau"};
             if (!ValidHostPath(request.productRoot) || !ValidHostPath(request.trustedPublishers))
                 return Outcome::Failure(MakeError(InvalidRequest));
             return Outcome::Success(std::move(request));
@@ -393,8 +394,17 @@ namespace Horo::Editor {
             auto report = std::move(route).Value();
             report.temporalGuidesVerified = true;
             auto shaders = std::move(guides).Value();
+            std::optional<CookedNativeReconstructionKernel> fallback;
+            if (request.scaleViewport) {
+                auto loaded = LoadEntry(files, request.productRoot, manifest.Value().Artifacts(), Entry::Spatial);
+                if (loaded.HasError())
+                    return Outcome::Failure(loaded.ErrorValue());
+                if (!loaded.Value())
+                    return Outcome::Failure(MakeError(InvalidInventory));
+                fallback = std::move(loaded).Value();
+            }
             return Outcome::Success({std::move(report), std::move(kernels), std::move(scene).Value(), std::move(shaders.linearDepth),
-                                     std::move(shaders.motion)});
+                                     std::move(shaders.motion), std::move(fallback)});
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
         }

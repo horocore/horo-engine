@@ -173,18 +173,25 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareTemporalColor */
-    Result<void> EditorViewportRendererVulkan::PrepareTemporalColor(
-        EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs, const Render::ExposureSettings &settings,
-        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
-        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalColor(EditorVulkanSceneLinearCook scene,
+                                                                    const EditorViewportColorInputs &inputs,
+                                                                    const Render::ExposureSettings &settings,
+                                                                    const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+                                                                    const std::span<const Render::CookedNativeReconstructionKernel> kernels,
+                                                                    const Render::CookedNativeReconstructionKernel *upscaleFallback) {
         if (kernels.empty())
             return Result<void>::Failure(MakeError(Render::NativeReconstructionErrors::InvalidArtifact));
         auto candidate = MakeTemporalGuidePrograms(linearDepth, motion, kernels);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
+        auto fallback = PrepareReconstructionKernel(upscaleFallback, Render::NativeReconstructionEntry::Spatial);
+        if (fallback.HasError())
+            return Result<void>::Failure(fallback.ErrorValue());
+        candidate.Value()->prepareDisplayDepth = upscaleFallback != nullptr;
+        using enum EditorViewportResources::ColorReconstruction;
         try {
-            const auto prepared =
-                PrepareColorRecipe(std::move(scene), inputs, settings, EditorViewportResources::ColorReconstruction::Temporal);
+            const auto prepared = PrepareColorRecipe(std::move(scene), inputs, settings, upscaleFallback ? TemporalUpscale : Temporal,
+                                                     std::move(fallback).Value());
             if (prepared.HasError())
                 return prepared;
         } catch (const std::bad_alloc &) {

@@ -55,8 +55,7 @@ namespace Horo::Editor {
         using Outcome = Result<NativeReconstructionDispatchPlan>;
         const auto scene = resources_.SceneColorDescriptor();
         const auto output = resources_.SpatialColorDescriptor();
-        // Display overlays currently load the exact scene depth at the display extent.
-        if (scene.extent != pass.extent || output.extent != scene.extent)
+        if (!scene.extent.IsValid() || output.extent != pass.extent)
             return Outcome::Failure(MakeError(ReconstructionErrors::IncompatibleOutput));
         const auto &capabilities = frontend_.Capabilities().support;
         const auto view = LightingViewIdentity();
@@ -161,7 +160,7 @@ namespace Horo::Editor {
         const auto color = resources_.ColorTexture();
         const auto guideInput = [&](RenderTextureHandle texture, RenderTextureFormat format) {
             return ReconstructionTextureInput{texture,
-                                              {.extent = pass.extent,
+                                              {.extent = current.renderExtent,
                                                .format = format,
                                                .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
                                               current.view,
@@ -172,7 +171,7 @@ namespace Horo::Editor {
             .resourceOwner = color.owner,
             .timing = {.frameId = frameId, .predecessorFrameId = previous ? previous->frameId : 0, .jitterSample = state.JitterPhase()},
             .projection = pass.scene.camera.projection,
-            .currentJitterUv = EditorVulkanTemporalJitter(state.JitterPhase(), pass.extent),
+            .currentJitterUv = EditorVulkanTemporalJitter(state.JitterPhase(), current.renderExtent),
             .previousJitterUv = state.AcceptedJitterUv(),
             .color = {color, resources_.SceneColorDescriptor(), current.view, frameId},
             .positiveLinearDepth = guideInput(images->linearDepth.texture, RenderTextureFormat::R32Float),

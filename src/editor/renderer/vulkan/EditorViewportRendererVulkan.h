@@ -54,7 +54,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareTemporalColor(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
                                                         const Render::ExposureSettings &settings, const TemporalGuideCook &linearDepth,
                                                         const TemporalGuideCook &motion,
-                                                        std::span<const Render::CookedNativeReconstructionKernel> kernels);
+                                                        std::span<const Render::CookedNativeReconstructionKernel> kernels,
+                                                        const Render::CookedNativeReconstructionKernel *upscaleFallback = nullptr);
         /** @copydoc IEditorViewportRenderer::PrepareTemporalFrame */
         [[nodiscard]] Result<void> PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &pass, std::uint64_t frameId) override;
         ~EditorViewportRendererVulkan() override;
@@ -385,7 +386,8 @@ namespace Horo::Editor {
             /** @brief Grows all buffered frames together while preserving previously valid draw slots on failure. */
             [[nodiscard]] Result<void> PrepareDraws(std::size_t count);
             /** @brief Begins a motion attempt and uploads both raster guides to the selected slot. */
-            [[nodiscard]] Result<void> Upload(Render::FrameToken frame, std::uint32_t slot, const Render::StaticMeshPassDescriptor &pass);
+            [[nodiscard]] Result<void> Upload(Render::FrameToken frame, std::uint32_t slot, const Render::StaticMeshPassDescriptor &pass,
+                                              bool displayDepth);
             /** @brief Associates the pending attempt with the recorded graphics submission. */
             void Recorded(Render::RenderTimelinePoint signal) noexcept;
             /** @brief Settles the pending attempt using the exact queue receipt and clears the source. */
@@ -396,6 +398,7 @@ namespace Horo::Editor {
             struct GuideDraw final {
                 DrawSlot linearDepth;
                 DrawSlot motion;
+                DrawSlot displayDepth;
             };
 
             EditorViewportRendererVulkan &owner;
@@ -403,11 +406,12 @@ namespace Horo::Editor {
             ShaderResources motion;
             std::shared_ptr<Render::IResidentNativeReconstructionKernel> seedKernel;
             std::shared_ptr<Render::IResidentNativeReconstructionKernel> historyKernel;
+            bool prepareDisplayDepth{};
             std::shared_ptr<Render::NativeReconstructionViewHistory> reconstruction;
             Render::TemporalHistoryCompatibility reconstructionCompatibility;
             /** @brief Staged plan consumed by the next graph. The history owner retains accepted work. */
             std::optional<Render::NativeReconstructionScenePlan> reconstructionPlan;
-            [[nodiscard]] Render::TemporalHistoryCompatibility Compatibility(Render::FramebufferExtent extent, std::uint64_t scene) const;
+            [[nodiscard]] Render::TemporalHistoryCompatibility Compatibility(Render::FramebufferExtent output, std::uint64_t scene) const;
             [[nodiscard]] bool ProjectionChanges(const Render::RenderProjectionDescriptor &projection) const noexcept;
             /** @brief Returns the shader's exact current raster offset, or zero on a plain color frame. */
             [[nodiscard]] Math::Vec2 JitterUv() const noexcept;
@@ -436,7 +440,10 @@ namespace Horo::Editor {
             /** @brief Packs and uploads both guides for one draw without retaining scene data. */
             [[nodiscard]] Result<void> UploadDraw(Render::FrameToken frame, const GuideDraw &draw, const Math::Mat4 &view,
                                                   const Render::RenderMotionCameraPair &camera,
-                                                  const Render::RenderMotionObjectPair &object) const;
+                                                  const Render::RenderMotionObjectPair &object, bool displayDepth) const;
+            /** @brief Uploads the shared linear depth shader ABI for either raster extent. */
+            [[nodiscard]] Result<void> UploadDepth(Render::FrameToken frame, const DrawSlot &draw, const Math::Mat4 &raster,
+                                                   const Math::Mat4 &localToView) const;
             void RetireDrawsAfter(std::size_t keep) noexcept;
 
             static constexpr auto MaximumDraws = Render::RenderMaterialPass::MaximumDraws;

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <memory>
 
 #ifdef HORO_TEST_VIEWPORT_MCP
@@ -406,15 +407,29 @@ TEST_CASE("Color viewport publishes its encoded image while retaining distinct s
 }
 
 TEST_CASE("Temporal viewport publishes and retires an atomic guide and history generation", "[unit][headless][renderer][resource][color]") {
+    const bool upscale = GENERATE(false, true);
+    CAPTURE(upscale);
     const auto frontend = CreateTemporalResourceFrontend();
     ImageResolverFixture imageResolver;
     auto resources = CreateResources(*frontend);
-    REQUIRE(resources.EnableColorPipeline(EditorViewportResources::ColorReconstruction::Temporal).HasValue());
+    using enum EditorViewportResources::ColorReconstruction;
+    REQUIRE(resources.EnableColorPipeline(upscale ? TemporalUpscale : Temporal).HasValue());
     REQUIRE(resources.Prepare({}, {128, 128}).HasValue());
     CHECK_FALSE(resources.TemporalImages());
     SettleResources(resources, *frontend, {}, {128, 128});
     const auto first = resources.TemporalImages();
     REQUIRE(first);
+    CHECK(resources.SceneColorDescriptor().extent == (upscale ? FramebufferExtent{86, 86} : FramebufferExtent{128, 128}));
+    CHECK(resources.SpatialColorDescriptor().extent == FramebufferExtent{128, 128});
+    const auto firstDisplayDepth = resources.DisplayDepthImages();
+    if (upscale) {
+        REQUIRE(firstDisplayDepth);
+        CHECK(firstDisplayDepth->depth.texture != resources.DepthTexture());
+        CHECK(frontend->ResourceState(firstDisplayDepth->depth.texture).Value() == RenderResourceState::Ready);
+        CHECK(frontend->ResourceState(resources.SpatialTexture()).Value() == RenderResourceState::Ready);
+    } else {
+        CHECK_FALSE(firstDisplayDepth);
+    }
     const std::array images{first->linearDepth,      first->motion,           first->history[0].color,
                             first->history[0].depth, first->history[1].color, first->history[1].depth};
     for (const auto &image : images) {
@@ -438,12 +453,18 @@ TEST_CASE("Temporal viewport publishes and retires an atomic guide and history g
     REQUIRE(rejected);
     REQUIRE(resources.TemporalImages());
     CHECK(resources.TemporalImages()->motion.view == first->motion.view);
+    if (upscale)
+        CHECK(resources.DisplayDepthImages()->depth.view == firstDisplayDepth->depth.view);
 
     imageResolver.reject = false;
     SettleResources(resources, *frontend, {}, {256, 256});
     const auto second = resources.TemporalImages();
     REQUIRE(second);
     CHECK(second->motion.view != first->motion.view);
+    if (upscale) {
+        CHECK(resources.SceneExtent() == FramebufferExtent{171, 171});
+        CHECK(frontend->ResourceState(firstDisplayDepth->depth.texture).HasError());
+    }
     for (const auto &image : images) {
         CHECK(frontend->ResourceState(image.texture).HasError());
         CHECK(frontend->ResourceState(image.view).HasError());

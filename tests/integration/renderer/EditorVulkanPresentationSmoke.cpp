@@ -1484,6 +1484,8 @@ namespace Horo::Tests::VulkanEditor {
     }
 
     TEST_CASE("Native Vulkan viewport resolves temporal color before display encoding", "[native-smoke][vulkan][gui][temporal-color]") {
+        const bool upscale = GENERATE(false, true);
+        CAPTURE(upscale);
         const auto *assets = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
         const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
         const auto *colorRoot = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
@@ -1516,8 +1518,9 @@ namespace Horo::Tests::VulkanEditor {
             .package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(package).Value())};
         const std::array kernels{ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalSeed),
                                  ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalHistory)};
+        const auto fallback = ReadViewportTemporalKernel(stage, NativeReconstructionEntry::Spatial);
         Check(host.viewport->PrepareTemporalColor(std::move(sceneCook).Value(), inputs, {}, {depth, depthLayout}, {motion, motionLayout},
-                                                  kernels));
+                                                  kernels, upscale ? &fallback : nullptr));
         const auto view = host.frontend->CreateRenderViewIdentity();
         Check(view);
         Check(host.viewport->BindLightingViewIdentity(view.Value()));
@@ -1529,8 +1532,10 @@ namespace Horo::Tests::VulkanEditor {
         auto scene = fixture.View(0);
         scene.lights = {};
         constexpr auto size = Host::CameraQualificationExtent;
+        if (upscale)
+            scene.camera.position.y = 1.5F;
         host.viewport->RequestExtent(size);
-        host.viewport->RequestGrid({.visible = false});
+        host.viewport->RequestGrid({.visible = upscale});
         host.SynchronizeViewport(scene, size);
         constexpr std::array objectIds{RenderMotionObjectId{1}};
         const auto sampler = host.frontend->CreateSampler({});
@@ -1548,7 +1553,7 @@ namespace Horo::Tests::VulkanEditor {
             auto frame = host.Frame(number);
             host.viewportObservation->ResetDraws();
             host.ExecuteSceneAndGui(frame, scene);
-            CHECK(host.viewportObservation->DispatchCount() == (tracked ? 1 : 0));
+            CHECK(host.viewportObservation->DispatchCount() == (tracked || upscale ? 1 : 0));
             Check(frame.Present(), "submit the viewport color and GUI");
             host.viewport->FinishColorFrame(true);
             CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == number);

@@ -445,6 +445,10 @@ scene color, both motion and depth guides, and the seed and history kernels.
 The viewport resolves temporal color before display encoding and advances
 history after accepted GPU work completes. When a tracked scene or ready
 history slot is unavailable, the color pipeline uses the current scene color.
+Select `--activate-image-provider=taau` to render each axis at two thirds of the
+output size, rounded up. This route also verifies the spatial kernel from the
+same inventory and uses it whenever temporal reconstruction is unavailable.
+Display overlays retain output-size geometry and depth testing.
 
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned

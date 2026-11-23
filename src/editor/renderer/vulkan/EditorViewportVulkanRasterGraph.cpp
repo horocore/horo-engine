@@ -16,6 +16,7 @@ namespace Horo::Editor {
         constexpr auto MaximumScenePasses = MaximumDirectionalShadowCascades + 1;
         constexpr auto MaximumSpatialPasses = 1;
         constexpr auto TemporalGuidePasses = 2;
+        constexpr auto DisplayDepthPasses = 1;
         constexpr auto MaximumCanvasPasses = 1;
         constexpr auto MaximumCapturePasses = 1;
         constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
@@ -25,6 +26,7 @@ namespace Horo::Editor {
         /** @brief One complete resident attachment generation of the ordinary desktop viewport. */
         struct RasterAttachments final {
             FramebufferExtent extent;
+            FramebufferExtent displayExtent;
             FramebufferExtent atlasExtent;
             RenderTextureHandle color, depth, atlas;
             RenderTextureViewHandle colorView, depthView, atlasView;
@@ -36,9 +38,9 @@ namespace Horo::Editor {
         RasterAttachments Attachments(const EditorViewportResources &resources) {
             const auto size = resources.AllocatedExtent();
             const auto atlas = resources.ShadowExtent();
-            return {{size.width, size.height},    {atlas.width, atlas.height},    resources.ColorTexture(),
-                    resources.DepthTexture(),     resources.ShadowDepthTexture(), resources.ColorTextureView(),
-                    resources.DepthTextureView(), resources.ShadowTextureView()};
+            return {resources.SceneExtent(),      {size.width, size.height},    {atlas.width, atlas.height},
+                    resources.ColorTexture(),     resources.DepthTexture(),     resources.ShadowDepthTexture(),
+                    resources.ColorTextureView(), resources.DepthTextureView(), resources.ShadowTextureView()};
         }
 
         /** @brief One pass's owned backing for synchronous draw and read borrows. */
@@ -61,13 +63,18 @@ namespace Horo::Editor {
             RasterInputs canvas;
             EditorViewportColorGraph color;
             std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses +
-                                                    MaximumCapturePasses + TemporalGuidePasses>
+                                                    MaximumCapturePasses + TemporalGuidePasses + DisplayDepthPasses>
                 workloads;
             std::optional<std::size_t> spatialWork;
             std::optional<std::size_t> temporalWork;
             std::optional<NativeReconstructionHistoryStates> temporalInitial;
             std::size_t count{};
             std::size_t guidePasses{};
+            bool displayDepth{};
+
+            std::size_t ScenePrefix() const noexcept {
+                return guidePasses + static_cast<std::size_t>(displayDepth);
+            }
         };
 
         struct BuildFailure final {
@@ -94,7 +101,7 @@ namespace Horo::Editor {
                 : ownedBuilder(Take(RenderGraphBuilder::Create(
                       {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial || temporal ? 1 : 0) + (capture ? 1 : 0),
                        .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) + (spatial ? 1 : 0) +
-                                       (cameraCrossFade ? 5 : 0) + (capture ? 1 : 0) + TemporalGuidePasses + (temporal ? 4 : 0),
+                                       (cameraCrossFade ? 5 : 0) + (capture ? 1 : 0) + TemporalGuidePasses + (temporal ? 4 : 0) + 2,
                        .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) + (spatial ? 2 : 0) +
                                     (cameraCrossFade ? 8 : 0) + (capture ? 2 : 0) +
                                     (temporal ? RenderGraphNativeReconstruction::ImageCount : 0),
@@ -267,6 +274,7 @@ namespace Horo::Editor {
         RenderTextureViewHandle displayView, presentationView, spatialView;
         const TemporalGuidePrograms *guidePrograms{};
         std::optional<EditorViewportResources::TemporalAttachments> temporal;
+        std::optional<EditorViewportResources::DisplayDepthAttachments> outputDepth;
         std::uint32_t atlasPasses{};
         bool shadowDraws{};
 
@@ -374,20 +382,20 @@ namespace Horo::Editor {
         }
 
         RenderGraphPassWorkload AuthorDisplayOverlay(RasterGraphAuthor &author, RasterVariant &variant, const OverlaySlot &overlay,
-                                                     RenderGraphResourceId displayResource, RenderGraphResourceId depth,
+                                                     RenderGraphResourceId displayResource, const RasterOutput &depth,
                                                      RenderGraphResourceId atlas) {
             const auto pass = author.Pass();
             author.Output(pass, displayResource, RenderGraphUsageKind::ColorAttachment, RenderGraphAccess::ReadWrite);
-            author.Output(pass, depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::ReadWrite);
+            author.Output(pass, depth.depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::ReadWrite);
             auto &input = variant.displayOverlay;
             input.Reserve(1);
             author.Draw(pass, input, overlay.mesh, overlay.vertices, overlay.indices, overlay.uniforms.material, overlay.uniforms.buffer);
             author.Sample(pass, input, atlas, attachments.atlasView);
             return {pass, RenderGraphMaterialRaster{.color = displayResource,
-                                                    .depth = depth,
+                                                    .depth = depth.depth,
                                                     .colorView = displayView,
-                                                    .depthView = attachments.depthView,
-                                                    .extent = attachments.extent,
+                                                    .depthView = depth.depthView,
+                                                    .extent = attachments.displayExtent,
                                                     .colorOperations = {.loadOperation = AttachmentLoadOperation::Load},
                                                     .depthClear = std::nullopt,
                                                     .draws = input.draws,
@@ -424,7 +432,7 @@ namespace Horo::Editor {
                                               const RasterOutput &scene, const RenderGraphResourceId atlas,
                                               const EditorViewportColorPipeline &pipeline,
                                               const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel,
-                                              const NativeReconstructionGraphSources &sources) {
+                                              const NativeReconstructionGraphSources &sources, const RasterOutput &overlayDepth) {
             const auto displayResource = author.Attach(display);
             const auto output = author.Attach(presentation);
             auto toneMapInput = scene.color;
@@ -441,10 +449,10 @@ namespace Horo::Editor {
                 variant.spatialWork = variant.count;
                 variant.workloads[variant.count++] = author.Reconstruct(scene.color, scene.colorView, toneMapInput, spatialView, kernel);
             }
-            author.ColorScene(variant.color, pipeline, toneMapInput, displayResource, displayView, attachments.extent);
+            author.ColorScene(variant.color, pipeline, toneMapInput, displayResource, displayView, attachments.displayExtent);
             RenderGraphPassWorkload displayOverlay;
             if (overlay)
-                displayOverlay = AuthorDisplayOverlay(author, variant, *overlay, displayResource, scene.depth, atlas);
+                displayOverlay = AuthorDisplayOverlay(author, variant, *overlay, displayResource, overlayDepth, atlas);
             author.ColorEncode(variant.color, pipeline, output, presentationView);
             const auto work = variant.color.Workloads();
             for (const auto &pass : work.first(work.size() - 1))
@@ -476,7 +484,7 @@ namespace Horo::Editor {
         /** @brief Renders one guide from the same retained mesh bindings as the ordinary scene. */
         void AuthorGuide(RasterGraphAuthor &author, RasterVariant &variant, const RasterOutput &output,
                          std::span<const TemporalGuidePrograms::GuideDraw> draws, DrawSlot TemporalGuidePrograms::GuideDraw::*member,
-                         ClearColor clear, std::size_t work) {
+                         ClearColor clear, std::size_t work, FramebufferExtent extent) {
             const auto pass = author.Pass();
             author.Output(pass, output.color, RenderGraphUsageKind::ColorAttachment, RenderGraphAccess::Write);
             author.Output(pass, output.depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::Write);
@@ -491,7 +499,7 @@ namespace Horo::Editor {
                                                                        .depth = output.depth,
                                                                        .colorView = output.colorView,
                                                                        .depthView = output.depthView,
-                                                                       .extent = attachments.extent,
+                                                                       .extent = extent,
                                                                        .colorOperations = {.clearColor = clear},
                                                                        .draws = inputs.draws,
                                                                        .reads = inputs.reads}};
@@ -506,9 +514,10 @@ namespace Horo::Editor {
             const RasterOutput depth{author.Attach(temporal->linearDepth.texture), output.depth, temporal->linearDepth.view,
                                      output.depthView};
             const RasterOutput motion{author.Attach(temporal->motion.texture), output.depth, temporal->motion.view, output.depthView};
-            AuthorGuide(author, variant, depth, draws, &TemporalGuidePrograms::GuideDraw::linearDepth, {}, 0);
+            AuthorGuide(author, variant, depth, draws, &TemporalGuidePrograms::GuideDraw::linearDepth, {}, 0, attachments.extent);
             // Values outside the normalized UV range mark pixels without a valid predecessor.
-            AuthorGuide(author, variant, motion, draws, &TemporalGuidePrograms::GuideDraw::motion, {2.0F, 2.0F, 0.0F, 1.0F}, 1);
+            AuthorGuide(author, variant, motion, draws, &TemporalGuidePrograms::GuideDraw::motion, {2.0F, 2.0F, 0.0F, 1.0F}, 1,
+                        attachments.extent);
             return {output.color, depth.color, motion.color};
         }
 
@@ -523,7 +532,9 @@ namespace Horo::Editor {
                    const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {},
                    const EditorGraphViewportImageCapture::Copy *capture = nullptr) {
             variant.guidePasses = temporal && guidePrograms && !meshes.empty() ? TemporalGuidePasses : 0;
-            variant.count = variant.guidePasses + atlasPasses + 1;
+            variant.displayDepth = frame.overlay && outputDepth.has_value();
+            const auto prefix = variant.ScenePrefix();
+            variant.count = prefix + atlasPasses + 1;
             const auto draws = std::max<std::size_t>(1, meshes.size() + (frame.overlay ? 1 : 0));
             RasterGraphAuthor author{draws,
                                      variant.count,
@@ -538,12 +549,19 @@ namespace Horo::Editor {
                                       attachments.depthView};
             const auto sources =
                 variant.guidePasses ? AuthorTemporalGuides(author, variant, output, frame.index) : NativeReconstructionGraphSources{};
-            AuthorAtlas(author, variant, frame.slot, atlas, variant.guidePasses);
-            AuthorScene(author, variant, frame.slot, atlas, output, frame.overlay && !pipeline, variant.guidePasses + atlasPasses);
+            auto overlayDepth = output;
+            if (variant.displayDepth) {
+                overlayDepth = {author.Attach(outputDepth->scratch.texture), author.Attach(outputDepth->depth.texture),
+                                outputDepth->scratch.view, outputDepth->depth.view};
+                AuthorGuide(author, variant, overlayDepth, guidePrograms->draws[frame.index],
+                            &TemporalGuidePrograms::GuideDraw::displayDepth, {}, variant.guidePasses, attachments.displayExtent);
+            }
+            AuthorAtlas(author, variant, frame.slot, atlas, prefix);
+            AuthorScene(author, variant, frame.slot, atlas, output, frame.overlay && !pipeline, prefix + atlasPasses);
             auto finalColor = output.color;
             if (pipeline) {
                 const auto *overlay = frame.overlay ? &frame.slot.overlay : nullptr;
-                finalColor = AppendColorTail(author, variant, overlay, output, atlas, *pipeline, kernel, sources);
+                finalColor = AppendColorTail(author, variant, overlay, output, atlas, *pipeline, kernel, sources, overlayDepth);
             }
             if (capture)
                 variant.workloads[variant.count++] = author.Capture(finalColor, *capture);
@@ -670,7 +688,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
                 SetRasterRegions(variant, 0, source, clear);
             }
-            SetRasterRegions(variant, sourceShadow ? atlasPasses + 1 : variant.guidePasses, shadow, clear);
+            SetRasterRegions(variant, sourceShadow ? atlasPasses + 1 : variant.ScenePrefix(), shadow, clear);
             return Result<void>::Success();
         }
     };
@@ -877,7 +895,7 @@ namespace Horo::Editor {
         if (const auto boundary = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
             return Result<void>::Failure(boundary.ErrorValue());
         const auto attachments = Attachments(resources_);
-        if (!initialized_ || pass.target != resources_.Target() || !pass.extent.IsValid() || pass.extent != attachments.extent ||
+        if (!initialized_ || pass.target != resources_.Target() || !pass.extent.IsValid() || pass.extent != attachments.displayExtent ||
             pass.scene.instances.size() > MaximumDraws || !device_.graphicsIdentity.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
         auto shadow = BuildDirectionalShadowFrame(pass.scene, static_cast<float>(pass.extent.width) / pass.extent.height,
@@ -918,6 +936,7 @@ namespace Horo::Editor {
             candidate->spatialView = resources_.SpatialTextureView();
             candidate->guidePrograms = temporalGuides_.get();
             candidate->temporal = resources_.TemporalImages();
+            candidate->outputDepth = resources_.DisplayDepthImages();
             candidate->atlasPasses = AtlasPassCount(cast);
             candidate->shadowDraws = cast != nullptr;
             candidate->BindMeshes(resources_, pass.scene);
@@ -977,7 +996,7 @@ namespace Horo::Editor {
             return refreshed;
 
         if (variant.guidePasses)
-            if (const auto uploaded = temporalGuides_->Upload(frame.Token(), slot, pass); uploaded.HasError())
+            if (const auto uploaded = temporalGuides_->Upload(frame.Token(), slot, pass, variant.displayDepth); uploaded.HasError())
                 return uploaded;
         if (variant.spatialWork) {
             const auto spatial = PrepareSpatialDispatch(frame.Token(), pass);
