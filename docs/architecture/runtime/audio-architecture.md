@@ -2342,6 +2342,13 @@ timestamped PCM format, bounded capture buffers, monitoring, and recording
 publication. Capture and output may share a platform device service, but they
 have separate stream generations, queues, permission states, and failure paths.
 
+Capture discovery uses `AudioCaptureDeviceSnapshot` and generation-scoped
+`AudioCaptureDeviceId` values. Recording roles resolve within the capture
+catalog and never fall back to playback or another role. Adapters may omit
+unavailable format evidence. Discovery reports platform permission as a
+separate fact. Opening a capture stream still requires the host's permission
+and consent decision.
+
 Capture producers write into preallocated or policy-bounded buffers and never
 block the real-time callback. Consumers receive owner-backed timestamped spans
 or bounded stream reads; they do not retain native device handles. Device change,

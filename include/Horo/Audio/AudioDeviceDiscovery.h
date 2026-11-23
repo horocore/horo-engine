@@ -2,9 +2,10 @@
 
 /**
  * @file AudioDeviceDiscovery.h
- * @brief Owned output discovery snapshots and explicit device selection without native identities.
+ * @brief Owned playback and capture discovery snapshots without native identities.
  */
 
+#include "Horo/Audio/AudioFormat.h"
 #include "Horo/Audio/AudioIdentity.h"
 
 #include <optional>
@@ -37,7 +38,7 @@ namespace Horo::Audio {
         Unknown /**< The native discovery protocol does not substantiate an endpoint class. */
     };
 
-    /** @brief Maximum number of output endpoints in one complete discovery snapshot. */
+    /** @brief Maximum number of endpoints in one complete discovery snapshot. */
     inline constexpr std::size_t MaximumAudioDiscoveredDevices = 256;
 
     /** @brief Owned presentation metadata; neither display name nor enumeration position is identity. */
@@ -107,4 +108,67 @@ namespace Horo::Audio {
      */
     [[nodiscard]] AudioDeviceResolution ResolveAudioDevice(const AudioDeviceSnapshot &snapshot,
                                                            const AudioDeviceSelection &selection) noexcept;
+
+    /** @brief Reported recording permission. Unknown cannot authorize recording. */
+    enum class AudioCapturePermission : std::uint8_t {
+        Unknown,
+        NotRequired,
+        Required,
+        Granted,
+        Denied
+    };
+
+    /** @brief Owned recording endpoint metadata; the optional format is an observed preference. */
+    struct AudioDiscoveredCaptureDevice final {
+        AudioCaptureDeviceId id;
+        std::string displayName; /**< At most 256 bytes, excluding private native identifiers. */
+        AudioDeviceClass deviceClass{AudioDeviceClass::Physical};
+        std::optional<AudioProcessingFormat> preferredFormat;
+    };
+
+    /** @brief Independently resolved recording defaults; missing bindings imply no fallback. */
+    struct AudioDefaultCaptureDevices final {
+        std::optional<AudioCaptureDeviceId> console;
+        std::optional<AudioCaptureDeviceId> multimedia;
+        std::optional<AudioCaptureDeviceId> communications;
+    };
+
+    /** @brief Complete immutable control-thread recording inventory, independent of playback.
+     * @details Revisions advance when inventory, formats, defaults or permission change. An adapter
+     * retains unchanged identities and retires removed generations before reusing a slot.
+     * Discovery does not open a recording stream or request permission.
+     */
+    struct AudioCaptureDeviceSnapshot final {
+        std::uint32_t contractVersion{1};
+        AudioRuntimeId owner;
+        AudioBackendKind backend{AudioBackendKind::NullAudio};
+        std::uint64_t revision{};
+        std::vector<AudioDiscoveredCaptureDevice> devices;
+        AudioDefaultCaptureDevices defaults;
+        AudioCapturePermission permission{AudioCapturePermission::Unknown};
+    };
+
+    /** @brief An explicit recording identity or a default role within the recording catalog. */
+    using AudioCaptureDeviceSelection = std::variant<AudioCaptureDeviceId, AudioDefaultDeviceRole>;
+
+    /** @brief A bound recording identity and catalog revision; activation has a separate permission check. */
+    struct AudioCaptureDeviceResolution final {
+        AudioDeviceResolutionStatus status{AudioDeviceResolutionStatus::InvalidSnapshot};
+        AudioCaptureDeviceId device;
+        std::uint64_t revision{};
+    };
+
+    /** @brief Validates recording defaults, stable identities, optional format evidence and permission state.
+     * @param snapshot Complete capture discovery from the selected adapter.
+     * @return True when the snapshot is structurally valid, including an empty inventory.
+     */
+    [[nodiscard]] bool ValidateAudioCaptureDeviceSnapshot(const AudioCaptureDeviceSnapshot &snapshot) noexcept;
+
+    /** @brief Resolves capture intent without opening a stream or crossing into playback.
+     * @param snapshot Complete immutable recording inventory.
+     * @param selection Requested recording identity or role.
+     * @return A recording identity and revision or a typed failure with neither.
+     */
+    [[nodiscard]] AudioCaptureDeviceResolution ResolveAudioCaptureDevice(const AudioCaptureDeviceSnapshot &snapshot,
+                                                                         const AudioCaptureDeviceSelection &selection) noexcept;
 }  // namespace Horo::Audio

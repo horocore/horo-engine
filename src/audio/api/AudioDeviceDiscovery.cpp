@@ -20,14 +20,14 @@ namespace Horo::Audio {
         }
 
         /** @brief Matches the complete generation, not a reused slot or presentation name. */
-        bool Contains(const AudioDeviceSnapshot &snapshot, const AudioDeviceId &id) noexcept {
+        bool Contains(const auto &snapshot, const auto &id) noexcept {
             return std::ranges::any_of(snapshot.devices, [&id](const auto &device) {
                 return device.id == id;
             });
         }
 
         /** @brief Missing default roles are valid; present roles must name an enumerated endpoint. */
-        bool ValidDefault(const AudioDeviceSnapshot &snapshot, const std::optional<AudioDeviceId> &id) noexcept {
+        bool ValidDefault(const auto &snapshot, const auto &id) noexcept {
             return !id || Contains(snapshot, *id);
         }
 
@@ -41,10 +41,10 @@ namespace Horo::Audio {
         }
 
         /** @brief Resolves a role without inventing cross-role or enumeration-order fallback. */
-        AudioDeviceResolution ResolveDefault(const AudioDeviceSnapshot &snapshot, const AudioDefaultDeviceRole role) noexcept {
+        template <class Resolution> Resolution ResolveDefault(const auto &snapshot, const AudioDefaultDeviceRole role) noexcept {
             using enum AudioDefaultDeviceRole;
             using enum AudioDeviceResolutionStatus;
-            const std::optional<AudioDeviceId> *binding{};
+            const decltype(snapshot.defaults.console) *binding{};
             switch (role) {
                 case Console:
                     binding = &snapshot.defaults.console;
@@ -64,7 +64,7 @@ namespace Horo::Audio {
         }
 
         /** @brief Checks endpoint shape and prevents simultaneous generations of one registry slot. */
-        bool ValidDevices(const AudioDeviceSnapshot &snapshot) noexcept {
+        bool ValidDevices(const auto &snapshot) noexcept {
             for (std::size_t index = 0; index < snapshot.devices.size(); ++index) {
                 const auto &device = snapshot.devices[index];
                 if (!device.id.IsValid() || device.id.owner != snapshot.owner || device.displayName.size() > 256 ||
@@ -77,29 +77,56 @@ namespace Horo::Audio {
             }
             return true;
         }
+
+        /** @brief Checks the shared shape of a playback or capture catalog before using any endpoint. */
+        bool ValidCatalog(const auto &snapshot) noexcept {
+            if (snapshot.contractVersion != 1 || !snapshot.owner.IsValid() || snapshot.revision == 0 || !KnownBackend(snapshot.backend) ||
+                snapshot.devices.size() > MaximumAudioDiscoveredDevices)
+                return false;
+            return ValidDevices(snapshot) && ValidDefault(snapshot, snapshot.defaults.console) &&
+                   ValidDefault(snapshot, snapshot.defaults.multimedia) && ValidDefault(snapshot, snapshot.defaults.communications);
+        }
+
+        /** @brief Keeps explicit selection fenced to this catalog's exact owner and generation. */
+        template <class Resolution, class DeviceId>
+        Resolution ResolveSelection(const auto &snapshot, const std::variant<DeviceId, AudioDefaultDeviceRole> &selection) noexcept {
+            using enum AudioDeviceResolutionStatus;
+            if (const auto *explicitDevice = std::get_if<DeviceId>(&selection)) {
+                if (!explicitDevice->IsValid() || explicitDevice->owner != snapshot.owner)
+                    return {.status = InvalidSelection};
+                if (!Contains(snapshot, *explicitDevice))
+                    return {.status = Unavailable};
+                return {.status = Resolved, .device = *explicitDevice, .revision = snapshot.revision};
+            }
+            return ResolveDefault<Resolution>(snapshot, std::get<AudioDefaultDeviceRole>(selection));
+        }
     }  // namespace
 
     /** @copydoc ValidateAudioDeviceSnapshot */
     bool ValidateAudioDeviceSnapshot(const AudioDeviceSnapshot &snapshot) noexcept {
-        if (snapshot.contractVersion != 1 || !snapshot.owner.IsValid() || snapshot.revision == 0 || !KnownBackend(snapshot.backend) ||
-            snapshot.devices.size() > MaximumAudioDiscoveredDevices)
-            return false;
-        return ValidDevices(snapshot) && ValidDefault(snapshot, snapshot.defaults.console) &&
-               ValidDefault(snapshot, snapshot.defaults.multimedia) && ValidDefault(snapshot, snapshot.defaults.communications);
+        return ValidCatalog(snapshot);
     }
 
     /** @copydoc ResolveAudioDevice */
     AudioDeviceResolution ResolveAudioDevice(const AudioDeviceSnapshot &snapshot, const AudioDeviceSelection &selection) noexcept {
-        using enum AudioDeviceResolutionStatus;
         if (!ValidateAudioDeviceSnapshot(snapshot))
             return {};
-        if (const auto *explicitDevice = std::get_if<AudioDeviceId>(&selection)) {
-            if (!explicitDevice->IsValid() || explicitDevice->owner != snapshot.owner)
-                return {.status = InvalidSelection};
-            if (!Contains(snapshot, *explicitDevice))
-                return {.status = Unavailable};
-            return {.status = Resolved, .device = *explicitDevice, .revision = snapshot.revision};
-        }
-        return ResolveDefault(snapshot, std::get<AudioDefaultDeviceRole>(selection));
+        return ResolveSelection<AudioDeviceResolution>(snapshot, selection);
+    }
+
+    /** @copydoc ValidateAudioCaptureDeviceSnapshot */
+    bool ValidateAudioCaptureDeviceSnapshot(const AudioCaptureDeviceSnapshot &snapshot) noexcept {
+        return ValidCatalog(snapshot) && snapshot.permission <= AudioCapturePermission::Denied &&
+               std::ranges::all_of(snapshot.devices, [](const AudioDiscoveredCaptureDevice &device) {
+            return !device.preferredFormat || ValidateAudioProcessingFormat(*device.preferredFormat);
+        });
+    }
+
+    /** @copydoc ResolveAudioCaptureDevice */
+    AudioCaptureDeviceResolution ResolveAudioCaptureDevice(const AudioCaptureDeviceSnapshot &snapshot,
+                                                           const AudioCaptureDeviceSelection &selection) noexcept {
+        if (!ValidateAudioCaptureDeviceSnapshot(snapshot))
+            return {};
+        return ResolveSelection<AudioCaptureDeviceResolution>(snapshot, selection);
     }
 }  // namespace Horo::Audio

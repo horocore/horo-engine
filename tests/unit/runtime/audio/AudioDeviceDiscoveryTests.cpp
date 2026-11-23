@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <span>
+#include <type_traits>
 
 namespace Horo::Audio {
     namespace {
@@ -178,6 +179,59 @@ namespace Horo::Audio {
             REQUIRE(after.revision == 10);
             REQUIRE(original.devices[0].displayName == "Output");
             REQUIRE(std::get<AudioDefaultDeviceRole>(intent) == AudioDefaultDeviceRole::Multimedia);
+        }
+
+        TEST_CASE("Recording device selection stays independent of playback and retains exact default roles",
+                  "[audio][discovery][capture]") {
+            static_assert(!std::is_constructible_v<AudioDeviceSelection, AudioCaptureDeviceId>);
+            static_assert(!std::is_constructible_v<AudioCaptureDeviceSelection, AudioDeviceId>);
+            const auto playback = Snapshot();
+            const AudioCaptureDeviceId microphone{playback.owner, 1, 2};
+            const AudioCaptureDeviceId headset{playback.owner, 2, 1};
+            const AudioProcessingFormat mono{48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono)};
+            AudioCaptureDeviceSnapshot input{.owner = playback.owner,
+                                             .backend = playback.backend,
+                                             .revision = 5,
+                                             .devices = {{microphone, "Microphone", AudioDeviceClass::Physical, mono},
+                                                         {headset, "Headset", AudioDeviceClass::Physical, std::nullopt}},
+                                             .defaults = {.multimedia = microphone, .communications = headset},
+                                             .permission = AudioCapturePermission::Required};
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(input));
+            const auto defaultMic = ResolveAudioCaptureDevice(input, AudioDefaultDeviceRole::Multimedia);
+            CHECK(defaultMic.status == AudioDeviceResolutionStatus::Resolved);
+            CHECK(defaultMic.device == microphone);
+            CHECK(defaultMic.revision == 5);
+            CHECK(ResolveAudioCaptureDevice(input, AudioDefaultDeviceRole::Communications).device == headset);
+            CHECK(ResolveAudioCaptureDevice(input, AudioDefaultDeviceRole::Console).status == AudioDeviceResolutionStatus::Unavailable);
+
+            input.devices.erase(input.devices.begin());
+            input.defaults.multimedia.reset();
+            ++input.revision;
+            const auto removed = ResolveAudioCaptureDevice(input, microphone);
+            CHECK(removed.status == AudioDeviceResolutionStatus::Unavailable);
+            CHECK_FALSE(removed.device.IsValid());
+            CHECK(removed.revision == 0);
+            CHECK(ResolveAudioDevice(playback, playback.devices.front().id).status == AudioDeviceResolutionStatus::Resolved);
+        }
+
+        TEST_CASE("Capture discovery rejects invalid formats, permission states and stale defaults", "[audio][discovery][capture]") {
+            const auto owner = AudioRuntimeId::Create(7).Value();
+            const AudioCaptureDeviceId device{owner, 1, 2};
+            AudioCaptureDeviceSnapshot input{.owner = owner,
+                                             .backend = AudioBackendKind::WASAPI,
+                                             .revision = 5,
+                                             .devices = {{device, "Microphone"}},
+                                             .defaults = {.communications = device},
+                                             .permission = AudioCapturePermission::Denied};
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(input));
+            input.devices.front().preferredFormat = AudioProcessingFormat{};
+            CHECK_FALSE(ValidateAudioCaptureDeviceSnapshot(input));
+            input.devices.front().preferredFormat.reset();
+            input.permission = static_cast<AudioCapturePermission>(255);
+            CHECK_FALSE(ValidateAudioCaptureDeviceSnapshot(input));
+            input.permission = AudioCapturePermission::Unknown;
+            input.defaults.communications->generation = 1;
+            CHECK(ResolveAudioCaptureDevice(input, device).status == AudioDeviceResolutionStatus::InvalidSnapshot);
         }
     }  // namespace
 }  // namespace Horo::Audio

@@ -143,6 +143,7 @@ namespace Horo::Audio {
     struct AudioBusHandleTag;
     struct AudioEventInstanceTag;
     struct AudioDeviceIdentityTag;
+    struct AudioCaptureDeviceIdentityTag;
     struct AudioSceneContextHandleTag;
     struct AudioAcousticSourceHandleTag;
     struct AudioAcousticListenerHandleTag;
@@ -155,8 +156,10 @@ namespace Horo::Audio {
     using AudioBusHandle = AudioHandle<AudioBusHandleTag>;
     /** @brief Generation-safe identity of one active middleware event instance. */
     using AudioEventInstanceId = AudioHandle<AudioEventInstanceTag>;
-    /** @brief Generation-scoped Horo device identity that exposes no native device value. */
+    /** @brief Generation-scoped playback device identity that exposes no native device value. */
     using AudioDeviceId = AudioHandle<AudioDeviceIdentityTag>;
+    /** @brief Generation-scoped recording device identity, independent of playback slots. */
+    using AudioCaptureDeviceId = AudioHandle<AudioCaptureDeviceIdentityTag>;
     /** @brief Generation-safe client handle to one active scene audio context. */
     using AudioSceneContextHandle = AudioHandle<AudioSceneContextHandleTag>;
     /** @brief Control-owned acoustic source identity; slot reuse requires a new generation. */
