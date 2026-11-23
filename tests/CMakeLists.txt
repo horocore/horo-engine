@@ -2034,6 +2034,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             unit/runtime/navigation/RecastDetourProviderTests.cpp
             unit/runtime/navigation/RecastDetourLinkValidationTests.cpp
             unit/runtime/navigation/RecastDetourProviderPathTests.cpp
+            unit/runtime/navigation/RecastDetourRuntimeRebuildTests.cpp
             unit/runtime/navigation/RecastDetourMeshBuilderTests.cpp
     )
     target_compile_features(HoroNavigationRecastDetourTests PRIVATE cxx_std_20)

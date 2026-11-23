@@ -2485,6 +2485,7 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationCoordinator.cpp
         runtime/navigation/runtime/NavigationCoordinatorState.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
+        runtime/navigation/runtime/NavigationRuntimeTileRebuild.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
 add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)

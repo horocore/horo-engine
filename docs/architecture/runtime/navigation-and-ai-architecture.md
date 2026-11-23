@@ -1228,6 +1228,17 @@ in the 1.0 baseline and its output remains transient; it cannot update Asset
 Registry, cook cache, `current.json` or Scene source. Streamed geometry installs/
 removes already cooked cell tiles only through World Streaming.
 
+`PrepareRuntimeNavigationTileRebuild` gives an opt-in host an owned detached
+candidate built from its exact predecessor tile closure, pinned post-change
+source snapshot and explicit builder and query materializer. It recomputes
+halo-aware tile dependencies, shares unchanged tiles and builds changed tiles
+under caller budgets. Publication consumes the candidate at the owner safe
+point and checks the Scene, topology, sources, overlay, origin and world change
+authority before swapping the complete provider. Readers pin the predecessor
+until their leases drain. A changed tile with retained off-mesh links requires
+link reprojection before it can be rebuilt. Product hosts still own capture,
+scheduling, capability admission and blocker retirement.
+
 ```cpp
 struct DynamicObstacle {
     WorldCoordinate64  center;
