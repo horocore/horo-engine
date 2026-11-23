@@ -1270,8 +1270,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                      Scenario::MissedWorker, Scenario::SaturatedWorker, Scenario::QualifiedCrowd, Scenario::RelevanceCadence);
         const bool follows = scenario == Scenario::Follow;
         const bool dedicated = scenario == Scenario::Dedicated;
-        const bool animated = scenario == Scenario::Animated || dedicated;
         const bool workerPressure = scenario == Scenario::SaturatedWorker;
+        const bool animated = scenario == Scenario::Animated || dedicated || workerPressure;
         const bool workerDeadline = workerPressure || scenario == Scenario::MissedWorker;
         const bool qualifiedCrowd = scenario == Scenario::QualifiedCrowd;
         JobSystem queuedJobs({.workerCount = 0, .maxQueuedJobs = 1});
@@ -1343,6 +1343,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             policy->workerSolvers.emplace_back(CreateRecastDetourCrowdBackend().Value());
         else
             policy->solver = CreateRecastDetourCrowdBackend().Value();
+        if (workerDeadline)
+            policy->workerBudget.emplace(4, 2);
         policy->capture = [&](const auto &, const auto &active, const auto &agents, const auto samples, const std::uint64_t tick) {
             REQUIRE(samples.size() == 1);
             if (captures++ == 0)
@@ -1453,7 +1455,20 @@ namespace Horo::Application::CharacterSceneProductTest {
             if (blocker) {
                 const auto admission = queuedJobs.AdmissionSnapshot();
                 CHECK(admission.rejected[static_cast<std::size_t>(JobPriority::Normal)] > 0);
+                REQUIRE(product.scheduled);
+                const Network::NetworkModeWorld world{Network::NetworkModeWorldKind::Standalone, {31}};
+                const auto pressured = product.scheduled->AiHealth(world);
+                REQUIRE(pressured);
+                REQUIRE(pressured->crowdPressure);
+                CHECK(pressured->crowdPressure->queuePressure);
+                CHECK(pressured->degraded);
                 REQUIRE(blocker->RequestCancel().HasValue());
+                product.RunFrame();
+                const auto late = product.scheduled->AiHealth(world);
+                REQUIRE(late);
+                REQUIRE(late->crowdPressure);
+                CHECK(late->crowdPressure->missedCutoff);
+                CHECK(late->crowdPressure->jobsAttempted == 1);
             }
             for (std::size_t frame = 0; frame < 6; ++frame)
                 product.RunFrame();

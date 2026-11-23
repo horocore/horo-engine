@@ -10,6 +10,7 @@
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
+#include "Horo/Navigation/NavigationCrowdOverload.h"
 #include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Network/NetworkModeComposition.h"
@@ -270,6 +271,7 @@ namespace Horo::Application::Internal {
         std::vector<std::shared_ptr<Navigation::INavigationCrowdBackend>> workerSolvers;
         std::optional<QualifiedCrowd> qualified;
         std::optional<RelevancePolicy> relevance;
+        std::optional<Navigation::NavigationCrowdWorkBudget> workerBudget; /**< Optional best-effort admission and recovery envelope. */
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
                                                                   const Navigation::NavigationWorldActivationDescriptor &,
@@ -282,6 +284,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Checks the selected execution profile and exact qualified provider agreement. */
         [[nodiscard]] bool HasSolverSelection() const noexcept {
+            if (workerBudget && (qualified || workerSolvers.empty() || !workerBudget->IsValid()))
+                return false;
             if (relevance && (qualified || !relevance->profile.IsValid() || !relevance->observe))
                 return false;
             if (qualified)

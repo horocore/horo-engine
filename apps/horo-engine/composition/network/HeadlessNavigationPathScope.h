@@ -11,6 +11,7 @@
 #include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
+#include "NetworkProductComposition.h"
 
 namespace Horo::Runtime {
     class RuntimeSceneView;
@@ -94,6 +95,8 @@ namespace Horo::Application::Internal {
         /** @brief Polls the exact tick once and submits ready motion or a bounded stop. */
         void PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
                            const CancellationToken &cancellation);
+        /** @brief Reads pressure counters only for the exact committed owner tick. */
+        [[nodiscard]] std::optional<HeadlessCrowdPressure> CrowdPressure(std::uint64_t tick) const noexcept;
         /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;
@@ -125,6 +128,7 @@ namespace Horo::Application::Internal {
             Navigation::NavigationCrowdCadence cadence;
             Navigation::NavigationCrowdWork crowdWork{Navigation::NavigationCrowdWork::Avoidance};
             std::uint64_t cadenceTick{};
+            std::uint64_t crowdWaitingSince{};
         };
 
         /** @brief Updates per-registration optional work and withdraws pending work at suspension. */
@@ -143,7 +147,7 @@ namespace Horo::Application::Internal {
         void PublishCrowdResult(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, std::size_t agent,
                                 const Navigation::NavigationAvoidanceOutcome &outcome);
         /** @brief Publishes any scheduled holds through the same exact-tick Character admission. */
-        void PublishCadenceHolds(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
+        void PublishDeferredHolds(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
         /** @brief Withdraws this tick's detached jobs and any unconsumed per-actor requests. */
         void DiscardCrowdTick() noexcept;
         HeadlessNavigationPathScope(std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle,

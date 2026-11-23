@@ -687,6 +687,8 @@ namespace Horo::Application::Internal {
         /** @brief Copies only finite counters from the selected world's latest committed AI work. */
         HeadlessAiHealth CollectAiHealth(const WorldRecord &record, const std::uint64_t committedTick) {
             HeadlessAiHealth health;
+            if (record.navigationPath)
+                health.crowdPressure = record.navigationPath->CrowdPressure(committedTick);
             if (const auto perception = record.perception.Current())
                 health.perceptionListeners = perception->ListenerCount();
             const auto scheduler = record.ai->TaskSchedulerAtSafePoint();
@@ -701,6 +703,8 @@ namespace Horo::Application::Internal {
                 health.failed = report->failed;
                 health.degraded = report->failed != 0 || report->exhausted != 0 || report->firstFailure || report->firstAdvisoryFailure;
             }
+            if (health.crowdPressure)
+                health.degraded = health.degraded || health.crowdPressure->IsSaturated();
             return health;
         }
 

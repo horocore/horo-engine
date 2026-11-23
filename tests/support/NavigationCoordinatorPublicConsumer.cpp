@@ -1,6 +1,7 @@
 #include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
+#include "Horo/Navigation/NavigationCrowdOverload.h"
 #include "Horo/Navigation/NavigationCrowdRelevance.h"
 #include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Navigation/NavigationVelocityPipeline.h"
@@ -20,6 +21,7 @@ static_assert(Horo::Navigation::NavigationCrowdProfileFacts{}.densitySaturationN
 static_assert(Horo::Navigation::NavigationCrowdAgentFact{}.densitySpeedScale == 1.0F);
 static_assert(std::is_base_of_v<Horo::Navigation::INavigationCrowdBackend, Horo::Navigation::INavigationQualifiedCrowdBackend>);
 static_assert(Horo::Navigation::NavigationCrowdAdmission{}.tier == Horo::Navigation::NavigationCrowdTier::Full);
+static_assert(Horo::Navigation::NavigationCrowdCapacity{}.agents == 0);
 static_assert(Horo::Navigation::NavigationVelocityPublication{}.recovery == Horo::Navigation::NavigationCrowdRecovery::Clear);
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationMovementIntent::desiredVelocity), Horo::Math::Vec3>);
 

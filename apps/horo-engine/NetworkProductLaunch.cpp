@@ -670,6 +670,15 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Prints the committed crowd envelope without agent or cell labels. */
+        void PrintCrowdPressure(const HeadlessCrowdPressure &crowd) {
+            std::cout << "horo-engine: crowd pressure tick=" << crowd.tick << " requested=" << crowd.requested
+                      << " selected=" << crowd.selected << " deferred=" << crowd.deferred << " groups_deferred=" << crowd.groupsDeferred
+                      << " incomplete=" << crowd.incomplete << " max_wait_ticks=" << crowd.maximumWaitTicks
+                      << " jobs_attempted=" << crowd.jobsAttempted << " queue_pressure=" << crowd.queuePressure
+                      << " missed_cutoff=" << crowd.missedCutoff << " provider_pressure=" << crowd.providerPressure << '\n';
+        }
+
         /** @brief Prints one fixed-size health line per selected and published authority world. */
         void PrintProductAiHealth(const NetworkProductHost &runtime, const ProductWorlds &worlds) {
             for (std::size_t index = 0; index < worlds.count; ++index) {
@@ -682,6 +691,8 @@ namespace Horo::Application::Internal {
                           << " worker_submissions=" << health->workersSubmitted << " deferred=" << health->deferred
                           << " exhausted=" << health->exhausted << " failed=" << health->failed
                           << " perception_listeners=" << health->perceptionListeners << '\n';
+                if (health->crowdPressure)
+                    PrintCrowdPressure(*health->crowdPressure);
             }
         }
 

@@ -15,6 +15,26 @@ namespace Horo::Application::Internal {
     /** @brief Owner-retained polling after actual service and worker shutdown; no normal-frame wait. */
     using NetworkNativeRetirementPoll = std::function<Result<bool>(std::uint32_t)>;
 
+    /** @brief Fixed-cardinality diagnostics for one completed best-effort owner tick. */
+    struct HeadlessCrowdPressure final {
+        std::uint64_t tick{};
+        std::uint64_t maximumWaitTicks{};
+        std::size_t requested{};
+        std::size_t selected{};
+        std::size_t groupsDeferred{};
+        std::size_t deferred{};
+        std::size_t incomplete{};
+        std::size_t jobsAttempted{};
+        std::size_t providerPressure{};
+        bool queuePressure{};
+        bool missedCutoff{};
+
+        /** @brief Reports degraded optional work for the current fixed tick. */
+        [[nodiscard]] bool IsSaturated() const noexcept {
+            return deferred != 0 || incomplete != 0 || providerPressure != 0 || queuePressure || missedCutoff;
+        }
+    };
+
     /** @brief Fixed-size observation of the current authority world with counters from its last committed decision tick. */
     struct HeadlessAiHealth final {
         std::uint64_t decisionTick{};
@@ -26,6 +46,7 @@ namespace Horo::Application::Internal {
         std::size_t failed{};
         std::size_t perceptionListeners{};
         bool degraded{};
+        std::optional<HeadlessCrowdPressure> crowdPressure;
     };
 
     using NetworkAiHealthSource = std::function<std::optional<HeadlessAiHealth>(Network::NetworkModeWorld, std::uint64_t)>;

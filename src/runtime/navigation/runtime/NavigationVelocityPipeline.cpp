@@ -43,7 +43,7 @@ namespace Horo::Navigation {
         using enum NavigationAvoidanceStopReason;
         if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
             ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
-            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > CadenceHold ||
+            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > BudgetDeferred ||
             (outcome.disposition == Sampled && outcome.stopReason != None) ||
             (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
             return false;
@@ -107,7 +107,8 @@ namespace Horo::Navigation {
             if (!current.path.tick || feedback_->tick != current.path.tick - 1 || feedback_->operation != movement_->Status().id)
                 return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
             const auto progress = ComputeMotionMagnitude(feedback_->achievedDisplacement);
-            if (!publication_ || publication_->stopReason != NavigationAvoidanceStopReason::CadenceHold) {
+            if (publication_ && publication_->stopReason != NavigationAvoidanceStopReason::CadenceHold &&
+                publication_->stopReason != NavigationAvoidanceStopReason::BudgetDeferred) {
                 const bool stalled = feedback_->blocked && progress <= policy_.minimumProgressMeters && publication_ &&
                                      publication_->intent.state == NavigationMovementState::Following &&
                                      publication_->preferredVelocity != Math::Vec3{};

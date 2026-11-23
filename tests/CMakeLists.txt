@@ -1928,6 +1928,7 @@ add_executable(HoroNavigationRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
         unit/runtime/navigation/NavigationBakeValidationJobsTests.cpp
+        unit/runtime/navigation/NavigationCrowdOverloadTests.cpp
         unit/runtime/navigation/NavigationCrowdRelevanceTests.cpp
         unit/runtime/navigation/NavigationCrowdSnapshotTests.cpp
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp

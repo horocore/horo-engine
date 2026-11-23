@@ -3179,6 +3179,19 @@ resumes from its committed position with a fresh route request. This policy
 does not take renderer visibility as input. Qualified fixed-owner crowd
 execution continues to use its recorded complete-capture contract.
 
+The best-effort worker host can opt into authored per-tick and per-cell solve
+limits. Unserved demand carries its original age with the registered agent
+across captures and cell changes. The oldest requests enter the bounded batch
+first, with stable cell and agent order for ties. A consumed provider result
+resets that agent's wait. Truncated input, deferred demand and missed results
+produce fresh zero-motion commands at the ordinary Character cutoff.
+
+Queue pressure, provider scratch pressure and missed cutoffs reduce the next
+attempt toward one agent and one job. Complete service restores capacity
+gradually within the authored ceilings. Each tick uses only its latest demand
+and makes one admission attempt. Authority-world health exposes bounded wait,
+deferral, truncation, queue, provider and cutoff counters for the committed tick.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

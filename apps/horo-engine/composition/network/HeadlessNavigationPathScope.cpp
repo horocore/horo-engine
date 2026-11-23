@@ -4,6 +4,7 @@
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Foundation/JobAdmission.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
+#include "Horo/Navigation/NavigationCrowdOverload.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
 #include "SceneAiNavigationMotion.h"
@@ -199,6 +200,8 @@ namespace Horo::Application::Internal {
         struct Pending final {
             Actor *actor;
             Nav::NavigationVelocityWork work;
+            std::size_t group{};
+            Nav::NavigationAvoidanceStopReason fallback{Nav::NavigationAvoidanceStopReason::None};
 
             std::size_t AgentIndex() const noexcept {
                 return work.request.agentIndex;
@@ -210,6 +213,95 @@ namespace Horo::Application::Internal {
         Nav::NavigationCrowdSnapshot capture;
         std::unique_ptr<Nav::NavigationCrowdBatch> batch;
         std::optional<std::vector<Nav::NavigationCrowdBatchResult>> qualifiedResults;
+        std::vector<Nav::NavigationCrowdDemand> demands;
+        std::vector<std::size_t> groupCounts;
+        Nav::NavigationCrowdRecoveryBudget recovery;
+        std::optional<HeadlessCrowdPressure> pressure;
+
+        /** @brief Resolves one index in the stable pending order. */
+        auto Find(const std::size_t agent) noexcept {
+            return std::ranges::lower_bound(pending, agent, std::ranges::less{}, &Pending::AgentIndex);
+        }
+
+        /** @brief Retains demand across capture changes while excluding agents with incomplete facts. */
+        void GatherDemands() {
+            using enum Nav::NavigationAvoidanceStopReason;
+            demands.clear();
+            groupCounts.clear();
+            const auto ordered = capture.CellAgentIndices();
+            for (const auto &cell : capture.Cells()) {
+                const auto group = groupCounts.size();
+                const auto before = demands.size();
+                for (const auto agent : ordered.subspan(cell.firstAgent, cell.agentCount)) {
+                    const auto entry = Find(agent);
+                    if (entry == pending.end() || entry->AgentIndex() != agent ||
+                        entry->actor->crowdWork != Nav::NavigationCrowdWork::Avoidance)
+                        continue;
+                    ++pressure->requested;
+                    if (const auto &fact = capture.Agents()[agent]; fact.truncatedNeighbors != 0 || fact.truncatedBoundaries != 0) {
+                        entry->fallback = SnapshotIncomplete;
+                        ++pressure->incomplete;
+                        continue;
+                    }
+                    auto &since = entry->actor->crowdWaitingSince;
+                    if (since == 0)
+                        since = capture.CaptureTick();
+                    pressure->maximumWaitTicks = std::max(pressure->maximumWaitTicks, capture.CaptureTick() - since);
+                    entry->group = group;
+                    entry->fallback = BudgetDeferred;
+                    demands.emplace_back(agent, group, since);
+                }
+                if (demands.size() != before)
+                    groupCounts.push_back(0);
+            }
+        }
+
+        /** @brief Admits oldest unserved requests inside the current recovery window. */
+        Result<void> PlanBudget(const Nav::NavigationCrowdWorkBudget &budget, const std::size_t providers) {
+            pressure.emplace();
+            pressure->tick = capture.CaptureTick();
+            GatherDemands();
+            if (demands.empty())
+                return Result<void>::Success();
+            const auto cap = recovery.Limit({budget.maximumAgents, providers});
+            auto selected =
+                Nav::SelectNavigationCrowdDemand(demands, groupCounts, {cap.agents, std::min(cap.agents, budget.maximumAgentsPerGroup)});
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            pressure->jobsAttempted = std::min(cap.jobs, static_cast<std::size_t>(std::ranges::count_if(groupCounts, [](auto count) {
+                return count != 0;
+            })));
+            for (const auto &demand : std::span{demands}.first(selected.Value())) {
+                auto entry = Find(demand.agentIndex);
+                entry->fallback = Nav::NavigationAvoidanceStopReason::None;
+                requests.push_back(entry->work.request);
+            }
+            pressure->selected = requests.size();
+            pressure->deferred = demands.size() - requests.size();
+            std::ranges::fill(groupCounts, 0);
+            for (const auto &entry : pending) {
+                if (entry.fallback != Nav::NavigationAvoidanceStopReason::BudgetDeferred)
+                    continue;
+                auto &deferredInGroup = groupCounts[entry.group];
+                if (deferredInGroup == 0)
+                    ++pressure->groupsDeferred;
+                ++deferredInGroup;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Updates the next admission window from this exact tick's queue or collection evidence. */
+        void ObserveCapacity(const Collection &completed) noexcept {
+            if (!pressure || pressure->selected == 0 || completed.HasError())
+                return;
+            pressure->missedCutoff = !pressure->queuePressure && !completed.Value();
+            if (const auto &results = completed.Value())
+                pressure->providerPressure = static_cast<std::size_t>(std::ranges::count_if(*results, [](const auto &result) {
+                    return result.outcome.stopReason == Nav::NavigationAvoidanceStopReason::CapacityBusy;
+                }));
+            recovery.Observe({pressure->selected, pressure->jobsAttempted},
+                             pressure->queuePressure || pressure->missedCutoff || pressure->providerPressure != 0);
+        }
 
         /** @brief Solve the entire captured population, including stationary requests for inactive motion owners. */
         Result<void> SolveQualified(const HeadlessNavigationMotionPolicy &policy, const Nav::NavigationGeneration topology,
@@ -242,16 +334,26 @@ namespace Horo::Application::Internal {
                               const float step, const CancellationToken &cancellation) {
             if (policy.qualified)
                 return SolveQualified(policy, topology, step, cancellation);
-            for (const auto &entry : pending) {
-                if (entry.actor->crowdWork == Nav::NavigationCrowdWork::Avoidance)
-                    requests.push_back(entry.work.request);
+            auto providers = std::span{policy.workerSolvers};
+            if (policy.workerBudget) {
+                if (auto planned = PlanBudget(*policy.workerBudget, providers.size()); planned.HasError())
+                    return planned;
+                providers = providers.first(pressure->jobsAttempted);
+            } else {
+                for (const auto &entry : pending) {
+                    if (entry.actor->crowdWork == Nav::NavigationCrowdWork::Avoidance)
+                        requests.push_back(entry.work.request);
+                }
             }
             if (requests.empty())
                 return Result<void>::Success();
-            auto submitted = Nav::NavigationCrowdBatch::Submit(jobs, capture, requests, policy.workerSolvers, cancellation);
+            auto submitted = Nav::NavigationCrowdBatch::Submit(jobs, capture, requests, providers, cancellation);
             if (submitted.HasError()) {
-                if (IsJobAdmissionPressure(submitted.ErrorValue()))
+                if (IsJobAdmissionPressure(submitted.ErrorValue())) {
+                    if (pressure)
+                        pressure->queuePressure = true;
                     return Result<void>::Success();
+                }
                 return Result<void>::Failure(std::move(submitted).ErrorValue());
             }
             batch = std::move(submitted).Value();
@@ -268,7 +370,8 @@ namespace Horo::Application::Internal {
         /** @brief Delivers a worker error to the actors still owning motion. */
         void Reject(const Error &error) const {
             for (const auto &entry : pending) {
-                if (auto *motion = entry.actor->owner->Motion(); motion && entry.actor->crowdWork == Nav::NavigationCrowdWork::Avoidance)
+                if (auto *motion = entry.actor->owner->Motion(); motion && entry.actor->crowdWork == Nav::NavigationCrowdWork::Avoidance &&
+                                                                 entry.fallback == Nav::NavigationAvoidanceStopReason::None)
                     motion->Reject(error);
             }
         }
@@ -308,6 +411,8 @@ namespace Horo::Application::Internal {
             auto crowd = std::make_unique<CrowdTick>();
             crowd->pending.reserve(selected.size());
             crowd->requests.reserve(selected.size());
+            crowd->demands.reserve(selected.size());
+            crowd->groupCounts.reserve(selected.size());
             for (const auto &policy : selected) {
                 const auto entity = scene.Find(policy.object);
                 if (!entity || policy.principal == 0 || (policy.motionStartTrigger && !policy.motionStartTrigger->IsValid()))
@@ -397,6 +502,7 @@ namespace Horo::Application::Internal {
         if (admitted.HasError())
             return admitted;
         selected->target = target;
+        selected->crowdWaitingSince = 0;
         if (selected->motionStartTrigger) {
             const auto trigger = animation->QueueTrigger(entity.Value(), *selected->motionStartTrigger);
             if (!trigger.HasValue()) {
@@ -454,6 +560,7 @@ namespace Horo::Application::Internal {
             actor.crowdWork = admitted.Value().work;
             if (!admitted.Value().tierChanged || actor.crowdWork != Nav::NavigationCrowdWork::Suspended)
                 continue;
+            actor.crowdWaitingSince = 0;
             if (auto *motion = actor.owner->Motion()) {
                 auto current = ObserveActor(scene, policy, *actor.owner, actor.target);
                 if (current.HasValue())
@@ -514,6 +621,8 @@ namespace Horo::Application::Internal {
     Result<void> HeadlessNavigationPathScope::DispatchMotion(const Runtime::RuntimeSceneView &scene,
                                                              const HeadlessNavigationMotionPolicy &policy, const JobSystem &jobs,
                                                              const CancellationToken &cancellation) {
+        if (crowdTick_ && !crowdTick_->pending.empty())
+            return Result<void>::Success();
         if (auto cadence = ApplyCrowdCadence(scene, policy); cadence.HasError())
             return cadence;
         auto capture = CaptureMotion(scene, policy);
@@ -565,11 +674,12 @@ namespace Horo::Application::Internal {
             }
         }
         const auto completed = tick.Collect(motionTick_);
+        tick.ObserveCapacity(completed);
         if (completed.HasError()) {
-            PublishCadenceHolds(scene, policy);
+            PublishDeferredHolds(scene, policy);
             tick.Reject(completed.ErrorValue());
         } else if (const auto &results = completed.Value()) {
-            PublishCadenceHolds(scene, policy);
+            PublishDeferredHolds(scene, policy);
             for (const auto &result : *results)
                 PublishCrowdResult(scene, policy, result.agentIndex, result.outcome);
         } else {
@@ -578,6 +688,13 @@ namespace Horo::Application::Internal {
                 PublishCrowdResult(scene, policy, agent, stopped);
         }
         DiscardCrowdTick();
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::CrowdPressure */
+    std::optional<HeadlessCrowdPressure> HeadlessNavigationPathScope::CrowdPressure(const std::uint64_t tick) const noexcept {
+        if (revoked_ || !crowdTick_ || !crowdTick_->pressure || crowdTick_->pressure->tick != tick)
+            return std::nullopt;
+        return crowdTick_->pressure;
     }
 
     /** @copydoc HeadlessNavigationPathScope::PublishCrowdResult */
@@ -589,29 +706,35 @@ namespace Horo::Application::Internal {
         if (found == tick.pending.end() || found->AgentIndex() != agent)
             return;
         auto &actor = *found->actor;
-        const auto selectedOutcome = actor.crowdWork == Nav::NavigationCrowdWork::PathOnly
-                                         ? CrowdHold(tick.capture, Nav::NavigationAvoidanceStopReason::CadenceHold)
-                                         : outcome;
+        auto reason = found->fallback;
+        if (actor.crowdWork == Nav::NavigationCrowdWork::PathOnly)
+            reason = Nav::NavigationAvoidanceStopReason::CadenceHold;
+        const auto selectedOutcome = reason == Nav::NavigationAvoidanceStopReason::None ? outcome : CrowdHold(tick.capture, reason);
         auto *motion = actor.owner->Motion();
         if (!motion)
             return;
         auto current = ObserveActor(scene, policy, *actor.owner, actor.target);
-        if (current.HasError())
+        if (current.HasError()) {
             motion->Reject(std::move(current).ErrorValue());
-        else
-            (void)motion->Complete(found->work, Result<Nav::NavigationAvoidanceOutcome>::Success(selectedOutcome), current.Value(),
-                                   tick.capture);
+            return;
+        }
+        const auto accepted =
+            motion->Complete(found->work, Result<Nav::NavigationAvoidanceOutcome>::Success(selectedOutcome), current.Value(), tick.capture);
+        if (accepted.HasValue() && (selectedOutcome.disposition == Nav::NavigationAvoidanceDisposition::Sampled ||
+                                    selectedOutcome.stopReason == Nav::NavigationAvoidanceStopReason::NoFeasibleSample))
+            actor.crowdWaitingSince = 0;
     }
 
-    /** @copydoc HeadlessNavigationPathScope::PublishCadenceHolds */
-    void HeadlessNavigationPathScope::PublishCadenceHolds(const Runtime::RuntimeSceneView &scene,
-                                                          const HeadlessNavigationMotionPolicy &policy) {
-        if (!policy.relevance)
+    /** @copydoc HeadlessNavigationPathScope::PublishDeferredHolds */
+    void HeadlessNavigationPathScope::PublishDeferredHolds(const Runtime::RuntimeSceneView &scene,
+                                                           const HeadlessNavigationMotionPolicy &policy) {
+        if (!policy.relevance && !policy.workerBudget)
             return;
         const auto &tick = *crowdTick_;
         const auto stopped = CrowdHold(tick.capture, Nav::NavigationAvoidanceStopReason::CadenceHold);
         for (const auto &pending : tick.pending) {
-            if (pending.actor->crowdWork == Nav::NavigationCrowdWork::PathOnly)
+            if (pending.actor->crowdWork == Nav::NavigationCrowdWork::PathOnly ||
+                pending.fallback != Nav::NavigationAvoidanceStopReason::None)
                 PublishCrowdResult(scene, policy, pending.AgentIndex(), stopped);
         }
     }
