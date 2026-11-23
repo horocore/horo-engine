@@ -100,41 +100,24 @@ namespace ReconstructionSmoke {
             {.maxPasses = images + 1, .maxResources = images, .maxUsages = images * 2, .maxDependencies = images * 2}));
         std::vector<RenderGraphPassWorkload> workloads;
         std::vector<RenderGraphImportedState> initial;
-        RenderGraphNativeReconstruction workload{.dispatch = plan.dispatch, .kernel = kernel};
-        for (std::size_t slot = 0; slot < images; ++slot) {
-            const auto role = static_cast<Image>(slot);
+        const auto clearCurrent = [&](const Image role) {
             if (!NativeReconstructionUsesImage(plan.dispatch.entry, role))
-                continue;
-            const auto previous = role == Image::PreviousColor || role == Image::PreviousDepth;
-            const auto written = NativeReconstructionWritesImage(role);
-            const auto image =
-                Take(builder.ImportTexture(plan.images[slot].texture,
-                                           previous || written ? RenderGraphResourceClass::History : RenderGraphResourceClass::Persistent));
-            workload.images[slot] = {image, plan.images[slot].view};
-            if (previous) {
-                REQUIRE(plan.previousStates.has_value());
-                const auto &state = role == Image::PreviousColor ? plan.previousStates->color : plan.previousStates->depth;
-                initial.push_back({image, state, RenderGraphInitialContents::Preserved});
-            } else {
-                initial.push_back({image, {}, RenderGraphInitialContents::Discarded});
-            }
-            if (previous || written)
-                continue;
+                return RenderGraphResourceId{};
+            const auto &current = plan.images[static_cast<std::size_t>(role)];
+            const auto image = Take(builder.ImportTexture(current.texture, RenderGraphResourceClass::Persistent));
+            initial.push_back({image, {}, RenderGraphInitialContents::Discarded});
             const auto clear = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
             REQUIRE(builder.AddUsage({clear, image, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
             workloads.push_back({clear, RenderGraphColorAttachment{image, {.clearColor = ImageContents(role)}}});
-        }
+            return image;
+        };
+        const NativeReconstructionGraphSources sources{clearCurrent(Image::CurrentColor), clearCurrent(Image::CurrentDepth),
+                                                       clearCurrent(Image::Motion)};
         const auto reconstruct = Take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Compute));
-        for (std::size_t slot = 0; slot < images; ++slot) {
-            const auto image = workload.images[slot].resource;
-            if (!image.IsValid())
-                continue;
-            const auto written = NativeReconstructionWritesImage(static_cast<Image>(slot));
-            REQUIRE(builder
-                        .AddUsage({reconstruct, image, written ? RenderGraphAccess::Write : RenderGraphAccess::Read,
-                                   written ? RenderGraphUsageKind::Storage : RenderGraphUsageKind::Sampled})
-                        .HasValue());
-        }
+        const auto dispatch = Take(BindNativeReconstructionGraphDispatch(builder, reconstruct, sources, plan, kernel));
+        const auto imports = std::span{dispatch.historyImports}.first(dispatch.historyImportCount);
+        initial.insert(initial.end(), imports.begin(), imports.end());
+        const auto &workload = dispatch.workload;
         workloads.push_back({reconstruct, workload});
         const auto graph = Take(builder.Finalize());
         const auto schedule = Take(CompileRenderGraph(graph));

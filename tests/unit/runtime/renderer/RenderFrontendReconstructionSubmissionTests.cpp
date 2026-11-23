@@ -86,7 +86,8 @@ namespace Horo::Tests::RenderFrontendTesting {
 
         /** @brief Builds a temporal batch followed by a separate read of the resolved color, changing its final state. */
         void RecordHistory(RenderFrameScope &frame, const HistoryFrontend &owner, const NativeReconstructionScenePlan &plan,
-                           const std::shared_ptr<NativeReconstructionViewHistory> &history, NativeReconstructionSceneImage laterOutput) {
+                           const std::shared_ptr<NativeReconstructionViewHistory> &history,
+                           const NativeReconstructionSceneImage &laterOutput) {
             using enum NativeReconstructionImage;
             const auto take = []<typename T>(Result<T> result) {
                 return HistoryFrontend::Take(std::move(result));
@@ -108,7 +109,7 @@ namespace Horo::Tests::RenderFrontendTesting {
                 if (!image.texture.IsValid())
                     return RenderGraphResourceId{};
                 const auto id = take(builder.ImportTexture(image.texture, RenderGraphResourceClass::Persistent));
-                initial.push_back({id, sampled, RenderGraphInitialContents::Preserved});
+                initial.emplace_back(id, sampled, RenderGraphInitialContents::Preserved);
                 return id;
             };
             const NativeReconstructionGraphSources sources{importCurrent(CurrentColor), importCurrent(CurrentDepth), importCurrent(Motion)};
@@ -161,7 +162,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         const NativeReconstructionViewHistory::ImagePairs pairs{pair(), pair()};
         const auto epoch = Compatibility(frontend, targetExtent);
         const auto history = HistoryFrontend::Take(NativeReconstructionViewHistory::Create(frontend, epoch, pairs));
-        const auto input = [&](NativeReconstructionSceneImage image, RenderTextureFormat format) {
+        const auto input = [&](const NativeReconstructionSceneImage &image, RenderTextureFormat format) {
             return ReconstructionTextureInput{image.texture, {.extent = Extent, .format = format, .usage = sampled}, epoch.view, 1};
         };
         const ReconstructionFrameRequest request{.compatibility = epoch,
@@ -202,7 +203,9 @@ namespace Horo::Tests::RenderFrontendTesting {
 
             auto next = request;
             next.timing = {.frameId = 2, .predecessorFrameId = 1};
-            next.color.frameId = next.positiveLinearDepth->frameId = next.motion->frameId = next.timing.frameId;
+            next.color.frameId = next.timing.frameId;
+            next.positiveLinearDepth->frameId = next.timing.frameId;
+            next.motion->frameId = next.timing.frameId;
             const auto continued = HistoryFrontend::Take(history->Stage(frontend, next, views, tuning));
             REQUIRE(continued.dispatch.entry == NativeReconstructionEntry::TemporalHistory);
             auto successor = HistoryFrontend::Take(frontend.BeginFrame({.frameNumber = 2, .outputExtent = targetExtent}));

@@ -19,12 +19,13 @@ namespace Horo::Render {
         /** @brief Distinguishes a required current producer from a history image this pass must import. */
         std::optional<RenderGraphResourceId> ReconstructionSource(const NativeReconstructionGraphSources &sources,
                                                                   const Image role) noexcept {
+            using enum NativeReconstructionImage;
             switch (role) {
-                case Image::CurrentColor:
+                case CurrentColor:
                     return sources.color;
-                case Image::CurrentDepth:
+                case CurrentDepth:
                     return sources.positiveLinearDepth;
-                case Image::Motion:
+                case Motion:
                     return sources.motion;
                 default:
                     return std::nullopt;
@@ -96,8 +97,8 @@ namespace Horo::Render {
         const NativeReconstructionScenePlan &plan, std::shared_ptr<IResidentNativeReconstructionKernel> kernel) {
         using Outcome = Result<NativeReconstructionGraphDispatch>;
         const auto entry = plan.dispatch.entry;
-        const bool usesHistory = entry == NativeReconstructionEntry::TemporalHistory;
-        if ((!usesHistory && entry != NativeReconstructionEntry::TemporalSeed) || usesHistory != plan.previousStates.has_value() || !kernel)
+        if (const bool usesHistory = entry == NativeReconstructionEntry::TemporalHistory;
+            (!usesHistory && entry != NativeReconstructionEntry::TemporalSeed) || usesHistory != plan.previousStates.has_value() || !kernel)
             return Outcome::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
 
         NativeReconstructionGraphDispatch dispatch{.workload = {.dispatch = plan.dispatch, .kernel = std::move(kernel)}};
