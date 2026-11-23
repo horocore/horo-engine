@@ -1,6 +1,8 @@
 #include "Horo/Gameplay/GameplayFormation.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <new>
 
 namespace Horo::Gameplay {
@@ -8,6 +10,7 @@ namespace Horo::Gameplay {
         using namespace Navigation;
         using Resolution = Result<GameplayFormationResolution>;
         using Target = Result<std::optional<Math::Vec3>>;
+        using SlotGoal = Result<std::optional<GameplayFormationGoal>>;
 
         /** @brief Compares a typed provider error without depending on its diagnostic text. */
         bool IsError(const Error &error, const ErrorCodeDescriptor &kind) noexcept {
@@ -15,36 +18,38 @@ namespace Horo::Gameplay {
         }
 
         /** @brief Proves that one ground target is reachable from this member's captured start. */
-        Target ValidateRoute(const INavigationQueryBackend &backend, const NavigationQueryProvenance &projected, const Math::Vec3 point,
-                             const NavigationPathRequest &request, const CancellationToken &token) {
+        Result<bool> ValidateRoute(const INavigationQueryBackend &backend, const NavigationPathRequest &request,
+                                   const CancellationToken &token) {
             using enum NavigationPathStatus;
             const auto routed = backend.FindPath(request, token);
             if (routed.HasError()) {
                 if (IsError(routed.ErrorValue(), NavigationErrors::NoNavigationData))
-                    return Target::Success(std::nullopt);
-                return Target::Failure(routed.ErrorValue());
+                    return Result<bool>::Success(false);
+                return Result<bool>::Failure(routed.ErrorValue());
             }
             const auto &path = routed.Value();
-            if (path.sourceGeneration != projected.topology || path.status >= Count)
-                return Target::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+            if (path.sourceGeneration != request.topology || path.status >= Count)
+                return Result<bool>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
             if (path.status == BudgetExceeded)
-                return Target::Failure(MakeError(NavigationErrors::QueryLimitExceeded));
+                return Result<bool>::Failure(MakeError(NavigationErrors::QueryLimitExceeded));
             if (path.status != Reachable)
-                return Target::Success(std::nullopt);
-            if (path.stopReason != NavigationPathStopReason::None || path.waypoints.empty() || path.waypoints.back().position != point)
-                return Target::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
-            return Target::Success(point);
+                return Result<bool>::Success(false);
+            if (path.stopReason != NavigationPathStopReason::None || path.waypoints.empty() ||
+                path.waypoints.back().position != request.destination)
+                return Result<bool>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+            return Result<bool>::Success(true);
         }
 
-        /** @brief Resolves one slot through the pinned provider without retaining its result storage. */
-        Target ResolveSlot(const GameplayFormationSlot &slot, const NavigationAgentRecord &agent, const NavigationWorldReadLease &world,
-                           const GameplayFormationQueryPolicy &policy, const CancellationToken &caller) {
+        /** @brief Projects one point and checks its world/topology before returning a ground position. */
+        Target Project(const NavigationWorldReadLease &world, Math::Vec3 point, const GameplayFormationQueryPolicy &policy,
+                       const CancellationToken &caller) {
             const auto token = world.Cancellation();
             const auto &source = world.Descriptor();
-            const auto &backend = world.Backend();
-            const auto projected = backend.ProjectPoint({source.world, source.topology, slot.unprojectedTarget,
-                                                         policy.projectionHalfExtents, policy.projection},
-                                                        token);
+            if (caller.IsCancellationRequested() || token.IsCancellationRequested())
+                return Target::Failure(MakeError(NavigationErrors::QueryCancelled));
+            const auto projected =
+                world.Backend().ProjectPoint({source.world, source.topology, point, policy.projectionHalfExtents, policy.projection},
+                                             token);
             if (projected.HasError()) {
                 if (IsError(projected.ErrorValue(), NavigationErrors::NoNavigationData))
                     return Target::Success(std::nullopt);
@@ -53,17 +58,52 @@ namespace Horo::Gameplay {
             const auto &hit = projected.Value().hit;
             if (hit.provenance.world != source.world || hit.provenance.topology != source.topology || !Math::IsFinite(hit.position))
                 return Target::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+            return Target::Success(hit.position);
+        }
+
+        /** @brief Preserves the captured actor's root offset when transferring between projected surfaces. */
+        std::optional<Math::Vec3> OffsetGoal(Math::Vec3 target, const Math::Vec3 start, const Math::Vec3 groundStart) {
+            const double height = static_cast<double>(target.y) + start.y - groundStart.y;
+            if (std::abs(height) > std::numeric_limits<float>::max())
+                return std::nullopt;
+            target.y = static_cast<float>(height);
+            return target;
+        }
+
+        /** @brief Resolves one slot through the pinned provider without retaining its result storage. */
+        SlotGoal ResolveSlot(const GameplayFormationSlot &slot, const NavigationAgentRecord &agent, const NavigationWorldReadLease &world,
+                             const GameplayFormationQueryPolicy &policy, const CancellationToken &caller) {
+            const auto target = Project(world, slot.unprojectedTarget, policy, caller);
+            if (target.HasError())
+                return SlotGoal::Failure(target.ErrorValue());
+            if (!target.Value())
+                return SlotGoal::Success(std::nullopt);
+            const auto start = Project(world, slot.start, policy, caller);
+            if (start.HasError())
+                return SlotGoal::Failure(start.ErrorValue());
+            if (!start.Value())
+                return SlotGoal::Success(std::nullopt);
+            const auto movement = OffsetGoal(*target.Value(), slot.start, *start.Value());
+            if (!movement)
+                return SlotGoal::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+            const auto token = world.Cancellation();
             if (caller.IsCancellationRequested() || token.IsCancellationRequested())
-                return Target::Failure(MakeError(NavigationErrors::QueryCancelled));
-            return ValidateRoute(backend, hit.provenance, hit.position,
-                                 {.world = source.world,
-                                  .topology = source.topology,
-                                  .start = slot.start,
-                                  .destination = hit.position,
-                                  .filter = agent.filter,
-                                  .requirement = policy.path,
-                                  .clearanceMeters = agent.radiusOverride.value_or(0)},
-                                 token);
+                return SlotGoal::Failure(MakeError(NavigationErrors::QueryCancelled));
+            const auto &source = world.Descriptor();
+            const auto reachable = ValidateRoute(world.Backend(),
+                                                 {.world = source.world,
+                                                  .topology = source.topology,
+                                                  .start = slot.start,
+                                                  .destination = *movement,
+                                                  .filter = agent.filter,
+                                                  .requirement = policy.path,
+                                                  .clearanceMeters = agent.radiusOverride.value_or(0)},
+                                                 token);
+            if (reachable.HasError())
+                return SlotGoal::Failure(reachable.ErrorValue());
+            if (!reachable.Value())
+                return SlotGoal::Success(std::nullopt);
+            return SlotGoal::Success(GameplayFormationGoal{slot.slot, slot.agent, *target.Value(), *movement});
         }
 
         /** @brief Validates the shape without doing any provider work on malformed proposals. */
@@ -120,9 +160,9 @@ namespace Horo::Gameplay {
                 const auto target = ResolveSlot(slot, record.Value(), world, policy, caller);
                 if (target.HasError())
                     return Resolution::Failure(target.ErrorValue());
-                if (target.Value() &&
-                    std::ranges::find(result.goals, *target.Value(), &GameplayFormationGoal::groundTarget) == result.goals.end())
-                    result.goals.emplace_back(slot.slot, slot.agent, *target.Value());
+                if (target.Value() && std::ranges::find(result.goals, target.Value()->groundTarget, &GameplayFormationGoal::groundTarget) ==
+                                          result.goals.end())
+                    result.goals.push_back(*target.Value());
                 else
                     result.unassigned.push_back(slot.agent);
             }

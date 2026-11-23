@@ -92,6 +92,7 @@ namespace Horo::Gameplay {
         std::uint32_t slot{};
         Navigation::CrowdAgentHandle agent;
         Math::Vec3 groundTarget;
+        Math::Vec3 movementTarget; /**< Target on the projected surface with the captured Character root offset. */
     };
 
     /** @brief Owned reachability results to revalidate against live group and topology before movement admission. */

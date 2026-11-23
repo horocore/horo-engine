@@ -3,6 +3,7 @@
 /** @file GameplayNavigationContext.h
  * @brief Host-admitted native and script navigation requests with revocable owner-thread delivery.
  */
+#include "Horo/Gameplay/GameplayFormation.h"
 #include "Horo/Navigation/NavigationMovement.h"
 
 #include <memory>
@@ -129,6 +130,16 @@ namespace Horo::Gameplay {
          * @return Opaque handle or typed permission/unavailable/validation error.
          */
         [[nodiscard]] Result<GameplayNavigationHandle> Submit(GameplayNavigationRequest request) const;
+        /** @brief Starts the assigned MoveTo on this exact member's existing movement grant.
+         * @param resolved Detached formation reachability result.
+         * @param activeGroup Group identity from the current Gameplay owner.
+         * @param activeRevision Group revision from the same owner cutoff.
+         * @param cancellation Optional caller cancellation scope.
+         * @return The ordinary movement handle or typed stale, unavailable or admission error.
+         */
+        [[nodiscard]] Result<GameplayNavigationHandle> SubmitFormationSlot(const GameplayFormationResolution &resolved,
+                                                                           GameplayFormationId activeGroup, std::uint64_t activeRevision,
+                                                                           CancellationToken cancellation = {}) const;
         /** @brief Relinquishes owned path results, cancels movement and permanently suppresses delivery before teardown. */
         void Revoke() const noexcept;
         /** @brief Report live owner-thread scope admission without accessing a provider. @return False after retirement or on another

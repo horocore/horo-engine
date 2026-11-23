@@ -1,8 +1,8 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
-#include "Horo/Gameplay/GameplayFormation.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayFormation.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -207,6 +207,7 @@ TEST_CASE("Native formation projects reachable slots and withdraws goals from re
     REQUIRE(resolved.Value().goals.size() == 2);
     CHECK(resolved.Value().goals[1].agent == members[1].agent);
     CHECK(resolved.Value().goals[1].groundTarget == Math::Vec3{5, 0, 4});
+    CHECK(resolved.Value().goals[1].movementTarget == Math::Vec3{5, 0.3F, 4});
     REQUIRE(resolved.Value().unassigned.size() == 1);
     CHECK(resolved.Value().unassigned.front() == members[2].agent);
 
@@ -234,6 +235,42 @@ TEST_CASE("Native formation projects reachable slots and withdraws goals from re
     const auto stale = ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy);
     REQUIRE(stale.HasError());
     CHECK(stale.ErrorValue().code.Value() == NavigationErrors::QueryCancelled.code.Value());
+}
+
+TEST_CASE("Formation goals start only their exact live movement controllers", "[gameplay][navigation][formation]") {
+    Fixture fixture;
+    const auto agent = fixture.movement->Agent();
+    const auto group = GameplayFormationId::Create(4).Value();
+    const auto current = fixture.Now();
+    GameplayFormationResolution resolved{.group = group,
+                                         .revision = 2,
+                                         .source = Activation(),
+                                         .availability = GameplayFormationAvailability::Complete,
+                                         .goals = {{0, agent, {4, 0, 1}, {4, 0, 1}}}};
+    const auto stale = fixture.context->SubmitFormationSlot(resolved, group, 3);
+    REQUIRE(stale.HasError());
+    CHECK(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+    const auto exact = resolved.goals.front().agent;
+    ++resolved.goals.front().agent.slot.generation;
+    const auto foreign = fixture.context->SubmitFormationSlot(resolved, group, 2);
+    REQUIRE(foreign.HasError());
+    CHECK(foreign.ErrorValue().code.Value() == NavigationErrors::NoNavigationData.code.Value());
+    resolved.goals.front().agent = exact;
+
+    auto admitted = fixture.context->SubmitFormationSlot(resolved, group, 2);
+    REQUIRE(admitted.HasValue());
+    REQUIRE(fixture.movement->Update(current).HasValue());
+    fixture.Publish();
+    const auto following = fixture.movement->Update(fixture.Now(2));
+    REQUIRE(following.HasValue());
+    CHECK(following.Value().operation.agent == agent);
+    CHECK(following.Value().state == NavigationMovementState::Following);
+    CHECK(following.Value().desiredVelocity.x > 0);
+    CHECK(following.Value().desiredVelocity.z == 0);
+    REQUIRE(admitted.Value().Cancel().HasValue());
+    const auto stopped = fixture.movement->Update(fixture.Now(3));
+    REQUIRE(stopped.HasValue());
+    CHECK(stopped.Value().state == NavigationMovementState::Cancelled);
 }
 #endif
 

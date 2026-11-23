@@ -3184,8 +3184,11 @@ and exact Scene binding. Background resolution projects each slot through a
 pinned Navigation world and requires a complete path using the member's
 registered traversal filter. Off-mesh or duplicate projected slots leave their
 members unassigned. The result carries the exact topology generation and
-remains subject to owner-cutoff validation before movement admission.
-Character remains the owner of achieved movement.
+remains subject to owner-cutoff validation before movement admission. The
+member's existing Gameplay Navigation grant accepts only its own slot under the
+active group revision and topology. The target preserves the captured root
+offset above the projected ground. Character remains the owner of achieved
+movement.
 
 Gameplay can opt a crowd profile into route-speed modulation by setting
 `densitySaturationNeighbors` and `minimumDensitySpeedScale` in

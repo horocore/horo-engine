@@ -93,6 +93,17 @@ namespace Horo::Gameplay {
             return !scope || (!scope->revoked && agents && agents->FindOwner(scope->owner) == scope->agent);
         }
 
+        /** @brief Revalidates the result against both the Gameplay and Navigation owner cutoffs. */
+        bool IsFormationCurrent(const GameplayFormationResolution &resolved, const GameplayFormationId group,
+                                const std::uint64_t revision) const {
+            if (!group.IsValid() || revision == 0 || resolved.group != group || resolved.revision != revision)
+                return false;
+            if (!current || current->path.provenance.topology != resolved.source.topology)
+                return false;
+            const auto active = world->ActiveDescriptor();
+            return active.HasValue() && active.Value() == resolved.source;
+        }
+
         /** @brief Forward host query policy and exact copied caller context to the canonical coordinator. */
         Result<Navigation::NavRequestHandle> SubmitPath(GameplayNavigationRequest &request, CancellationToken cancellation,
                                                         const Navigation::CrowdAgentHandle agent) {
@@ -382,6 +393,32 @@ namespace Horo::Gameplay {
         } catch (const std::bad_alloc &) {
             return Result<GameplayNavigationHandle>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
         }
+    }
+
+    /** @copydoc GameplayNavigationContext::SubmitFormationSlot */
+    Result<GameplayNavigationHandle> GameplayNavigationContext::SubmitFormationSlot(const GameplayFormationResolution &resolved,
+                                                                                    const GameplayFormationId activeGroup,
+                                                                                    const std::uint64_t activeRevision,
+                                                                                    CancellationToken cancellation) const {
+        using Submission = Result<GameplayNavigationHandle>;
+        using namespace Navigation;
+        if (const auto check = state_->Check(); check.HasError())
+            return Submission::Failure(check.ErrorValue());
+        if (agent_ || !state_->binding.movementGranted)
+            return Submission::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+        if (!state_->world || !state_->movement)
+            return Submission::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+        if (!state_->IsFormationCurrent(resolved, activeGroup, activeRevision))
+            return Submission::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        if (resolved.goals.size() > GameplayFormationRequest::MaximumMembers)
+            return Submission::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        const auto goal = std::ranges::find(resolved.goals, state_->movement->Agent(), &GameplayFormationGoal::agent);
+        if (goal == resolved.goals.end())
+            return Submission::Failure(MakeError(NavigationErrors::NoNavigationData));
+        return Submit({.operation = GameplayNavigationOperation::MoveTo,
+                       .start = state_->current->position,
+                       .destination = goal->movementTarget,
+                       .cancellation = std::move(cancellation)});
     }
 
     /** @copydoc GameplayNavigationContext::IsUsable */
