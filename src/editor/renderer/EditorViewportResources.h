@@ -89,6 +89,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> EnableColorPipeline(ColorReconstruction reconstruction = ColorReconstruction::None);
         /** @brief Maps the existing same-extent spatial selection to the typed resource policy. */
         [[nodiscard]] Result<void> EnableColorPipeline(bool spatial);
+        /** @brief Enables temporal guide and history storage for the ordinary color target. */
+        [[nodiscard]] Result<void> EnableTemporalGuideTargets();
 
         /** @brief The exact resident guide and history images from one completely prepared viewport generation. */
         struct TemporalAttachments final {

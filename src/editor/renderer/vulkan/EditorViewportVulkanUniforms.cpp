@@ -66,6 +66,53 @@ namespace Horo::Editor {
         return WriteParameter(layout, bytes, {20}, baseColor);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeed */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeed(const Render::FrameToken frame, const std::uint32_t slot,
+                                                                                 const Render::StaticMeshPassDescriptor &pass) const {
+        const auto &instances = pass.scene.instances;
+        if (slot >= draws.size() || instances.size() > draws[slot].size())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const auto &camera = pass.scene.camera;
+        const auto view = Math::TryLookAt(camera.position, camera.target, camera.up);
+        if (view.HasError())
+            return Result<void>::Failure(view.ErrorValue());
+        const auto aspect = static_cast<float>(pass.extent.width) / static_cast<float>(pass.extent.height);
+        const auto projection = BuildRenderMvp(camera, Math::Mat4::Identity(), aspect, Math::ClipDepthRange::ZeroToOne);
+        if (projection.HasError())
+            return Result<void>::Failure(projection.ErrorValue());
+        const Render::RenderMotionCameraPair seed{.currentUnjitteredViewProjection = projection.Value()};
+        for (std::size_t index = 0; index < instances.size(); ++index)
+            if (const auto uploaded = UploadSeedDraw(frame, draws[slot][index], view.Value(), seed, instances[index].localToWorld);
+                uploaded.HasError())
+                return uploaded;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeedDraw */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeedDraw(const Render::FrameToken frame, const GuideDraw &draw,
+                                                                                     const Math::Mat4 &view,
+                                                                                     const Render::RenderMotionCameraPair &camera,
+                                                                                     const Math::Mat4 &localToWorld) const {
+        auto raster = Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld);
+        // Match the ordinary Vulkan raster's top-left orientation.
+        for (std::size_t column = 0; column < 4; ++column)
+            raster.values[column * 4 + 1] *= -1;
+        const auto localToView = Math::Multiply(view, localToWorld);
+        std::array<std::byte, MaximumUniformBytes> depthBytes{};
+        const auto depthBlock = std::span{depthBytes}.first(linearDepth.uniformBytes);
+        if (const auto packed = PackEditorVulkanTemporalDepth(linearDepth.layout, raster, localToView, depthBlock); packed.HasError())
+            return Result<void>::Failure(packed.ErrorValue());
+        std::array<std::byte, MaximumUniformBytes> motionBytes{};
+        const auto motionBlock = std::span{motionBytes}.first(motion.uniformBytes);
+        const Render::RenderMotionObjectPair seed{.currentLocalToWorld = localToWorld};
+        if (const auto packed = PackEditorVulkanTemporalMotion(motion.layout, raster, camera, seed, motionBlock); packed.HasError())
+            return Result<void>::Failure(packed.ErrorValue());
+        auto *port = owner.bridge_.Port();
+        if (const auto uploaded = port->WriteFrameBuffer(frame, draw.linearDepth.instance, depthBlock); uploaded.HasError())
+            return uploaded;
+        return port->WriteFrameBuffer(frame, draw.motion.instance, motionBlock);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */
     Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(
         const Render::Detail::VulkanEditorGraphicsBridge &bridge, const ShaderResources &program, const EditorViewportExtent extent,

@@ -1377,13 +1377,28 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
+    /** @brief Observes the two guide draws and the scene draw before the GUI records its own work. */
+    void VerifyTemporalGuideSubmission(Host &host, const RenderSceneView &scene) {
+        host.PrepareScene(scene);
+        auto frame = host.Frame(1);
+        host.viewportObservation->ResetDraws();
+        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = host.ViewportPass(scene)},
+                                RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        Check(host.viewport->ExecutePreparedFrame(frame, passes));
+        CHECK(host.viewportObservation->DrawCounts() == std::array<std::uint32_t, 3>{3, 3, 0});
+        const auto texture = host.viewport->TextureView();
+        REQUIRE(texture.IsValid());
+        host.ComposeGui(frame, &texture);
+        Check(frame.Present(), "submit both guide draws and the ordinary viewport");
+    }
+
     TEST_CASE("Native Vulkan admits the cooked temporal guide pair through the viewport owner",
               "[native-smoke][vulkan][gui][temporal-guides]") {
         const auto *assets = SDL_getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
         const auto *stage = SDL_getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
         if (!assets || !stage)
             SKIP("Supply the cooked Vulkan viewport assets and the temporal reconstruction cook stage.");
-        Host host{true};
+        Host host{true, true};
         if (!host.frontend->Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
             SKIP("Selected Vulkan device cannot realize native reconstruction guides.");
         auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{assets});
@@ -1404,9 +1419,20 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, depthMetadata}).HasError());
         Check(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, motionMetadata}),
               "prepare the two native pipelines after rejecting a mismatched guide family");
-        const CameraViewportFixture fixture;
-        const auto scene = fixture.View(0);
+        const auto view = host.frontend->CreateRenderViewIdentity();
+        Check(view);
+        Check(host.viewport->BindLightingViewIdentity(view.Value()));
+        const EditorViewportLightingProfile lighting;
+        const auto selected = host.frontend->ResolveLightPreparation(lighting.requested, lighting.fallback, {});
+        Check(selected);
+        Check(host.viewport->RequestLightingProfile(lighting, selected.Value()));
+        CameraViewportFixture fixture;
+        const std::array<std::uint32_t, 6> indices{0, 1, 2, 0, 1, 2};
+        fixture.meshes.front().indices = indices;
+        auto scene = fixture.View(0);
+        scene.lights = {};
         host.viewport->RequestExtent({320, 240});
+        host.viewport->RequestGrid({.visible = false});
         host.SynchronizeViewport(scene);
         std::vector<RenderStaticMeshInstance> oversized(RenderMaterialPass::MaximumDraws + 1, scene.instances.front());
         auto excessive = scene;
@@ -1415,6 +1441,7 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(refused.HasError());
         CHECK(refused.ErrorValue().code.Value() == RendererErrors::ViewportInvalidScene.code.Value());
         Check(host.viewport->PrepareResources(*host.frontend, scene), "preserve the previously prepared guide draw slots");
+        VerifyTemporalGuideSubmission(host, scene);
         REQUIRE(host.Drain());
     }
 

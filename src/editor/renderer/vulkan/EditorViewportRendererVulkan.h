@@ -373,6 +373,9 @@ namespace Horo::Editor {
 
             /** @brief Grows all buffered frames together while preserving previously valid draw slots on failure. */
             [[nodiscard]] Result<void> PrepareDraws(std::size_t count);
+            /** @brief Uploads the exact unjittered first-frame guide bindings for the selected viewport slot. */
+            [[nodiscard]] Result<void> UploadSeed(Render::FrameToken frame, std::uint32_t slot,
+                                                  const Render::StaticMeshPassDescriptor &pass) const;
 
             struct GuideDraw final {
                 DrawSlot linearDepth;
@@ -386,6 +389,9 @@ namespace Horo::Editor {
 
         private:
             [[nodiscard]] Result<void> GrowFrame(std::uint32_t slot, std::size_t count);
+            /** @brief Packs and uploads both guides for one draw without allocating or retaining scene data. */
+            [[nodiscard]] Result<void> UploadSeedDraw(Render::FrameToken frame, const GuideDraw &draw, const Math::Mat4 &view,
+                                                      const Render::RenderMotionCameraPair &camera, const Math::Mat4 &localToWorld) const;
             void RetireDrawsAfter(std::size_t keep) noexcept;
         };
 

@@ -169,6 +169,8 @@ namespace Horo::Editor {
                                                                   device_.frames);
                 vectors.HasError())
                 return vectors;
+            if (const auto enabled = resources_.EnableTemporalGuideTargets(); enabled.HasError())
+                return enabled;
             temporalGuides_ = std::move(candidate);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {

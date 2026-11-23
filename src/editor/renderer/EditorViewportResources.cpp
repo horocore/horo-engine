@@ -445,12 +445,15 @@ namespace Horo::Editor {
             return texturesReady;
         if (const auto viewsReady = AdvanceViewportViews(resources); viewsReady.HasError() || !viewsReady.Value())
             return viewsReady;
+        const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
+        if (const auto reconstruction = AdvanceReconstructionTargets(resources, extent);
+            reconstruction.HasError() || !reconstruction.Value())
+            return reconstruction;
         if (colorPipeline_) {
             const auto color = AdvanceColorPipelineTargets(resources);
             if (color.HasError() || !color.Value())
                 return color;
         }
-        const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
         return AdvanceRenderTarget(*frontend_,
                                    {.colorAttachment = resources.colorView, .depthAttachment = resources.depthView, .extent = extent},
                                    resources.target, resources.targetOperation);
@@ -491,7 +494,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportResources::EnableColorPipeline */
     Result<void> EditorViewportResources::EnableColorPipeline(const ColorReconstruction reconstruction) {
-        if (cameraCrossFade_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+        if (cameraCrossFade_ || (reconstruction_ == ColorReconstruction::Temporal && reconstruction != reconstruction_) ||
+            viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         colorPipeline_ = true;
         reconstruction_ = reconstruction;
@@ -501,6 +505,14 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportResources::EnableColorPipeline(bool) */
     Result<void> EditorViewportResources::EnableColorPipeline(const bool spatial) {
         return EnableColorPipeline(spatial ? ColorReconstruction::Spatial : ColorReconstruction::None);
+    }
+
+    /** @copydoc EditorViewportResources::EnableTemporalGuideTargets */
+    Result<void> EditorViewportResources::EnableTemporalGuideTargets() {
+        if (cameraCrossFade_ || colorPipeline_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        reconstruction_ = ColorReconstruction::Temporal;
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportResources::TemporalImages */
@@ -516,7 +528,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportResources::EnableCameraCrossFade */
     Result<void> EditorViewportResources::EnableCameraCrossFade(const CameraCrossFadeOutput output) {
-        if (colorPipeline_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+        if (colorPipeline_ || reconstruction_ == ColorReconstruction::Temporal || viewportTarget_.colorTexture.IsValid() ||
+            pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         cameraCrossFade_ = output;
         return Result<void>::Success();
@@ -656,9 +669,6 @@ namespace Horo::Editor {
         using enum Horo::Render::RenderTextureUsage;
         using namespace Render;
         const FramebufferExtent extent{resources.extent.width, resources.extent.height};
-        if (const auto reconstruction = AdvanceReconstructionTargets(resources, extent);
-            reconstruction.HasError() || !reconstruction.Value())
-            return reconstruction;
 
         struct Attachment {
             RenderTextureHandle *texture;

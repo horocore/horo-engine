@@ -15,6 +15,7 @@ namespace Horo::Editor {
         constexpr auto MaximumDraws = RenderMaterialPass::MaximumDraws;
         constexpr auto MaximumScenePasses = MaximumDirectionalShadowCascades + 1;
         constexpr auto MaximumSpatialPasses = 1;
+        constexpr auto TemporalGuidePasses = 2;
         constexpr auto MaximumCanvasPasses = 1;
         constexpr auto MaximumCapturePasses = 1;
         constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
@@ -59,11 +60,12 @@ namespace Horo::Editor {
             RasterInputs displayOverlay;
             RasterInputs canvas;
             EditorViewportColorGraph color;
-            std::array<RenderGraphPassWorkload,
-                       MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses + MaximumCapturePasses>
+            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses +
+                                                    MaximumCapturePasses + TemporalGuidePasses>
                 workloads;
             std::optional<std::size_t> spatialWork;
             std::size_t count{};
+            std::size_t guidePasses{};
         };
 
         struct BuildFailure final {
@@ -88,12 +90,12 @@ namespace Horo::Editor {
             RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color, bool spatial,
                               bool cameraCrossFade = false, bool capture = false)
                 : ownedBuilder(Take(RenderGraphBuilder::Create(
-                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + capture,
+                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + (capture ? 1 : 0),
                        .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) + (spatial ? 1 : 0) +
-                                       (cameraCrossFade ? 5 : 0) + capture,
+                                       (cameraCrossFade ? 5 : 0) + (capture ? 1 : 0) + TemporalGuidePasses,
                        .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) + (spatial ? 2 : 0) +
                                     (cameraCrossFade ? 8 : 0) + (capture ? 2 : 0),
-                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + capture}))),
+                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0) + (capture ? 1 : 0)}))),
                   builder(*ownedBuilder), queue(graphics), spatial_(spatial) {}
 
             /** @brief Appends the renderer-owned scene to the paint program's existing sampled canvas graph. */
@@ -248,8 +250,21 @@ namespace Horo::Editor {
         std::size_t captureColorSlot{};
         RenderTextureHandle display, presentation, spatial;
         RenderTextureViewHandle displayView, presentationView, spatialView;
+        const TemporalGuidePrograms *guidePrograms{};
+        std::optional<EditorViewportResources::TemporalAttachments> temporal;
         std::uint32_t atlasPasses{};
         bool shadowDraws{};
+
+        /** @brief Captures the live mesh bindings used by every raster in the new graph generation. */
+        void BindMeshes(const EditorViewportResources &resources, const RenderSceneView &scene) {
+            meshes.reserve(scene.instances.size());
+            for (const auto &instance : scene.instances) {
+                const auto mesh = resources.FindMesh(instance.mesh.id.value);
+                if (!mesh || !mesh->ready || mesh->sourceGeneration != instance.mesh.generation)
+                    throw BuildFailure{MakeError(RendererErrors::ViewportStaleMeshResource)};
+                meshes.push_back(*mesh);
+            }
+        }
 
         bool Matches(const EditorViewportResources &resources, const RenderSceneView &scene, const DirectionalShadowFrame *shadow) const {
             if (attachments != Attachments(resources) || display != resources.DisplayTexture() ||
@@ -410,23 +425,71 @@ namespace Horo::Editor {
             return consumer;
         }
 
-        void Build(RasterVariant &variant, const FrameSlot &slot, RenderQueueId queue, bool overlay,
+        /** @brief Renders one guide from the same retained mesh bindings as the ordinary scene. */
+        void AuthorGuide(RasterGraphAuthor &author, RasterVariant &variant, const RasterOutput &output,
+                         std::span<const TemporalGuidePrograms::GuideDraw> draws, DrawSlot TemporalGuidePrograms::GuideDraw::*member,
+                         ClearColor clear, std::size_t work) {
+            const auto pass = author.Pass();
+            author.Output(pass, output.color, RenderGraphUsageKind::ColorAttachment, RenderGraphAccess::Write);
+            author.Output(pass, output.depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::Write);
+            auto &inputs = variant.inputs[work];
+            inputs.Reserve(meshes.size());
+            for (std::size_t index = 0; index < meshes.size(); ++index) {
+                const auto &mesh = meshes[index];
+                const auto &draw = draws[index].*member;
+                author.Draw(pass, inputs, mesh.mesh, mesh.descriptor.vertexBuffer, mesh.descriptor.indexBuffer, draw.material, draw.buffer);
+            }
+            variant.workloads[work] = {pass, RenderGraphMaterialRaster{.color = output.color,
+                                                                       .depth = output.depth,
+                                                                       .colorView = output.colorView,
+                                                                       .depthView = output.depthView,
+                                                                       .extent = attachments.extent,
+                                                                       .colorOperations = {.clearColor = clear},
+                                                                       .draws = inputs.draws,
+                                                                       .reads = inputs.reads}};
+        }
+
+        /** @brief Places both guide prepasses before the ordinary scene clears and publishes its own depth. */
+        void AuthorTemporalGuides(RasterGraphAuthor &author, RasterVariant &variant, const RasterOutput &output, std::size_t slot) {
+            const auto &draws = guidePrograms->draws[slot];
+            if (draws.size() < meshes.size())
+                throw BuildFailure{MakeError(RendererErrors::ViewportStaleTarget)};
+            const RasterOutput depth{author.Attach(temporal->linearDepth.texture), output.depth, temporal->linearDepth.view,
+                                     output.depthView};
+            const RasterOutput motion{author.Attach(temporal->motion.texture), output.depth, temporal->motion.view, output.depthView};
+            AuthorGuide(author, variant, depth, draws, &TemporalGuidePrograms::GuideDraw::linearDepth, {}, 0);
+            // Values outside the normalized UV range mark pixels without a valid predecessor.
+            AuthorGuide(author, variant, motion, draws, &TemporalGuidePrograms::GuideDraw::motion, {2.0F, 2.0F, 0.0F, 1.0F}, 1);
+        }
+
+        struct FrameRecipe final {
+            const FrameSlot &slot;
+            std::size_t index;
+            bool overlay;
+        };
+
+        void Build(RasterVariant &variant, const FrameRecipe frame, RenderQueueId queue,
                    const EditorViewportColorPipeline *pipeline = nullptr,
                    const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {},
                    const EditorGraphViewportImageCapture::Copy *capture = nullptr) {
-            variant.count = atlasPasses + 1;
-            const auto draws = std::max<std::size_t>(1, meshes.size() + (overlay ? 1 : 0));
+            variant.guidePasses = temporal && guidePrograms && !meshes.empty() ? TemporalGuidePasses : 0;
+            variant.count = variant.guidePasses + atlasPasses + 1;
+            const auto draws = std::max<std::size_t>(1, meshes.size() + (frame.overlay ? 1 : 0));
             RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr, false, capture != nullptr};
             const auto atlas = author.Attach(attachments.atlas);
             const RasterOutput output{author.Attach(attachments.color), author.Attach(attachments.depth), attachments.colorView,
                                       attachments.depthView};
-            AuthorAtlas(author, variant, slot, atlas);
-            AuthorScene(author, variant, slot, atlas, output, overlay && !pipeline, atlasPasses);
-            const auto presentation =
-                pipeline ? AppendColorTail(author, variant, overlay ? &slot.overlay : nullptr, output, atlas, *pipeline, kernel)
-                         : output.color;
+            if (variant.guidePasses)
+                AuthorTemporalGuides(author, variant, output, frame.index);
+            AuthorAtlas(author, variant, frame.slot, atlas, variant.guidePasses);
+            AuthorScene(author, variant, frame.slot, atlas, output, frame.overlay && !pipeline, variant.guidePasses + atlasPasses);
+            auto finalColor = output.color;
+            if (pipeline) {
+                const auto *overlay = frame.overlay ? &frame.slot.overlay : nullptr;
+                finalColor = AppendColorTail(author, variant, overlay, output, atlas, *pipeline, kernel);
+            }
             if (capture)
-                variant.workloads[variant.count++] = author.Capture(presentation, *capture);
+                variant.workloads[variant.count++] = author.Capture(finalColor, *capture);
             variant.graph.emplace(author.Compile());
         }
 
@@ -492,9 +555,9 @@ namespace Horo::Editor {
                 return;
             auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
             for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
-                Build((*candidate)[index][0], nativeSlots[index], queue, false, &pipeline, kernel);
+                Build((*candidate)[index][0], {nativeSlots[index], index, false}, queue, &pipeline, kernel);
                 if (meshes.size() < MaximumDraws)
-                    Build((*candidate)[index][1], nativeSlots[index], queue, true, &pipeline, kernel);
+                    Build((*candidate)[index][1], {nativeSlots[index], index, true}, queue, &pipeline, kernel);
             }
             slot = std::move(candidate);
         }
@@ -519,13 +582,39 @@ namespace Horo::Editor {
                 return;
             auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
             for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
-                Build((*candidate)[index][0], nativeSlots[index], queue, false, pipeline, kernel, &capture);
+                Build((*candidate)[index][0], {nativeSlots[index], index, false}, queue, pipeline, kernel, &capture);
                 if (meshes.size() < MaximumDraws)
-                    Build((*candidate)[index][1], nativeSlots[index], queue, true, pipeline, kernel, &capture);
+                    Build((*candidate)[index][1], {nativeSlots[index], index, true}, queue, pipeline, kernel, &capture);
             }
             captureSlots = std::move(candidate);
             captureId = capture.id;
             captureColorSlot = colorSlot;
+        }
+
+        /** @brief Applies this scene's clear and atlas regions after the graph's optional guide prefix. */
+        void SetRasterRegions(RasterVariant &variant, std::size_t first, const DirectionalShadowFrame *shadow, ClearColor clear) const {
+            if (shadow)
+                for (std::uint32_t index = 0; index < shadow->cascadeCount; ++index) {
+                    const auto &tile = shadow->cascades[index].viewport;
+                    std::get<RenderGraphMaterialRaster>(variant.workloads[first + index].workload).region =
+                        RenderMaterialRegion{tile.x, tile.y, tile.width, tile.height};
+                }
+            std::get<RenderGraphMaterialRaster>(variant.workloads[first + atlasPasses].workload).colorOperations.clearColor = clear;
+        }
+
+        /** @brief Validates the optional camera pair and refreshes the active scene passes. */
+        Result<void> RefreshRasterRegions(RasterVariant &variant, const EditorViewportResources &resources, ClearColor clear,
+                                          const DirectionalShadowFrame *shadow,
+                                          const std::optional<DirectionalShadowFrame> *sourceShadow) const {
+            if (sourceShadow) {
+                const auto *source = *sourceShadow ? &**sourceShadow : nullptr;
+                if ((source != nullptr) != (shadow != nullptr) || AtlasPassCount(source) != atlasPasses ||
+                    cameraCrossFadeAttachments != resources.CameraCrossFadeImages())
+                    return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
+                SetRasterRegions(variant, 0, source, clear);
+            }
+            SetRasterRegions(variant, sourceShadow ? atlasPasses + 1 : variant.guidePasses, shadow, clear);
+            return Result<void>::Success();
         }
     };
 
@@ -770,22 +859,18 @@ namespace Horo::Editor {
             candidate->presentationView = resources_.PresentationTextureView();
             candidate->spatial = resources_.SpatialTexture();
             candidate->spatialView = resources_.SpatialTextureView();
+            candidate->guidePrograms = temporalGuides_.get();
+            candidate->temporal = resources_.TemporalImages();
             candidate->atlasPasses = AtlasPassCount(cast);
             candidate->shadowDraws = cast != nullptr;
-            candidate->meshes.reserve(pass.scene.instances.size());
-            for (const auto &instance : pass.scene.instances) {
-                const auto mesh = resources_.FindMesh(instance.mesh.id.value);
-                if (!mesh || !mesh->ready || mesh->sourceGeneration != instance.mesh.generation)
-                    return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
-                candidate->meshes.push_back(*mesh);
-            }
+            candidate->BindMeshes(resources_, pass.scene);
             if (color_)
                 candidate->PrepareColorSlot(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, *color_, spatial_);
             else
                 for (std::uint32_t index = 0; index < device_.frames; ++index) {
-                    candidate->Build(candidate->slots[index][0], slots_[index], device_.graphicsIdentity, false);
+                    candidate->Build(candidate->slots[index][0], {slots_[index], index, false}, device_.graphicsIdentity);
                     if (candidate->meshes.size() < MaximumDraws)
-                        candidate->Build(candidate->slots[index][1], slots_[index], device_.graphicsIdentity, true);
+                        candidate->Build(candidate->slots[index][1], {slots_[index], index, true}, device_.graphicsIdentity);
                 }
             prepareCamera(*candidate);
             viewportRasterGraphs_ = std::move(candidate);
@@ -830,26 +915,13 @@ namespace Horo::Editor {
         if (!prepared || !prepared->graph)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &variant = *prepared;
-        const auto atlasPasses = viewportRasterGraphs_->atlasPasses;
-        const auto setRaster = [&](std::size_t first, const DirectionalShadowFrame *active) {
-            if (active)
-                for (std::uint32_t index = 0; index < active->cascadeCount; ++index) {
-                    const auto &tile = active->cascades[index].viewport;
-                    std::get<RenderGraphMaterialRaster>(variant.workloads[first + index].workload).region =
-                        RenderMaterialRegion{tile.x, tile.y, tile.width, tile.height};
-                }
-            std::get<RenderGraphMaterialRaster>(variant.workloads[first + atlasPasses].workload).colorOperations.clearColor =
-                pass.clearColor;
-        };
-        if (sourceShadow) {
-            const auto *source = *sourceShadow ? &**sourceShadow : nullptr;
-            if ((source != nullptr) != (shadow != nullptr) || AtlasPassCount(source) != atlasPasses ||
-                viewportRasterGraphs_->cameraCrossFadeAttachments != resources_.CameraCrossFadeImages())
-                return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
-            setRaster(0, source);
-        }
-        setRaster(sourceShadow ? atlasPasses + 1 : 0, shadow);
+        if (const auto refreshed = viewportRasterGraphs_->RefreshRasterRegions(variant, resources_, pass.clearColor, shadow, sourceShadow);
+            refreshed.HasError())
+            return refreshed;
 
+        if (variant.guidePasses)
+            if (const auto uploaded = temporalGuides_->UploadSeed(frame.Token(), slot, pass); uploaded.HasError())
+                return uploaded;
         if (variant.spatialWork) {
             const auto spatial = PrepareSpatialDispatch(frame.Token(), pass);
             if (spatial.HasError())
