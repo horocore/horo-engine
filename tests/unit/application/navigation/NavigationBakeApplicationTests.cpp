@@ -107,6 +107,35 @@ namespace Horo::Application {
         CHECK_FALSE(std::filesystem::exists(session.service.targetRoot));
     }
 
+    TEST_CASE("Navigation command retains the last publication when authored link evidence is unavailable",
+              "[navigation][application][bake][links]") {
+        using Nav::TestSupport::Id;
+        Session session;
+        const auto first = session.Execute(Nav::NavigationBakeExecutionMode::BuildAndPublish);
+        REQUIRE(first.state == OperationState::Succeeded);
+        REQUIRE(first.publication);
+        auto object = NavigationInputTestSupport::Project::Object();
+        object.components.navigationLink = Runtime::NavigationLinkComponent{.id = Id<Nav::NavigationLinkId>(23),
+                                                                            .start = {Id<Nav::SurfaceId>(10), {1, 0, 1}, 0.5F},
+                                                                            .end = {Id<Nav::SurfaceId>(10), {6, 0, 6}, 0.5F},
+                                                                            .profiles = {Id<Nav::NavigationAgentProfileId>(1)}};
+        session.project.Scenes(object);
+
+        const auto mode = GENERATE(Nav::NavigationBakeExecutionMode::ValidateOnly, Nav::NavigationBakeExecutionMode::BuildAndPublish);
+        const auto refused = session.Execute(mode);
+        REQUIRE(refused.state == OperationState::Failed);
+        REQUIRE(refused.inputFingerprint);
+        CHECK(refused.inputFingerprint != first.inputFingerprint);
+        REQUIRE(refused.diagnostic);
+        CHECK(ErrorChainContains(*refused.diagnostic, Nav::NavigationErrors::OperationUnsupported.domain,
+                                 Nav::NavigationErrors::OperationUnsupported.code));
+        CHECK_FALSE(refused.publication);
+        CHECK(session.builder->builds.load() == 2);
+        const auto current = ResolveNavigationBakePublication(session.service);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value()->generation.manifestDigest == first.publication->generation.manifestDigest);
+    }
+
     TEST_CASE("Navigation command retains live invocation authority through actual source capture",
               "[navigation][application][authority]") {
         Session session;

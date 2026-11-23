@@ -1,5 +1,6 @@
 #include "Horo/Navigation/NavigationMovement.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
+#include "navigation/NavigationTestAssertions.h"
 
 #include <catch2/catch_approx.hpp>
 #include <limits>
@@ -90,6 +91,7 @@ namespace Horo::Navigation {
             NavigationAgentRegistry registry{std::move(NavigationAgentRegistry::Create({.maximumAgents = 4})).Value()};
             NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
             std::unique_ptr<NavigationAgentSceneCandidate> candidate;
+            std::unique_ptr<NavigationTraversalCatalog> traversalCatalog;
             std::unique_ptr<NavigationMovementController> movement;
             CrowdAgentHandle agent;
 
@@ -100,7 +102,7 @@ namespace Horo::Navigation {
                 return limits;
             }
 
-            explicit Fixture(const Answer answer = Answer::Reachable, const std::uint32_t leases = 1) {
+            explicit Fixture(const Answer answer = Answer::Reachable, const std::uint32_t leases = 1, const bool withTraversal = false) {
                 Activate(world, std::make_unique<MovementBackend>(answer, leases));
                 const NavigationAgentDescriptor descriptor{.owner = {binding.scene, 1, 1},
                                                            .profile = NavigationAgentProfileId::Create(1).Value(),
@@ -108,9 +110,22 @@ namespace Horo::Navigation {
                 candidate = std::move(registry.PrepareScene(binding, std::array{descriptor})).Value();
                 candidate->Publish();
                 agent = registry.Snapshot().Value().Agents().front().handle;
-                auto created = NavigationMovementController::Create(registry, world, coordinator, agent, Caller());
+                if (withTraversal)
+                    traversalCatalog = PrepareTraversal(descriptor.profile);
+                auto created = NavigationMovementController::Create(registry, world, coordinator, agent, Caller(), traversalCatalog.get());
                 REQUIRE(created.HasValue());
                 movement = std::move(created).Value();
+            }
+
+            std::unique_ptr<NavigationTraversalCatalog> PrepareTraversal(const NavigationAgentProfileId profile) {
+                const std::array profiles{profile};
+                const std::array links{NavigationTraversalAdmission{.link = NavigationLinkId::Create(1).Value(),
+                                                                    .incarnation = 7,
+                                                                    .action = NavigationLinkKind::Door,
+                                                                    .profiles = profiles}};
+                auto catalog = NavigationTraversalCatalog::Create(world, registry, links);
+                REQUIRE(catalog.HasValue());
+                return std::move(catalog).Value();
             }
 
             NavigationMovementObservation Now(const std::uint64_t tick = 0) const {
@@ -146,6 +161,17 @@ namespace Horo::Navigation {
                 jobs.Shutdown(ShutdownPolicy::Drain);
                 Commit(1);
                 return Update(Now(1));
+            }
+
+            NavigationMovementIntent ReachTraversal(const CancellationToken &token = {}) {
+                auto request = Move();
+                request.cancellation = token;
+                Start(request, Now());
+                Update(Now());
+                REQUIRE(Publish().state == NavigationMovementState::Following);
+                auto entrance = Now(2);
+                entrance.position = {2, 0, 0};
+                return Update(entrance);
             }
         };
     }  // namespace
@@ -461,6 +487,111 @@ namespace Horo::Navigation {
         CHECK(stopped.desiredVelocity == Math::Vec3{});
         REQUIRE(fixture.movement->Status().error);
         CHECK(fixture.movement->Status().error->code.Value() == MakeError(NavigationErrors::CapabilityUnavailable).code.Value());
+    }
+
+    TEST_CASE("Movement resumes only from a completed exact traversal exit", "[unit][navigation][movement][traversal]") {
+        using enum NavigationTraversalState;
+        Fixture fixture{Answer::OffMesh, 1, true};
+        const auto crossing = fixture.ReachTraversal();
+        REQUIRE(crossing.state == NavigationMovementState::Traversing);
+        REQUIRE(crossing.traversal);
+        CHECK(crossing.desiredVelocity == Math::Vec3{});
+        CHECK(crossing.traversal->grant.action == NavigationLinkKind::Door);
+        const auto &token = crossing.traversal->grant.reservation;
+        CHECK(token.link.incarnation == 7);
+        CHECK_FALSE(fixture.traversalCatalog->Transition(token, fixture.agent, Completed, 2));
+        REQUIRE(fixture.traversalCatalog->Transition(token, fixture.agent, Entering, 2));
+        REQUIRE(fixture.traversalCatalog->Transition(token, fixture.agent, Active, 2));
+        auto current = fixture.Now(3);
+        current.position = crossing.traversal->entrance;
+        const auto waiting = fixture.Update(current);
+        CHECK(waiting.traversal == crossing.traversal);
+        CHECK(waiting.desiredVelocity == Math::Vec3{});
+        REQUIRE(fixture.traversalCatalog->Transition(token, fixture.agent, Completed, 3));
+        current.path.tick = 4;
+        SECTION("The action reaches the committed exit") {
+            current.position = crossing.traversal->exit;
+            const auto resumed = fixture.Update(current);
+            CHECK(resumed.state == NavigationMovementState::Following);
+            CHECK_FALSE(resumed.traversal);
+            CHECK(resumed.desiredVelocity.x > 0.0F);
+        }
+        SECTION("The action reports completion at the entrance") {
+            const auto stopped = fixture.Update(current);
+            CHECK(stopped.state == NavigationMovementState::Failed);
+            CHECK(stopped.desiredVelocity == Math::Vec3{});
+        }
+        CHECK_FALSE(fixture.traversalCatalog->Take(token, fixture.agent, 4));
+    }
+
+    TEST_CASE("Withdrawing movement authority immediately frees its exact reservation", "[unit][navigation][movement][traversal]") {
+        Fixture fixture{Answer::OffMesh, 1, true};
+        CancellationSource parent;
+        const auto crossing = fixture.ReachTraversal(parent.Token());
+        REQUIRE(crossing.traversal);
+        const auto &token = crossing.traversal->grant.reservation;
+        auto &catalog = *fixture.traversalCatalog;
+        const auto second = fixture.registry.RegisterAtSafePoint(
+            {.owner = {fixture.binding.scene, 2, 1}, .profile = NavigationAgentProfileId::Create(1).Value(), .filter = Request().filter});
+        REQUIRE(second.HasValue());
+        CHECK(catalog.Reserve(token.link.link, token.link.activation.topology, second.Value(), 2, 10).HasError());
+        SECTION("The operation is cancelled") {
+            REQUIRE(fixture.movement->Cancel(crossing.operation));
+        }
+        SECTION("The parent cancels before the same-tick handoff") {
+            auto current = fixture.Now(2);
+            current.position = crossing.traversal->entrance;
+            parent.RequestCancellation();
+            TestSupport::RequireError(fixture.movement->ValidateIntentAtSafePoint(crossing, current), NavigationErrors::QueryCancelled);
+            CHECK(fixture.movement->Status().state == NavigationMovementState::Cancelled);
+        }
+        SECTION("A link revision changes before action handoff") {
+            auto current = fixture.Now(2);
+            current.position = crossing.traversal->entrance;
+            ++current.path.linkRevision;
+            CHECK(fixture.movement->ValidateIntentAtSafePoint(crossing, current).HasError());
+        }
+        CHECK_FALSE(catalog.IsLive(token, fixture.agent, 2));
+        const auto replacement = catalog.Reserve(token.link.link, token.link.activation.topology, second.Value(), 2, 10);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value().reservation.sequence != token.sequence);
+        CHECK_FALSE(catalog.Transition(token, second.Value(), NavigationTraversalState::Entering, 2));
+    }
+
+    TEST_CASE("Retiring an occupied link terminates a waiting movement", "[unit][navigation][movement][traversal]") {
+        Fixture fixture{Answer::OffMesh, 1, true};
+        auto &catalog = *fixture.traversalCatalog;
+        const auto second = fixture.registry.RegisterAtSafePoint(
+            {.owner = {fixture.binding.scene, 2, 1}, .profile = NavigationAgentProfileId::Create(1).Value(), .filter = Request().filter});
+        REQUIRE(second.HasValue());
+        const auto held = catalog.Reserve(NavigationLinkId::Create(1).Value(), Activation().topology, second.Value(), 0, 10);
+        REQUIRE(held.HasValue());
+        const auto waiting = fixture.ReachTraversal();
+        CHECK(waiting.state == NavigationMovementState::Holding);
+        CHECK_FALSE(waiting.traversal);
+        REQUIRE(catalog.Retire(held.Value().reservation.link));
+        auto current = fixture.Now(3);
+        current.position = {2, 0, 0};
+        const auto stopped = fixture.Update(current);
+        CHECK(stopped.state == NavigationMovementState::Failed);
+        CHECK(stopped.desiredVelocity == Math::Vec3{});
+        REQUIRE(fixture.movement->Status().error);
+        CHECK(fixture.movement->Status().error->code.Value() == MakeError(NavigationErrors::StaleSnapshot).code.Value());
+    }
+
+    TEST_CASE("Cancelling an admitted traversal preserves movement cancellation", "[unit][navigation][movement][traversal]") {
+        Fixture fixture{Answer::OffMesh, 1, true};
+        const auto crossing = fixture.ReachTraversal();
+        REQUIRE(crossing.traversal);
+        REQUIRE(fixture.traversalCatalog->Transition(crossing.traversal->grant.reservation, fixture.agent,
+                                                     NavigationTraversalState::Cancelled, 2));
+        auto current = fixture.Now(3);
+        current.position = crossing.traversal->entrance;
+        const auto stopped = fixture.Update(current);
+        CHECK(stopped.state == NavigationMovementState::Cancelled);
+        CHECK(stopped.desiredVelocity == Math::Vec3{});
+        CHECK_FALSE(stopped.traversal);
+        CHECK_FALSE(fixture.movement->Status().error);
     }
 
     TEST_CASE("Changed world revisions stop held corridors and finite query budgets end retries", "[unit][navigation][movement]") {

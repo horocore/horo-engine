@@ -2476,6 +2476,8 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
         runtime/navigation/runtime/NavigationObstacleOverlay.cpp
         runtime/navigation/runtime/NavigationAgentRegistry.cpp
+        runtime/navigation/runtime/NavigationTraversalReservations.cpp
+        runtime/navigation/runtime/NavigationTraversalCatalog.cpp
         runtime/navigation/runtime/NavigationMovement.cpp
         runtime/navigation/runtime/NavigationMovementUpdate.cpp
         runtime/navigation/runtime/NavigationVelocityPipeline.cpp

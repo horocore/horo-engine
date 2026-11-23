@@ -232,22 +232,47 @@ namespace Horo::Application {
         CHECK(result.HasError());
     }
 
-    TEST_CASE("Unassembled enabled authored semantics fail explicitly rather than yielding partial baked intent",
+    TEST_CASE("Unassembled enabled modifiers fail before publishing incomplete source capture",
               "[navigation][project][bake_input][admission]") {
         Inputs::Project project;
         auto object = Inputs::Project::Object();
-        SECTION("modifier") {
-            object.components.navigationModifier =
-                Runtime::NavigationModifierComponent{.id = Id<Nav::NavigationModifierId>(1), .surface = Id<Nav::SurfaceId>(10)};
-        }
-        SECTION("link") {
-            object.components.navigationLink = Runtime::NavigationLinkComponent{.id = Id<Nav::NavigationLinkId>(1),
-                                                                                .start = {Id<Nav::SurfaceId>(10), {1, 0, 1}, 0.5F},
-                                                                                .end = {Id<Nav::SurfaceId>(10), {6, 0, 6}, 0.5F},
-                                                                                .profiles = {Id<Nav::NavigationAgentProfileId>(1)}};
-        }
+        object.components.navigationModifier =
+            Runtime::NavigationModifierComponent{.id = Id<Nav::NavigationModifierId>(1), .surface = Id<Nav::SurfaceId>(10)};
         project.Scenes(object);
         RequireError(Capture(project), Nav::NavigationErrors::OperationUnsupported);
+    }
+
+    TEST_CASE("Project capture retains authored link identities and resolved endpoints under exact Scene authority",
+              "[navigation][project][bake_input][links]") {
+        Inputs::Project project;
+        auto object = Inputs::Project::Object();
+        object.localTransform.translation = {0, 1, 0};
+        object.components.navigationLink = Runtime::NavigationLinkComponent{.id = Id<Nav::NavigationLinkId>(23),
+                                                                            .generation = 7,
+                                                                            .start = {Id<Nav::SurfaceId>(10), {1, 0, 1}, 0.5F},
+                                                                            .end = {Id<Nav::SurfaceId>(10), {6, 0, 6}, 0.75F},
+                                                                            .profiles = {Id<Nav::NavigationAgentProfileId>(1)}};
+        project.Scenes(object);
+        const auto captured = Capture(project);
+        REQUIRE(captured.HasValue());
+        const auto &links = captured.Value().authoredLinks;
+        REQUIRE(links.size() == 2);
+        CHECK(links[0].scope.SceneBytes() == Asset(2).Bytes());
+        CHECK(links[1].scope.SceneBytes() == Asset(3).Bytes());
+        for (const auto &row : links) {
+            CHECK(row.sourceGeneration == 7);
+            CHECK(row.link.id == Id<Nav::NavigationLinkId>(23));
+            CHECK(row.link.profile == Id<Nav::NavigationAgentProfileId>(1));
+            CHECK((row.link.start == Nav::NavigationBakeLinkEndpoint{Id<Nav::SurfaceId>(10), {1, 1, 1}, 0.5F}));
+            CHECK((row.link.end == Nav::NavigationBakeLinkEndpoint{Id<Nav::SurfaceId>(10), {6, 1, 6}, 0.75F}));
+        }
+        object.components.navigationLink->enabled = false;
+        project.Scenes(object);
+        RequireError(CaptureNavigationProjectBakeInput(captured.Value().source, Asset(1), Inputs::Project::Revisions()),
+                     Nav::NavigationErrors::BakeInputStale);
+        const auto disabled = Capture(project);
+        REQUIRE(disabled.HasValue());
+        CHECK(disabled.Value().authoredLinks.empty());
     }
 
     TEST_CASE("Project input cancellation and authoritative identity/profile admission precede work",

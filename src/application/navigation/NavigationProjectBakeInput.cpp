@@ -76,28 +76,70 @@ namespace Horo::Application {
                  material});
         }
 
-        /** @brief Checks feature ownership rather than dropping unresolved enabled semantic contributions. */
-        Result<void> CheckAuthoredFeatures(const Detail::Graph &graph, Assets::AssetId definition) {
-            const auto matches = [&](Nav::SurfaceId id) {
-                const auto &surface = *graph.nodes[graph.surfaces.at(id)].object->components.navigationSurface;
-                return surface.enabled && surface.definition == definition;
-            };
+        /** @brief Retains one resolved endpoint pair for every exact authored link profile. */
+        Result<void> AppendAuthoredLink(std::vector<Nav::NavigationScopedBakeLinkInput> &output, const Nav::NavigationBakeScopeId scope,
+                                        const Detail::Node &node, const Runtime::NavigationLinkComponent &link) {
+            if (link.profiles.size() > Nav::NavigationLinkValidationLimits::MaximumAuthoredLinks - output.size())
+                return Result<void>::Failure(MakeError(Errors::CapacityExceeded));
+            const auto start = Math::TryTransformPoint(node.world, link.start.localPosition);
+            if (start.HasError())
+                return Result<void>::Failure(start.ErrorValue());
+            const auto end = Math::TryTransformPoint(node.world, link.end.localPosition);
+            if (end.HasError())
+                return Result<void>::Failure(end.ErrorValue());
+            for (const auto profile : link.profiles)
+                output.push_back({.scope = scope,
+                                  .sourceGeneration = link.generation,
+                                  .link = {.id = link.id,
+                                           .profile = profile,
+                                           .start = {link.start.surface, start.Value(), link.start.connectionRadiusMeters},
+                                           .end = {link.end.surface, end.Value(), link.end.connectionRadiusMeters},
+                                           .kind = link.kind,
+                                           .direction = link.direction,
+                                           .traversalCost = link.traversalCost}});
+            return Result<void>::Success();
+        }
+
+        /** @brief Matches an enabled endpoint surface to the exact selected definition. */
+        bool SelectsDefinition(const Detail::Graph &graph, const Nav::SurfaceId id, const Assets::AssetId definition) {
+            const auto &surface = *graph.nodes[graph.surfaces.at(id)].object->components.navigationSurface;
+            return surface.enabled && surface.definition == definition;
+        }
+
+        /** @brief Captures only links scoped to this definition and rejects partially owned endpoint pairs. */
+        Result<void> CaptureLinkInDefinition(std::vector<Nav::NavigationScopedBakeLinkInput> &links, const Detail::Graph &graph,
+                                             const Detail::Node &node, const Nav::NavigationBakeScopeId scope,
+                                             const Assets::AssetId definition) {
+            const auto &link = node.object->components.navigationLink;
+            if (!link || !link->enabled)
+                return Result<void>::Success();
+            const bool startSelected = SelectsDefinition(graph, link->start.surface, definition);
+            if (startSelected != SelectsDefinition(graph, link->end.surface, definition))
+                return Result<void>::Failure(
+                    MakeError(Errors::OperationUnsupported, "Both authored link surfaces must belong to the same enabled definition."));
+            return startSelected ? AppendAuthoredLink(links, scope, node, *link) : Result<void>::Success();
+        }
+
+        /** @brief Captures link ownership from the validated Scene graph and rejects unfinished modifier assembly. */
+        Result<void> CaptureAuthoredFeatures(std::vector<Nav::NavigationScopedBakeLinkInput> &links, const Detail::Graph &graph,
+                                             const Nav::NavigationBakeScopeId scope, const CaptureContext &context) {
+            const auto definition = context.definition.asset;
             for (const auto &node : graph.nodes) {
-                const auto &c = node.object->components;
-                if ((c.navigationModifier && c.navigationModifier->enabled && matches(c.navigationModifier->surface)) ||
-                    (c.navigationLink && c.navigationLink->enabled &&
-                     (matches(c.navigationLink->start.surface) || matches(c.navigationLink->end.surface))))
+                if (context.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Errors::BakeInputCancelled));
+                if (const auto &modifier = node.object->components.navigationModifier;
+                    modifier && modifier->enabled && SelectsDefinition(graph, modifier->surface, definition))
                     return Result<void>::Failure(
-                        MakeError(Errors::OperationUnsupported,
-                                  "Project bake requires qualified modifier and link assembly; authored intent cannot be omitted"));
+                        MakeError(Errors::OperationUnsupported, "Project bake requires qualified navigation modifier assembly."));
+                if (auto captured = CaptureLinkInDefinition(links, graph, node, scope, definition); captured.HasError())
+                    return captured;
             }
             return Result<void>::Success();
         }
 
         /** @brief Adds complete authored scope, preserving empty LocalBounds independently of geometry. */
-        Result<void> AddSurfaces(Detail::ProjectBakeSurfaces &surfaces, const Detail::Graph &graph, const NavigationSceneBakeSource &scene,
+        Result<void> AddSurfaces(Detail::ProjectBakeSurfaces &surfaces, const Detail::Graph &graph, const Nav::NavigationBakeScopeId scope,
                                  const CaptureContext &context) {
-            const auto scope = Nav::NavigationBakeScopeId::ForScene(scene.asset.Bytes()).Value();
             for (const auto &[id, slot] : graph.surfaces) {
                 const auto &node = graph.nodes[slot];
                 const auto &surface = *node.object->components.navigationSurface;
@@ -158,7 +200,8 @@ namespace Horo::Application {
         }
 
         /** @brief Captures each complete Scene once through the shared graph/Physics path and aggregate producer budget. */
-        Result<Captures> Collect(const CaptureContext &context, Detail::ProjectBakeSurfaces &surfaces) {
+        Result<Captures> Collect(const CaptureContext &context, Detail::ProjectBakeSurfaces &surfaces,
+                                 std::vector<Nav::NavigationScopedBakeLinkInput> &links) {
             Captures captures;
             captures.reserve(context.source.Scenes().size());
             SourceUsage used;
@@ -167,9 +210,10 @@ namespace Horo::Application {
                 auto graph = Detail::CaptureSceneGraph(scene, context.definition, context.limits.scene, context.cancellation);
                 if (graph.HasError())
                     return Result<Captures>::Failure(graph.ErrorValue());
-                if (auto admitted = CheckAuthoredFeatures(graph.Value(), context.definition.asset); admitted.HasError())
+                const auto scope = Nav::NavigationBakeScopeId::ForScene(scene.asset.Bytes()).Value();
+                if (auto admitted = CaptureAuthoredFeatures(links, graph.Value(), scope, context); admitted.HasError())
                     return Result<Captures>::Failure(admitted.ErrorValue());
-                if (auto added = AddSurfaces(surfaces, graph.Value(), scene, context); added.HasError())
+                if (auto added = AddSurfaces(surfaces, graph.Value(), scope, context); added.HasError())
                     return Result<Captures>::Failure(added.ErrorValue());
                 auto captured = Detail::CaptureSceneColliders(scene, context.definition, graph.Value(), RemainingPolicy(context, used),
                                                               remainingRegionWork, context.cancellation);
@@ -177,7 +221,7 @@ namespace Horo::Application {
                     return Result<Captures>::Failure(captured.ErrorValue());
                 Charge(used, captured.Value());
                 for (const auto &source : captured.Value()) {
-                    auto &surface = surfaces.at({source.source.surface, Nav::NavigationBakeScopeId::ForScene(scene.asset.Bytes()).Value()});
+                    auto &surface = surfaces.at({source.source.surface, scope});
                     if (source.footprint) {
                         const std::array vertices{source.footprint->minimum, source.footprint->maximum};
                         IncludeVertices(surface, vertices);
@@ -185,6 +229,9 @@ namespace Horo::Application {
                 }
                 captures.push_back(std::move(captured).Value());
             }
+            std::ranges::sort(links, {}, [](const auto &row) {
+                return std::tie(row.scope, row.link.id, row.link.profile);
+            });
             return Result<Captures>::Success(std::move(captures));
         }
 
@@ -325,7 +372,8 @@ namespace Horo::Application {
                 return Return::Failure(qualified.ErrorValue());
             const CaptureContext context{*source, *found, limits, cancellation};
             Detail::ProjectBakeSurfaces surfaces;
-            auto captures = Collect(context, surfaces);
+            std::vector<Nav::NavigationScopedBakeLinkInput> links;
+            auto captures = Collect(context, surfaces, links);
             if (captures.HasError())
                 return Return::Failure(captures.ErrorValue());
             auto bound = Bind(captures.Value(), surfaces, context);
@@ -341,12 +389,12 @@ namespace Horo::Application {
                 return Return::Failure(fresh.ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Return::Failure(MakeError(Errors::BakeInputCancelled));
-            NavigationProjectBakeInput output{std::move(source),
-                                              definition,
-                                              std::move(owned).Value(),
-                                              std::move(tiles).Value(),
-                                              std::move(bound).Value().contributions,
-                                              {}};
+            NavigationProjectBakeInput output{.source = std::move(source),
+                                              .definition = definition,
+                                              .input = std::move(owned).Value(),
+                                              .tiles = std::move(tiles).Value(),
+                                              .contributions = std::move(bound).Value().contributions,
+                                              .authoredLinks = std::move(links)};
             ExportSurfaces(output, surfaces);
             return Return::Success(std::move(output));
         } catch (const std::bad_alloc &) {

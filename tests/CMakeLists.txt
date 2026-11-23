@@ -1948,6 +1948,13 @@ target_include_directories(HoroNavigationRuntimeTests PRIVATE ${CMAKE_CURRENT_SO
 target_link_libraries(HoroNavigationRuntimeTests PRIVATE HoroEngine::NavigationRuntime HoroEngine::NavigationCrowdDeterministic)
 horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")
 
+add_executable(HoroNavigationTraversalReservationsTests unit/runtime/navigation/NavigationTraversalReservationsTests.cpp)
+target_include_directories(HoroNavigationTraversalReservationsTests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime/navigation/runtime"
+        "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_link_libraries(HoroNavigationTraversalReservationsTests PRIVATE HoroEngine::NavigationRuntime)
+horo_register_catch_test(HoroNavigationTraversalReservationsTests LABELS "unit;navigation;headless;lifecycle")
+
 # Dedicated non-installed white-box test boundary for the private transport primitive.
 add_executable(HoroNavigationTransportReservationTests unit/runtime/navigation/NavigationTransportReservationTests.cpp)
 target_include_directories(HoroNavigationTransportReservationTests PRIVATE

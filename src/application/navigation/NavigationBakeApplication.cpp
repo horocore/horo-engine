@@ -147,7 +147,8 @@ namespace Horo::Application {
                                           .rebuildSurfaces = std::move(selection),
                                           .execution = snapshot->execution,
                                           .authoredSurfaces = std::move(input.surfaces),
-                                          .sourceValidation = std::move(input.source)};
+                                          .sourceValidation = std::move(input.source),
+                                          .authoredLinks = std::move(input.authoredLinks)};
             for (const auto &source : input.contributions)
                 request.sources.push_back(source.observation);
             if (auto current = config.service.sourceAuthority->UpdateCurrent(request.input->Revisions(), request.sources);

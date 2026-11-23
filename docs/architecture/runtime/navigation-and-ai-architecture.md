@@ -88,6 +88,11 @@ The decoder accepts all three formats and leaves legacy and generated link
 identities invalid. The validated link fingerprint uses a new domain for this
 record shape. A bake path that attaches validated links must include that
 fingerprint in the affected tile dependency closure before reading its cache.
+Project capture retains enabled link rows by exact Scene, authored generation
+and profile, with both endpoints transformed through the saved Scene hierarchy.
+The bake worker checks the retained source before requiring candidate-topology
+projection and Physics clearance. Missing evidence leaves the prior publication
+available and exits before cache lookup or tile build.
 
 An explicitly traversal-aware Recast consumer can query authored links within
 one admitted tile. The corridor carries the exact link identity and ordered
@@ -395,8 +400,13 @@ An authored off-mesh portal identifies its exact consecutive corridor polygons
 and contributes an ordered entrance/exit waypoint pair. Held-path admission
 rejects missing or mismatched pairs. Ground following can approach the entrance,
 with arrival bounded by the smaller of the movement waypoint radius and the link
-radius. Without a composed traversal owner, reaching that boundary ends the
-operation with a typed capability failure and withdraws desired velocity.
+radius. With a composed catalog the controller reserves the exact link and
+publishes the admitted action with zero ground velocity. The host action owner
+advances the grant and reports completion through the catalog. The controller
+continues only after consuming the matching receipt and observing the committed
+position within the exit radius. Path invalidation and movement cancellation
+release the grant. Without a composed catalog, the entrance returns a typed
+capability failure and withdraws desired velocity.
 
 Returned intents contain desired velocity, operation/path identities and a fixed
 tick. Character/Physics remains the only movement writer; the host's Character
@@ -1254,6 +1264,18 @@ active obstacle coalesce latest-wins in one staged command within the declared
 advances the immutable revision once. This adds a NavigationRuntime-owned public
 header and target-private implementation, with no new backend dependency or
 change to the cooked NavMesh artifact format.
+
+The NavigationRuntime-owned `NavigationTraversalCatalog` gives each authored
+link incarnation in a published Scene topology one capacity owner. It admits
+only exact live agents from the bound registry and resolves each link's allowed
+profiles and action from host-prepared descriptors. The fixed owner advances
+entry and execution, expires deadlines, and cancels work on agent or link
+retirement. Terminal receipts release link capacity immediately and remain
+available for one read within the configured receipt bound. A host retires a
+gate before destroying or disabling it, and retains the catalog while its
+movement controllers use it. Ground-only callers retain their existing factory
+call syntax. Rebuild clients for the additive movement intent field and handle
+the active `Traversing` state when composing a traversal action owner.
 
 ## AI Perception
 

@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Application/NavigationSceneBakeGeometry.h"
+#include "Horo/Navigation/NavigationLinkValidation.h"
 #include "Horo/Navigation/NavigationTileDependencies.h"
 
 namespace Horo::Application {
@@ -47,6 +48,7 @@ namespace Horo::Application {
         std::vector<NavigationProjectBakeContribution> contributions;
         std::vector<Navigation::NavigationBakeSurfaceKey>
             surfaces; /**< Complete authored catalog, including disabled and empty surfaces. */
+        std::vector<Navigation::NavigationScopedBakeLinkInput> authoredLinks; /**< Canonical Scene/profile rows awaiting projection. */
     };
 
     /** @brief Captures all registered Scenes for one exact definition into the canonical bake boundary.
@@ -60,8 +62,8 @@ namespace Horo::Application {
      * versioned canonical hashes of full persistent keys; collisions and reserved zero fail rather than aliasing.
      * LocalBounds surfaces retain their complete transformed grid, including empty clipped geometry. Subtree
      * surfaces use their complete source footprint. Each profile uses its own authored voxel/tile extent and
-     * finite agent clearance in Y. Unsupported authored modifier/link assembly currently fails explicitly;
-     * those semantics must be composed before this candidate can serve the complete production command contract.
+     * finite agent clearance in Y. Captured links retain their Scene scope, source generation and resolved
+     * endpoint transforms for later topology projection. Unsupported modifier assembly fails explicitly.
      * Registry/source bytes are checked before and after capture; this is not the later publication lease.
      */
     [[nodiscard]] Result<NavigationProjectBakeInput> CaptureNavigationProjectBakeInput(
