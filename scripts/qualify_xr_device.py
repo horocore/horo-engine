@@ -11,7 +11,8 @@ import re
 
 MAX_RECORD_BYTES = 64 * 1024
 MAX_DESKTOP_PREFLIGHT_BYTES = 512
-DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v1"
+DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v2"
+DESKTOP_CONNECTIONS = {"Tethered": "tethered", "WirelessStreaming": "wireless-streaming"}
 DESKTOP_PREFLIGHT_MAXIMA = (65535, 65535, 4294967295, 4294967295, 4294967295, 4294967295, 16, 128, 15)
 DESKTOP_REQUIRED_ROUTES = 0b0011
 DESKTOP_HOSTS = {"windows", "linux"}
@@ -213,8 +214,9 @@ def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
     require(host in DESKTOP_HOSTS and host == identity["hostPlatform"].lower(), "Desktop preflight uses a different host")
     require(route == "system-default" and renderer == DESKTOP_RENDERER and renderer == identity["renderer"].lower(),
             "Desktop preflight uses a different runtime route or renderer")
-    require(connection == "desktop-local" and identity["connectionMode"] in {"Tethered", "WirelessStreaming"},
-            "Desktop preflight requires a PCVR declaration")
+    expected_connection = DESKTOP_CONNECTIONS.get(identity["connectionMode"])
+    require(expected_connection is not None, "Desktop preflight requires a PCVR declaration")
+    require(connection == expected_connection, "Desktop preflight uses a different connection mode")
     labels = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
     target_digest = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + labels).hexdigest()
     require(target == f"sha256:{target_digest}", "Desktop preflight uses a different runtime or system")

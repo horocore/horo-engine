@@ -110,15 +110,15 @@ def test_cli_rejects_duplicate_record_members(tmp_path, smoke):
 def desktop_preflight_receipt(identity):
     labels = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
     target = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + labels).hexdigest()
-    return (f"horo-xr-desktop-qualification-v1 sha256:{'2' * 64} sha256:{identity['buildSha256']} "
-            f"linux system-default vulkan sha256:{target} desktop-local preflight 9 8 7 1 3 0 2 2 3\n").encode()
+    return (f"horo-xr-desktop-qualification-v2 sha256:{'2' * 64} sha256:{identity['buildSha256']} "
+            f"linux system-default vulkan sha256:{target} tethered preflight 9 8 7 1 3 0 2 2 3\n").encode()
 
 
 @pytest.fixture
 def desktop_identity(smoke):
     identity = smoke["tuple"]
     identity.update(hostPlatform="Linux", renderer="Vulkan", runtime="Test Runtime",
-                    headsetModel="Test HMD", runtimeVersion="9.8.7")
+                    headsetModel="Test HMD", runtimeVersion="9.8.7", connectionMode="Tethered")
     return identity
 
 
@@ -148,6 +148,7 @@ def test_desktop_preflight_cli_checks_exact_receipt_and_physical_gate(tmp_path, 
     ("hostPlatform", "Windows", "different host"),
     ("renderer", "Metal", "different runtime route or renderer"),
     ("connectionMode", "Standalone", "PCVR declaration"),
+    ("connectionMode", "WirelessStreaming", "different connection mode"),
     ("packageReceiptSha256", "b" * 64, "declared receipt digest"),
 ])
 def test_desktop_preflight_rejects_foreign_tuple(desktop_identity, field, different, message):
@@ -159,6 +160,8 @@ def test_desktop_preflight_rejects_foreign_tuple(desktop_identity, field, differ
 
 
 @pytest.mark.parametrize(("index", "value", "message"), [
+    (0, b"horo-xr-desktop-qualification-v1", "Expected a successful Desktop preflight"),
+    (7, b"desktop-local", "different connection mode"),
     (-1, b"2", "required provider route"),
     (-1, b"16", "supported range"),
     (-9, b"0", "required runtime or renderer"),

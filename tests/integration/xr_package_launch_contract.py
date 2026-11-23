@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
         "insufficient-reference-spaces": (-3, "1"),
         "missing-swapchain-format": (-2, "0"),
     }
-    qualified_variants = ("accepted", "required-routes-only", "failure-receipt", "foreign", "duplicate", "stale-executable",
+    qualified_variants = ("accepted", "tethered", "wireless-streaming", "required-routes-only", "failure-receipt", "foreign", "duplicate", "stale-executable",
                           "stale-after-failure", "surviving-child", "interrupted", "timed-out", *incompatible_facts,
                           "invalid-connection", "invalid-timeout")
     cases = [(variant, False) for variant in (*success_variants, *failure_variants)]
@@ -97,7 +97,8 @@ sys.exit(7 if variant == "failed" else 0)
         args = [str(launch), "--probe-xr-package", "linux", "system-default", runtime, headset, install, str(executable),
                 executable_digest, str(root), str(project), *(str(path) for path in trust)]
         if qualified:
-            connection = "remote-device" if variant == "invalid-connection" else "desktop-local"
+            connection = {"accepted": "desktop-local", "tethered": "tethered", "invalid-connection": "remote-device"}.get(
+                variant, "wireless-streaming")
             args += ["--connection", connection]
             if variant == "timed-out":
                 args += ["--timeout-seconds", "1"]
@@ -120,12 +121,14 @@ sys.exit(7 if variant == "failed" else 0)
         else:
             run = subprocess.run(args, env=env, timeout=8, capture_output=True, text=True, check=False)
         invalid_options = variant in ("invalid-connection", "invalid-timeout")
-        accepted = variant in ("accepted", "required-routes-only")
+        accepted = variant in ("accepted", "tethered", "wireless-streaming", "required-routes-only")
         assert run.returncode == (0 if accepted else 2 if invalid_options else 1), (variant, run)
         assert "private" not in run.stderr and "/root/" not in run.stderr, (variant, run)
         assert (root / "ran").exists() == (not invalid_options and variant != "stale-executable"), (variant, run)
         if qualified and not invalid_options:
-            identity = f"horo-xr-desktop-qualification-v1 {install} {executable_digest} linux system-default vulkan {target} desktop-local"
+            version = 1 if connection == "desktop-local" else 2
+            identity = (f"horo-xr-desktop-qualification-v{version} {install} {executable_digest} linux system-default "
+                        f"vulkan {target} {connection}")
             if accepted:
                 admitted_routes = 3 if variant == "required-routes-only" else 11
                 assert run.stdout == f"{identity} preflight 9 8 7 1 3 0 2 2 {admitted_routes}\n" and not run.stderr, (variant, run)

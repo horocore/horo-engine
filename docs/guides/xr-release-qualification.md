@@ -79,8 +79,9 @@ successful Desktop OpenXR preflight receipt. Use Windows or Linux for
 `hostPlatform` and keep the operating system version in `hostVersion`.
 Keep other PCVR combinations in planning rows until the package supports
 their host and renderer. Store the exact product stdout from
-`horo-engine --probe-xr-package ... --connection desktop-local` and set the
-matrix row's `desktopPreflightSha256` to its SHA-256 when the package receipt
+`horo-engine --probe-xr-package ... --connection tethered` or
+`--connection wireless-streaming` and set the matrix row's
+`desktopPreflightSha256` to its SHA-256 when the package receipt
 is a separate file. In that case, set `desktopComponentSha256` to the verified
 installed OpenXR component digest from the package provenance. The gate compares
 this digest with the component reported by the preflight. If the tuple already
@@ -88,8 +89,9 @@ refers to the preflight receipt as its `packageReceiptSha256`, both fields can
 be omitted. Set
 `desktopPreflightSha256` to null to record an unrun preflight. The gate
 reports such claims under their assigned owner. The receipt must match the
-same executable, runtime and HMD, runtime version, host, and renderer as
-the physical evidence. The release claim still requires the underlying
+same executable, runtime and HMD, runtime version, host, renderer, and declared
+connection mode as the physical evidence. Generate a new version 2 receipt for
+each connection mode. The release claim still requires the underlying
 physical qualification checks for the declared connection mode.
 
 Store the exact tested executable, package receipt, physical smoke record,

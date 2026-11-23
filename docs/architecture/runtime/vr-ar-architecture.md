@@ -1245,7 +1245,7 @@ Desktop OpenXR probe through the installed Editor.
 horo-engine --probe-xr-package <windows|linux> system-default <runtime-name>
   <hmd-system-name> <install-sha256> <editor-executable> <editor-sha256>
   <installation-root> <project> <trust-roots> <catalog> <catalog-signature>
-  --connection desktop-local [--timeout-seconds 1..90]
+  --connection <tethered|wireless-streaming> [--timeout-seconds 1..90]
 ```
 
 Pass the command as one argument vector and quote runtime or file names with
@@ -1266,18 +1266,22 @@ fixed reason such as permission denial, rejected runtime, stale evidence or
 unsupported profile. Native diagnostic text and device labels stay in the
 child.
 
-With `--connection desktop-local`, the terminal emits one
-`horo-xr-desktop-qualification-v1` record. Its fields are the installed component
+With `--connection tethered` or `--connection wireless-streaming`, the terminal
+emits one `horo-xr-desktop-qualification-v2` record. Its fields are the installed component
 digest, expected executable digest, host, loader route, renderer, digest of the
-explicit runtime/HMD pair, connection, and outcome. The `preflight` outcome on
+explicit runtime/HMD pair, declared connection mode, and outcome. The runtime
+probe cannot observe the physical transport. The declaration binds the receipt to
+one connection mode, which the physical smoke test must verify separately.
+The `preflight` outcome on
 stdout appends runtime and graphics versions, reference-space and swapchain
 format counts, and the admitted provider route mask. The launcher requires
 nonzero runtime and graphics version majors, at least two reference spaces,
 at least one swapchain format, and the graphics and platform time routes.
 Hand tracking and eye gaze remain optional. Typed outcomes on stderr
 cover stale or busy packages, timeouts, unavailable runtime and rejected receipts.
-The timeout defaults to 90 seconds. Omit both options to keep the existing
-child-receipt format. This is packaged Desktop preflight evidence. Per-unit
+The timeout defaults to 90 seconds. `--connection desktop-local` still emits the
+version 1 diagnostic record. Omitting both options keeps the child-receipt
+format. Use version 2 for release qualification. Per-unit
 headset selection, remote installation, connection transport provenance,
 interaction profile, and physical-device smoke results require separate runs.
 

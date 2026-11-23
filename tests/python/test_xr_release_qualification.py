@@ -164,8 +164,9 @@ def desktop_receipt(row, *, host=None):
     system = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
     target = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + system).hexdigest()
     host = host or identity["hostPlatform"].lower()
-    return (f"horo-xr-desktop-qualification-v1 sha256:{COMPONENT} sha256:{identity['buildSha256']} "
-            f"{host} system-default vulkan sha256:{target} desktop-local preflight 1 2 3 1 3 0 2 2 3\n").encode()
+    connection = {"Tethered": "tethered", "WirelessStreaming": "wireless-streaming"}[identity["connectionMode"]]
+    return (f"horo-xr-desktop-qualification-v2 sha256:{COMPONENT} sha256:{identity['buildSha256']} "
+            f"{host} system-default vulkan sha256:{target} {connection} preflight 1 2 3 1 3 0 2 2 3\n").encode()
 
 
 @pytest.mark.parametrize(("host", "mode"), [("Windows", "Tethered"), ("Linux", "WirelessStreaming")])

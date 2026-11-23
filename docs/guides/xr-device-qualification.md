@@ -128,12 +128,13 @@ for setup, input, display enumeration, timing, comfort, lifecycle and recovery.
 Add `--require haptics` or `--require optionalMR` when the release claims the
 capability. Keep any limited optional results visible in the matrix.
 For PCVR, `--desktop-preflight` validates the exact stdout receipt from
-`horo-engine --probe-xr-package ... --connection desktop-local`. Save the
+`horo-engine --probe-xr-package ... --connection tethered` or
+`--connection wireless-streaming`, matching the tuple. Save the version 2
 receipt bytes directly and use their SHA-256 for `packageReceiptSha256`.
 Use the runtime-reported labels from the probe in `runtime` and `headsetModel`,
 and record `runtimeVersion` as `major.minor.patch`. The checker also confirms
-the executable digest, host, and renderer. The same physical checks still apply
-to tethered and wireless-streaming declarations. The release
+the executable digest, host, renderer, and declared connection mode. Verify the
+transport during the physical smoke test. The release
 owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).
 Use the [release matrix and example procedures](xr-release-qualification.md)
