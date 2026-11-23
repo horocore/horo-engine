@@ -359,9 +359,10 @@ namespace Horo::Render::Detail {
     }
 
     /** @brief Copies submission ownership into preallocated tickets; no graph/request views survive admission. */
-    Result<void> VulkanGraphRuntime::Impl::Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins) {
+    Result<void> VulkanGraphRuntime::Impl::Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins,
+                                                  const RenderTimelinePoint timedSignal) {
         for (auto &submission : submissions) {
-            auto reserved = commands.Begin(submission.value.queue);
+            auto reserved = commands.Begin(submission.value.queue, timedSignal == submission.value.signal);
             if (reserved.HasError())
                 return Result<void>::Failure(std::move(reserved).ErrorValue());
             submission.ticket = reserved.Value();

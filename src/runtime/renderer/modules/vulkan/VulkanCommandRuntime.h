@@ -78,6 +78,8 @@ namespace Horo::Render::Detail {
                                               const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         /** @brief Reserves one completed slot without waiting; returns typed busy when all are retained. */
         [[nodiscard]] Result<VulkanCommandTicket> Begin(RenderQueueId queue, bool measureGpuDuration = false);
+        /** @brief Checks whether this exact selected queue has a prepared timestamp pool. */
+        [[nodiscard]] Result<bool> SupportsGpuDuration(RenderQueueId queue) const;
         /** @brief Reads retained GPU duration for an exact completed submission after Poll without waiting.
          * @return No sample for pending, unmeasured, unavailable or evicted timing. Invalid ownership or identity is an error. */
         [[nodiscard]] Result<std::optional<std::chrono::nanoseconds>> GpuDuration(RenderTimelinePoint completion) const;

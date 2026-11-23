@@ -102,6 +102,21 @@ Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t dev
     return graph_.WasSubmissionAccepted(signal, deviceIncarnation);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::ArmGraphGpuDuration */
+Result<bool> ArmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) override {
+    return graph_.ArmGraphGpuDuration(frame, signal);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::DisarmGraphGpuDuration */
+void DisarmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) noexcept override {
+    graph_.DisarmGraphGpuDuration(frame, signal);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ObserveGraphGpuDuration */
+Result<std::optional<std::chrono::nanoseconds>> ObserveGraphGpuDuration(RenderTimelinePoint signal, std::uint64_t incarnation) override {
+    return graph_.ObserveGraphGpuDuration(signal, incarnation);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::AttachDeviceChild */
 Result<void> AttachDeviceChild(Detail::IVulkanEditorDeviceChild &child) override {
     if (editorOwner_ != std::this_thread::get_id())

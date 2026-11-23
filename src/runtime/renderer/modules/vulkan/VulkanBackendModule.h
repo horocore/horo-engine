@@ -84,7 +84,7 @@ namespace Horo::Render {
         bool supportsGraphics{false};
         bool supportsPresentation{false};
         bool supportsTransfer{false};
-        bool supportsCompute{false}; /**< Actual VK_QUEUE_COMPUTE_BIT; graphics alone never implies compute. */
+        bool supportsCompute{false};        /**< Actual VK_QUEUE_COMPUTE_BIT; graphics alone never implies compute. */
         std::uint32_t timestampValidBits{}; /**< Zero when the family does not support GPU timestamps. */
     };
 

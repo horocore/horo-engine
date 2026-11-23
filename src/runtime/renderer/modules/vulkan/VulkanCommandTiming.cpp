@@ -4,6 +4,12 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Admits timestamp facts for queues that can encode the measured pipeline stages. */
+        [[nodiscard]] bool ValidTimestampProperties(const VulkanCommandQueue &queue) noexcept {
+            return (queue.supportsGraphics || queue.supportsCompute) && queue.timestampValidBits > 0 && queue.timestampValidBits <= 64 &&
+                   std::isfinite(queue.timestampPeriodNs) && queue.timestampPeriodNs > 0.0F;
+        }
+
         /** @brief Subtracts in the queue's counter width and rejects zero or unrepresentable durations. */
         [[nodiscard]] std::chrono::nanoseconds Duration(const VulkanCommandQueue &queue, std::uint64_t begin, std::uint64_t end) {
             const auto bitMask = std::numeric_limits<std::uint64_t>::max() >> (64U - queue.timestampValidBits);
@@ -17,11 +23,7 @@ namespace Horo::Render::Detail {
 
     /** @brief Reserves one disjoint timestamp pair per command slot and bounded completed history. */
     Result<void> VulkanCommandRuntime::Impl::PrepareTimestamps(Queue &queue, const std::uint32_t slots) {
-        const auto &binding = queue.binding;
-        if ((!binding.supportsGraphics && !binding.supportsCompute) || binding.timestampValidBits == 0 || binding.timestampValidBits > 64 ||
-            !std::isfinite(binding.timestampPeriodNs) || binding.timestampPeriodNs <= 0.0F)
-            return Result<void>::Success();
-        if (!timestamps.create || !timestamps.destroy || !timestamps.reset || !timestamps.write || !timestamps.results)
+        if (!ValidTimestampProperties(queue.binding) || !timestamps.IsComplete())
             return Result<void>::Success();
         const VkQueryPoolCreateInfo request{.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                                             .queryType = VK_QUERY_TYPE_TIMESTAMP,
@@ -38,7 +40,9 @@ namespace Horo::Render::Detail {
     }
 
     /** @brief Reads only retired query pairs. A failed or unavailable optional sample leaves no timing evidence. */
-    Result<void> VulkanCommandRuntime::Impl::ReadTimestamps(Queue &queue, Slot &slot) {
+    Result<void> VulkanCommandRuntime::Impl::ReadTimestamps(Queue &queue, const Slot &slot) {
+        if (!slot.timed)
+            return Result<void>::Success();
         std::array<std::uint64_t, 4> data{};
         constexpr auto stride = 2 * sizeof(std::uint64_t);
         const auto result = timestamps.results(device, queue.timestampPool, queue.FirstTimestamp(slot), 2, sizeof(data), data.data(),
@@ -47,12 +51,21 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(NativeError("vkGetQueryPoolResults", result));
         if (result != VK_SUCCESS || data[1] == 0 || data[3] == 0)
             return Result<void>::Success();
-        const auto duration = Duration(queue.binding, data[0], data[2]);
-        if (duration.count() > 0) {
+        if (const auto duration = Duration(queue.binding, data[0], data[2]); duration.count() > 0) {
             queue.timings[queue.nextTiming] = {slot.completion.value, duration};
             queue.nextTiming = (queue.nextTiming + 1) % queue.timings.size();
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanCommandRuntime::SupportsGpuDuration */
+    Result<bool> VulkanCommandRuntime::SupportsGpuDuration(const RenderQueueId identity) const {
+        if (const auto access = impl_->Access(); access.HasError())
+            return Result<bool>::Failure(access.ErrorValue());
+        const auto *queue = impl_->FindQueue(identity);
+        if (!queue)
+            return Result<bool>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+        return Result<bool>::Success(queue->timestampPool != VK_NULL_HANDLE);
     }
 
     /** @copydoc VulkanCommandRuntime::GpuDuration */

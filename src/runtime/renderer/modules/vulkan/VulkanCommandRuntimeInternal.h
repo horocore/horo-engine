@@ -103,7 +103,13 @@ namespace Horo::Render::Detail {
             PFN_vkCmdResetQueryPool reset{};
             PFN_vkCmdWriteTimestamp2 write{};
             PFN_vkGetQueryPoolResults results{};
-        } timestamps;
+
+            [[nodiscard]] bool IsComplete() const noexcept {
+                return create && destroy && reset && write && results;
+            }
+        };
+
+        TimestampDispatch timestamps;
 
         VkDevice device{VK_NULL_HANDLE};
         std::thread::id owner;
@@ -164,7 +170,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> LoadDispatch(const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         [[nodiscard]] Result<void> CreateQueue(Queue &queue, std::uint32_t slots);
         [[nodiscard]] Result<void> PrepareTimestamps(Queue &queue, std::uint32_t slots);
-        [[nodiscard]] Result<void> ReadTimestamps(Queue &queue, Slot &slot);
+        [[nodiscard]] Result<void> ReadTimestamps(Queue &queue, const Slot &slot);
         [[nodiscard]] Result<void> ValidateSubmission(const Queue &queue, const RenderQueueSubmission &submission) const;
 
         [[nodiscard]] Result<void> ValidateWaits(std::span<const RenderTimelinePoint> waits,

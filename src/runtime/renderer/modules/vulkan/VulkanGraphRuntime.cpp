@@ -371,12 +371,17 @@ namespace Horo::Render::Detail {
         return commands.ValidateBatch(request.submissions);
     }
 
-    Result<void> VulkanGraphRuntime::Impl::ExecuteGraphCommands(const RenderGraphExecutionRequest &request) {
+    Result<void> VulkanGraphRuntime::Impl::ExecuteGraphCommands(const RenderGraphExecutionRequest &request,
+                                                                const RenderTimelinePoint timedSignal) {
         if (auto valid = ValidateGraphAdmission(request); valid.HasError())
             return valid;
         auto *free = lifecycle.pins;
         if (!free || free->references || free->lease)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        if (timedSignal.IsValid() && std::ranges::none_of(request.submissions, [timedSignal](const auto &submission) {
+            return submission.submission.signal == timedSignal;
+        }))
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid, "Timed graph has no matching signal."));
         if (auto captured = resources->CaptureGraphResources(request, bindings, *free); captured.HasError()) {
             free->resources.clear();
             return captured;
@@ -385,7 +390,7 @@ namespace Horo::Render::Detail {
             free->resources.clear();
             return prepared;
         }
-        if (auto recorded = Record(request, *free); recorded.HasError()) {
+        if (auto recorded = Record(request, *free, timedSignal); recorded.HasError()) {
             Abort();
             free->resources.clear();
             return recorded;
@@ -396,7 +401,10 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanGraphRuntime::ExecuteGraph */
     Result<void> VulkanGraphRuntime::ExecuteGraph(const RenderGraphExecutionRequest &request) {
-        auto result = impl_->ExecuteGraphCommands(request);
+        RenderTimelinePoint timedSignal{};
+        if (impl_->owner == std::this_thread::get_id() && request.frame == impl_->lifecycle.frame)
+            timedSignal = std::exchange(impl_->lifecycle.timedSignal, {});
+        auto result = impl_->ExecuteGraphCommands(request, timedSignal);
         if (result.HasError())
             impl_->vfxGpu.Reject(request);
         return result;
@@ -425,6 +433,7 @@ namespace Horo::Render::Detail {
         impl_->updates.clear();
         impl_->barriers.clear();
         impl_->lifecycle.frame = {};
+        impl_->lifecycle.timedSignal = {};
         impl_->lifecycle.pins = nullptr;
         impl_->lifecycle.recorded = false;
         return Result<void>::Success();
@@ -450,6 +459,7 @@ namespace Horo::Render::Detail {
         lifecycle.pins = nullptr;
         lifecycle.recorded = false;
         lifecycle.frame = {};
+        lifecycle.timedSignal = {};
     }
 
     /** @copydoc VulkanGraphRuntime::AbortFrame */
@@ -496,6 +506,35 @@ namespace Horo::Render::Detail {
     /** @copydoc VulkanGraphRuntime::WasSubmissionAccepted */
     Result<bool> VulkanGraphRuntime::WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const {
         return impl_->commands.WasSubmissionAccepted(signal, deviceIncarnation);
+    }
+
+    /** @copydoc VulkanGraphRuntime::ArmGraphGpuDuration */
+    Result<bool> VulkanGraphRuntime::ArmGraphGpuDuration(const FrameToken frame, const RenderTimelinePoint signal) {
+        if (auto access = impl_->Access(); access.HasError())
+            return Result<bool>::Failure(access.ErrorValue());
+        auto &lifecycle = impl_->lifecycle;
+        if (!frame.IsValid() || frame != lifecycle.frame || lifecycle.recorded || lifecycle.timedSignal.IsValid() || !signal.IsValid())
+            return Result<bool>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        const auto supported = impl_->commands.SupportsGpuDuration(signal.queue);
+        if (supported.HasValue() && supported.Value())
+            lifecycle.timedSignal = signal;
+        return supported;
+    }
+
+    /** @copydoc VulkanGraphRuntime::DisarmGraphGpuDuration */
+    void VulkanGraphRuntime::DisarmGraphGpuDuration(const FrameToken frame, const RenderTimelinePoint signal) noexcept {
+        if (impl_->owner == std::this_thread::get_id() && frame == impl_->lifecycle.frame && signal == impl_->lifecycle.timedSignal)
+            impl_->lifecycle.timedSignal = {};
+    }
+
+    /** @copydoc VulkanGraphRuntime::ObserveGraphGpuDuration */
+    Result<std::optional<std::chrono::nanoseconds>> VulkanGraphRuntime::ObserveGraphGpuDuration(const RenderTimelinePoint signal,
+                                                                                                const std::uint64_t deviceIncarnation) {
+        using Outcome = Result<std::optional<std::chrono::nanoseconds>>;
+        const auto ready = ObserveSubmission({.completion = signal, .expectedDeviceIncarnation = deviceIncarnation});
+        if (ready.HasError())
+            return Outcome::Failure(ready.ErrorValue());
+        return ready.Value() ? impl_->commands.GpuDuration(signal) : Outcome::Success(std::nullopt);
     }
 
     /** @copydoc VulkanGraphRuntime::ObserveSubmission */

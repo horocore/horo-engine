@@ -156,13 +156,12 @@ namespace Horo::Render::Detail {
                     MakeError(VulkanBackendErrors::TimelineInvalid, "The native completion counter escaped its accepted timeline domain."));
             queue.observed = observed;
             for (auto &slot : queue.slots) {
-                if (slot.state == Impl::State::Pending && slot.completion.value <= observed) {
-                    if (slot.timed)
-                        if (const auto timing = impl_->ReadTimestamps(queue, slot); timing.HasError())
-                            return timing;
-                    slot.ReleaseRetention();
-                    slot.state = Impl::State::Idle;
-                }
+                if (slot.state != Impl::State::Pending || slot.completion.value > observed)
+                    continue;
+                if (const auto timing = impl_->ReadTimestamps(queue, slot); timing.HasError())
+                    return timing;
+                slot.ReleaseRetention();
+                slot.state = Impl::State::Idle;
             }
         }
         return Result<void>::Success();

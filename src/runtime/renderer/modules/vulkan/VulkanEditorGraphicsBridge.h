@@ -135,6 +135,21 @@ namespace Horo::Render::Detail {
          * @details Call on the owner immediately after Present/cancel. No presentation success, GPU completion or wait is implied.
          */
         [[nodiscard]] virtual Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const = 0;
+
+        /** @brief Selects one exact graph signal for GPU timing in the active frame.
+         * @return True when armed, false when native timing is unsupported, or a typed ownership/admission error. */
+        [[nodiscard]] virtual Result<bool> ArmGraphGpuDuration(FrameToken, RenderTimelinePoint) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Revokes an unconsumed timing request when frontend graph admission fails before reaching Vulkan. */
+        virtual void DisarmGraphGpuDuration(FrameToken, RenderTimelinePoint) noexcept {}
+
+        /** @brief Polls timing availability without waiting and preserves the selected device incarnation. */
+        [[nodiscard]] virtual Result<std::optional<std::chrono::nanoseconds>> ObserveGraphGpuDuration(RenderTimelinePoint, std::uint64_t) {
+            return Result<std::optional<std::chrono::nanoseconds>>::Success(std::nullopt);
+        }
+
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;
         virtual void DetachDeviceChild(IVulkanEditorDeviceChild &child) noexcept = 0;
 

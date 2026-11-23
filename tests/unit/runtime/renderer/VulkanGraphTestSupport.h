@@ -183,12 +183,17 @@ namespace Horo::Render::VulkanGraphTest {
         EncodedGraph encoded;
         Detail::VulkanGraphRuntime graph;
 
-        explicit NativeGraphFixture(const bool vertexLayers = false) {
+        explicit NativeGraphFixture(const bool vertexLayers = false, const bool timestamp = false) {
             encodedGraph = &encoded;
             InitializeNativeResourceRuntime(resources);
+            auto queues = commandState.queues;
+            if (timestamp) {
+                queues.front().timestampValidBits = 64;
+                queues.front().timestampPeriodNs = 1.0F;
+            }
             REQUIRE(graph
                         .Initialize({.device = NativeHandle<VkDevice>(1),
-                                     .queues = commandState.queues,
+                                     .queues = queues,
                                      .frames = 2,
                                      .timelineDifference = 1024,
                                      .deviceIncarnation = 11,

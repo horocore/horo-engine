@@ -268,6 +268,44 @@ namespace {
         CHECK(fixture.commandState.state.waitCalls == 0);
     }
 
+    TEST_CASE("Vulkan graph timing arms one exact signal and clears with its active frame", "[unit][renderer][vulkan][graph][timing]") {
+        NativeGraphFixture fixture(false, true);
+        fixture.commandState.state.queryResults = {100, 1, 160, 1};
+        auto packet = SubmissionTest::CopyGraph();
+        fixture.Bind(packet, fixture.CreateBuffers());
+        const auto records = packet.Submissions();
+        const auto signal = records.front().submission.signal;
+        const auto transferSignal = records.back().submission.signal;
+        const FrameToken frame{1};
+        const FrameToken later{2};
+        REQUIRE(fixture.graph.BeginFrame(frame).HasValue());
+        CHECK(fixture.graph.ArmGraphGpuDuration(later, signal).HasError());
+        const auto unsupported = fixture.graph.ArmGraphGpuDuration(frame, transferSignal);
+        REQUIRE(unsupported.HasValue());
+        CHECK_FALSE(unsupported.Value());
+        REQUIRE(fixture.graph.ArmGraphGpuDuration(frame, signal).Value());
+        CHECK(fixture.graph.ArmGraphGpuDuration(frame, signal).HasError());
+        fixture.graph.AbortFrame(frame);
+        REQUIRE(fixture.graph.BeginFrame(later).HasValue());
+        const RenderTimelinePoint unrelated{signal.queue, signal.value + 1};
+        REQUIRE(fixture.graph.ArmGraphGpuDuration(later, unrelated).Value());
+        RenderGraphLeaseTransfer transfer;
+        const RenderGraphExecutionRequest request{later,          packet.graph, packet.workloads, packet.instances,
+                                                  &fixture.lease, false,        &transfer,        records};
+        REQUIRE(fixture.graph.ExecuteGraph(request).HasError());
+        REQUIRE(fixture.graph.ArmGraphGpuDuration(later, signal).Value());
+        fixture.graph.DisarmGraphGpuDuration(later, unrelated);
+        REQUIRE(fixture.graph.ExecuteGraph(request).HasValue());
+        CHECK(fixture.commandState.state.timestampWrites.size() == 2);
+        REQUIRE(fixture.graph.SubmitFrame(later).HasValue());
+        CHECK(fixture.graph.ObserveGraphGpuDuration(signal, 12).HasError());
+        CHECK_FALSE(fixture.graph.ObserveGraphGpuDuration(signal, 11).Value());
+        fixture.commandState.state.Complete();
+        CHECK(fixture.graph.ObserveGraphGpuDuration(signal, 11).Value() == std::chrono::nanoseconds{60});
+        CHECK_FALSE(fixture.graph.ObserveGraphGpuDuration(transferSignal, 11).Value());
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Vulkan graph encoding emits real copy commands and matched family ownership barriers",
               "[unit][runtime][renderer][vulkan][graph]") {
         NativeGraphFixture fixture;

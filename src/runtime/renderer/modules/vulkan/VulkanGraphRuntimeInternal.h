@@ -165,7 +165,8 @@ namespace Horo::Render::Detail {
         /** @brief Active-frame admission and terminal submission/shutdown state, owned together by the command runtime. */
         struct Lifecycle {
             FrameToken frame;
-            VulkanCommandRetention *pins{}; /**< Same canonical retained owner shared by viewport and later GUI tail. */
+            RenderTimelinePoint timedSignal; /**< Single attempt-local measurement; no GUI tail or foreign graph can consume it. */
+            VulkanCommandRetention *pins{};  /**< Same canonical retained owner shared by viewport and later GUI tail. */
             bool recorded{false};
             bool closing{false};
             bool failedSubmission{false};
@@ -274,7 +275,7 @@ namespace Horo::Render::Detail {
         /** @brief Returns typed busy when a prior reader/writer still retains this native buffer. */
         [[nodiscard]] Result<void> RequireBufferRetirement(std::uint64_t instance);
         [[nodiscard]] Result<void> ValidateGraphAdmission(const RenderGraphExecutionRequest &) const;
-        [[nodiscard]] Result<void> ExecuteGraphCommands(const RenderGraphExecutionRequest &);
+        [[nodiscard]] Result<void> ExecuteGraphCommands(const RenderGraphExecutionRequest &, RenderTimelinePoint timedSignal);
         [[nodiscard]] Result<void> RecordPass(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
                                               const RenderGraphExecutionRequest &, std::size_t pass);
         [[nodiscard]] Result<void> Access(bool admission = true) const;
@@ -305,7 +306,8 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] Result<void> ValidateTextureUpload(const RenderGraphTextureUpload &upload);
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
-        [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins,
+                                          RenderTimelinePoint timedSignal);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
         void Barriers(VkCommandBuffer command, RenderGraphExecutionRange range) const noexcept;
         [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;
