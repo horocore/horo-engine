@@ -9,6 +9,7 @@
 #include <bit>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::Application::Internal {
     namespace Nav = Navigation;
@@ -68,6 +69,29 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Materializes the exact portable closure under the selected project provider policy. */
+        [[nodiscard]] Result<Nav::RecastDetourPreparedQueryBackend> PrepareNativeBackend(
+            const ProjectSceneNavigationSelection &selection, const Nav::NavigationWorldActivationDescriptor &world,
+            std::span<const std::shared_ptr<const Nav::NavigationCookedTile>> tiles, const Nav::NavigationAgentBuildGeometry &geometry,
+            const std::size_t budget) {
+            if (tiles.size() > selection.policy.Capacities().maximumResidentTiles)
+                return Result<Nav::RecastDetourPreparedQueryBackend>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+            const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
+            const auto providerBudget = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
+            return Nav::PrepareRecastDetourCookedNavigationQueryBackend(
+                {.world = world.world,
+                 .topology = world.topology,
+                 .surface = selection.surface,
+                 .profile = selection.profile,
+                 .definition = *selection.catalog,
+                 .tiles = tiles,
+                 .nearestPointHalfExtents = {horizontal, geometry.heightMeters, horizontal},
+                 .queryLimits = selection.policy.MaximumQuery().limits,
+                 .maximumConcurrentQueries = selection.policy.Capacities().maximumConcurrentQueries,
+                 .maximumOwnedBytes = providerBudget,
+                 .capabilityRevision = selection.policy.Revision().Value()});
+        }
+
         /** @brief Materializes only the selected exact decoded partition through the production native factory. */
         [[nodiscard]] Result<Nav::NavigationPreparedAssetBackend> PrepareBackend(const ProjectSceneNavigationSelection &selection,
                                                                                  const Nav::NavigationWorldActivationDescriptor &world,
@@ -77,27 +101,58 @@ namespace Horo::Application::Internal {
             if (surfaces.size() != 1 || !surfaces.front().partition)
                 return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
             const auto &partition = *surfaces.front().partition;
-            if (partition.tiles.size() > selection.policy.Capacities().maximumResidentTiles)
-                return Prepared::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
-            const auto &geometry = partition.descriptor.geometry;
-            const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
-            const auto providerBudget = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
-            auto backend = Nav::PrepareRecastDetourCookedNavigationQueryBackend(
-                {.world = world.world,
-                 .topology = world.topology,
-                 .surface = selection.surface,
-                 .profile = selection.profile,
-                 .definition = *selection.catalog,
-                 .tiles = partition.tiles,
-                 .nearestPointHalfExtents = {horizontal, geometry.heightMeters, horizontal},
-                 .queryLimits = selection.policy.MaximumQuery().limits,
-                 .maximumConcurrentQueries = selection.policy.Capacities().maximumConcurrentQueries,
-                 .maximumOwnedBytes = providerBudget,
-                 .capabilityRevision = selection.policy.Revision().Value()});
+            auto backend = PrepareNativeBackend(selection, world, partition.tiles, partition.descriptor.geometry, budget);
             if (backend.HasError())
                 return Prepared::Failure(backend.ErrorValue());
             auto prepared = std::move(backend).Value();
             return Prepared::Success({std::move(prepared.backend), prepared.reservedBytes});
+        }
+
+        /** @brief Worker-owned factory shares the immutable configured project catalog, never the mutable Scene. */
+        class ProjectRebuildBackend final : public Nav::INavigationRuntimeRebuildBackendFactory {
+        public:
+            explicit ProjectRebuildBackend(std::shared_ptr<const ProjectSceneNavigationSelection> selection)
+                : selection_(std::move(selection)) {}
+
+            [[nodiscard]] Result<Nav::NavigationPreparedRuntimeRebuildBackend> Prepare(
+                const Nav::NavigationWorldActivationDescriptor &world,
+                std::span<const std::shared_ptr<const Nav::NavigationCookedTile>> tiles, const std::size_t budget,
+                const CancellationToken &cancellation) const override {
+                using Prepared = Result<Nav::NavigationPreparedRuntimeRebuildBackend>;
+                if (cancellation.IsCancellationRequested())
+                    return Prepared::Failure(MakeError(Nav::NavigationErrors::BakeInputCancelled));
+                const auto descriptor = Nav::ProjectNavigationCookedTileDescriptor(*tiles.front());
+                if (descriptor.HasError())
+                    return Prepared::Failure(descriptor.ErrorValue());
+                auto result = PrepareNativeBackend(*selection_, world, tiles, descriptor.Value().geometry, budget);
+                if (result.HasError())
+                    return Prepared::Failure(std::move(result).ErrorValue());
+                auto prepared = std::move(result).Value();
+                return Prepared::Success({std::move(prepared.backend), prepared.reservedBytes});
+            }
+
+        private:
+            std::shared_ptr<const ProjectSceneNavigationSelection> selection_;
+        };
+
+        /** @brief Derives the ordered rebuild layout from every active tile, including the empty ones. */
+        [[nodiscard]] Result<std::vector<Nav::NavigationBakeTile>> RebuildLayout(
+            std::span<const std::shared_ptr<const Nav::NavigationCookedTile>> tiles) {
+            using Layout = Result<std::vector<Nav::NavigationBakeTile>>;
+            std::vector<Nav::NavigationBakeTile> layout;
+            layout.reserve(tiles.size());
+            for (const auto &tile : tiles) {
+                const auto descriptor = Nav::ProjectNavigationCookedTileDescriptor(*tile);
+                if (descriptor.HasError())
+                    return Layout::Failure(descriptor.ErrorValue());
+                layout.emplace_back(tile->Key(), tile->Topology().bounds, descriptor.Value().tileSizeMeters);
+            }
+            return Layout::Success(std::move(layout));
+        }
+
+        /** @brief Rejects incomplete host commands before reserving the rebuild slot. */
+        [[nodiscard]] bool ValidRebuildCommand(const ProjectSceneNavigationRebuildCommand &command) noexcept {
+            return command.input && command.observe && command.maximumRebuiltTiles != 0;
         }
 
         Result<std::unique_ptr<Assets::AssetPayloadCache>> CreateNavigationTileCache(const Nav::NavigationProjectProfile &policy) {
@@ -220,7 +275,18 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RegisterProjectSceneNavigation */
     Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,
-                                                std::shared_ptr<const ProjectSceneNavigationSelection> selection, bool streamCoverage) {
+                                                std::shared_ptr<const ProjectSceneNavigationSelection> selection, bool streamCoverage,
+                                                bool runtimeRebuild) {
+        if (streamCoverage && runtimeRebuild)
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
+        std::unique_ptr<Nav::NavigationRuntimeRebuildJobs> rebuild;
+        if (runtimeRebuild) {
+            auto builder = Nav::CreateRecastDetourNavigationMeshBuilder();
+            if (builder.HasError())
+                return Result<void>::Failure(std::move(builder).ErrorValue());
+            rebuild = std::make_unique<Nav::NavigationRuntimeRebuildJobs>(selection->jobs, std::move(builder).Value(),
+                                                                          std::make_shared<ProjectRebuildBackend>(selection));
+        }
         const auto &capacity = selection->policy.Capacities();
         const auto tileLimit = static_cast<std::size_t>(capacity.maximumBytesPerResidentTile);
         const Nav::NavigationAssetSceneLimits limits{.maximumReservedProviderBytes =
@@ -235,7 +301,8 @@ namespace Horo::Application::Internal {
                                                                              limits, std::nullopt,
                                                                              Nav::NavigationAssetSceneSelection{selection->surface.scope,
                                                                                                                 selection->policy,
-                                                                                                                streamCoverage});
+                                                                                                                streamCoverage,
+                                                                                                                runtimeRebuild});
         auto *assetOwner = assets.get();
         const auto admission = [selection](const Nav::NavigationAgentDescriptor &agent) {
             return AdmitAgent(*selection, agent);
@@ -252,6 +319,73 @@ namespace Horo::Application::Internal {
             return added;
         world.assets = assetOwner;
         world.streamCoverage = streamCoverage;
+        world.rebuild = std::move(rebuild);
         return Result<void>::Success();
+    }
+
+    /** @copydoc QueueProjectSceneNavigationRebuild */
+    Result<void> QueueProjectSceneNavigationRebuild(ProjectSceneNavigationWorld &world, ProjectSceneNavigationRebuildCommand command) {
+        if (!world.rebuild || !world.assets)
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapabilityUnavailable));
+        if (!ValidRebuildCommand(command))
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::BakeInputInvalid));
+        if (command.cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::BakeInputCancelled));
+        auto reservation = world.assets->ReserveRuntimeRebuild(command.expected, command.maximumOwnedBytes);
+        if (reservation.HasError())
+            return Result<void>::Failure(std::move(reservation).ErrorValue());
+        try {
+            const auto tiles = world.assets->ActiveRuntimeRebuildTiles();
+            auto layout = RebuildLayout(*tiles);
+            if (layout.HasError())
+                return Result<void>::Failure(std::move(layout).ErrorValue());
+            Nav::NavigationRuntimeOwnedRebuildRequest request{.expected = command.expected,
+                                                              .nextTopology = command.nextTopology,
+                                                              .input = std::move(command.input),
+                                                              .layout = std::move(layout).Value(),
+                                                              .activeTiles = *tiles,
+                                                              .compatibility = command.compatibility,
+                                                              .maximumRebuiltTiles = command.maximumRebuiltTiles,
+                                                              .maximumOwnedBytes = command.maximumOwnedBytes};
+            auto started = world.rebuild->Start(std::move(request), command.cancellation, std::move(reservation).Value());
+            if (started.HasValue()) {
+                world.rebuildAuthority = std::move(command.observe);
+                world.rebuildCancellation = std::move(command.cancellation);
+            }
+            return started;
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+        }
+    }
+
+    /** @copydoc CommitProjectSceneNavigationRebuild */
+    Result<bool> CommitProjectSceneNavigationRebuild(ProjectSceneNavigationWorld &world, const CancellationToken &cancellation) {
+        using Commit = Result<bool>;
+        if (!world.rebuild || !world.rebuild->Busy())
+            return Commit::Success(false);
+        if (cancellation.IsCancellationRequested())
+            world.rebuild->Cancel();
+        auto completed = world.rebuild->TakeCompleted();
+        if (completed.HasError()) {
+            world.rebuildAuthority = {};
+            world.rebuildCancellation = {};
+            return Commit::Failure(std::move(completed).ErrorValue());
+        }
+        if (!completed.Value())
+            return Commit::Success(false);
+        auto prepared =
+            world.assets->PrepareRuntimeRebuildPublication(std::move(completed).Value().value(), std::exchange(world.rebuildAuthority, {}),
+                                                           std::exchange(world.rebuildCancellation, {}));
+        if (prepared.HasError())
+            return Commit::Failure(std::move(prepared).ErrorValue());
+        auto publication = std::move(prepared).Value();
+        if (auto checked = publication->ValidatePublication(); checked.HasError())
+            return Commit::Failure(std::move(checked).ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Commit::Failure(MakeError(Nav::NavigationErrors::BakeInputCancelled));
+        publication->Publish();
+        if (auto notified = publication->AfterPublication(); notified.HasError())
+            return Commit::Failure(std::move(notified).ErrorValue());
+        return Commit::Success(true);
     }
 }  // namespace Horo::Application::Internal

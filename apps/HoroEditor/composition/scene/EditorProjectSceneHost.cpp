@@ -220,6 +220,20 @@ namespace Horo::Application::Internal {
         return selected->InspectWorldCell(occurrence);
     }
 
+    /** @copydoc QueueEditorPlayNavigationRebuild */
+    Result<void> QueueEditorPlayNavigationRebuild(Editor::EditorPlaySceneHost &host, ProjectSceneNavigationRebuildCommand command) {
+        auto *selected = dynamic_cast<ProjectPlaySceneHost *>(&host);
+        if (!selected)
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityUnavailable));
+        return selected->QueueNavigationRebuild(std::move(command));
+    }
+
+    /** @copydoc InspectEditorPlayNavigationRebuildError */
+    std::optional<Error> InspectEditorPlayNavigationRebuildError(const Editor::EditorPlaySceneHost &host) {
+        const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
+        return selected ? selected->NavigationRebuildError() : std::nullopt;
+    }
+
     /** @copydoc MakeEditorProjectSceneFactory */
     Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         return ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPlayScene, {std::numeric_limits<std::uint64_t>::max()}});

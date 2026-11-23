@@ -23,6 +23,7 @@
 
 namespace Horo::Application::Internal {
     class RuntimeUiPaintProjectSources;
+    struct ProjectSceneNavigationRebuildCommand;
 
     /** @brief An explicit committed World startup bound to one authorized native project root. */
     struct EditorPlayWorldSelection final {
@@ -74,6 +75,7 @@ namespace Horo::Application::Internal {
         EditorPlayXrLocomotion xrLocomotion;
         std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion;
         std::function<void()> cancelXrLocomotion;
+        bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.
@@ -89,6 +91,13 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
                                                                                  Runtime::SceneInstanceId occurrence);
+
+    /** @brief Submits a host-authorized immutable geometry change to an opted-in Editor Play Scene. */
+    [[nodiscard]] Result<void> QueueEditorPlayNavigationRebuild(Editor::EditorPlaySceneHost &host,
+                                                                ProjectSceneNavigationRebuildCommand command);
+
+    /** @brief Reads the terminal error of the last accepted rebuild, if the owner rejected it. */
+    [[nodiscard]] std::optional<Error> InspectEditorPlayNavigationRebuildError(const Editor::EditorPlaySceneHost &host);
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */

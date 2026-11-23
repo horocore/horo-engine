@@ -5,6 +5,25 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @copydoc ProjectPlaySceneHost::QueueNavigationRebuild */
+    Result<void> ProjectPlaySceneHost::QueueNavigationRebuild(ProjectSceneNavigationRebuildCommand command) {
+        if (!navigation_)
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityUnavailable));
+        auto queued = QueueProjectSceneNavigationRebuild(*navigation_, std::move(command));
+        if (queued.HasValue())
+            navigationRebuildError_.reset();
+        return queued;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::AdvanceNavigationRebuild */
+    void ProjectPlaySceneHost::AdvanceNavigationRebuild(const CancellationToken &cancellation) {
+        if (!navigation_)
+            return;
+        auto committed = CommitProjectSceneNavigationRebuild(*navigation_, cancellation);
+        if (committed.HasError())
+            navigationRebuildError_ = std::move(committed).ErrorValue();
+    }
+
     /** @brief Reads the configured Navigation registry for only the exact selected entity generation. */
     std::optional<Editor::EditorPlayAgentNavigation> ProjectPlaySceneHost::ReadAgentNavigation(const Runtime::EntityRef owner) const {
         if (!navigation_)
@@ -232,7 +251,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (const auto matched = MatchCommittedPlayProjection(*definition, selected.Value(), Navigation::NavigationErrors::StaleSnapshot);
             matched.HasError())
             return matched;
+        return PrepareCommittedNavigation(root, jobs, policy, selected.Value());
+    }
 
+    /** @copydoc ProjectPlaySceneHost::PrepareCommittedNavigation */
+    Result<void> ProjectPlaySceneHost::PrepareCommittedNavigation(const std::filesystem::path &root, JobSystem &jobs,
+                                                                  const EditorProjectScenePolicy &policy,
+                                                                  const Runtime::RuntimeSceneDefinition &committed) {
         const auto metadata = LoadProjectMetadata(root);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
@@ -242,7 +267,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const Platform::ProjectReadContext context{.projectIdentity = metadata.Value().projectId,
                                                    .projectGeneration = 1,
                                                    .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30}};
-        const auto captured = CaptureProjectSceneNavigation({*files.Value(), context, resources_.registry_.Snapshot(), selected.Value(),
+        const auto captured = CaptureProjectSceneNavigation({*files.Value(), context, resources_.registry_.Snapshot(), committed,
                                                              *policy.playNavigationScene, policy.cooked->target, jobs});
         if (captured.HasError())
             return Result<void>::Failure(captured.ErrorValue());
@@ -252,7 +277,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         navigation_ = std::move(navigation).Value();
         navigationSelection_ = captured.Value();
         const bool streamCoverage = mountedWorld_ && mountedWorld_->HasLiveNavigationContent();
-        if (auto registered = RegisterProjectSceneNavigation(*scenes_, *navigation_, navigationSelection_, streamCoverage);
+        if (auto registered = RegisterProjectSceneNavigation(*scenes_, *navigation_, navigationSelection_, streamCoverage,
+                                                             policy.playNavigationRuntimeRebuild);
             registered.HasError())
             return registered;
         if (streamCoverage)

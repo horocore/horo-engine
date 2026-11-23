@@ -209,6 +209,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         /** @brief Reads the current live mount's readiness for one exact occurrence. */
         [[nodiscard]] Result<MountedWorldCellReadiness> InspectWorldCell(Runtime::SceneInstanceId occurrence) const;
+        /** @brief Submits an authorized geometry change to the active resident navigation owner. */
+        [[nodiscard]] Result<void> QueueNavigationRebuild(ProjectSceneNavigationRebuildCommand command);
+
+        /** @brief Returns the last accepted rebuild's typed failure, if present. */
+        [[nodiscard]] std::optional<Error> NavigationRebuildError() const {
+            return navigationRebuildError_;
+        }
 
         /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
         [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
@@ -541,6 +548,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                     return prepared;
             if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
                 return committed;
+            AdvanceNavigationRebuild(frame.cancellation);
             if (auto mounted = CompleteWorldStartup(frame); mounted.HasError()) {
                 Shutdown();
                 return mounted;
@@ -707,6 +715,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
     private:
+        /** @brief Publishes completed navigation at the drained Scene cutoff and retains command-local failures. */
+        void AdvanceNavigationRebuild(const CancellationToken &cancellation);
+        /** @brief Composes the provider for an already verified committed Play Scene projection. */
+        [[nodiscard]] Result<void> PrepareCommittedNavigation(const std::filesystem::path &root, JobSystem &jobs,
+                                                              const EditorProjectScenePolicy &policy,
+                                                              const Runtime::RuntimeSceneDefinition &committed);
         /** @brief Arms one bounded read-only sample for the current live editor selection. */
         [[nodiscard]] std::optional<AI::AgentHandle> ArmSelectedDecisionTrace(std::uint64_t tick);
         /** @brief Resolves the selected entity's current live AI generation. */
@@ -767,8 +781,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         void ShutdownSceneOwners() noexcept {
             if (prefab_.templates)
                 prefab_.templates->Shutdown();
-            if (navigation_)
+            if (navigation_) {
                 navigation_->coordinator.BeginShutdown();
+                navigation_->rebuild.reset();
+                navigation_->rebuildAuthority = {};
+            }
             if (worldViewport_)
                 worldViewport_->publication->Withdraw(identity_);
             worldRenderer_.reset();
@@ -826,6 +843,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         CancellationSource animationLifetime_;
         std::shared_ptr<Runtime::SceneAnimationRuntime> animation_;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
+        std::optional<Error> navigationRebuildError_;
         std::shared_ptr<const ProjectSceneNavigationSelection> navigationSelection_;
         std::array<Navigation::NavigationPathCaller, 1> queryNavigationCallers_;
         std::optional<Navigation::NavigationPathPublication> queryNavigationPublication_;

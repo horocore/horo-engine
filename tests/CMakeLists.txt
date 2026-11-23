@@ -2593,8 +2593,9 @@ target_include_directories(HoroWorldCookIntegrationTests PRIVATE
     ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking
 )
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    target_sources(HoroWorldCookIntegrationTests PRIVATE unit/world_cook/ProjectSceneNavigationRebuildTests.cpp)
     target_include_directories(HoroWorldCookIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/application)
-    target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::ProjectSettings
+    target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::ProjectSettings HoroEngine::NavigationRecastDetour
         HoroEngine::PlatformImmutableFileStorage HoroBuiltinAssetCookerHostInternal nlohmann_json::nlohmann_json)
 endif()
 horo_register_catch_test(HoroWorldCookIntegrationTests LABELS "unit;world_streaming;headless;ci-windows")
