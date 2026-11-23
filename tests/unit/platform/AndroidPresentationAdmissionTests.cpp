@@ -306,4 +306,48 @@ namespace Horo::AndroidQualification::Tests {
         CHECK(mailbox.Read(replacement) == Baseline);
         CHECK(mailbox.Acquire() > replacement);
     }
+
+    TEST_CASE("Android pacing recovers without debt across one simulated hour of pressure and backgrounding",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        using enum FramePacing::Mode;
+        Fixture fixture;
+        FramePacing pacing{16ms, 32ms};
+        FramePacingMailbox mailbox;
+        const auto token = mailbox.Acquire();
+        REQUIRE(token != 0);
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto countAttempts = [&fixture, &mailbox, &pacing, token](const FramePacing::Clock::time_point start) {
+            const auto state = fixture.State();
+            std::size_t attempts{};
+            for (auto elapsed = 0ms; elapsed < 16s; elapsed += 1ms)
+                attempts += static_cast<std::size_t>(pacing.TryAdmit(state, start + elapsed, mailbox.Read(token)));
+            return attempts;
+        };
+        const std::array modes{Baseline, ThermalConservation, MemoryConservation, PowerConservation};
+        for (auto elapsed = 0min; elapsed < 60min; elapsed += 2min) {
+            const FramePacing::Clock::time_point start{elapsed};
+            for (std::size_t phase = 0; phase < modes.size(); ++phase) {
+                mailbox.Publish(token, modes[phase]);
+                CHECK(mailbox.Read(token) == modes[phase]);
+                CHECK(countAttempts(start + 20s * phase) == (phase == 0 ? 1000 : 500));
+            }
+            Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+            fixture.Commit();
+            mailbox.Publish(token, Baseline);
+            CHECK(countAttempts(start + 80s) == 0);
+
+            Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+            fixture.Commit();
+            Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+            const auto recovery = start + 110s;
+            REQUIRE(pacing.TryAdmit(fixture.State(), recovery, mailbox.Read(token)));
+            CHECK_FALSE(pacing.TryAdmit(fixture.State(), recovery, mailbox.Read(token)));
+            CHECK_FALSE(pacing.TryAdmit(fixture.State(), recovery + 15ms, mailbox.Read(token)));
+            CHECK(pacing.TryAdmit(fixture.State(), recovery + 16ms, mailbox.Read(token)));
+        }
+    }
 }  // namespace Horo::AndroidQualification::Tests
