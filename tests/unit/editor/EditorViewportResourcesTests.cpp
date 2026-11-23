@@ -79,30 +79,22 @@ namespace {
     }
 
     /** @brief Provides explicit reconstruction admission metadata without changing the Null backend's capability contract. */
-    struct TemporalResourceFrontend final {
-        std::unique_ptr<RenderFrontend> frontend;
-
-        TemporalResourceFrontend() {
-            using namespace Horo::Tests::RenderFrontendTesting;
-            using enum RenderCapability;
-            using enum RenderTextureUsage;
-            lifecycleState = {};
-            RenderCapabilitySnapshot support{.capabilityRevision = 1};
-            for (const auto feature : {TextureResources, RenderTargetResources, NativeReconstruction, Compute})
-                support.features.Enable(feature);
-            support.queues.graphics = true;
-            support.queues.compute = true;
-            support.limits.maxTextureDimension2D = 4096;
-            support.formats.sampleCountMask = 1 << 1;
-            support.formats.usages.fill(Sampled | RenderAttachment | Storage | CopySource);
-            lifecycleState.syntheticCapabilities = support;
-            frontend = CreateTrackingFrontend();
-        }
-
-        ~TemporalResourceFrontend() {
-            Render::Test::RequireDrainedOwner(*frontend);
-        }
-    };
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTemporalResourceFrontend() {
+        using namespace Horo::Tests::RenderFrontendTesting;
+        using enum RenderCapability;
+        using enum RenderTextureUsage;
+        lifecycleState = {};
+        RenderCapabilitySnapshot support{.capabilityRevision = 1};
+        for (const auto feature : {TextureResources, RenderTargetResources, NativeReconstruction, Compute})
+            support.features.Enable(feature);
+        support.queues.graphics = true;
+        support.queues.compute = true;
+        support.limits.maxTextureDimension2D = 4096;
+        support.formats.sampleCountMask = 1 << 1;
+        support.formats.usages.fill(Sampled | RenderAttachment | Storage | CopySource);
+        lifecycleState.syntheticCapabilities = support;
+        return CreateTrackingFrontend();
+    }
 
     void SettleResources(EditorViewportResources &resources, RenderFrontend &frontend, const RenderSceneView &scene,
                          const EditorViewportExtent extent) {
@@ -414,8 +406,7 @@ TEST_CASE("Color viewport publishes its encoded image while retaining distinct s
 }
 
 TEST_CASE("Temporal viewport publishes and retires an atomic guide and history generation", "[unit][headless][renderer][resource][color]") {
-    TemporalResourceFrontend owner;
-    auto &frontend = owner.frontend;
+    const auto frontend = CreateTemporalResourceFrontend();
     ImageResolverFixture imageResolver;
     auto resources = CreateResources(*frontend);
     REQUIRE(resources.EnableColorPipeline(EditorViewportResources::ColorReconstruction::Temporal).HasValue());
@@ -460,6 +451,7 @@ TEST_CASE("Temporal viewport publishes and retires an atomic guide and history g
     resources.Shutdown();
     CHECK_FALSE(resources.TemporalImages());
     CHECK(frontend->ResourceState(second->history[0].color.texture).HasError());
+    Render::Test::RequireDrainedOwner(*frontend);
 }
 
 TEST_CASE("Color activation cannot reinterpret already published legacy viewport storage", "[unit][headless][renderer][resource][color]") {
