@@ -3,6 +3,7 @@
 #include "support/renderer/RenderBackendDrainTestSupport.h"
 
 #include <array>
+#include <catch2/generators/catch_generators.hpp>
 #include <utility>
 
 namespace Horo::Tests::RenderFrontendTesting {
@@ -52,8 +53,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         constexpr FramebufferExtent Extent{16, 16};
 
         /** @brief Creates an exact persistent texture and sampled view using the tested frontend resource registry. */
-        NativeReconstructionSceneImage MakeImage(RenderFrontend &frontend, RenderTextureFormat format, RenderTextureUsage usage) {
-            const auto texture = HistoryFrontend::Take(frontend.CreateTexture({.extent = Extent, .format = format, .usage = usage})).handle;
+        NativeReconstructionSceneImage MakeImage(RenderFrontend &frontend, RenderTextureFormat format, RenderTextureUsage usage,
+                                                 const FramebufferExtent extent = Extent) {
+            const auto texture = HistoryFrontend::Take(frontend.CreateTexture({.extent = extent, .format = format, .usage = usage})).handle;
             REQUIRE(frontend.ProcessResourceRequests().HasValue());
             const auto view = HistoryFrontend::Take(frontend.CreateTextureView({.texture = texture, .format = format})).handle;
             REQUIRE(frontend.ProcessResourceRequests().HasValue());
@@ -61,12 +63,12 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         /** @brief Freezes the selected software device/scene epoch for this one real-frame history test. */
-        TemporalHistoryCompatibility Compatibility(RenderFrontend &frontend) {
+        TemporalHistoryCompatibility Compatibility(RenderFrontend &frontend, const FramebufferExtent targetExtent) {
             return {.view = HistoryFrontend::Take(frontend.CreateRenderViewIdentity()),
                     .provider = {1},
                     .mode = {1},
                     .renderExtent = Extent,
-                    .targetExtent = Extent,
+                    .targetExtent = targetExtent,
                     .providerGeneration = 1,
                     .modeGeneration = 1,
                     .surfaceGeneration = 1,
@@ -82,17 +84,17 @@ namespace Horo::Tests::RenderFrontendTesting {
                     .recipeGeneration = 1};
         }
 
-        /** @brief Builds an exact seed batch followed by a separate read of the history color, changing its final state. */
+        /** @brief Builds a temporal batch followed by a separate read of the resolved color, changing its final state. */
         void RecordHistory(RenderFrameScope &frame, const HistoryFrontend &owner, const NativeReconstructionScenePlan &plan,
                            const std::shared_ptr<NativeReconstructionViewHistory> &history, NativeReconstructionSceneImage laterOutput) {
             using enum NativeReconstructionImage;
             const auto take = []<typename T>(Result<T> result) {
                 return HistoryFrontend::Take(std::move(result));
             };
-            auto builder = take(RenderGraphBuilder::Create({.maxPasses = 2, .maxResources = 5, .maxUsages = 6, .maxDependencies = 1}));
-            const auto seed = take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Compute));
+            auto builder = take(RenderGraphBuilder::Create({.maxPasses = 2, .maxResources = 8, .maxUsages = 9, .maxDependencies = 1}));
+            const auto reconstruction = take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Compute));
             const auto reader = take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Compute));
-            REQUIRE(builder.AddDependency({seed, reader, RenderGraphDependencyKind::ExecutionOrder}).HasValue());
+            REQUIRE(builder.AddDependency({reconstruction, reader, RenderGraphDependencyKind::ExecutionOrder}).HasValue());
 
             constexpr RenderGraphLogicalState sampled{RenderGraphSynchronizationAccess::Read,
                                                       RenderGraphSynchronizationOperation::Sampled,
@@ -100,29 +102,29 @@ namespace Horo::Tests::RenderFrontendTesting {
                                                       RenderGraphTextureLayout::ShaderReadOnly,
                                                       {1}};
             const auto kernel = std::make_shared<HistoryKernel>();
-            RenderGraphNativeReconstruction first{.dispatch = plan.dispatch, .kernel = kernel};
             std::vector<RenderGraphImportedState> initial;
-            for (const auto role : {CurrentColor, OutputColor, CurrentDepth, OutputDepth}) {
-                const auto index = static_cast<std::size_t>(role);
-                const auto image = plan.images[index];
-                const bool output = NativeReconstructionWritesImage(role);
-                const auto id = take(builder.ImportTexture(image.texture, output ? RenderGraphResourceClass::History
-                                                                                 : RenderGraphResourceClass::Persistent));
-                first.images[index] = {id, image.view};
-                initial.push_back({id, output ? RenderGraphLogicalState{} : sampled,
-                                   output ? RenderGraphInitialContents::Discarded : RenderGraphInitialContents::Preserved});
-                REQUIRE(builder
-                            .AddUsage({seed, id, output ? RenderGraphAccess::Write : RenderGraphAccess::Read,
-                                       output ? RenderGraphUsageKind::Storage : RenderGraphUsageKind::Sampled})
-                            .HasValue());
-            }
+            const auto importCurrent = [&](const NativeReconstructionImage role) {
+                const auto image = plan.images[static_cast<std::size_t>(role)];
+                if (!image.texture.IsValid())
+                    return RenderGraphResourceId{};
+                const auto id = take(builder.ImportTexture(image.texture, RenderGraphResourceClass::Persistent));
+                initial.push_back({id, sampled, RenderGraphInitialContents::Preserved});
+                return id;
+            };
+            const NativeReconstructionGraphSources sources{importCurrent(CurrentColor), importCurrent(CurrentDepth), importCurrent(Motion)};
+            auto bound = take(BindNativeReconstructionGraphDispatch(builder, reconstruction, sources, plan, kernel));
+            const auto historyImports = std::span{bound.historyImports}.first(bound.historyImportCount);
+            initial.insert(initial.end(), historyImports.begin(), historyImports.end());
+            const auto &first = bound.workload;
             const auto source = first.images[static_cast<std::size_t>(OutputColor)];
             const auto destination = take(builder.ImportTexture(laterOutput.texture, RenderGraphResourceClass::Persistent));
             initial.push_back({destination, {}, RenderGraphInitialContents::Discarded});
             REQUIRE(builder.AddUsage({reader, source.resource, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled}).HasValue());
             REQUIRE(builder.AddUsage({reader, destination, RenderGraphAccess::Write, RenderGraphUsageKind::Storage}).HasValue());
-            RenderGraphNativeReconstruction second{.dispatch = {NativeReconstructionEntry::Spatial, plan.dispatch.constants},
-                                                   .kernel = kernel};
+            const auto &extents = plan.dispatch.constants.extents;
+            const NativeReconstructionDispatch tailConstants{.extents = {extents[2], extents[3], extents[2], extents[3]},
+                                                             .sample = {0.0F, 0.0F, 1.0F, 0.0F}};
+            RenderGraphNativeReconstruction second{.dispatch = {NativeReconstructionEntry::Spatial, tailConstants}, .kernel = kernel};
             second.images[static_cast<std::size_t>(CurrentColor)] = source;
             second.images[static_cast<std::size_t>(OutputColor)] = {destination, laterOutput.view};
 
@@ -130,16 +132,20 @@ namespace Horo::Tests::RenderFrontendTesting {
             const auto schedule = take(CompileRenderGraph(graph));
             const auto sync = take(SynthesizeRenderGraphSynchronization(graph, schedule, owner.assignments, initial));
             const auto compiled = take(CompileRenderGraphExecution(graph, schedule, sync, owner.assignments));
-            const std::array work{RenderGraphPassWorkload{seed, first}, RenderGraphPassWorkload{reader, second}};
+            const std::array work{RenderGraphPassWorkload{reconstruction, first}, RenderGraphPassWorkload{reader, second}};
             const std::array submissions{RenderGraphQueueSubmission{take(frame.ReserveSubmission(RenderQueueRole::Compute)), {0, 1}},
                                          RenderGraphQueueSubmission{take(frame.ReserveSubmission(RenderQueueRole::Compute)), {1, 1}}};
             const std::array histories{history};
-            REQUIRE(frame.ExecuteNativeReconstructionScene(compiled, work, submissions, histories).HasValue());
+            const auto executed = frame.ExecuteNativeReconstructionScene(compiled, work, submissions, histories);
+            INFO((executed.HasError() ? executed.ErrorValue().message : "accepted"));
+            REQUIRE(executed.HasValue());
         }
     }  // namespace
 
     TEST_CASE("Reconstruction history admits an accepted scene tail independently of presentation",
               "[renderer][reconstruction][submission]") {
+        const auto targetExtent = GENERATE(Extent, FramebufferExtent{24, 20});
+        CAPTURE(targetExtent.width, targetExtent.height);
         HistoryFrontend owner;
         auto &frontend = *owner.frontend;
         constexpr auto sampled = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
@@ -147,13 +153,13 @@ namespace Horo::Tests::RenderFrontendTesting {
         const auto color = MakeImage(frontend, RenderTextureFormat::Rgba16Float, sampled);
         const auto depth = MakeImage(frontend, RenderTextureFormat::R32Float, sampled);
         const auto motion = MakeImage(frontend, RenderTextureFormat::Rg16Float, sampled);
-        const auto later = MakeImage(frontend, RenderTextureFormat::Rgba32Float, storage);
+        const auto later = MakeImage(frontend, RenderTextureFormat::Rgba32Float, storage, targetExtent);
         const auto pair = [&] {
-            return NativeReconstructionHistoryImages{MakeImage(frontend, RenderTextureFormat::Rgba32Float, storage),
-                                                     MakeImage(frontend, RenderTextureFormat::R32Float, storage)};
+            return NativeReconstructionHistoryImages{MakeImage(frontend, RenderTextureFormat::Rgba32Float, storage, targetExtent),
+                                                     MakeImage(frontend, RenderTextureFormat::R32Float, storage, targetExtent)};
         };
         const NativeReconstructionViewHistory::ImagePairs pairs{pair(), pair()};
-        const auto epoch = Compatibility(frontend);
+        const auto epoch = Compatibility(frontend, targetExtent);
         const auto history = HistoryFrontend::Take(NativeReconstructionViewHistory::Create(frontend, epoch, pairs));
         const auto input = [&](NativeReconstructionSceneImage image, RenderTextureFormat format) {
             return ReconstructionTextureInput{image.texture, {.extent = Extent, .format = format, .usage = sampled}, epoch.view, 1};
@@ -164,12 +170,15 @@ namespace Horo::Tests::RenderFrontendTesting {
                                                  .color = input(color, RenderTextureFormat::Rgba16Float),
                                                  .positiveLinearDepth = input(depth, RenderTextureFormat::R32Float),
                                                  .motion = input(motion, RenderTextureFormat::Rg16Float),
-                                                 .output = {.descriptor = {.extent = Extent,
+                                                 .output = {.descriptor = {.extent = targetExtent,
                                                                            .format = RenderTextureFormat::Rgba32Float,
                                                                            .usage = storage},
                                                             .writeUsage = RenderGraphUsageKind::Storage}};
-        const auto plan = HistoryFrontend::Take(history->Stage(frontend, request, {color.view, depth.view, motion.view}, {}));
-        auto frame = HistoryFrontend::Take(frontend.BeginFrame({.frameNumber = 1, .outputExtent = Extent}));
+        const NativeReconstructionSceneViews views{color.view, depth.view, motion.view};
+        const NativeReconstructionTemporalSettings tuning{.historyWeight = 0.8F};
+        const auto plan = HistoryFrontend::Take(history->Stage(frontend, request, views, tuning));
+        REQUIRE(plan.dispatch.entry == NativeReconstructionEntry::TemporalSeed);
+        auto frame = HistoryFrontend::Take(frontend.BeginFrame({.frameNumber = 1, .outputExtent = targetExtent}));
         RecordHistory(frame, owner, plan, history, later);
         REQUIRE(lifecycleState.reconstruction.recorded.size() == 2);
         lifecycleState.failPresentation = true;
@@ -190,6 +199,24 @@ namespace Horo::Tests::RenderFrontendTesting {
             REQUIRE(published);
             CHECK(published->frameId == 1);
             CHECK(published->states.color.layout == RenderGraphTextureLayout::ShaderReadOnly);
+
+            auto next = request;
+            next.timing = {.frameId = 2, .predecessorFrameId = 1};
+            next.color.frameId = next.positiveLinearDepth->frameId = next.motion->frameId = next.timing.frameId;
+            const auto continued = HistoryFrontend::Take(history->Stage(frontend, next, views, tuning));
+            REQUIRE(continued.dispatch.entry == NativeReconstructionEntry::TemporalHistory);
+            auto successor = HistoryFrontend::Take(frontend.BeginFrame({.frameNumber = 2, .outputExtent = targetExtent}));
+            RecordHistory(successor, owner, continued, history, later);
+            lifecycleState.reconstruction.acceptedPrefix = lifecycleState.reconstruction.recorded.size();
+            REQUIRE(successor.Present().HasError());
+            auto *nextLease = std::exchange(lifecycleState.graphLease, nullptr);
+            REQUIRE(nextLease);
+            nextLease->Release();
+            REQUIRE(HistoryFrontend::Take(history->Poll(frontend, epoch)));
+            const auto replacement = history->Published(epoch);
+            REQUIRE(replacement);
+            CHECK(replacement->frameId == 2);
+            CHECK(replacement->images.color.texture != published->images.color.texture);
         }
 
         SECTION("An accepted dispatch cannot publish final states from a failed later batch") {

@@ -16,6 +16,47 @@ namespace Horo::Render {
             return static_cast<std::size_t>(role);
         }
 
+        /** @brief Distinguishes a required current producer from a history image this pass must import. */
+        std::optional<RenderGraphResourceId> ReconstructionSource(const NativeReconstructionGraphSources &sources,
+                                                                  const Image role) noexcept {
+            switch (role) {
+                case Image::CurrentColor:
+                    return sources.color;
+                case Image::CurrentDepth:
+                    return sources.positiveLinearDepth;
+                case Image::Motion:
+                    return sources.motion;
+                default:
+                    return std::nullopt;
+            }
+        }
+
+        /** @brief Adds a sampled current image or imports one exact generation of a history image. */
+        Result<void> BindReconstructionImage(RenderGraphBuilder &builder, const RenderGraphPassRef pass,
+                                             const NativeReconstructionScenePlan &plan, const Image role, RenderGraphResourceId resource,
+                                             NativeReconstructionGraphDispatch &dispatch) {
+            const auto &image = plan.images[Slot(role)];
+            if (!image.texture.IsValid() || !image.view.IsValid() || image.texture.owner != image.view.owner)
+                return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+            const bool written = NativeReconstructionWritesImage(role);
+            if (!resource.IsValid()) {
+                const auto imported = builder.ImportTexture(image.texture, RenderGraphResourceClass::History);
+                if (imported.HasError())
+                    return Result<void>::Failure(imported.ErrorValue());
+                resource = imported.Value();
+                auto &initial = dispatch.historyImports[dispatch.historyImportCount++];
+                initial.resource = resource;
+                initial.contents = RenderGraphInitialContents::Discarded;
+                if (!written) {
+                    initial.contents = RenderGraphInitialContents::Preserved;
+                    initial.state = role == Image::PreviousColor ? plan.previousStates->color : plan.previousStates->depth;
+                }
+            }
+            dispatch.workload.images[Slot(role)] = {resource, image.view};
+            return builder.AddUsage({pass, resource, written ? RenderGraphAccess::Write : RenderGraphAccess::Read,
+                                     written ? RenderGraphUsageKind::Storage : RenderGraphUsageKind::Sampled});
+        }
+
         /** @brief Gets the exact two color/depth texture pairs in the history store's fixed order. */
         auto HistoryTextures(const NativeReconstructionViewHistory::ImagePairs &images) noexcept {
             return std::array{images[0].color.texture, images[0].depth.texture, images[1].color.texture, images[1].depth.texture};
@@ -48,6 +89,31 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc BindNativeReconstructionGraphDispatch */
+    Result<NativeReconstructionGraphDispatch> BindNativeReconstructionGraphDispatch(
+        RenderGraphBuilder &builder, const RenderGraphPassRef pass, const NativeReconstructionGraphSources &sources,
+        const NativeReconstructionScenePlan &plan, std::shared_ptr<IResidentNativeReconstructionKernel> kernel) {
+        using Outcome = Result<NativeReconstructionGraphDispatch>;
+        const auto entry = plan.dispatch.entry;
+        const bool usesHistory = entry == NativeReconstructionEntry::TemporalHistory;
+        if ((!usesHistory && entry != NativeReconstructionEntry::TemporalSeed) || usesHistory != plan.previousStates.has_value() || !kernel)
+            return Outcome::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+
+        NativeReconstructionGraphDispatch dispatch{.workload = {.dispatch = plan.dispatch, .kernel = std::move(kernel)}};
+        for (std::size_t slot = 0; slot < plan.images.size(); ++slot) {
+            const auto role = static_cast<Image>(slot);
+            if (!NativeReconstructionUsesImage(entry, role))
+                continue;
+            const auto source = ReconstructionSource(sources, role);
+            if (source && (!source->IsValid() || source->owner != builder.Owner()))
+                return Outcome::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+            const auto bound = BindReconstructionImage(builder, pass, plan, role, source.value_or(RenderGraphResourceId{}), dispatch);
+            if (bound.HasError())
+                return Outcome::Failure(bound.ErrorValue());
+        }
+        return Outcome::Success(std::move(dispatch));
+    }
 
     NativeReconstructionViewHistory::NativeReconstructionViewHistory(TemporalHistoryStore store, TemporalHistoryHandle handle,
                                                                      const ImagePairs &images,

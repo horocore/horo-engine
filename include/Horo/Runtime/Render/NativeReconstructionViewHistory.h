@@ -2,7 +2,7 @@
 
 /** @file NativeReconstructionViewHistory.h @brief Scene-owned native reconstruction history and exact graph handoff. */
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
-#include "Horo/Runtime/Render/RenderGraphSynchronization.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
 
 #include <array>
@@ -49,6 +49,34 @@ namespace Horo::Render {
         std::array<NativeReconstructionSceneImage, static_cast<std::size_t>(NativeReconstructionImage::Count)> images;
         std::optional<NativeReconstructionHistoryStates> previousStates; /**< Exact preserved imports for a history dispatch. */
     };
+
+    /** @brief Current scene images already declared by their producer passes in this graph. */
+    struct NativeReconstructionGraphSources final {
+        RenderGraphResourceId color;
+        RenderGraphResourceId positiveLinearDepth;
+        RenderGraphResourceId motion;
+    };
+
+    /** @brief One temporal dispatch and its exact history imports for synchronization synthesis. */
+    struct NativeReconstructionGraphDispatch final {
+        RenderGraphNativeReconstruction workload;
+        std::array<RenderGraphImportedState, 4> historyImports;
+        std::size_t historyImportCount{};
+    };
+
+    /** @brief Authors the image roles of one staged temporal reconstruction pass.
+     * @param builder Open graph owning the pass and current scene image declarations.
+     * @param pass Compute pass to which the image uses belong.
+     * @param sources Graph identities of the staged plan's current-frame producers.
+     * @param plan Exact plan returned by the view history owner.
+     * @param kernel Resident kernel for the plan's selected seed or history entry.
+     * @return Typed workload and additional initial states, or the original authoring failure.
+     * @details The caller supplies producer dependencies and consumes the resolved color through its graph
+     * identity. The caller discards the candidate graph and cancels its staged history if authoring fails.
+     */
+    [[nodiscard]] Result<NativeReconstructionGraphDispatch> BindNativeReconstructionGraphDispatch(
+        RenderGraphBuilder &builder, RenderGraphPassRef pass, const NativeReconstructionGraphSources &sources,
+        const NativeReconstructionScenePlan &plan, std::shared_ptr<IResidentNativeReconstructionKernel> kernel);
 
     /** @brief Latest successful view-local frame and its exact history image pair. */
     struct NativeReconstructionScenePublication final {
