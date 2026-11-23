@@ -254,7 +254,8 @@ TEST_CASE("Local tool results require an exact pending assistant intent", "[agen
 }
 
 TEST_CASE("Local inference distinguishes a stopped service and a loading model", "[agent][model][http]") {
-    auto offline = CreateOllamaModelProvider({.endpoint = Endpoint("HORO_MODEL_TEST_OFFLINE_ENDPOINT")});
+    auto offline =
+        CreateOllamaModelProvider({.endpoint = Endpoint("HORO_MODEL_TEST_OFFLINE_ENDPOINT"), .timeout = std::chrono::milliseconds{250}});
     const auto discovery = offline->Discover({});
     REQUIRE(discovery.outcome.error);
     CHECK(discovery.outcome.error->code == ModelErrorCode::Unavailable);

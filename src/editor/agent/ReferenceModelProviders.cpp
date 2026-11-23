@@ -127,16 +127,6 @@ namespace Horo::Agent {
             return {code, message.str(), status};
         }
 
-        /** @brief Keep local endpoint problems actionable without exposing URLs or remote response text. */
-        ModelError TransportError(Protocol protocol, CURLcode result) {
-            using enum ModelErrorCode;
-            if (protocol == Protocol::Ollama && result == CURLE_COULDNT_CONNECT)
-                return {Unavailable, "Local model service is unreachable. Start it or check its configured port.", std::nullopt};
-            if (protocol == Protocol::Ollama && result == CURLE_OPERATION_TIMEDOUT)
-                return {Unavailable, "Local model request timed out. Wait for the model to load and retry.", std::nullopt};
-            return {Transport, "Model HTTP transport failed", std::nullopt};
-        }
-
         /** @brief Own the bounded response buffer and cancellation state for one HTTP transfer. */
         struct HttpContext final {
             std::string pending;
@@ -147,6 +137,22 @@ namespace Horo::Agent {
             bool oversized{};
             bool invalid{};
         };
+
+        /** @brief Keep local endpoint problems actionable without exposing URLs or remote response text. */
+        ModelError TransportError(const HttpContext &context, Protocol protocol, CURLcode result) {
+            using enum ModelErrorCode;
+            if (protocol == Protocol::Ollama) {
+                curl_off_t connectTime{};
+                if (const bool connectTimedOut = result == CURLE_OPERATION_TIMEDOUT &&
+                                                 curl_easy_getinfo(context.curl, CURLINFO_CONNECT_TIME_T, &connectTime) == CURLE_OK &&
+                                                 connectTime == 0;
+                    result == CURLE_COULDNT_CONNECT || connectTimedOut)
+                    return {Unavailable, "Local model service is unreachable. Start it or check its configured port.", std::nullopt};
+                if (result == CURLE_OPERATION_TIMEDOUT)
+                    return {Unavailable, "Local model request timed out. Wait for the model to load and retry.", std::nullopt};
+            }
+            return {Transport, "Model HTTP transport failed", std::nullopt};
+        }
 
         /** @brief Feed complete response lines to the parser without retaining unbounded payloads. */
         std::size_t WriteResponse(char *data,  // NOSONAR: libcurl's C callback requires a mutable char pointer.
@@ -224,6 +230,19 @@ namespace Horo::Agent {
             }
         }
 
+        /** @brief Delivers the final unterminated response record to the provider parser. */
+        ModelOutcome FinishHttpFragment(const HttpContext &context) {
+            if (context.pending.empty())
+                return {};
+            try {
+                if (context.consume(context.pending))
+                    return {};
+            } catch (...) {  // NOSONAR: non-standard sink exceptions are a protocol failure too.
+                // Provider payload or sink exception text must stay out of diagnostics.
+            }
+            return {ModelError{ModelErrorCode::Protocol, "Invalid final model response fragment", std::nullopt}};
+        }
+
         /** @brief Translate a completed transfer and its final fragment into the neutral outcome. */
         ModelOutcome FinishHttpResponse(const HttpContext &context, Protocol protocol, CURLcode result, long status) {
             using enum ModelErrorCode;
@@ -236,18 +255,10 @@ namespace Horo::Agent {
             if (status >= 300)
                 return {HttpError(status)};
             if (result != CURLE_OK)
-                return {TransportError(protocol, result)};
+                return {TransportError(context, protocol, result)};
             if (status < 200)
                 return {HttpError(status)};
-            if (!context.pending.empty()) {
-                try {
-                    if (!context.consume(context.pending))
-                        return {ModelError{Protocol, "Invalid final model response fragment", std::nullopt}};
-                } catch (...) {  // NOSONAR: non-standard sink exceptions are a protocol failure too.
-                    return {ModelError{Protocol, "Invalid final model response fragment", std::nullopt}};
-                }
-            }
-            return {};
+            return FinishHttpFragment(context);
         }
 
         /** @brief Perform one real bounded HTTP request with a per-line or buffered response consumer. */
