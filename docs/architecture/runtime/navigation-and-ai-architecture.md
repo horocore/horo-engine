@@ -1239,6 +1239,15 @@ until their leases drain. A changed tile with retained off-mesh links requires
 link reprojection before it can be rebuilt. Product hosts still own capture,
 scheduling, capability admission and blocker retirement.
 
+`NavigationRuntimeRebuildJobs` adds one owner-lane job slot per composed
+rebuild owner. Its background CPU job owns the source, tile and provider pins
+without borrowing the live Scene. The owner retains admission until it consumes
+the terminal result and withdraws any unpublished candidate on cancellation.
+Taking a result hands it back for owner-lane publication.
+The candidate exposes its retained tile and provider reservation for Scene
+admission. Its provider factory reports measured storage independently of the
+remaining preparation budget, and over-budget results fail before publication.
+
 ```cpp
 struct DynamicObstacle {
     WorldCoordinate64  center;

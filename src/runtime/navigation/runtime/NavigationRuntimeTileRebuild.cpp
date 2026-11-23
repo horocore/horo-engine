@@ -144,23 +144,29 @@ namespace Horo::Navigation {
         }
 
         /** @brief Selects no backend for explicit loss of walkable coverage. */
-        [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> PrepareBackend(
-            const NavigationRuntimeTileRebuildRequest &request, const INavigationRuntimeRebuildBackendFactory &factory,
-            const RebuildClosure &closure, const CancellationToken &cancel) {
-            using Backend = Result<std::unique_ptr<INavigationQueryBackend>>;
+        [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> PrepareBackend(const NavigationRuntimeTileRebuildRequest &request,
+                                                                                     const INavigationRuntimeRebuildBackendFactory &factory,
+                                                                                     const RebuildClosure &closure,
+                                                                                     const CancellationToken &cancel) {
+            using Backend = Result<NavigationPreparedRuntimeRebuildBackend>;
             if (cancel.IsCancellationRequested())
-                return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::BakeInputCancelled);
+                return Failure<NavigationPreparedRuntimeRebuildBackend>(NavigationErrors::BakeInputCancelled);
             if (std::ranges::all_of(closure.tiles, [](const Tile &tile) {
                 return tile->Topology().IsEmpty();
             }))
-                return Backend::Success(nullptr);
+                return Backend::Success({});
             if (closure.remaining == 0)
-                return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
+                return Failure<NavigationPreparedRuntimeRebuildBackend>(NavigationErrors::CapacityExceeded);
             auto activation = request.expected.activation;
             activation.topology = request.nextTopology;
             auto backend = factory.Prepare(activation, closure.tiles, closure.remaining, cancel);
-            if (backend.HasValue() && !backend.Value())
-                return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::ProviderFailed);
+            if (backend.HasError())
+                return backend;
+            const auto &prepared = backend.Value();
+            if (!prepared.backend || prepared.reservedProviderBytes == 0)
+                return Failure<NavigationPreparedRuntimeRebuildBackend>(NavigationErrors::OutcomeDescriptorInvalid);
+            if (prepared.reservedProviderBytes > closure.remaining)
+                return Failure<NavigationPreparedRuntimeRebuildBackend>(NavigationErrors::CapacityExceeded);
             return backend;
         }
     }  // namespace
@@ -169,8 +175,10 @@ namespace Horo::Navigation {
     NavigationRuntimeTileRebuildCandidate::NavigationRuntimeTileRebuildCandidate(const NavigationRuntimeRebuildFence &expected,
                                                                                  NavigationGeneration next, TileClosure tiles,
                                                                                  std::unique_ptr<INavigationQueryBackend> backend,
-                                                                                 const std::size_t rebuiltTiles) noexcept
-        : expected_(expected), next_(next), tiles_(std::move(tiles)), backend_(std::move(backend)), rebuiltTiles_(rebuiltTiles) {}
+                                                                                 const std::size_t rebuiltTiles,
+                                                                                 const std::size_t reservedBytes) noexcept
+        : expected_(expected), next_(next), tiles_(std::move(tiles)), backend_(std::move(backend)), rebuiltTiles_(rebuiltTiles),
+          reservedBytes_(reservedBytes) {}
 
     /** @copydoc PrepareRuntimeNavigationTileRebuild */
     Candidate PrepareRuntimeNavigationTileRebuild(const NavigationRuntimeTileRebuildRequest &request, const INavigationMeshBuilder &builder,
@@ -191,9 +199,11 @@ namespace Horo::Navigation {
                 return Candidate::Failure(std::move(backend).ErrorValue());
             if (cancel.IsCancellationRequested())
                 return Failure<NavigationRuntimeTileRebuildCandidate>(NavigationErrors::BakeInputCancelled);
+            auto provider = std::move(backend).Value();
+            const auto reserved = request.maximumOwnedBytes - closure.remaining + provider.reservedProviderBytes;
             return Candidate::Success(NavigationRuntimeTileRebuildCandidate{request.expected, request.nextTopology,
-                                                                            std::move(closure.tiles), std::move(backend).Value(),
-                                                                            closure.rebuilt});
+                                                                            std::move(closure.tiles), std::move(provider.backend),
+                                                                            closure.rebuilt, reserved});
         } catch (const std::bad_alloc &) {
             return Failure<NavigationRuntimeTileRebuildCandidate>(NavigationErrors::CapacityExceeded);
         }

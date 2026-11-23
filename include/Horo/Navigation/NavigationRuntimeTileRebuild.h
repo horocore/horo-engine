@@ -32,6 +32,12 @@ namespace Horo::Navigation {
         std::size_t maximumOwnedBytes{64U * 1024U * 1024U};
     };
 
+    /** @brief Detached provider and its retained storage reservation, separate from the portable tiles. */
+    struct NavigationPreparedRuntimeRebuildBackend final {
+        std::unique_ptr<INavigationQueryBackend> backend;
+        std::size_t reservedProviderBytes{}; /**< Positive and within the factory's admitted budget for nonempty coverage. */
+    };
+
     /** @brief Host-selected materializer for a complete detached, nonempty tile closure. */
     class INavigationRuntimeRebuildBackendFactory {
     public:
@@ -42,9 +48,9 @@ namespace Horo::Navigation {
          * @param tiles Complete sorted closure pinned for this call.
          * @param maximumOwnedBytes Remaining budget for provider-owned resources and temporary preparation.
          * @param cancellation Cancellation observed at bounded work boundaries.
-         * @return Owned provider or a typed failure.
+         * @return Owned provider with its verified storage reservation, or a typed failure.
          */
-        [[nodiscard]] virtual Result<std::unique_ptr<INavigationQueryBackend>> Prepare(
+        [[nodiscard]] virtual Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
             const NavigationWorldActivationDescriptor &activation, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
             std::size_t maximumOwnedBytes, const CancellationToken &cancellation) const = 0;
     };
@@ -66,6 +72,13 @@ namespace Horo::Navigation {
             return rebuiltTiles_;
         }
 
+        /** @brief Reports the conservative retained tile and provider charge for aggregate owner admission.
+         * @return Owned storage reservation including shared tile pins.
+         */
+        [[nodiscard]] std::size_t ReservedBytes() const noexcept {
+            return reservedBytes_;
+        }
+
         /** @brief Rechecks authority and commits the complete candidate once at the owner safe point.
          * @param world Owner of the exact active predecessor and its read leases.
          * @param current Freshly observed source, origin, overlay and command authority.
@@ -83,13 +96,15 @@ namespace Horo::Navigation {
         /** @brief Takes ownership only after all detached builds and provider preparation succeed. */
         NavigationRuntimeTileRebuildCandidate(const NavigationRuntimeRebuildFence &expected, NavigationGeneration next,
                                               std::vector<std::shared_ptr<const NavigationCookedTile>> tiles,
-                                              std::unique_ptr<INavigationQueryBackend> backend, std::size_t rebuiltTiles) noexcept;
+                                              std::unique_ptr<INavigationQueryBackend> backend, std::size_t rebuiltTiles,
+                                              std::size_t reservedBytes) noexcept;
 
         NavigationRuntimeRebuildFence expected_;
         NavigationGeneration next_;
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles_;
         std::unique_ptr<INavigationQueryBackend> backend_;
         std::size_t rebuiltTiles_{};
+        std::size_t reservedBytes_{};
     };
 
     /** @brief Rebuilds changed dependency keys and prepares a complete immutable replacement without publishing it.

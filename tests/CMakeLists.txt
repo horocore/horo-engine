@@ -1941,6 +1941,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationCoordinatorTests.cpp
         unit/runtime/navigation/NavigationCoordinatorOwnerBudgetTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
+        unit/runtime/navigation/NavigationRuntimeRebuildJobsTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
 )
 target_compile_features(HoroNavigationRuntimeTests PRIVATE cxx_std_20)

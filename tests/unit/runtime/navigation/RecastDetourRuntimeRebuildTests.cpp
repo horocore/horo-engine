@@ -50,23 +50,29 @@ namespace Horo::Navigation {
             explicit NativeFactory(const NavigationDefinition &definition, std::size_t providerBudget = 1024U * 1024U)
                 : definition_(definition), providerBudget_(providerBudget) {}
 
-            [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> Prepare(
+            [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
                 const NavigationWorldActivationDescriptor &descriptor, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
                 std::size_t maximumOwnedBytes, const CancellationToken &cancellation) const override {
                 if (cancellation.IsCancellationRequested())
-                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+                    return Result<NavigationPreparedRuntimeRebuildBackend>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
                 const auto &key = tiles.front()->Key();
-                return CreateRecastDetourCookedNavigationQueryBackend({.world = descriptor.world,
-                                                                       .topology = descriptor.topology,
-                                                                       .surface = {key.surface, key.scope},
-                                                                       .profile = key.profile,
-                                                                       .definition = definition_,
-                                                                       .tiles = tiles,
-                                                                       .nearestPointHalfExtents = {2, 4, 2},
-                                                                       .queryLimits = {128, 32, 100},
-                                                                       .maximumConcurrentQueries = 1,
-                                                                       .maximumOwnedBytes = std::min(providerBudget_, maximumOwnedBytes),
-                                                                       .capabilityRevision = 12});
+                auto backend =
+                    PrepareRecastDetourCookedNavigationQueryBackend({.world = descriptor.world,
+                                                                     .topology = descriptor.topology,
+                                                                     .surface = {key.surface, key.scope},
+                                                                     .profile = key.profile,
+                                                                     .definition = definition_,
+                                                                     .tiles = tiles,
+                                                                     .nearestPointHalfExtents = {2, 4, 2},
+                                                                     .queryLimits = {128, 32, 100},
+                                                                     .maximumConcurrentQueries = 1,
+                                                                     .maximumOwnedBytes = std::min(providerBudget_, maximumOwnedBytes),
+                                                                     .capabilityRevision = 12});
+                using Return = Result<NavigationPreparedRuntimeRebuildBackend>;
+                if (backend.HasError())
+                    return Return::Failure(std::move(backend).ErrorValue());
+                auto prepared = std::move(backend).Value();
+                return Return::Success({std::move(prepared.backend), prepared.reservedBytes});
             }
 
         private:
@@ -154,7 +160,7 @@ namespace Horo::Navigation {
                 auto created = NavigationWorldLifecycle::Create(1);
                 REQUIRE(created.HasValue());
                 auto active = std::move(created).Value();
-                REQUIRE(active.Stage(original, std::move(provider).Value()).HasValue());
+                REQUIRE(active.Stage(original, std::move(provider).Value().backend).HasValue());
                 REQUIRE(active.CommitAtSafePoint(original.scene, original.sceneGeneration).HasValue());
                 const auto lease = active.Acquire(original.world).Value();
                 REQUIRE(PathStatus(lease, filter, 4, 12) == NavigationPathStatus::Reachable);
@@ -201,6 +207,8 @@ namespace Horo::Navigation {
         REQUIRE(prepared.HasValue());
         const auto &candidate = prepared.Value();
         REQUIRE(candidate.Tiles().size() == fixture.base.size());
+        CHECK(candidate.ReservedBytes() > candidate.Tiles().front()->StorageBytes());
+        CHECK(candidate.ReservedBytes() <= request.maximumOwnedBytes);
         CHECK(candidate.RebuiltTileCount() == 2);
         CHECK(candidate.Tiles()[0] != fixture.base[0]);
         CHECK(candidate.Tiles()[1] != fixture.base[1]);

@@ -1109,6 +1109,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationTraversal.h
     Horo/Navigation/NavigationVelocityPipeline.h
     Horo/Navigation/NavigationRuntimeQueues.h
+    Horo/Navigation/NavigationRuntimeRebuildJobs.h
     Horo/Navigation/NavigationRuntimeTileRebuild.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
