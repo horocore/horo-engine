@@ -8,6 +8,47 @@ namespace {
     using namespace Horo::Runtime::Ui::AnimationTests;
 }  // namespace
 
+TEST_CASE("Visual accessibility survives Runtime UI asset replacement with the same policy revision",
+          "[runtime_ui][animation][integration][reload][accessibility]") {
+    auto allocator = UiElementSlotAllocator::Create(ReloadTests::Owner()).Value();
+    HostFixture fixture{{.allocator = &allocator, .decorativeMotion = true, .contrastVariants = true}};
+    auto &participant = *fixture.participant;
+    REQUIRE(participant.SetVisualAccessibility({20, true, true}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto retained = Frame(participant);
+
+    auto replacement = Generation(allocator, 100);
+    auto resources = Resources(replacement.Canvases().front(), false, 1000000000, false, false, true);
+    resources.definition.animations.front().motionIntent = UiAnimationMotionIntent::Decorative;
+    const auto reloaded = participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
+                                             std::move(resources.definition),
+                                             {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands});
+    REQUIRE(reloaded.HasValue());
+    CHECK(participant.SetVisualAccessibility({19, false, false}).HasError());
+    CHECK(participant.SetVisualAccessibility({20, false, false}).HasError());
+    REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto current = Frame(participant);
+    REQUIRE(current.Timelines().size() == 1);
+    CHECK(current.Timelines().front().playback.outcome == UiAnimationOutcome::Completed);
+    CheckGeometry(current, 50);
+    CHECK(current.Controls().front().source != retained.Controls().front().source);
+    for (const auto *frame : {&retained, &current}) {
+        const auto style = frame->Styles().Get(frame->Controls().front().source.element);
+        REQUIRE(style.HasValue());
+        const auto properties = frame->Styles().Properties(style.Value());
+        const auto fill =
+            std::ranges::find(properties, CoreUiStylePropertyId(UiCoreStyleProperty::Fill), &UiComputedStyleProperty::property);
+        REQUIRE(fill != properties.end());
+        CHECK(fill->provenance.origin == UiStyleOrigin::AccessibilityPolicy);
+        CHECK(style.Value().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+        const auto focused = style.Value().state.Contains(UiVisualStateMask{UiVisualState::Focused});
+        CHECK(std::get<UiStyleColor>(fill->value).red == (focused ? 1.0F : 0.0F));
+    }
+    fixture.host->Shutdown();
+    CHECK(participant.SetVisualAccessibility({21, false, false}).HasError());
+}
+
 TEST_CASE("Real asset generation re-admission uses the same canvas issuer and rejects old animation and input incarnations",
           "[runtime_ui][animation][integration][reload][identity]") {
     auto issued = UiElementSlotAllocator::Create(ReloadTests::Owner());
