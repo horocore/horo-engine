@@ -2,7 +2,7 @@
 
 #include "DetourObstacleAvoidance.h"
 #include "Horo/Navigation/NavigationErrors.h"
-#include "RecastDetourCrowdGeometry.h"
+#include "NavigationCrowdGeometry.h"
 
 #include <algorithm>
 #include <array>

@@ -1943,7 +1943,7 @@ add_executable(HoroNavigationRuntimeTests
 )
 target_compile_features(HoroNavigationRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroNavigationRuntimeTests PRIVATE HoroEngine::NavigationRuntime)
+target_link_libraries(HoroNavigationRuntimeTests PRIVATE HoroEngine::NavigationRuntime HoroEngine::NavigationCrowdDeterministic)
 horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;headless;lifecycle")
 
 # Dedicated non-installed white-box test boundary for the private transport primitive.
@@ -1980,7 +1980,7 @@ target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
     target_include_directories(HoroNavigationRuntimeQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ai")
     target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE HoroSceneAiNavigationMotionInternal
-            HoroEngine::GameplayNavigationIntegration)
+            HoroEngine::GameplayNavigationIntegration HoroEngine::NavigationCrowdDeterministic)
     target_sources(HoroNavigationRuntimeQualificationTests PRIVATE
             integration/navigation/AINavigationCharacterQualificationTests.cpp
             integration/navigation/NavigationRuntimeQualificationTests.cpp
@@ -1993,7 +1993,7 @@ target_link_libraries(HoroNavigationCharacterAdapterPublicConsumer PRIVATE HoroE
 add_test(NAME HoroNavigationCharacterAdapterPublicConsumer COMMAND HoroNavigationCharacterAdapterPublicConsumer)
 
 add_executable(HoroNavigationCoordinatorPublicConsumer support/NavigationCoordinatorPublicConsumer.cpp)
-target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime)
+target_link_libraries(HoroNavigationCoordinatorPublicConsumer PRIVATE HoroEngine::NavigationRuntime HoroEngine::NavigationCrowdDeterministic)
 add_test(NAME HoroNavigationCoordinatorPublicConsumer COMMAND HoroNavigationCoordinatorPublicConsumer)
 
 add_executable(HoroNavigationSceneAgentLifecyclePublicConsumer support/NavigationSceneAgentLifecyclePublicConsumer.cpp)

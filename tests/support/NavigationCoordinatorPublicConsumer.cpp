@@ -1,3 +1,4 @@
+#include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationMovement.h"

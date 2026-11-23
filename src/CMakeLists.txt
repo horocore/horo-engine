@@ -2848,14 +2848,25 @@ else()
     )
 endif()
 
+add_library(HoroNavigationCrowdGeometryInternal STATIC
+        runtime/navigation/backends/crowd_geometry/NavigationCrowdGeometry.cpp)
+target_compile_features(HoroNavigationCrowdGeometryInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNavigationCrowdGeometryInternal PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/navigation/backends/crowd_geometry)
+target_link_libraries(HoroNavigationCrowdGeometryInternal PUBLIC HoroEngine::NavigationRuntime)
+
+add_library(HoroNavigationCrowdDeterministic STATIC
+        runtime/navigation/backends/deterministic/DeterministicCrowdProvider.cpp)
+add_library(HoroEngine::NavigationCrowdDeterministic ALIAS HoroNavigationCrowdDeterministic)
+target_compile_features(HoroNavigationCrowdDeterministic PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCrowdDeterministic PUBLIC HoroEngine::NavigationRuntime PRIVATE HoroNavigationCrowdGeometryInternal)
+
 add_library(HoroNavigationCrowdDetour STATIC)
 add_library(HoroEngine::NavigationCrowdDetour ALIAS HoroNavigationCrowdDetour)
 target_compile_features(HoroNavigationCrowdDetour PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationCrowdDetour PUBLIC HoroEngine::NavigationRuntime)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationCrowdDetour PRIVATE
-            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.cpp
-            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.h
             runtime/navigation/backends/recast_detour/RecastDetourCrowdProvider.cpp
     )
     target_compile_definitions(HoroNavigationCrowdDetour PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
@@ -2863,7 +2874,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/DetourCrowd/Include
             ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Detour/Include
     )
-    target_link_libraries(HoroNavigationCrowdDetour PRIVATE HoroThirdPartyDetourCrowd)
+    target_link_libraries(HoroNavigationCrowdDetour PRIVATE HoroThirdPartyDetourCrowd HoroNavigationCrowdGeometryInternal)
 else()
     target_sources(HoroNavigationCrowdDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourCrowdOmitted.cpp

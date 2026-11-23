@@ -1235,6 +1235,9 @@ horo_configure_target_header_boundary(HoroNavigationRecastDetour PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNavigationCrowdDetour PUBLIC_HEADERS
     Horo/Navigation/Backends/RecastDetourCrowdProvider.h
 )
+horo_configure_target_header_boundary(HoroNavigationCrowdDeterministic PUBLIC_HEADERS
+    Horo/Navigation/Backends/DeterministicCrowdProvider.h
+)
 horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingCellEncoding.h
     Horo/WorldStreaming/StreamingCellInspection.h

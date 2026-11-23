@@ -1,3 +1,4 @@
+#include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Navigation/NavigationErrors.h"
@@ -249,6 +250,42 @@ namespace Horo::Navigation {
         RequireError(NavigationCrowdBatch::RunQualified(capture, requests, provider, admitted, topology, scene.Token()),
                      NavigationErrors::QueryCancelled);
         CHECK(provider.calls == 7);
+    }
+
+    TEST_CASE("Built-in deterministic crowd reproduces its free and blocked velocity corpus", "[unit][navigation][crowd][deterministic]") {
+        const auto parsedGolden = ParseSha256("sha256:dba504a365fb12e4d866578454a3124642864ef0e231da678b93aa5af4937e80");
+        REQUIRE(parsedGolden.HasValue());
+        const auto fixtureEvidence = ComputeSha256(std::as_bytes(std::span{"crowd fixture", 13}));
+        const NavigationCrowdQualification admitted{DeterministicCrowdProviderFingerprint(),
+                                                    fixtureEvidence,
+                                                    parsedGolden.Value(),
+                                                    fixtureEvidence,
+                                                    fixtureEvidence,
+                                                    0.05F,
+                                                    3};
+        const auto solver = CreateDeterministicCrowdBackend(admitted);
+        REQUIRE(solver.HasValue());
+        const auto topology = Id<NavigationGeneration>(1);
+        const auto capture = BatchCapture({.mode = AvoidanceExecutionMode::DeterministicQualified,
+                                           .deterministicStamp = {topology, admitted.topologyContent, admitted.profile}});
+        std::array requests{NavigationAvoidanceRequest{.agentIndex = 2, .preferredVelocity = {1, 0, 0}},
+                            NavigationAvoidanceRequest{.agentIndex = 1, .preferredVelocity = {1, 0, 0}},
+                            NavigationAvoidanceRequest{.agentIndex = 0, .preferredVelocity = {1, 0, 0}}};
+        const auto first = NavigationCrowdBatch::RunQualified(capture, requests, *solver.Value(), admitted, topology);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().size() == 3);
+        CHECK(first.Value()[0].outcome.disposition == NavigationAvoidanceDisposition::Sampled);
+        CHECK(first.Value()[1].outcome.disposition == NavigationAvoidanceDisposition::CollisionSafeStop);
+        CHECK(first.Value()[2].outcome.disposition == NavigationAvoidanceDisposition::CollisionSafeStop);
+        CHECK(QualifiedFixtureDigest(first.Value()) == parsedGolden.Value());
+        std::ranges::reverse(requests);
+        const auto second = NavigationCrowdBatch::RunQualified(capture, requests, *solver.Value(), admitted, topology);
+        REQUIRE(second.HasValue());
+        CHECK(QualifiedFixtureDigest(second.Value()) == parsedGolden.Value());
+        RequireError(solver.Value()->Solve(BatchCapture(), requests.front()), NavigationErrors::OperationUnsupported);
+        auto foreign = admitted;
+        foreign.provider = fixtureEvidence;
+        RequireError(CreateDeterministicCrowdBackend(foreign), NavigationErrors::CapabilityDescriptorInvalid);
     }
 
     TEST_CASE("crowd jobs collect only once in fixed cell and agent order", "[unit][navigation][crowd][jobs]") {

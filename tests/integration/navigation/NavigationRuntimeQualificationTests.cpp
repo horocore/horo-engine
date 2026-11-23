@@ -3,6 +3,7 @@
 #include "navigation/NavigationTestAssertions.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <iostream>
 
@@ -37,6 +38,33 @@ namespace Horo::Navigation {
             REQUIRE(host.dynamic.IsShutdown());
             REQUIRE(host.agents.ActiveBinding().HasError());
             REQUIRE(host.physics->State() == Physics::PhysicsWorldState::Destroyed);
+        }
+
+        /** @brief Hashes exact desired velocities and Character roots from the same native fixed-tick circuit. */
+        Sha256Digest DeterministicMotionDigest(const std::uint32_t workers) {
+            Host host(false, false, {}, workers);
+            const auto fixture = ComputeSha256(std::as_bytes(std::span{"native navigation fixture", 25}));
+            const NavigationCrowdQualification
+                evidence{DeterministicCrowdProviderFingerprint(), fixture, fixture, fixture, fixture, StepSeconds, 1};
+            auto solver = CreateDeterministicCrowdBackend(evidence);
+            REQUIRE(solver.HasValue());
+            host.deterministicCrowd = std::move(solver).Value();
+            host.Start(host.RequestTo());
+            Sha256Builder digest;
+            for (std::uint64_t tick = 1; tick <= 90; ++tick) {
+                const auto publication = host.Advance(tick);
+                REQUIRE(publication.HasValue());
+                const auto position = host.Now(tick).position;
+                const auto desired = publication.Value().intent.desiredVelocity;
+                for (const auto value : {position.x, position.y, position.z, desired.x, desired.z}) {
+                    const auto bits = std::bit_cast<std::uint32_t>(value);
+                    const std::array bytes{std::byte(bits >> 24), std::byte(bits >> 16), std::byte(bits >> 8), std::byte(bits)};
+                    REQUIRE(digest.Update(bytes));
+                }
+            }
+            CHECK(host.Now(90).position.x > 2.0F);
+            RequireClosed(host);
+            return digest.Finalize();
         }
 
         /** @brief Borrow caller-owned scope values and admit the two real pending jobs at monotonic ticks. */
@@ -129,6 +157,11 @@ namespace Horo::Navigation {
                   << " owner_cpp_commit_allocations=0 capture_cpp_allocations=" << captureRequests << " capture_cpp_bytes=" << captureBytes
                   << " direct_native_allocations=unobserved\n";
         RequireClosed(host);
+    }
+
+    TEST_CASE("Qualified crowd reproduces native Character motion under different path worker counts",
+              "[integration][navigation][qualification][native][character][deterministic]") {
+        CHECK(DeterministicMotionDigest(1) == DeterministicMotionDigest(3));
     }
 
     TEST_CASE("Native crowd density slows Character inside a narrow corridor and releases the cap after passing the neighbor",

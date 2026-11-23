@@ -3138,6 +3138,13 @@ Execution follows spatial cell and agent order without consulting worker
 completion. Cancellation or a malformed result withdraws the entire tick.
 Detour continues to use the best-effort entry point.
 
+The optional `NavigationCrowdDeterministic` provider tries a fixed sequence
+of planar velocity targets within the admitted speed and acceleration envelope.
+It shares swept neighbor and boundary validation with Detour and publishes
+an explicit stop when no candidate is valid. The factory requires the built-in
+algorithm fingerprint and a host-verified qualification record. The numeric
+scope is same-build and same-platform with round-to-nearest arithmetic.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

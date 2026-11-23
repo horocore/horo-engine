@@ -18,6 +18,8 @@ namespace Horo::Navigation {
         float fixedStepSeconds{};
         std::uint32_t maximumAgents{};
 
+        /** @brief Checks that every required tuple field is present. @return True for a structurally complete record. */
+        [[nodiscard]] bool IsValid() const noexcept;
         bool operator==(const NavigationCrowdQualification &) const noexcept = default;
     };
 

@@ -15,17 +15,6 @@ namespace Horo::Navigation {
         using Collection = Result<std::optional<std::vector<NavigationCrowdBatchResult>>>;
         using QualifiedResults = Result<std::vector<NavigationCrowdBatchResult>>;
 
-        /** @brief A qualification must identify an exact, tested runtime tuple. */
-        bool ValidQualification(const NavigationCrowdQualification &evidence) noexcept {
-            const std::array digests{evidence.provider, evidence.buildPlatform, evidence.goldenEvidence, evidence.topologyContent,
-                                     evidence.profile};
-            return std::ranges::none_of(digests,
-                                        [](const Sha256Digest &digest) {
-                return digest == Sha256Digest{};
-            }) && std::isfinite(evidence.fixedStepSeconds) &&
-                   evidence.fixedStepSeconds > 0.0F && evidence.maximumAgents != 0;
-        }
-
         /** @brief Missing constraints or a mismatched fixed delta invalidate the whole deterministic tick. */
         bool CompleteQualifiedTick(const NavigationCrowdSnapshot &capture, const std::span<const NavigationAvoidanceRequest> requests,
                                    const NavigationCrowdQualification &admitted) noexcept {
@@ -115,6 +104,16 @@ namespace Horo::Navigation {
         }
     }  // namespace
 
+    /** @copydoc NavigationCrowdQualification::IsValid */
+    bool NavigationCrowdQualification::IsValid() const noexcept {
+        const std::array digests{provider, buildPlatform, goldenEvidence, topologyContent, profile};
+        return std::ranges::none_of(digests,
+                                    [](const Sha256Digest &digest) {
+            return digest == Sha256Digest{};
+        }) && std::isfinite(fixedStepSeconds) &&
+               fixedStepSeconds > 0.0F && maximumAgents != 0;
+    }
+
     struct NavigationCrowdBatch::State final {
         State(const NavigationCrowdSnapshot &snapshot, const CancellationToken &parent) : capture(snapshot), cancel(parent) {}
 
@@ -157,7 +156,7 @@ namespace Horo::Navigation {
                                                         const NavigationGeneration activeTopology, const CancellationToken &cancellation) {
         if (!capture.IsValid() || capture.Mode() != AvoidanceExecutionMode::DeterministicQualified)
             return QualifiedResults::Failure(MakeError(NavigationErrors::OperationUnsupported));
-        if (!ValidQualification(admitted) || provider.Qualification() != admitted)
+        if (!admitted.IsValid() || provider.Qualification() != admitted)
             return QualifiedResults::Failure(MakeError(NavigationErrors::CapabilityDescriptorInvalid));
         if (!activeTopology.IsValid() ||
             capture.DeterministicStamp() != NavigationCrowdDeterministicStamp{activeTopology, admitted.topologyContent, admitted.profile})

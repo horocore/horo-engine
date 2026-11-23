@@ -1,4 +1,4 @@
-#include "RecastDetourCrowdGeometry.h"
+#include "NavigationCrowdGeometry.h"
 
 #include <algorithm>
 #include <cmath>

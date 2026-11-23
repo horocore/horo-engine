@@ -4,6 +4,7 @@
  * @brief Test-host composition of real Detour query/crowd providers and canonical Physics-backed Character movement.
  */
 #include "AllocationProbe.h"
+#include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationCharacterAdapter.h"
@@ -90,7 +91,7 @@ namespace Horo::Navigation::Qualification {
 
     /** @brief Test host owns services in dependency order and drains jobs before provider/world destruction. */
     struct Host final {
-        JobSystem jobs{{.workerCount = 1}};
+        JobSystem jobs;
         NavigationWorldLifecycle navigation{NavigationWorldLifecycle::Create(4).Value()};
         std::unique_ptr<NavigationCoordinator> coordinator{
             std::make_unique<NavigationCoordinator>(NavigationCoordinator::Create(jobs, QueryLimits()).Value())};
@@ -111,6 +112,7 @@ namespace Horo::Navigation::Qualification {
         std::unique_ptr<NavigationMovementController> movement;
         std::unique_ptr<NavigationVelocityPipeline> velocity;
         std::unique_ptr<INavigationCrowdBackend> crowd;
+        std::unique_ptr<INavigationQualifiedCrowdBackend> deterministicCrowd;
         Character::CharacterCapability grant;
         NavigationCharacterAdapter bridge;
         std::uint32_t dispatched{};
@@ -122,8 +124,9 @@ namespace Horo::Navigation::Qualification {
         Tests::AllocationProbe::Measurement commitAllocations{};
         std::chrono::nanoseconds commitLatency{};
 
-        explicit Host(const bool disconnected = false, const bool wall = false, std::optional<CrowdCorridor> layout = {})
-            : corridor(layout) {
+        explicit Host(const bool disconnected = false, const bool wall = false, std::optional<CrowdCorridor> layout = {},
+                      const std::uint32_t workers = 1)
+            : jobs({.workerCount = workers}), corridor(layout) {
             REQUIRE(navigation.Stage(activation, Provider(activation.topology, disconnected, activation.world, corridor)).HasValue());
             REQUIRE(navigation.CommitAtSafePoint(activation.scene, activation.sceneGeneration).HasValue());
             physicsRuntime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical).Value();
@@ -320,16 +323,32 @@ namespace Horo::Navigation::Qualification {
                                             .maximumBoundarySegments = 16,
                                             .densitySaturationNeighbors = corridor ? 1U : 0U,
                                             .minimumDensitySpeedScale = corridor ? corridor->minimumSpeedScale : 1.0F}};
-            const NavigationCrowdSnapshotLimits limits{.maximumAgents = 4,
-                                                       .maximumBoundarySegments = 16,
-                                                       .maximumCellEntries = 32,
-                                                       .maximumNeighborFacts = 16,
-                                                       .maximumBoundaryFacts = 16,
-                                                       .maximumPairChecks = 16,
-                                                       .maximumBoundaryChecks = 64};
+            NavigationCrowdSnapshotLimits limits{.maximumAgents = 4,
+                                                 .maximumBoundarySegments = 16,
+                                                 .maximumCellEntries = 32,
+                                                 .maximumNeighborFacts = 16,
+                                                 .maximumBoundaryFacts = 16,
+                                                 .maximumPairChecks = 16,
+                                                 .maximumBoundaryChecks = 64};
+            if (deterministicCrowd) {
+                const auto &evidence = deterministicCrowd->Qualification();
+                limits.mode = AvoidanceExecutionMode::DeterministicQualified;
+                limits.deterministicStamp = {activation.topology, evidence.topologyContent, evidence.profile};
+            }
             return BuildNavigationCrowdSnapshot(agents.Snapshot().Value(), dynamic.Snapshot().Value(),
                                                 std::span(motions).first(corridor ? 2 : 1), profiles, limits, tick)
                 .Value();
+        }
+
+        /** @brief Chooses the fixture's exact provider before consuming the canonical motion publication. */
+        Result<NavigationAvoidanceOutcome> SolveCrowd(const NavigationCrowdSnapshot &capture, const NavigationAvoidanceRequest &request) {
+            if (!deterministicCrowd)
+                return crowd->Solve(capture, request);
+            auto result = NavigationCrowdBatch::RunQualified(capture, std::span{&request, 1}, *deterministicCrowd,
+                                                             deterministicCrowd->Qualification(), activation.topology);
+            if (result.HasError())
+                return Result<NavigationAvoidanceOutcome>::Failure(std::move(result).ErrorValue());
+            return Result<NavigationAvoidanceOutcome>::Success(std::move(result).Value().front().outcome);
         }
 
         /** @brief Test-only finite synchronization between simulation ticks; the runtime APIs remain nonblocking. */
@@ -366,7 +385,7 @@ namespace Horo::Navigation::Qualification {
             RequireSameRoot(before);
             if (work.HasError())
                 return Result<NavigationVelocityPublication>::Failure(work.ErrorValue());
-            const auto sampled = crowd->Solve(capture, work.Value().request);
+            const auto sampled = SolveCrowd(capture, work.Value().request);
             REQUIRE(sampled.HasValue());
             const auto commitStart = std::chrono::steady_clock::now();
             auto publication = [&] {
