@@ -1,3 +1,4 @@
+#include "Horo/Gameplay/GameplayFormationMovement.h"
 #include "navigation/NavigationRuntimeQualificationFixture.h"
 #include "navigation/NavigationTestAssertions.h"
 
@@ -166,6 +167,68 @@ namespace Horo::Navigation {
         REQUIRE(arrived);
         CHECK(std::abs(host.Now(host.lastTick).position.x - 7.0F) <= 0.2F);
         RequireClosed(host);
+    }
+
+    TEST_CASE("Formation movement carries a Character toward its native slot and stops when the layout dissolves",
+              "[integration][navigation][qualification][native][character][formation]") {
+        using namespace Gameplay;
+        const CrowdCorridor corridor;
+        Host host(false, false, corridor);
+        const auto leased = host.navigation.Acquire(host.activation.world);
+        REQUIRE(leased.HasValue());
+        const auto snapshot = host.agents.Snapshot().Value();
+        const std::array members{GameplayFormationMember{host.agent, host.Now(0).position},
+                                 GameplayFormationMember{host.neighbor,
+                                                         host.character->ControllerTransform(host.neighborController).Value().position}};
+        const auto group = GameplayFormationId::Create(1).Value();
+        const std::array offsets{Math::Vec3{3, 0, 0}};
+        const auto plan = PrepareGameplayFormation({.group = group,
+                                                    .revision = 1,
+                                                    .shape = GameplayFormationShape::Custom,
+                                                    .preferredLeader = host.neighbor,
+                                                    .customSlots = offsets},
+                                                   snapshot, members);
+        REQUIRE(plan.HasValue());
+        const GameplayFormationQueryPolicy queries{.projection = {NavigationQueryKind::NearestPoint,
+                                                                  NavigationQualityLevel::Balanced,
+                                                                  {64, 16, 100}},
+                                                   .path = Request().requirement,
+                                                   .projectionHalfExtents = {1, 2, 1}};
+        const auto resolved = ResolveGameplayFormation(plan.Value(), snapshot, leased.Value(), queries);
+        REQUIRE(resolved.HasValue());
+        REQUIRE(resolved.Value().goals.size() == 2);
+
+        NavigationPathSubmission policy{.caller = host.callers.front(), .request = Request(), .capabilityRevision = 1};
+        const auto context = GameplayNavigationContext::Create({"game.formation", host.binding, false, true}, &host.navigation,
+                                                               host.coordinator.get(), host.movement.get(), policy);
+        REQUIRE(context.HasValue());
+        REQUIRE(context.Value()->Refresh(host.Now(0)).HasValue());
+        const std::array grants{GameplayFormationMovementBinding{host.agent, context.Value().get()}};
+        GameplayFormationMovement movement{group};
+        const auto applied = movement.Apply(resolved.Value(), 1, host.navigation, grants);
+        REQUIRE(applied.HasValue());
+        CHECK(applied.Value().availability == GameplayFormationAvailability::Degraded);
+        REQUIRE(applied.Value().started == std::vector{host.agent});
+        REQUIRE(applied.Value().unassigned == std::vector{host.neighbor});
+        REQUIRE(movement.Apply(resolved.Value(), 1, host.navigation, grants).HasError());
+
+        for (std::uint64_t tick = 1; tick <= 45; ++tick)
+            REQUIRE(host.Advance(tick).HasValue());
+        const auto before = host.Now(45).position;
+        CHECK(before.x > 1.25F);
+        CHECK(before.z >= corridor.minimumZ);
+        CHECK(before.z <= corridor.maximumZ);
+
+        const GameplayFormationResolution empty{.group = group, .revision = 2, .source = host.activation};
+        const auto stopped = movement.Apply(empty, 2, host.navigation, grants);
+        REQUIRE(stopped.HasValue());
+        CHECK(stopped.Value().availability == GameplayFormationAvailability::Dissolved);
+        const auto next = host.Advance(46);
+        REQUIRE(next.HasValue());
+        CHECK(next.Value().intent.state == NavigationMovementState::Cancelled);
+        CHECK(host.Now(46).position == before);
+        context.Value()->Revoke();
+        movement.Retire();
     }
 
     TEST_CASE("Disconnected reference floor preserves an explicit unreachable outcome without physical movement",

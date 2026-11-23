@@ -1214,6 +1214,7 @@ target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkA
 
 add_library(HoroGameplayNavigationIntegration STATIC
         gameplay/runtime/GameplayFormation.cpp
+        gameplay/runtime/GameplayFormationMovement.cpp
         gameplay/runtime/GameplayFormationResolution.cpp
         gameplay/runtime/GameplayNavigationContext.cpp)
 add_library(HoroEngine::GameplayNavigationIntegration ALIAS HoroGameplayNavigationIntegration)

@@ -395,6 +395,11 @@ namespace Horo::Gameplay {
         }
     }
 
+    /** @copydoc GameplayNavigationContext::MatchesFormationAgent */
+    bool GameplayNavigationContext::MatchesFormationAgent(const Navigation::CrowdAgentHandle agent) const noexcept {
+        return IsUsable() && !agent_ && state_->movement && state_->movement->Agent() == agent;
+    }
+
     /** @copydoc GameplayNavigationContext::SubmitFormationSlot */
     Result<GameplayNavigationHandle> GameplayNavigationContext::SubmitFormationSlot(const GameplayFormationResolution &resolved,
                                                                                     const GameplayFormationId activeGroup,

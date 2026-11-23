@@ -3187,8 +3187,12 @@ members unassigned. The result carries the exact topology generation and
 remains subject to owner-cutoff validation before movement admission. The
 member's existing Gameplay Navigation grant accepts only its own slot under the
 active group revision and topology. The target preserves the captured root
-offset above the projected ground. Character remains the owner of achieved
-movement.
+offset above the projected ground. A group movement owner replaces revisions
+at the same cutoff, cancelling its earlier moves before admitting replacements.
+Repeated revisions do not restart movement. Missing grants and refused
+requests remain visible alongside successfully started members. External
+tactical requests retain their own cancellation scopes. Character remains the
+owner of achieved movement.
 
 Gameplay can opt a crowd profile into route-speed modulation by setting
 `densitySaturationNeighbors` and `minimumDensitySpeedScale` in

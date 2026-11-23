@@ -619,6 +619,7 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroGameplayNavigationIntegration PUBLIC_HEADERS
     Horo/Gameplay/GameplayFormation.h
+    Horo/Gameplay/GameplayFormationMovement.h
     Horo/Gameplay/GameplayNavigationContext.h
 )
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS

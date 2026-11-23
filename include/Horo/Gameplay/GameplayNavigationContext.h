@@ -156,6 +156,10 @@ namespace Horo::Gameplay {
     private:
         friend class BehaviorRuntime;
         friend class GameModuleHost;
+        friend class GameplayFormationMovement;
+
+        /** @brief Checks exact formation routing before the group owner dispatches a slot. */
+        [[nodiscard]] bool MatchesFormationAgent(Navigation::CrowdAgentHandle agent) const noexcept;
 
         /** @brief Derives one exact attachment grant while retaining the module-wide request queue and quota. */
         [[nodiscard]] Result<std::shared_ptr<const GameplayNavigationContext>> ForBehaviorEntity(

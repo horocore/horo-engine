@@ -3,6 +3,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayFormation.h"
+#include "Horo/Gameplay/GameplayFormationMovement.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -57,13 +58,14 @@ namespace {
         JobSystem jobs{{.workerCount = 0}};
         NavigationWorldLifecycle world{std::move(NavigationWorldLifecycle::Create(4)).Value()};
         NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, Limits())).Value()};
-        NavigationAgentRegistry registry{std::move(NavigationAgentRegistry::Create({.maximumAgents = 1})).Value()};
+        NavigationAgentRegistry registry;
         NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
         std::unique_ptr<NavigationAgentSceneCandidate> candidate;
         std::unique_ptr<NavigationMovementController> movement;
         std::shared_ptr<GameplayNavigationContext> context;
 
-        explicit Fixture(std::string moduleId = "game.tests") {
+        explicit Fixture(std::string moduleId = "game.tests", const std::size_t maximumAgents = 1)
+            : registry(std::move(NavigationAgentRegistry::Create({.maximumAgents = maximumAgents})).Value()) {
             Activate(world, Provider());
             const std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 0, 1},
                                                                    .profile = NavigationAgentProfileId::Create(1).Value(),
@@ -269,6 +271,54 @@ TEST_CASE("Formation goals start only their exact live movement controllers", "[
     CHECK(following.Value().desiredVelocity.z == 0);
     REQUIRE(admitted.Value().Cancel().HasValue());
     const auto stopped = fixture.movement->Update(fixture.Now(3));
+    REQUIRE(stopped.HasValue());
+    CHECK(stopped.Value().state == NavigationMovementState::Cancelled);
+}
+
+TEST_CASE("Formation revisions replace both moves and release a removed member", "[gameplay][navigation][formation]") {
+    Fixture fixture{"game.tests", 2};
+    const auto first = fixture.movement->Agent();
+    const auto second = fixture.registry.RegisterAtSafePoint(
+        {.owner = {fixture.binding.scene, 1, 1}, .profile = NavigationAgentProfileId::Create(1).Value(), .filter = Request().filter});
+    REQUIRE(second.HasValue());
+    const auto follower =
+        NavigationMovementController::Create(fixture.registry, fixture.world, fixture.coordinator, second.Value(), Caller());
+    REQUIRE(follower.HasValue());
+    const auto grant = GameplayNavigationContext::Create({"game.tests", fixture.binding, false, true}, &fixture.world, &fixture.coordinator,
+                                                         follower.Value().get(), Input());
+    REQUIRE(grant.HasValue());
+    REQUIRE(grant.Value()->Refresh(fixture.Now()).HasValue());
+    const std::array grants{GameplayFormationMovementBinding{first, fixture.context.get()},
+                            GameplayFormationMovementBinding{second.Value(), grant.Value().get()}};
+    const auto group = GameplayFormationId::Create(1).Value();
+    GameplayFormationMovement moves{group};
+    GameplayFormationResolution resolution{.group = group,
+                                           .revision = 1,
+                                           .source = Activation(),
+                                           .availability = GameplayFormationAvailability::Complete,
+                                           .goals = {{0, first, {4, 0, 1}, {4, 0, 1}}, {1, second.Value(), {1, 0, 4}, {1, 0, 4}}}};
+    const auto started = moves.Apply(resolution, 1, fixture.world, grants);
+    REQUIRE(started.HasValue());
+    REQUIRE(started.Value().started.size() == 2);
+    REQUIRE(moves.Apply(resolution, 1, fixture.world, grants).HasError());
+    REQUIRE(fixture.movement->Update(fixture.Now()).HasValue());
+    REQUIRE(follower.Value()->Update(fixture.Now()).HasValue());
+    fixture.Publish();
+    const auto east = fixture.movement->Update(fixture.Now(2));
+    const auto north = follower.Value()->Update(fixture.Now(2));
+    REQUIRE(east.HasValue());
+    REQUIRE(north.HasValue());
+    CHECK(east.Value().desiredVelocity.x > 0);
+    CHECK(north.Value().desiredVelocity.z > 0);
+
+    resolution.revision = 2;
+    resolution.goals.pop_back();
+    REQUIRE(fixture.context->Refresh(fixture.Now(2)).HasValue());
+    const auto replaced = moves.Apply(resolution, 2, fixture.world, std::span(grants).first(1));
+    REQUIRE(replaced.HasValue());
+    CHECK(replaced.Value().started == std::vector{first});
+    CHECK(fixture.movement->Status().id != east.Value().operation);
+    const auto stopped = follower.Value()->Update(fixture.Now(3));
     REQUIRE(stopped.HasValue());
     CHECK(stopped.Value().state == NavigationMovementState::Cancelled);
 }

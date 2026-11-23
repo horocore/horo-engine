@@ -1979,7 +1979,8 @@ target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE
         HoroEngine::NavigationCrowdDetour HoroEngine::Physics)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
     target_include_directories(HoroNavigationRuntimeQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ai")
-    target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE HoroSceneAiNavigationMotionInternal)
+    target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE HoroSceneAiNavigationMotionInternal
+            HoroEngine::GameplayNavigationIntegration)
     target_sources(HoroNavigationRuntimeQualificationTests PRIVATE
             integration/navigation/AINavigationCharacterQualificationTests.cpp
             integration/navigation/NavigationRuntimeQualificationTests.cpp
