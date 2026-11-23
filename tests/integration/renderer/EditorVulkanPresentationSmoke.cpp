@@ -4,6 +4,7 @@
 #include "CameraCutNativeTestSupport.h"
 #include "ColorOutputPackage.h"
 #include "EditorImageProviderHost.h"
+#include "EditorNativeReconstructionReleaseLayout.h"
 #include "EditorVulkanShaderAssets.h"
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Foundation/Platform.h"
@@ -1398,6 +1399,27 @@ namespace Horo::Tests::VulkanEditor {
         host.viewport->FinishColorFrame(submit);
     }
 
+    /** @brief Decodes one compute stage from the actual release cook using its canonical shader contract. */
+    CookedNativeReconstructionKernel ReadViewportTemporalKernel(const std::filesystem::path &stage, const NativeReconstructionEntry entry) {
+        using namespace NativeReconstructionRelease;
+        const NativeDurableFileSystem files;
+        const auto prefix = Prefix(entry);
+        auto payload = files.ReadFileBounded(stage / (prefix + ".horoshdr"), MaximumPayloadBytes);
+        Check(payload, "read the cooked viewport compute payload");
+        const auto reflection = files.ReadFileBounded(stage / (prefix + ".reflection.json"), MaximumReflectionBytes);
+        Check(reflection, "read the cooked viewport compute reflection");
+        const auto contract = DescribeNativeReconstructionShader(entry, Target);
+        Check(contract);
+        auto metadata = DecodeReflectedShaderArtifact(contract.Value().manifest, Target, payload.Value(), reflection.Value());
+        Check(metadata, "decode cooked viewport compute metadata");
+        CompiledShaderArtifact artifact{.backend = Target.backend,
+                                        .payloadFormat = Target.payloadFormat,
+                                        .artifactKey = metadata.Value().compiledArtifactKey,
+                                        .payload = std::move(payload).Value(),
+                                        .reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(metadata).Value())};
+        return {entry, Target, std::move(artifact)};
+    }
+
     TEST_CASE("Native Vulkan admits the cooked temporal guide pair through the viewport owner",
               "[native-smoke][vulkan][gui][temporal-guides]") {
         const auto *assets = SDL_getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
@@ -1422,9 +1444,15 @@ namespace Horo::Tests::VulkanEditor {
         const auto depthMetadata = loadGuidePart("viewport-linear-depth-vulkan.reflection.json");
         const auto motion = loadGuidePart("viewport-motion-vulkan.horoshdr");
         const auto motionMetadata = loadGuidePart("viewport-motion-vulkan.reflection.json");
-        REQUIRE(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, depthMetadata}).HasError());
-        Check(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, motionMetadata}),
-              "prepare the two native pipelines after rejecting a mismatched guide family");
+        const std::array kernels{ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalHistory),
+                                 ReadViewportTemporalKernel(stage, NativeReconstructionEntry::TemporalSeed)};
+        const auto incomplete =
+            host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, motionMetadata}, std::span{kernels}.first(1));
+        REQUIRE(incomplete.HasError());
+        CHECK(incomplete.ErrorValue().code.Value() == NativeReconstructionErrors::InvalidArtifact.code.Value());
+        REQUIRE(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, depthMetadata}, kernels).HasError());
+        Check(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, motionMetadata}, kernels),
+              "prepare the complete native temporal family after rejecting incomplete and mismatched candidates");
         const auto view = host.frontend->CreateRenderViewIdentity();
         Check(view);
         Check(host.viewport->BindLightingViewIdentity(view.Value()));

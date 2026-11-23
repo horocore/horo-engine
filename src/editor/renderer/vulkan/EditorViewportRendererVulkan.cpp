@@ -104,7 +104,7 @@ namespace Horo::Editor {
         if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
             !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
-        auto nativeSpatial = PrepareSpatialKernel(spatial);
+        auto nativeSpatial = PrepareReconstructionKernel(spatial, Render::NativeReconstructionEntry::Spatial);
         if (nativeSpatial.HasError())
             return Result<void>::Failure(nativeSpatial.ErrorValue());
         auto color = MakeViewportColor(inputs, settings);
@@ -150,8 +150,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareTemporalGuidePrograms */
-    Result<void> EditorViewportRendererVulkan::PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth,
-                                                                            const TemporalGuideCook &motion) {
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalGuidePrograms(
+        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
         using namespace Render;
         if (const auto boundary = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
             return Result<void>::Failure(boundary.ErrorValue());
@@ -163,6 +164,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(history.ErrorValue());
         try {
             auto candidate = std::make_unique<TemporalGuidePrograms>(*this, std::move(history).Value());
+            if (const auto compute = PrepareTemporalKernels(*candidate, kernels); compute.HasError())
+                return compute;
             if (const auto depth =
                     ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->linearDepth, EditorVulkanTemporalInput::LinearDepth,
                                                                   linearDepth, device_.frames);

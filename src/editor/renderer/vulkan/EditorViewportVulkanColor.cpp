@@ -7,15 +7,14 @@
 #include <utility>
 
 namespace Horo::Editor {
-    /** @copydoc EditorViewportRendererVulkan::PrepareSpatialKernel */
-    Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> EditorViewportRendererVulkan::PrepareSpatialKernel(
-        const Render::CookedNativeReconstructionKernel *kernel) {
+    /** @copydoc EditorViewportRendererVulkan::PrepareReconstructionKernel */
+    Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> EditorViewportRendererVulkan::PrepareReconstructionKernel(
+        const Render::CookedNativeReconstructionKernel *kernel, const Render::NativeReconstructionEntry entry) {
         using namespace Render;
         using Outcome = Result<std::shared_ptr<IResidentNativeReconstructionKernel>>;
         if (!kernel)
             return Outcome::Success({});
-        if (kernel->entry != NativeReconstructionEntry::Spatial ||
-            !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+        if (kernel->entry != entry || !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
             return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         const auto assigned = Detail::RenderFrontendResourceAccess::QueueAssignments(frontend_);
         if (assigned.HasError())
@@ -24,6 +23,28 @@ namespace Horo::Editor {
         if (compute == assigned.Value().end() || compute->queue != device_.graphicsIdentity)
             return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         return frontend_.RealizeNativeReconstructionKernel(*kernel);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalKernels */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalKernels(
+        TemporalGuidePrograms &candidate, const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+        using namespace Render;
+        using enum NativeReconstructionEntry;
+        if (kernels.empty())
+            return Result<void>::Success();
+        const auto seed = std::ranges::find(kernels, TemporalSeed, &CookedNativeReconstructionKernel::entry);
+        const auto history = std::ranges::find(kernels, TemporalHistory, &CookedNativeReconstructionKernel::entry);
+        if (kernels.size() != 2 || seed == kernels.end() || history == kernels.end())
+            return Result<void>::Failure(MakeError(NativeReconstructionErrors::InvalidArtifact));
+        auto nativeSeed = PrepareReconstructionKernel(&*seed, TemporalSeed);
+        if (nativeSeed.HasError())
+            return Result<void>::Failure(nativeSeed.ErrorValue());
+        auto nativeHistory = PrepareReconstructionKernel(&*history, TemporalHistory);
+        if (nativeHistory.HasError())
+            return Result<void>::Failure(nativeHistory.ErrorValue());
+        candidate.seedKernel = std::move(nativeSeed).Value();
+        candidate.historyKernel = std::move(nativeHistory).Value();
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareSpatialDispatch */

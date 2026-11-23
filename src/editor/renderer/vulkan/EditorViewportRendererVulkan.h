@@ -46,8 +46,10 @@ namespace Horo::Editor {
         /** @brief Admits both native guide pipelines before frame recording or publishing viewport targets.
          * @param linearDepth Cooked linear depth payload and its exact reflected layout.
          * @param motion Cooked motion payload and its exact reflected layout.
-         * @return Success only when both pipelines and their material tables are ready. */
-        [[nodiscard]] Result<void> PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion);
+         * @param kernels Empty for guide-only preparation or the complete temporal seed and history family.
+         * @return Success only when the selected native programs and their material tables are ready. */
+        [[nodiscard]] Result<void> PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+                                                                std::span<const Render::CookedNativeReconstructionKernel> kernels = {});
         ~EditorViewportRendererVulkan() override;
         /** @copydoc IEditorViewportRenderer::RequestImageCapture */
         [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
@@ -392,6 +394,8 @@ namespace Horo::Editor {
             EditorViewportRendererVulkan &owner;
             ShaderResources linearDepth;
             ShaderResources motion;
+            std::shared_ptr<Render::IResidentNativeReconstructionKernel> seedKernel;
+            std::shared_ptr<Render::IResidentNativeReconstructionKernel> historyKernel;
             std::array<std::vector<GuideDraw>, std::tuple_size_v<FrameSlots>> draws;
 
         private:
@@ -560,9 +564,12 @@ namespace Horo::Editor {
                                                                                              const Render::ExposureSettings &settings);
         /** @brief Prepares actual sampled attachment bindings and a free native-backed uniform pair before BeginFrame. */
         [[nodiscard]] Result<void> PrepareViewportColor(Render::RenderViewId view, Render::FramebufferExtent extent);
-        /** @brief Realizes an admitted explicit spatial kernel on the viewport's direct aliased graphics/compute queue. */
-        [[nodiscard]] Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> PrepareSpatialKernel(
-            const Render::CookedNativeReconstructionKernel *kernel);
+        /** @brief Realizes the exact optional compute entry on the viewport's aliased graphics/compute queue. */
+        [[nodiscard]] Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> PrepareReconstructionKernel(
+            const Render::CookedNativeReconstructionKernel *kernel, Render::NativeReconstructionEntry entry);
+        /** @brief Populates the cold candidate with the complete temporal compute family, independent of inventory order. */
+        [[nodiscard]] Result<void> PrepareTemporalKernels(TemporalGuidePrograms &candidate,
+                                                          std::span<const Render::CookedNativeReconstructionKernel> kernels);
         /** @brief Validates exact selected viewport resources and projection for the active same-extent graph. */
         [[nodiscard]] Result<Render::NativeReconstructionDispatchPlan> PrepareSpatialDispatch(
             Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass) const;
