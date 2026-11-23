@@ -258,16 +258,21 @@ namespace Horo::Render::Test::VfxInstanced {
                 self.destroyView_ = std::bit_cast<PFN_vkDestroyImageView>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DestroyView);
             }
+            return self.ObserveCommandProc(name, actual);
+        }
+
+        /** @brief Wraps command-recording entry points that the fixture observes. */
+        PFN_vkVoidFunction ObserveCommandProc(const char *name, const PFN_vkVoidFunction actual) noexcept {
             if (std::strcmp(name, "vkCmdBeginRendering") == 0) {
-                self.beginRendering_ = std::bit_cast<PFN_vkCmdBeginRendering>(actual);
+                beginRendering_ = std::bit_cast<PFN_vkCmdBeginRendering>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&BeginRendering);
             }
             if (std::strcmp(name, "vkCmdDrawIndexed") == 0) {
-                self.drawIndexed_ = std::bit_cast<PFN_vkCmdDrawIndexed>(actual);
+                drawIndexed_ = std::bit_cast<PFN_vkCmdDrawIndexed>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DrawIndexed);
             }
             if (std::strcmp(name, "vkCmdDispatch") == 0) {
-                self.dispatch_ = std::bit_cast<PFN_vkCmdDispatch>(actual);
+                dispatch_ = std::bit_cast<PFN_vkCmdDispatch>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&Dispatch);
             }
             return actual;

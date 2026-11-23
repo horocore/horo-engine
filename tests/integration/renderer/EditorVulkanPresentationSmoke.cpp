@@ -1275,8 +1275,7 @@ namespace Horo::Tests::VulkanEditor {
         const bool immediate = mode == PresentMode::Immediate;
         Host host{false, true, mode, Host::StartupSurface::Deferred};
         INFO("Vulkan / " << SDL_GetCurrentVideoDriver() << " / requested present mode " << (immediate ? "Immediate" : "FIFO"));
-        const auto realized = host.frontend->Resize(host.extent);
-        if (realized.HasError()) {
+        if (const auto realized = host.frontend->Resize(host.extent); realized.HasError()) {
             const auto &error = realized.ErrorValue();
             INFO("Vulkan / present-mode realization: " << error.domain.Value() << "/" << error.code.Value() << ": " << error.message);
             REQUIRE(immediate);
@@ -1298,10 +1297,34 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
     }
 
+    /** @brief Presents a GUI frame at the current drawable extent after the window manager accepts the transition. */
+    auto PresentFullscreenTransition(Host &host, const bool fullscreen, const std::uint64_t frameNumber) {
+        const auto window = host.window.get();
+        CAPTURE(fullscreen);
+        INFO(SDL_GetError());
+        REQUIRE(SDL_SetWindowFullscreen(window, fullscreen));
+        const bool acknowledged = WaitForWindowFlag(window, SDL_WINDOW_FULLSCREEN, fullscreen);
+        if (fullscreen && !acknowledged)
+            SKIP("The window manager did not acknowledge SDL fullscreen: " << SDL_GetError());
+        REQUIRE(acknowledged);
+        REQUIRE(SDL_SyncWindow(window));
+        int width{};
+        int height{};
+        REQUIRE(SDL_GetWindowSizeInPixels(window, &width, &height));
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+        const FramebufferExtent observed{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+        RealizeNativePresentation(host, observed, std::chrono::steady_clock::now() + std::chrono::seconds{5});
+        CHECK(host.viewportObservation->CreatedPresentationMode() == VK_PRESENT_MODE_FIFO_KHR);
+        auto frame = host.Frame(frameNumber, observed);
+        host.ExecuteGuiOnly(frame);
+        Check(frame.Present(), "present at the observed fullscreen/windowed pixel extent");
+        return host.frontend->PresentationOutput();
+    }
+
     TEST_CASE("Native Vulkan presents at the current extent across SDL fullscreen and windowed transitions",
               "[native-smoke][vulkan][presentation][fullscreen]") {
         Host host{false, true};
-        const auto window = host.window.get();
         INFO("Vulkan / SDL fullscreen and windowed transition / " << SDL_GetCurrentVideoDriver());
         host.RecordCapabilities();
         {
@@ -1310,29 +1333,8 @@ namespace Horo::Tests::VulkanEditor {
             Check(initial.Present(), "present at the initial windowed extent");
         }
         const auto initialOutput = host.frontend->PresentationOutput();
-        const auto transition = [&host, window](const bool fullscreen, const std::uint64_t number) {
-            CAPTURE(fullscreen);
-            INFO(SDL_GetError());
-            REQUIRE(SDL_SetWindowFullscreen(window, fullscreen));
-            const bool acknowledged = WaitForWindowFlag(window, SDL_WINDOW_FULLSCREEN, fullscreen);
-            if (fullscreen && !acknowledged)
-                SKIP("The window manager did not acknowledge SDL fullscreen: " << SDL_GetError());
-            REQUIRE(acknowledged);
-            REQUIRE(SDL_SyncWindow(window));
-            int width{}, height{};
-            REQUIRE(SDL_GetWindowSizeInPixels(window, &width, &height));
-            REQUIRE(width > 0);
-            REQUIRE(height > 0);
-            const FramebufferExtent observed{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-            RealizeNativePresentation(host, observed, std::chrono::steady_clock::now() + std::chrono::seconds{5});
-            CHECK(host.viewportObservation->CreatedPresentationMode() == VK_PRESENT_MODE_FIFO_KHR);
-            auto frame = host.Frame(number, observed);
-            host.ExecuteGuiOnly(frame);
-            Check(frame.Present(), "present at the observed fullscreen/windowed pixel extent");
-            return host.frontend->PresentationOutput();
-        };
-        const auto fullscreen = transition(true, 2);
-        const auto windowed = transition(false, 3);
+        const auto fullscreen = PresentFullscreenTransition(host, true, 2);
+        const auto windowed = PresentFullscreenTransition(host, false, 3);
         if (initialOutput.HasValue()) {
             Check(fullscreen, "observe fullscreen output facts");
             Check(windowed, "observe restored windowed output facts");
