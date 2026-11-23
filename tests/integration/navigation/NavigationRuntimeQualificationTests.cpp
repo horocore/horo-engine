@@ -130,6 +130,44 @@ namespace Horo::Navigation {
         RequireClosed(host);
     }
 
+    TEST_CASE("Native crowd density slows Character inside a narrow corridor and releases the cap after passing the neighbor",
+              "[integration][navigation][qualification][native][character][density]") {
+        const CrowdCorridor corridor;
+        Host host(false, false, corridor);
+        host.Start(host.RequestTo({7, RootHeight, 5}));
+        bool advancedUnderCap{};
+        bool resumedFullSpeed{};
+        bool arrived{};
+        for (std::uint64_t tick = 1; tick <= 600; ++tick) {
+            const auto publication = host.Advance(tick);
+            REQUIRE(publication.HasValue());
+            const auto &intent = publication.Value().intent;
+            const auto position = host.Now(tick).position;
+            CHECK(position.z >= corridor.minimumZ);
+            CHECK(position.z <= corridor.maximumZ);
+            CHECK(position.x >= 0.0F);
+            CHECK(position.x <= 10.0F);
+            const auto speed = std::hypot(intent.desiredVelocity.x, intent.desiredVelocity.z);
+            CHECK(speed <= 2.001F);
+            if (intent.state == NavigationMovementState::Following && position.x < 2.5F) {
+                CHECK(speed <= 1.001F);
+                advancedUnderCap = advancedUnderCap || position.x > 1.5F;
+            }
+            if (position.x > 5.0F && speed > 1.1F)
+                resumedFullSpeed = true;
+            if (intent.state >= NavigationMovementState::Arrived) {
+                REQUIRE(intent.state == NavigationMovementState::Arrived);
+                arrived = true;
+                break;
+            }
+        }
+        CHECK(advancedUnderCap);
+        CHECK(resumedFullSpeed);
+        REQUIRE(arrived);
+        CHECK(std::abs(host.Now(host.lastTick).position.x - 7.0F) <= 0.2F);
+        RequireClosed(host);
+    }
+
     TEST_CASE("Disconnected reference floor preserves an explicit unreachable outcome without physical movement",
               "[integration][navigation][qualification][native][character]") {
         Host host(true);
@@ -145,10 +183,13 @@ namespace Horo::Navigation {
         Host host(false, true);
         host.Start(host.RequestTo());
         bool physicallyBlocked{};
+        std::uint32_t repaths{};
         for (std::uint64_t tick = 1; tick <= 180; ++tick) {
             const auto result = host.Advance(tick);
             REQUIRE(result.HasValue());
             CHECK(result.Value().intent.state != NavigationMovementState::Arrived);
+            if (result.Value().recovery == NavigationCrowdRecovery::RepathRequested)
+                ++repaths;
             const auto root = host.Now(tick).position;
             CHECK(root.x < 3.75F);
             const auto motion = host.character->ControllerLocomotionSnapshot(host.controller);
@@ -157,6 +198,8 @@ namespace Horo::Navigation {
                                                       static_cast<std::uint16_t>(Character::CharacterCollisionFlags::Sides)) != 0;
         }
         REQUIRE(physicallyBlocked);
+        CHECK(repaths > 0);
+        CHECK(repaths <= 18);
         RequireClosed(host);
     }
 
