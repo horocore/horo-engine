@@ -56,6 +56,28 @@ exclude worker-thread and direct C/native allocator calls, resident memory,
 fixture construction and Catch assertions. They must not be reported as an
 allocation-free query/provider or complete process memory measurement.
 
+## CrowdSmall solver workloads
+
+The `[crowd][scale]` tests exercise the solver boundary at the ADR-109
+CrowdSmall limit of 64 registered agents and 64 evaluations per fixed tick.
+Each normal workload runs for 32 ticks at 60 Hz with at most 16 neighbor and
+16 boundary facts per agent. The corpus covers opposing lanes, a bottleneck
+with two obstacle boxes, a moving grid formation and opposing groups with
+different right-of-way priorities.
+
+The qualified provider must reproduce the same ordered agent indices, stop
+reasons and velocity bits when motion samples and solve requests are supplied
+in reverse order. The best-effort run uses one native Detour job per tick and
+prints median and p95 job execution time with the build, platform and compiler.
+Queue wait and snapshot construction are outside that timing. A separate run
+saturates the one-job queue, replaces the capture after teleport and removal,
+and checks that the old work is rejected and its provider pin released.
+
+The workload advances authored input positions. It qualifies solver output,
+admission and lifetime at this population size. Native Character displacement
+is exercised by the separate integration cases below. Full-population
+Character displacement and whole-process memory require separate measurements.
+
 ## Reference corpus and exact outcomes
 
 | Case | Expected outcome |
