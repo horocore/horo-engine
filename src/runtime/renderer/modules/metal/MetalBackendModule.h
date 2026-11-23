@@ -10,6 +10,8 @@
 #include <memory>
 
 namespace Horo::Render {
+    struct RenderMaterialRegion;
+
     namespace Detail {
         struct MetalEditorGraphicsAccess;
     }

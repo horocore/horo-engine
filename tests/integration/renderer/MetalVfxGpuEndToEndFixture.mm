@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Horo::Render::Test {
@@ -252,6 +253,18 @@ namespace Horo::Render::Test {
             return Value(ResolveSimulationDomain(caps, policy, request));
         }
 
+        /** @brief Admits the fixture's exact record count and checked byte budget for one observation. */
+        VfxGpuReadbackDescriptor ObservationPolicy(const std::uint32_t count) {
+            const auto bytes = count * VfxGpuObservationWords::Bytes;
+            REQUIRE(std::in_range<std::uint32_t>(bytes));
+            return {.enabled = true,
+                    .purpose = VfxGpuReadbackPurpose::DiagnosticsCapture,
+                    .requirement = VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                    .maximumRecords = count,
+                    .maximumBytesPerResult = static_cast<std::uint32_t>(bytes),
+                    .maximumPendingResults = 1};
+        }
+
         /** @brief Owns one separate unfocused SDL/native fixture and every real frontend/world lifetime. */
         class Fixture final {
         public:
@@ -326,10 +339,7 @@ namespace Horo::Render::Test {
                 info.maximumPendingSteps = 2;
                 info.maximumSteps = 128;
                 info.maximumDeltaSeconds = Delta;
-                VfxGpuReadbackDescriptor policy;
-                if (observe)
-                    policy = {true, 1,      VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
-                              1,    count_, count_ * VfxGpuObservationWords::Bytes,    1};
+                const auto policy = observe ? ObservationPolicy(count_) : VfxGpuReadbackDescriptor{};
                 const auto source = Source(SimulationPreference::RequireGPU, policy, variedSeed_, count_);
                 CHECK(source.Data().gpuReadback.enabled == observe);
                 INFO("Cold GPU logical admission: actual selected domain, finite PreparedParticles state, shared policy and payload "
