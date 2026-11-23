@@ -74,6 +74,17 @@ issued before that transition, alongside the distinct Android observations.
 These are policy and attempt measurements. Presentation and GPU completion
 have their own evidence.
 
+For a foreground pressure and recovery run, pass `--observe-seconds` to the
+Vulkan deployment command and leave time for installation and launch in
+`--timeout`. The observation can run for 1–120 seconds. Perform the pressure,
+background and resume steps separately on the selected device during that
+window. The report retains ordered lifecycle and pressure transitions from the
+same process as launch, with relative timestamps and native attempt counts when
+available. It bounds the retained timeline to 512 entries and 10 KiB. A detected
+log gap, conflicting observation or exceeded bound marks the timeline truncated.
+The completion flag records the sampling window. Device qualification requires
+the actual pressure, pacing, backgrounding and recovery observations in the report.
+
 The Vulkan qualification Activity observes Android's thermal status while it
 is resumed. Its optional deployment evidence contains a process-local
 revision and a platform status. A paused Activity publishes `inactive`.

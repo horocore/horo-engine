@@ -41,6 +41,10 @@ DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
 DEPLOY_DEADLINE_EXTRA = "org.horocore.qualification.DEADLINE_MS"
 DEPLOY_DEADLINE_MARKER = "host-launch-deadline nonce="
 DEPLOY_MAX_SECONDS = 300
+DEPLOY_OBSERVATION_MAX_SECONDS = 120
+DEPLOY_LOG_TAIL_LINES = 200
+DEPLOY_TRANSITION_LIMIT = 512
+DEPLOY_TRANSITION_BYTES = 10 * 1024
 DEPLOY_LAUNCH_MARKER = "host-launch nonce="
 DEPLOY_LAUNCH_CRASH_MARKER = "host-launch-crash nonce="
 DEPLOY_ENTRY_MARKER = "host-entry input=accepted"
@@ -1385,38 +1389,109 @@ def process_log_entries(log: str, process: DeployedProcess, after: int, through:
             yield logged, priority, tag, message
 
 
-def record_platform_state(evidence: dict, category: str, state: re.Match) -> None:
-    """Retain bounded, strictly newer observations and include only available measurements."""
+def platform_state(category: str, state: re.Match) -> dict | None:
+    """Project a bounded platform observation with only available measurements."""
     revision = int(state["revision"])
-    if not evidence.get(category, {}).get("revision", 0) < revision < 2**63:
-        return
+    if not 0 < revision < 2**63:
+        return None
     value = {"revision": revision, "state": state["state"]}
     if category == "refresh":
         rate = int(state["milliHz"])
         if rate >= 2**31 or (rate > 0) != (value["state"] == "observed"):
-            return
+            return None
         if rate:
             value["milliHz"] = rate
     elif category == "battery":
         percent = int(state["percent"])
         measured = value["state"] in ("charging", "discharging", "not-charging", "full")
         if percent > 100 or (percent >= 0) != measured:
-            return
+            return None
         if measured:
             value["percent"] = percent
     elif category == "pacing" and state["intervalMs"] is not None:
         interval, attempts = int(state["intervalMs"]), int(state["attempts"])
         if interval >= 2**31 or attempts >= 2**64:
-            return
+            return None
         value.update(intervalMs=interval, attempts=attempts)
-    evidence[category] = value
+    return value
 
 
-def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, categories: tuple[str, ...]) -> dict:
+class AndroidPressureTimeline:
+    """Retains bounded, redacted transitions across overlapping logcat windows."""
+
+    def __init__(self, after: int):
+        self.after = after
+        self.through = after
+        self.transitions = {}
+        self.retained_bytes = 0
+        self.truncated = False
+
+    def record(self, category: str, logged: int, fields: dict) -> None:
+        # Lifecycle facts can change without a new committed lifecycle revision.
+        identity = (category, fields["revision"]) if "revision" in fields else (category, logged, tuple(fields.items()))
+        transition = {"category": category, "elapsedNs": logged - self.after, **fields}
+        if identity in self.transitions:
+            self.truncated |= self.transitions[identity] != transition
+            return
+        size = len(canonical_json(transition)) + 1
+        if len(self.transitions) == DEPLOY_TRANSITION_LIMIT or self.retained_bytes + size > DEPLOY_TRANSITION_BYTES:
+            self.truncated = True
+            return
+        self.transitions[identity] = transition
+        self.retained_bytes += size
+
+    def finish_poll(self, through: int, admitted_lines: int, first: int | None) -> None:
+        if admitted_lines >= DEPLOY_LOG_TAIL_LINES and first is not None and first > self.through:
+            self.truncated = True
+        self.through = through
+
+    def report(self, duration: int, complete: bool) -> dict:
+        return {"durationSeconds": duration, "complete": complete, "truncated": self.truncated,
+                "transitions": sorted(self.transitions.values(), key=lambda value: value["elapsedNs"])}
+
+
+def record_platform_transition(evidence: dict, message: str, logged: int, categories: tuple[str, ...],
+                               timeline: AndroidPressureTimeline | None) -> None:
+    for category, pattern in PLATFORM_STATE_LINES.items():
+        if category not in categories or (state := pattern.fullmatch(message)) is None:
+            continue
+        value = platform_state(category, state)
+        if value is None:
+            return
+        if timeline is not None:
+            timeline.record(category, logged, value)
+        if value["revision"] > evidence.get(category, {}).get("revision", 0):
+            evidence[category] = value
+        return
+
+
+def record_render_evidence(evidence: dict, latest: dict, message: str, logged: int, categories: tuple[str, ...],
+                           timeline: AndroidPressureTimeline | None) -> None:
+    for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
+        if category not in categories or (match := pattern.fullmatch(message)) is None:
+            continue
+        fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
+        if any(isinstance(value, int) and value >= 2**64 for value in fields.values()):
+            return
+        if timeline is not None and category == "lifecycle":
+            timeline.record(category, logged, fields)
+        if logged >= latest.get(category, 0):
+            evidence[category] = fields
+            latest[category] = logged
+        return
+
+
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, categories: tuple[str, ...],
+                         timeline: AndroidPressureTimeline | None = None) -> dict:
     """Project named telemetry only from the exact UID, PID and admitted time interval."""
     evidence = {"crashObserved": False}
     latest = {}
+    first = None
+    admitted_lines = 0
     for logged, priority, tag, message in process_log_entries(log, process, after, through):
+        if timeline is not None:
+            first = logged if first is None else min(first, logged)
+            admitted_lines += 1
         if tag == "AndroidRuntime":
             evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
             continue
@@ -1430,16 +1505,10 @@ def package_log_evidence(log: str, process: DeployedProcess, after: int, through
                 raise AndroidDeployError("openxr_diagnostic_ambiguous")
             evidence["openxr"] = openxr_log_evidence(message)
             continue
-        for category, pattern in PLATFORM_STATE_LINES.items():
-            if category in categories and (state := pattern.fullmatch(message)):
-                record_platform_state(evidence, category, state)
-                break
-        for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
-            if category in categories and logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
-                fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
-                if all(not isinstance(value, int) or value < 2**64 for value in fields.values()):
-                    evidence[category] = fields
-                    latest[category] = logged
+        record_platform_transition(evidence, message, logged, categories, timeline)
+        record_render_evidence(evidence, latest, message, logged, categories, timeline)
+    if timeline is not None:
+        timeline.finish_poll(through, admitted_lines, first)
     return evidence
 
 
@@ -1480,7 +1549,7 @@ def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> D
 
 def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProcess, start: AndroidLogClock) -> tuple[str, int]:
     """Read bounded logcat output and validate the device clock interval."""
-    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
+    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", str(DEPLOY_LOG_TAIL_LINES), "-s",
                      "HoroPackageQualification:I", "AndroidRuntime:E")
     end = AndroidLogClock.read(device)
     end.require_continuity(start)
@@ -1488,10 +1557,10 @@ def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProces
 
 
 def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, window: AndroidDiagnosticWindow,
-                       categories: tuple[str, ...]) -> dict:
+                       categories: tuple[str, ...], timeline: AndroidPressureTimeline | None = None) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
     raw, through = read_deployed_process_log(device, process, window.start)
-    facts = package_log_evidence(raw, process, window.evidence_after, through, categories)
+    facts = package_log_evidence(raw, process, window.evidence_after, through, categories, timeline)
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
@@ -1500,7 +1569,7 @@ def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: Dep
 
 
 def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
-                             window: AndroidDiagnosticWindow, profile: dict) -> tuple[dict, bool]:
+                             window: AndroidDiagnosticWindow, profile: dict, observe_seconds: int = 0) -> tuple[dict, bool]:
     """Wait for actual evidence from the selected profile on the verified ADB transport and process."""
     openxr = "openxrProfile" in profile
     if openxr:
@@ -1510,20 +1579,28 @@ def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, proces
     else:
         required = ("lifecycle", "renderer")
     categories = (*required, *PLATFORM_STATE_LINES) if profile["renderer"] == "vulkan-android" else required
+    timeline = AndroidPressureTimeline(window.evidence_after) if observe_seconds else None
+    end = time.monotonic() + observe_seconds if timeline is not None else device.deadline
     facts = {"crashObserved": False}
+    applicable = False
     while time.monotonic() < device.deadline:
-        observed = deploy_diagnostics(device, application, process, window, categories)
+        observed = deploy_diagnostics(device, application, process, window, categories, timeline)
         for category in PLATFORM_STATE_LINES:
             if (state := observed.get(category)) and state["revision"] <= facts.get(category, {}).get("revision", 0):
                 observed.pop(category)
         facts.update(observed)
         applicable = all(key in facts for key in required)
-        if facts["crashObserved"] or applicable:
-            return facts, applicable
-        time.sleep(min(0.1, max(0, device.deadline - time.monotonic())))
-    if openxr:
+        ready = applicable if timeline is None else time.monotonic() >= end
+        if facts["crashObserved"] or ready:
+            break
+        time.sleep(min(0.5 if timeline is not None else 0.1, max(0, min(end, device.deadline) - time.monotonic())))
+    if timeline is not None:
+        complete = time.monotonic() >= end and not facts["crashObserved"]
+        facts["observationWindow"] = timeline.report(observe_seconds, complete)
+        return facts, applicable and complete and not timeline.truncated
+    if openxr and not applicable and not facts["crashObserved"]:
         raise AndroidDeployError("openxr_diagnostic_timeout")
-    return facts, False
+    return facts, applicable
 
 
 @dataclass(frozen=True)
@@ -1775,6 +1852,8 @@ def android_deploy_main(argv=None) -> int:
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
     parser.add_argument("--timeout", type=int, default=120,
                         help=f"Total host command deadline in seconds (1-{DEPLOY_MAX_SECONDS}).")
+    parser.add_argument("--observe-seconds", type=int, default=None,
+                        help=f"Collect Vulkan pressure transitions for 1-{DEPLOY_OBSERVATION_MAX_SECONDS} seconds after launch.")
     parser.add_argument("--diagnostic-bundle", type=Path, help="New absolute ZIP path for redacted deployment evidence.")
     arguments = parser.parse_args(argv)
     if (not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device)
@@ -1784,6 +1863,8 @@ def android_deploy_main(argv=None) -> int:
         parser.error("--expect-apk-sha256 requires 64 lowercase hexadecimal digits.")
     if arguments.expect_runtime_version is not None and arguments.runtime != "openxr":
         parser.error("--expect-runtime-version requires --runtime openxr.")
+    if arguments.observe_seconds is not None and not 1 <= arguments.observe_seconds <= DEPLOY_OBSERVATION_MAX_SECONDS:
+        parser.error(f"--observe-seconds must be from 1 to {DEPLOY_OBSERVATION_MAX_SECONDS}.")
     if arguments.expect_device_build_sha256 is not None:
         if not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_device_build_sha256):
             parser.error("--expect-device-build-sha256 requires 64 lowercase hexadecimal digits.")
@@ -1824,6 +1905,8 @@ def android_deploy_main(argv=None) -> int:
             artifact = deploy_artifact(
                 arguments.artifact, Path(directory), arguments.sdk, arguments.profile, arguments.java, deadline)
             profile = artifact.profile
+            if arguments.observe_seconds and profile["renderer"] != "vulkan-android":
+                raise AndroidDeployError("observation_profile_unsupported")
             application = profile["applicationId"]
             report["artifact"] = {"profile": arguments.profile, "applicationId": application,
                                   "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
@@ -1866,7 +1949,7 @@ def android_deploy_main(argv=None) -> int:
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, openxr_diagnostic=openxr)
             process, window = launch.start()
             report["stage"] = "diagnostics"
-            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile)
+            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, arguments.observe_seconds or 0)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
@@ -1876,6 +1959,10 @@ def android_deploy_main(argv=None) -> int:
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
             elif not applicable:
+                if observed.get("observationWindow", {}).get("truncated"):
+                    raise AndroidDeployError("observation_window_truncated")
+                if arguments.observe_seconds and not observed["observationWindow"]["complete"]:
+                    raise AndroidDeployError("observation_window_incomplete")
                 raise AndroidDeployError("application_evidence_unavailable")
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             if openxr and deploy_device_build_digest(device) != device_build:

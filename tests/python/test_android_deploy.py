@@ -723,6 +723,95 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["pacing"],
                          {"revision": 2, "state": "thermal-conservation", "intervalMs": 32, "attempts": 125})
 
+    def test_vulkan_observation_keeps_ordered_pressure_and_lifecycle_transitions_across_polls(self):
+        resumed = LIFECYCLE.replace("state=2", "state=3")
+        paused = resumed.replace("lifecycleRevision=3", "lifecycleRevision=4").replace("state=3", "state=4")
+        recovered = resumed.replace("lifecycleRevision=3", "lifecycleRevision=5")
+        initial_memory = log_line("host-memory revision=1 state=normal")
+        startup = log_line(resumed) + log_line(FRAME) + initial_memory
+        startup += log_line("host-pacing revision=1 state=baseline intervalMs=16 attempts=2")
+        pressure = log_line("host-pacing revision=2 state=memory-conservation intervalMs=32 attempts=29", stamp="1795000000.107000000")
+        pressure += log_line("host-memory revision=2 state=low", stamp="1795000000.106000000")
+        background = log_line(paused, stamp="1795000000.108000000")
+        background += log_line("host-memory revision=3 state=inactive", stamp="1795000000.108500000")
+        recovery = log_line(recovered, stamp="1795000000.109000000")
+        recovery += log_line("host-memory revision=4 state=normal", stamp="1795000000.109500000")
+        recovery += log_line("host-pacing revision=3 state=baseline intervalMs=16 attempts=63", stamp="1795000000.110000000")
+        recovery += log_line("host-memory revision=99 state=critical", uid="10200")
+        recovery += log_line("host-memory revision=100 state=critical payload=private-observation")
+        status, report, commands = self.execute(
+            {LOGCAT: [startup, pressure + initial_memory, background + pressure + startup] + [recovery] * 9},
+            ("--timeout", "3", "--observe-seconds", "2"), VULKAN_PROFILE)
+
+        self.assertEqual((status, report["status"], report["qualification"]["physicalXrQualification"]), (0, "complete", "not_run"))
+        self.assertEqual(commands.count(LOGCAT), 1 + 5)  # Launch receipt, then the two-second sampling window.
+        window = report["observed"]["observationWindow"]
+        self.assertEqual({key: window[key] for key in ("durationSeconds", "complete", "truncated")},
+                         {"durationSeconds": 2, "complete": True, "truncated": False})
+        transitions = window["transitions"]
+        offsets = [item["elapsedNs"] for item in transitions]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertEqual([(item["revision"], item["state"], item["elapsedNs"]) for item in transitions if item["category"] == "memory"],
+                         [(1, "normal", 5_000_000), (2, "low", 6_000_000), (3, "inactive", 8_500_000), (4, "normal", 9_500_000)])
+        self.assertEqual([(item["lifecycleRevision"], item["state"]) for item in transitions if item["category"] == "lifecycle"],
+                         [(3, 3), (4, 4), (5, 3)])
+        self.assertEqual([(item["revision"], item["state"], item["intervalMs"], item["attempts"])
+                          for item in transitions if item["category"] == "pacing"],
+                         [(1, "baseline", 16, 2), (2, "memory-conservation", 32, 29), (3, "baseline", 16, 63)])
+        for denied in ("private-observation", START, LOG_TIME, END):
+            self.assertNotIn(denied, json.dumps(window))
+
+    def test_vulkan_observation_keeps_partial_transitions_after_an_early_crash(self):
+        startup = log_line(LIFECYCLE) + log_line(FRAME) + log_line("host-memory revision=1 state=low")
+        crash = log_line("FATAL EXCEPTION: private-observation-crash", tag="E/AndroidRuntime")
+        status, report, commands = self.execute({LOGCAT: [startup, crash]}, ("--timeout", "3", "--observe-seconds", "2"),
+                                                VULKAN_PROFILE)
+
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_crashed"))
+        self.assertEqual(commands.count(LOGCAT), 1 + 2)  # Launch receipt, then startup and crash.
+        observed = report["observed"]
+        self.assertTrue(observed["crashObserved"])
+        window = observed["observationWindow"]
+        self.assertEqual((window["durationSeconds"], window["complete"], window["truncated"]), (2, False, False))
+        self.assertIn({"category": "memory", "elapsedNs": 5_000_000, "revision": 1, "state": "low"}, window["transitions"])
+        self.assertNotIn("private-observation-crash", json.dumps(report))
+
+    def test_vulkan_observation_marks_a_full_transition_buffer_as_partial(self):
+        log = log_line(LIFECYCLE) + log_line(FRAME)
+        log += log_line("host-memory revision=1 state=normal")
+        log += log_line("host-memory revision=2 state=low")
+        with patch.object(project, "DEPLOY_TRANSITION_LIMIT", 2):
+            status, report, _ = self.execute({LOGCAT: log}, ("--timeout", "2", "--observe-seconds", "1"), VULKAN_PROFILE)
+
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "observation_window_truncated"))
+        window = report["observed"]["observationWindow"]
+        self.assertEqual((window["durationSeconds"], window["complete"], window["truncated"]), (1, True, True))
+        self.assertEqual(len(window["transitions"]), 2)
+
+    def test_vulkan_observation_preserves_evidence_when_deadline_precedes_window(self):
+        status, report, _ = self.execute(options=("--timeout", "1", "--observe-seconds", "2"), profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["error"]), (1, "observation_window_incomplete"))
+        window = report["observed"]["observationWindow"]
+        self.assertFalse(window["complete"])
+        self.assertTrue(any(item["category"] == "lifecycle" for item in window["transitions"]))
+
+    def test_pressure_timeline_marks_a_saturated_nonoverlapping_log_tail(self):
+        start = project.log_epoch_nanoseconds(START)
+        timeline = project.AndroidPressureTimeline(start)
+        process = project.DeployedProcess(123, 1010200, 123456)
+        log = log_line("non-transition marker") * project.DEPLOY_LOG_TAIL_LINES
+        project.package_log_evidence(log, process, start, project.log_epoch_nanoseconds(END), ("memory",), timeline)
+        self.assertEqual(timeline.report(1, True)["transitions"], [])
+        self.assertTrue(timeline.report(1, True)["truncated"])
+
+    def test_observation_requires_a_bounded_duration_and_vulkan_profile(self):
+        for invalid in ("0", "121", "1.5"):
+            with self.subTest(invalid=invalid), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                self.execute(options=("--observe-seconds", invalid), profile_name=VULKAN_PROFILE)
+            self.assertEqual(raised.exception.code, 2)
+        status, report, commands = self.execute(options=("--observe-seconds", "1"))
+        self.assertEqual((status, report["error"], commands), (1, "observation_profile_unsupported", []))
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),
