@@ -153,8 +153,7 @@ namespace Horo::Editor {
             return;
         }
         const auto signal = std::exchange(signal_, {});
-        const auto *port = owner.bridge_.Port();
-        if (signal.IsValid() && port) {
+        if (const auto *port = owner.bridge_.Port(); signal.IsValid() && port) {
             const auto accepted = port->WasSubmissionAccepted(signal, pending_->compatibility.deviceGeneration);
             if (accepted.HasValue() && accepted.Value() && history_.Publish(*pending_).HasValue()) {
                 lastAcceptedFrame_ = pending_->frameId;
