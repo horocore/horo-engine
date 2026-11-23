@@ -13,6 +13,9 @@ static_assert(
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationMovementController>);
 static_assert(!std::is_copy_constructible_v<Horo::Navigation::NavigationVelocityPipeline>);
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationVelocityFeedback::achievedDisplacement), Horo::Math::Vec3>);
+static_assert(Horo::Navigation::NavigationCrowdProfileFacts{}.densitySaturationNeighbors == 0);
+static_assert(Horo::Navigation::NavigationCrowdAgentFact{}.densitySpeedScale == 1.0F);
+static_assert(Horo::Navigation::NavigationVelocityPublication{}.recovery == Horo::Navigation::NavigationCrowdRecovery::Clear);
 static_assert(std::is_same_v<decltype(Horo::Navigation::NavigationMovementIntent::desiredVelocity), Horo::Math::Vec3>);
 
 template <typename T>

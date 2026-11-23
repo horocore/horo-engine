@@ -29,11 +29,17 @@ namespace Horo::Navigation {
                    limits.cellSizeMeters > 0.0F && limits.mode < AvoidanceExecutionMode::Count;
         }
 
+        /** @brief Validates the opt-in policy independently of the solver's retained-neighbor cap. */
+        [[nodiscard]] bool ValidDensityPolicy(const NavigationCrowdProfileFacts &profile) noexcept {
+            const auto scale = profile.minimumDensitySpeedScale;
+            return scale > 0.0F && scale <= 1.0F && (profile.densitySaturationNeighbors != 0 || scale == 1.0F);
+        }
+
         [[nodiscard]] bool ValidProfile(const NavigationCrowdProfileFacts &profile) noexcept {
             return profile.profile.IsValid() && std::isfinite(profile.radiusMeters) && profile.radiusMeters > 0.0F &&
                    std::isfinite(profile.neighborRadiusMeters) && profile.neighborRadiusMeters > 0.0F &&
                    profile.neighborRadiusMeters >= profile.radiusMeters && profile.maximumNeighbors <= 32 &&
-                   profile.maximumBoundarySegments <= 24 && !profile.obstacleLayers.Empty();
+                   profile.maximumBoundarySegments <= 24 && !profile.obstacleLayers.Empty() && ValidDensityPolicy(profile);
         }
 
         [[nodiscard]] const NavigationCrowdProfileFacts *FindProfile(const Detail::NavigationCrowdSnapshotStorage &storage,

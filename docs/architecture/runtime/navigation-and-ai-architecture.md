@@ -3175,6 +3175,20 @@ orchestration above the provider. Traffic/road lane graphs are a separate future
 navigation domain, not a crowd flag. Products needing only grounded paths do not
 link or allocate DetourCrowd.
 
+Gameplay can opt a crowd profile into route-speed modulation by setting
+`densitySaturationNeighbors` and `minimumDensitySpeedScale` in
+`NavigationCrowdProfileFacts`. Scale interpolates from full speed to the
+profile floor using the exact relevant-neighbor count, including neighbors
+omitted from solver storage. The owner scales the corridor's preferred
+velocity before avoidance, preserving its direction. The local solver cap
+also falls with density. A bounded braking allowance lets an agent already
+above that cap decelerate without exceeding its original speed or acceleration
+limits. The default profile leaves speed unchanged.
+
+Velocity publications also expose whether exact Character feedback showed a
+stall or triggered the existing cooldown-limited repath. This reports the
+owner's recovery decision at the same tick as the resulting motion intent.
+
 Factory admission remains the only external construction path. The exact final
 pipeline type uses `std::make_unique` with a private nested, nonaggregate
 construction key whose default constructor is private and copying is deleted.

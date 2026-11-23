@@ -50,6 +50,8 @@ namespace Horo::Navigation {
         std::uint32_t maximumNeighbors{16};
         std::uint32_t maximumBoundarySegments{16};
         NavigationDynamicLayerMask obstacleLayers{1};
+        std::uint32_t densitySaturationNeighbors{}; /**< Relevant neighbors required to reach the speed floor. Zero disables scaling. */
+        float minimumDensitySpeedScale{1.0F};       /**< Finite (0, 1] multiplier at saturation, selected by the Gameplay profile. */
     };
 
     /** @brief Project-stable avoidance layer mapped to one fixed mask bit; independent of obstacle layers. */
@@ -89,6 +91,7 @@ namespace Horo::Navigation {
         std::uint32_t firstBoundary{};
         std::uint32_t boundaryCount{};
         std::uint32_t truncatedBoundaries{};
+        float densitySpeedScale{1.0F}; /**< Route-speed multiplier from the full observed neighborhood, before storage truncation. */
     };
 
     /** @brief Stable source identity of a conservative planar obstacle boundary. */

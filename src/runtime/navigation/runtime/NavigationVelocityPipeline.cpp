@@ -14,6 +14,18 @@ namespace Horo::Navigation {
             return std::hypot(static_cast<double>(value.x), static_cast<double>(value.y), static_cast<double>(value.z));
         }
 
+        /** @brief Reduces route speed and the solver speed budget, retaining room to brake within this tick's envelope. */
+        void ApplyDensityPolicy(NavigationAvoidanceRequest &request, const NavigationCrowdAgentFact &agent) noexcept {
+            if (agent.densitySpeedScale == 1.0F)
+                return;
+            request.preferredVelocity = request.preferredVelocity * agent.densitySpeedScale;
+            const auto maximum = static_cast<double>(request.maximumSpeedMetersPerSecond);
+            const auto speed = std::hypot(static_cast<double>(agent.velocity.x), static_cast<double>(agent.velocity.z));
+            const auto braking = static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds;
+            const auto limit = std::clamp(speed - braking, maximum * agent.densitySpeedScale, maximum);
+            request.maximumSpeedMetersPerSecond = std::max(std::numeric_limits<float>::denorm_min(), static_cast<float>(limit));
+        }
+
     }  // namespace
 
     /** @copydoc Detail::ValidCrowdEnvelope */
@@ -148,8 +160,12 @@ namespace Horo::Navigation {
         request.preferredVelocity = preferred.Value().desiredVelocity;
         if (const auto speed = ComputeMotionMagnitude(request.preferredVelocity); speed > request.maximumSpeedMetersPerSecond)
             request.preferredVelocity = request.preferredVelocity * static_cast<float>(request.maximumSpeedMetersPerSecond / speed);
-        pending_ =
-            NavigationVelocityWork{++sequence_, preferred.Value(), request, binding_, snapshot.DynamicRevision(), characterRevision_};
+        ApplyDensityPolicy(request, snapshot.Agents()[request.agentIndex]);
+        using enum NavigationCrowdRecovery;
+        const auto progress = feedback.blockedTicks != 0 ? Stalled : Clear;
+        const auto recovery = feedback.repath ? RepathRequested : progress;
+        pending_ = NavigationVelocityWork{++sequence_,        preferred.Value(), request, binding_, snapshot.DynamicRevision(),
+                                          characterRevision_, recovery};
         pendingCapture_ = snapshot;
         lastTick_ = current.path.tick;
         blockedTicks_ = feedback.blockedTicks;
@@ -198,7 +214,8 @@ namespace Horo::Navigation {
                                                      characterRevision_,
                                                      outcome.disposition,
                                                      outcome.stopReason,
-                                                     pending_->request.preferredVelocity};
+                                                     pending_->request.preferredVelocity,
+                                                     pending_->recovery};
         publishedStepSeconds_ = pending_->request.stepSeconds;
         pending_.reset();
         pendingCapture_.reset();
@@ -217,7 +234,8 @@ namespace Horo::Navigation {
             publication.intent.tick != publication_->intent.tick || publication.intent.state != publication_->intent.state ||
             publication.intent.desiredVelocity != publication_->intent.desiredVelocity ||
             publication.disposition != publication_->disposition || publication.stopReason != publication_->stopReason ||
-            publication.preferredVelocity != publication_->preferredVelocity || current.stepSeconds != publishedStepSeconds_)
+            publication.preferredVelocity != publication_->preferredVelocity || publication.recovery != publication_->recovery ||
+            current.stepSeconds != publishedStepSeconds_)
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         return movement_->ValidateIntentAtSafePoint(publication.intent, current);
     }

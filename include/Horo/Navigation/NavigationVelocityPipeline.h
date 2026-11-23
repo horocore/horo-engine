@@ -17,6 +17,13 @@ namespace Horo::Navigation {
         float minimumProgressMeters{0.001F};
     };
 
+    /** @brief Owner-observed corridor progress, derived from exact Character feedback. */
+    enum class NavigationCrowdRecovery : std::uint8_t {
+        Clear,
+        Stalled,
+        RepathRequested,
+    };
+
     /** @brief One owner-issued solver request; the caller pins the same immutable snapshot for worker execution. */
     struct NavigationVelocityWork final {
         std::uint64_t sequence{};
@@ -25,6 +32,7 @@ namespace Horo::Navigation {
         NavigationAgentSceneBinding binding;
         NavigationDynamicRegistryRevision dynamicRevision;
         std::uint64_t characterRevision{};
+        NavigationCrowdRecovery recovery{NavigationCrowdRecovery::Clear};
     };
 
     /** @brief Exact authority evidence and safe desired motion; this value never commits Physics movement. */
@@ -35,6 +43,7 @@ namespace Horo::Navigation {
         NavigationAvoidanceDisposition disposition{NavigationAvoidanceDisposition::CollisionSafeStop};
         NavigationAvoidanceStopReason stopReason{NavigationAvoidanceStopReason::None};
         Math::Vec3 preferredVelocity{}; /**< Route intent before avoidance, for explicit blocked-progress diagnostics. */
+        NavigationCrowdRecovery recovery{NavigationCrowdRecovery::Clear};
     };
 
     /** @brief Character-owned result of one exact published intent, measured over its declared fixed step. */
