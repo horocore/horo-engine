@@ -113,10 +113,10 @@ namespace Horo::Editor {
             return EditorDebugCaptureSnapshot{*slot_, publication_, *started_ + Lifetime};
         }
 
-        /** @brief Cancels only the exact active request. */
+        /** @brief Cancels the exact sampling trace or withdraws its retained result. */
         bool Cancel(std::uint64_t id, Clock::time_point now) {
             Expire(now);
-            if (!slot_ || slot_->id != id || slot_->phase != EditorDebugCapturePhase::Sampling)
+            if (!slot_ || slot_->id != id || !publication_)
                 return false;
             slot_->phase = EditorDebugCapturePhase::Cancelled;
             WithdrawSamples();

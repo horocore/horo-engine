@@ -339,7 +339,8 @@ namespace Horo::Editor {
                      StartSchema(), id, bound, owner),
             Register(Action::Read, "debug.get_capture", "Read progress and redacted samples from an exact debug capture.", id,
                      ArtifactSchema(), bound, owner),
-            Register(Action::Cancel, "debug.cancel_capture", "Cancel the exact active debug capture.", id, cancelled, bound, owner),
+            Register(Action::Cancel, "debug.cancel_capture", "Cancel the exact trace or withdraw its retained samples.", id, cancelled,
+                     bound, owner),
         };
         if (bound->readImageSource && bound->startImage && bound->readImage && bound->cancelImage) {
             const auto image = std::make_shared<CaptureOwner>();

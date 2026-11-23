@@ -285,19 +285,30 @@ namespace {
         REQUIRE(read["status"] == "succeeded");
         CHECK(read["result"]["phase"] == "sampling");
         CHECK(read["result"]["samples"][0]["worldPosition"] == Json::array({1, 2, 3}));
-        const auto queued = QueueAndPump(session, Command("queued", "debug.get_capture", args));
         SECTION("cancelling the capture revokes queued samples") {
+            SECTION("sampling is still in progress") {
+                REQUIRE(store.Due(now + 100ms));
+            }
+            SECTION("the final sample has already been collected") {
+                store.Sample({4, 5, 6}, now + 100ms);
+                const auto completed = Execute(session, Command("completed", "debug.get_capture", args));
+                REQUIRE(completed["result"]["phase"] == "ready");
+                REQUIRE(completed["result"]["samples"].size() == 2);
+            }
+            const auto queued = QueueAndPump(session, Command("queued", "debug.get_capture", args));
             const auto cancel = Command("cancel", "debug.cancel_capture", args);
             Approve(session, cancel);
             CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
             const auto after = Execute(session, Command("after", "debug.get_capture", args));
             CHECK(after["result"]["phase"] == "cancelled");
             CHECK(after["result"]["samples"].empty());
+            CHECK(session.Client()->Call({.id = "withdrawn", .method = "operations/get", .params = queued}).HasError());
         }
         SECTION("retiring the workspace revokes queued samples without another frame") {
+            const auto queued = QueueAndPump(session, Command("queued", "debug.get_capture", args));
             lifetime.RequestCancellation();
+            CHECK(session.Client()->Call({.id = "withdrawn", .method = "operations/get", .params = queued}).HasError());
         }
-        CHECK(session.Client()->Call({.id = "withdrawn", .method = "operations/get", .params = queued}).HasError());
         REQUIRE(authorized);
         CHECK(authorized());
         CHECK(session.Close().HasValue());
