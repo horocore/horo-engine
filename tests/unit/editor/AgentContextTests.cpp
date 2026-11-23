@@ -6,6 +6,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <future>
 
 namespace Horo::Agent {
@@ -256,5 +257,52 @@ namespace Horo::Agent {
         REQUIRE(result.messages.size() == 2);
         CHECK(result.messages.front().text == request.messages.front().text);
         CHECK(result.messages.back().text == "Result");
+    }
+
+    TEST_CASE("A provider cannot publish a response after its approved source revision expires", "[agent][context]") {
+        struct LateModel final : IModelProvider {
+            bool sourceCurrent{true};
+            bool revokeBeforeText{};
+            bool acceptedLateText{};
+
+            ProviderDiscovery Discover(std::stop_token) override {
+                return {};
+            }
+
+            ModelOutcome Stream(const ModelRequest &, const ModelEventSink &sink, std::stop_token) override {
+                sourceCurrent = !revokeBeforeText;
+                acceptedLateText = sink({.kind = ModelEventKind::TextDelta, .text = "Response with approved context"});
+                static_cast<void>(sink({.kind = ModelEventKind::Completed}));
+                sourceCurrent = false;
+                return {};
+            }
+        };
+        LateModel model;
+        model.revokeBeforeText = GENERATE(false, true);
+        const auto project = Project();
+        auto readers = Readers();
+        readers.isCurrent = [&model](const auto &) {
+            return model.sourceCurrent;
+        };
+        const std::array<AgentContextSelection, 1> selection{
+            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, "compiler", "r3", "selected build log"}};
+        const auto preview = AgentContextPreview::Capture(selection, readers, project, AgentProviderResidence::Local, 25, 4);
+        REQUIRE(preview.HasValue());
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(true, 4));
+        REQUIRE(preview.Value().Grant(policy).Allowed());
+        const AgentTurnContext context{preview.Value(), policy, project, readers.isCurrent, AgentProviderResidence::Local};
+        const ModelRequest request{.model = "fake", .messages = {{.role = ModelRole::User, .text = "Explain this log"}}};
+        AgentTurnRuntime runtime;
+        unsigned presented{};
+        const auto result = runtime.Run(model, nullptr, 25, request, {}, {}, &context, [&presented](std::string_view) {
+            ++presented;
+        });
+        CHECK(result.status == AgentTurnStatus::ContextDenied);
+        CHECK(result.contextError == AgentPolicyReason::StaleAuthority);
+        CHECK(result.messages.empty());
+        CHECK_FALSE(result.providerError.has_value());
+        CHECK(model.acceptedLateText == !model.revokeBeforeText);
+        CHECK(presented == (model.revokeBeforeText ? 0 : 1));
     }
 }  // namespace Horo::Agent

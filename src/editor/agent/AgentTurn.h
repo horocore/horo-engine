@@ -37,7 +37,7 @@ namespace Horo::Agent {
         AgentTurnStatus status{AgentTurnStatus::InvalidRequest};
         std::vector<ModelMessage> messages;
         std::optional<ModelErrorCode> providerError{};             /**< Structured provider failure without response text or credentials. */
-        std::optional<Security::AgentPolicyReason> contextError{}; /**< Structured pre-dispatch context denial. */
+        std::optional<Security::AgentPolicyReason> contextError{}; /**< Structured context admission or freshness denial. */
         std::optional<ModelUsage> finalUsage{};                    /**< Provider-reported counts for the final successful inference only. */
     };
 

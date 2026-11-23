@@ -68,6 +68,41 @@ namespace Horo::Agent {
             std::jthread timer_;
         };
 
+        /** @brief Keeps an admitted context invalid once any of its authority checks fails. */
+        class TurnContextGate final {
+        public:
+            explicit TurnContextGate(const AgentTurnContext *context) noexcept : context_(context) {}
+
+            [[nodiscard]] bool Check() noexcept {
+                if (!valid_ || !context_)
+                    return valid_;
+                try {
+                    valid_ = context_->preview.IsCurrent(context_->policy, context_->project, context_->isCurrent);
+                } catch (...) {
+                    valid_ = false;
+                }
+                return valid_;
+            }
+
+        private:
+            const AgentTurnContext *context_;
+            bool valid_{true};
+        };
+
+        /** @brief A stale admitted context carries no response or provider error payload. */
+        AgentTurnResult StaleContextResult() {
+            return {.status = ContextDenied, .contextError = Security::AgentPolicyReason::StaleAuthority};
+        }
+
+        /** @brief Projects failed rounds without publishing private provider details. */
+        AgentTurnResult FailedRound(const AgentTurnStatus status, const std::optional<ModelError> &providerError = std::nullopt) {
+            if (status == ContextDenied)
+                return StaleContextResult();
+            if (status == ProviderFailed && providerError)
+                return {status, {}, providerError->code};
+            return {status, {}};
+        }
+
         /** @brief Validates host policy before starting a timer or calling either port. */
         bool ValidLimits(const AgentTurnLimits &limits) noexcept {
             return limits.maximumRounds > 0 && limits.maximumRounds <= 16 && limits.maximumToolCalls <= 32 && limits.maximumEvents > 0 &&
@@ -114,13 +149,16 @@ namespace Horo::Agent {
 
         /** @brief Maintains the terminal boundary even if a provider implementation throws. */
         ModelOutcome StreamResponse(IModelProvider &provider, const ModelRequest &request, const TurnStop &stop,
-                                    Detail::AgentTurnStream &stream, const AgentTurnTextObserver &observeText) {
+                                    Detail::AgentTurnStream &stream, const AgentTurnTextObserver &observeText, TurnContextGate &context) {
             try {
                 return provider.Stream(request, [&](const ModelEvent &event) {
                     if (stop.Token().stop_requested() || !stream.Accept(event))
                         return false;
-                    if (observeText && event.kind == ModelEventKind::TextDelta)
+                    if (observeText && event.kind == ModelEventKind::TextDelta) {
+                        if (!context.Check())
+                            return false;
                         observeText(event.text);
+                    }
                     return true;
                 }, stop.Token());
             } catch (const std::bad_alloc &) {
@@ -131,9 +169,12 @@ namespace Horo::Agent {
         }
 
         /** @brief Classifies one exact provider response before charging it to the turn or executing any tools. */
-        AgentTurnStatus CompleteModelRound(const ModelOutcome &outcome, const Detail::AgentTurnStream &stream, const TurnStop &stop) {
+        AgentTurnStatus CompleteModelRound(const ModelOutcome &outcome, const Detail::AgentTurnStream &stream, const TurnStop &stop,
+                                           TurnContextGate &context) {
             if (const auto stopped = stop.Status())
                 return *stopped;
+            if (!context.Check())
+                return ContextDenied;
             if (const auto rejected = stream.Rejection())
                 return *rejected == Detail::TurnStreamFailure::Capacity ? BudgetExceeded : InvalidModelResponse;
             if (!outcome.Succeeded())
@@ -145,6 +186,7 @@ namespace Horo::Agent {
         struct TurnProgress final {
             Detail::TurnStreamBudget remaining;
             const TurnStop &stop;
+            TurnContextGate &context;
             std::uint64_t id;
             const AgentToolActivityObserver &observeTool;
             std::size_t submitted{};
@@ -169,6 +211,10 @@ namespace Horo::Agent {
             if (const auto stopped = progress.stop.Status()) {
                 ReportToolActivity(progress.observeTool, {ordinal, *stopped});
                 return *stopped;
+            }
+            if (!progress.context.Check()) {
+                ReportToolActivity(progress.observeTool, {ordinal, ContextDenied});
+                return ContextDenied;
             }
             AgentTurnStatus state{ToolFailed};
             try {
@@ -253,21 +299,20 @@ namespace Horo::Agent {
             TurnStop stop{limits.timeout, cancellation};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
-            TurnProgress progress{remaining, stop, turnId, observeTool};
+            TurnContextGate contextGate{context};
+            TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())
                     return {*stopped, {}};
-                if (context && !context->preview.IsCurrent(context->policy, context->project, context->isCurrent))
-                    return {.status = ContextDenied, .contextError = Security::AgentPolicyReason::StaleAuthority};
+                if (!contextGate.Check())
+                    return StaleContextResult();
                 request.maximumOutputTokens = std::min(outputPerRound, tokens);
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
                 Detail::AgentTurnStream stream{progress.remaining};
-                const auto outcome = StreamResponse(provider, request, stop, stream, observeText);
-                if (const auto status = CompleteModelRound(outcome, stream, stop); status == ProviderFailed)
-                    return {status, {}, outcome.error->code};
-                else if (status != Completed)
-                    return {status, {}};
+                const auto outcome = StreamResponse(provider, request, stop, stream, observeText, contextGate);
+                if (const auto status = CompleteModelRound(outcome, stream, stop, contextGate); status != Completed)
+                    return FailedRound(status, outcome.error);
                 const auto used =
                     stream.Usage() ? stream.Usage()->outputTokens.value_or(request.maximumOutputTokens) : request.maximumOutputTokens;
                 if (used > request.maximumOutputTokens)
@@ -288,7 +333,7 @@ namespace Horo::Agent {
                 if (round + 1 == limits.maximumRounds || tokens == 0)
                     return {BudgetExceeded, {}};
                 if (const auto status = AppendToolRound(*tools, request, std::move(message), progress); status != Completed)
-                    return {status, {}};
+                    return FailedRound(status);
             }
             return {BudgetExceeded, {}};
         } catch (const std::bad_alloc &) {

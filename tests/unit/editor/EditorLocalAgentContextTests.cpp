@@ -88,7 +88,7 @@ namespace Horo::Editor {
               "[unit][agent][context][saved_project_file]") {
         TestSupport::SourceProject project;
         project.Put("int saved_value;\nApi-Key: private-value\n", "unopened file.cpp");
-        auto files = Platform::CreateNativeProjectReadFiles(project.directory, "workspace", 1);
+        auto files = Platform::CreateNativeProjectReadFiles(std::filesystem::canonical(project.directory), "workspace", 1);
         REQUIRE(files.HasValue());
         CancellationSource lifetime;
         const Platform::ProjectReadContext read{"workspace", 1, lifetime.Token(),
@@ -143,7 +143,7 @@ namespace Horo::Editor {
     TEST_CASE("Saved project file review rejects unsafe, missing, binary or oversized sources",
               "[unit][agent][context][saved_project_file]") {
         TestSupport::SourceProject project;
-        auto files = Platform::CreateNativeProjectReadFiles(project.directory, "workspace", 1);
+        auto files = Platform::CreateNativeProjectReadFiles(std::filesystem::canonical(project.directory), "workspace", 1);
         REQUIRE(files.HasValue());
         const Platform::ProjectReadContext read{"workspace", 1, {}, std::chrono::steady_clock::now() + std::chrono::minutes{1}};
         const auto prepare = [&](std::string_view path) {
