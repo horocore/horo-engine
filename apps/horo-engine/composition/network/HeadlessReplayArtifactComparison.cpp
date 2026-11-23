@@ -180,6 +180,27 @@ namespace Horo::Application::Internal {
                     {{agent, ReadIdentity(section.at("revision"))}, hash}};
         }
 
+        /** @brief Validates both published path schemas and projects fixed-owner output as an observation. */
+        PortableBoundary ReadNavigationBoundary(const Json &section, const std::uint64_t tick) {
+            const auto &records = section.at("results");
+            const auto &version = section.at("schemaVersion");
+            const auto &scope = section.at("scope").get_ref<const std::string &>();
+            const bool fixedOwner = version == HeadlessFixedOwnerNavigationSchemaVersion && scope == HeadlessFixedOwnerNavigationScope;
+            if (!fixedOwner && (version != HeadlessBestEffortNavigationSchemaVersion || scope != HeadlessBestEffortNavigationScope))
+                throw InvalidEvidence{};
+            if (!records.is_array() || records.size() > 32 || ReadIdentity(section.at("tick")) != tick)
+                throw InvalidEvidence{};
+            const auto hash = HashJson(records);
+            if (hash != ReadHeadlessReplayDigest(section.at("digest")))
+                throw InvalidEvidence{};
+            const auto topology = ReadIdentity(section.at("topology"));
+            const auto profile = ReadHeadlessReplayDigest(section.at("profile"));
+            return fixedOwner
+                       ? PortableBoundary{{AI::AiReplayCoverage::Deterministic, HeadlessFixedOwnerNavigationSchemaVersion, profile},
+                                          {{tick, topology}, hash}}
+                       : PortableBoundary{{AI::AiReplayCoverage::Nondeterministic, HeadlessBestEffortNavigationSchemaVersion, profile}, {}};
+        }
+
         /** @brief Projects one unchanged version-one frame onto the ordered portable observations. */
         PortableReplay ReadReplayFrame(const Json &file) {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
@@ -195,17 +216,8 @@ namespace Horo::Application::Internal {
                     (available == false && (!records.empty() || unresolved != 0)))
                     throw InvalidEvidence{};
             }
-            if (file.contains("navigation")) {
-                const auto &navigation = file.at("navigation");
-                const auto &records = navigation.at("results");
-                if (navigation.at("schemaVersion") != 1 || navigation.at("scope") != "best-effort-path-publication" ||
-                    !records.is_array() || records.size() > 32 || ReadIdentity(navigation.at("tick")) != result.tick ||
-                    HashJson(records) != ReadHeadlessReplayDigest(navigation.at("digest")))
-                    throw InvalidEvidence{};
-                (void)ReadIdentity(navigation.at("topology"));
-                result.At(Navigation).profile = {AI::AiReplayCoverage::Nondeterministic, 1,
-                                                 ReadHeadlessReplayDigest(navigation.at("profile"))};
-            }
+            if (const auto navigation = file.find("navigation"); navigation != file.end())
+                result.At(Navigation) = ReadNavigationBoundary(*navigation, result.tick);
             if (file.contains("gameplay")) {
                 const auto &gameplay = file.at("gameplay");
                 const auto &records = gameplay.at("records");

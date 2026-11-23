@@ -850,9 +850,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &policy = owners_->configured->navigationPath;
             if (!policy)
                 return Result<void>::Success();
+            const auto &motion = owners_->configured->navigationMotion;
+            const auto *crowd = motion && motion->qualified ? &motion->qualified->admitted : nullptr;
             auto paths = HeadlessNavigationPathScope::Create(*record_->navigation, *owners_->configured->navigation, *policy,
                                                              request_.scene, selected.moduleId,
-                                                             record_->decisionQueries && record_->decisionQueries->UsesNavigation());
+                                                             record_->decisionQueries && record_->decisionQueries->UsesNavigation(), crowd);
             if (paths.HasError())
                 return Result<void>::Failure(paths.ErrorValue());
             const auto scene = record_->scenes->ActiveScene();

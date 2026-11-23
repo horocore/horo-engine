@@ -3158,6 +3158,12 @@ Worker queue availability cannot affect this mode. Deterministic decisions that
 issue Character motion also require the qualified crowd policy. Best-effort
 worlds continue to dispatch through the process scheduler.
 
+Headless replay compares fixed-owner path observations at their publication
+tick and topology, using a profile that binds the cooked surface and any
+admitted crowd qualification. The same replay window carries achieved
+Character motion from canonical Physics. Best-effort path evidence retains
+its diagnostic-only scope and original portable schema.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

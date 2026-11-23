@@ -32,7 +32,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Identifies the selected immutable Navigation assets and explicit query policy. */
         Sha256Digest CaptureNavigationProfile(const ProjectSceneNavigationWorld &owner, const ProjectSceneNavigationSelection &selection,
-                                              const HeadlessNavigationPathPolicy &policy) noexcept {
+                                              const HeadlessNavigationPathPolicy &policy,
+                                              const Nav::NavigationCrowdQualification *crowd) noexcept {
             Sha256Builder hash;
             const auto assets = owner.assets->ActiveAssetProvenance();
             HashWord(hash, assets.size());
@@ -49,6 +50,13 @@ namespace Horo::Application::Internal {
             HashFloat(hash, query.limits.maximumSearchDistanceMeters);
             if (policy.execution == Nav::NavigationPathExecution::FixedOwner)
                 HashWord(hash, static_cast<std::uint64_t>(policy.execution));
+            if (crowd) {
+                for (const auto *digest :
+                     {&crowd->provider, &crowd->buildPlatform, &crowd->goldenEvidence, &crowd->topologyContent, &crowd->profile})
+                    (void)hash.Update(std::as_bytes(std::span{digest->bytes}));
+                HashFloat(hash, crowd->fixedStepSeconds);
+                HashWord(hash, crowd->maximumAgents);
+            }
             return hash.Finalize();
         }
 
@@ -89,7 +97,8 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNavigationPathScope::Create */
     Result<std::unique_ptr<HeadlessNavigationPathScope>> HeadlessNavigationPathScope::Create(
         ProjectSceneNavigationWorld &owner, const ProjectSceneNavigationSelection &selection, const HeadlessNavigationPathPolicy &policy,
-        const Runtime::SceneRuntimeId scene, const std::string_view module, const bool tacticalQueries) {
+        const Runtime::SceneRuntimeId scene, const std::string_view moduleId, const bool tacticalQueries,
+        const Nav::NavigationCrowdQualification *crowd) {
         using Scope = Result<std::unique_ptr<HeadlessNavigationPathScope>>;
         if (!policy.IsValid() || !selection.catalog || selection.policy.MaximumQuery().query != Nav::NavigationQueryKind::Path)
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapabilityDescriptorInvalid));
@@ -147,7 +156,7 @@ namespace Horo::Application::Internal {
                                                                .request = {.filter = policy.filter, .requirement = requirement},
                                                                .deadlineTick = policy.deadlineTicks};
             }
-            auto context = Gameplay::GameplayNavigationContext::CreateWithBehaviorAgentPaths({std::string{module}, binding, true, false},
+            auto context = Gameplay::GameplayNavigationContext::CreateWithBehaviorAgentPaths({std::string{moduleId}, binding, true, false},
                                                                                              *world, owner.coordinator, owner.agents,
                                                                                              {.caller = caller,
                                                                                               .request = {.filter = policy.filter,
@@ -160,9 +169,16 @@ namespace Horo::Application::Internal {
             if (auto refreshed = context.Value()->Refresh({.binding = binding, .path = {.provenance = source}}); refreshed.HasError())
                 return Scope::Failure(refreshed.ErrorValue());
             return Scope::Success(std::unique_ptr<HeadlessNavigationPathScope>{
-                new HeadlessNavigationPathScope{std::move(world), owner.coordinator, active.Value(), source, owner.agents,
-                                                std::move(callers), std::move(tacticalPolicy), std::move(context).Value(),
-                                                CaptureNavigationProfile(owner, selection, policy)}});
+                new HeadlessNavigationPathScope{std::move(world),
+                                                owner.coordinator,
+                                                active.Value(),
+                                                source,
+                                                owner.agents,
+                                                std::move(callers),
+                                                std::move(tacticalPolicy),
+                                                std::move(context).Value(),
+                                                {CaptureNavigationProfile(owner, selection, policy, crowd),
+                                                 policy.execution == Nav::NavigationPathExecution::FixedOwner}}});
         } catch (const std::bad_alloc &) {
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
         }
@@ -250,7 +266,7 @@ namespace Horo::Application::Internal {
         const Nav::NavigationWorldActivationDescriptor activation, const Nav::NavigationOutcomeProvenance source,
         Nav::NavigationAgentRegistry &agents, std::vector<Nav::NavigationPathCaller> callers,
         std::optional<Nav::NavigationPathSubmission> tacticalPolicy, std::shared_ptr<Gameplay::GameplayNavigationContext> context,
-        const Sha256Digest replayProfile) noexcept
+        const ReplayProfile &replayProfile) noexcept
         : lifecycle_(std::move(lifecycle)), coordinator_(coordinator), activation_(activation), source_(source), agents_(agents),
           callers_(std::move(callers)), tacticalPolicy_(std::move(tacticalPolicy)), context_(std::move(context)),
           replayProfile_(replayProfile) {}
@@ -593,7 +609,10 @@ namespace Horo::Application::Internal {
         }
         Nav::NavigationPathCommitObserver observer;
         if (replay) {
-            *replay = {.profile = replayProfile_, .tick = tick, .topology = activation_.topology.Value()};
+            *replay = {.profile = replayProfile_.digest,
+                       .tick = tick,
+                       .topology = activation_.topology.Value(),
+                       .fixedOwner = replayProfile_.fixedOwner};
             observer = {replay, ObserveNavigationCompletion};
         }
         static_cast<void>(coordinator_.Commit({activation_, source_, callers_, tick}, observer));

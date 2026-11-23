@@ -20,6 +20,10 @@ namespace Horo::Application::Internal {
     inline constexpr std::size_t MaximumHeadlessReplayWindowBytes = MaximumHeadlessReplayEvidenceBytes * MaximumHeadlessReplayTicks;
     inline constexpr std::uint32_t HeadlessSceneInputSchemaVersion = 2;
     inline constexpr std::uint32_t HeadlessStimuliSchemaVersion = 1;
+    inline constexpr std::uint32_t HeadlessBestEffortNavigationSchemaVersion = 1;
+    inline constexpr std::uint32_t HeadlessFixedOwnerNavigationSchemaVersion = 2;
+    inline constexpr std::string_view HeadlessBestEffortNavigationScope = "best-effort-path-publication";
+    inline constexpr std::string_view HeadlessFixedOwnerNavigationScope = "fixed-owner-path-publication";
 
     /** @brief User-selected absolute directory name for one immutable evidence publication. */
     class HeadlessReplayOutput final {

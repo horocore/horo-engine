@@ -20,7 +20,6 @@ namespace Horo::Application::Internal {
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
         constexpr std::uint32_t GameplaySchemaVersion = 2;
-        constexpr std::uint32_t NavigationReplaySchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 2;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
@@ -30,6 +29,20 @@ namespace Horo::Application::Internal {
             return ComputeSha256(std::as_bytes(std::span{canonical}));
         }
 
+        /** @brief The worker path records diagnostics while fixed-owner paths participate in comparison. */
+        AI::AiReplayCoverage NavigationCoverage(const std::optional<HeadlessReplayNavigation> &navigation) noexcept {
+            using enum AI::AiReplayCoverage;
+            if (!navigation)
+                return Omitted;
+            return navigation->fixedOwner ? Deterministic : Nondeterministic;
+        }
+
+        /** @brief Checks the shared bounds and provenance before encoding or comparing a capture. */
+        bool ValidNavigationCapture(const std::optional<HeadlessReplayNavigation> &navigation, const std::uint64_t tick) noexcept {
+            return !navigation || (!navigation->truncated && navigation->count <= navigation->results.size() && navigation->tick == tick &&
+                                   navigation->topology != 0 && navigation->profile != Sha256Digest{});
+        }
+
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
         HeadlessReplayManifestJson EncodeCoverage(const HeadlessDecisionReplayData &data) {
             using enum AI::AiReplayCoverage;
@@ -37,14 +50,13 @@ namespace Horo::Application::Internal {
                 return available ? Deterministic : Omitted;
             };
             return EncodeHeadlessReplayManifest({Deterministic, observed(data.perception.has_value()), observed(data.queries.has_value()),
-                                                 observed(data.queries.has_value()), Deterministic,
-                                                 data.navigation ? Nondeterministic : Omitted, observed(data.gameplay.has_value()),
-                                                 observed(data.physics.has_value()), observed(data.characterMotion.has_value()),
-                                                 Deterministic});
+                                                 observed(data.queries.has_value()), Deterministic, NavigationCoverage(data.navigation),
+                                                 observed(data.gameplay.has_value()), observed(data.physics.has_value()),
+                                                 observed(data.characterMotion.has_value()), Deterministic});
         }
 
-        /** @brief Keeps the actual best-effort terminal outcomes visible for diagnosis. */
-        Json EncodeNavigation(const HeadlessReplayNavigation &navigation) {
+        /** @brief Encodes ordered terminal results without process-local job or world identities. */
+        Json EncodeNavigationResults(const HeadlessReplayNavigation &navigation) {
             auto results = Json::array();
             for (const auto &result : std::span{navigation.results}.first(navigation.count)) {
                 Json status = result.status ? Json(static_cast<std::uint8_t>(*result.status)) : Json(nullptr);
@@ -55,8 +67,15 @@ namespace Horo::Application::Internal {
                                    {"pointCount", result.points},
                                    {"digest", FormatSha256(result.digest)}});
             }
-            return {{"schemaVersion", NavigationReplaySchemaVersion},
-                    {"scope", "best-effort-path-publication"},
+            return results;
+        }
+
+        /** @brief Marks fixed-owner observations as comparable and preserves the old diagnostic artifact shape. */
+        Json EncodeNavigation(const HeadlessReplayNavigation &navigation) {
+            auto results = EncodeNavigationResults(navigation);
+            return {{"schemaVersion",
+                     navigation.fixedOwner ? HeadlessFixedOwnerNavigationSchemaVersion : HeadlessBestEffortNavigationSchemaVersion},
+                    {"scope", navigation.fixedOwner ? HeadlessFixedOwnerNavigationScope : HeadlessBestEffortNavigationScope},
                     {"profile", FormatSha256(navigation.profile)},
                     {"tick", std::to_string(navigation.tick)},
                     {"topology", std::to_string(navigation.topology)},
@@ -243,7 +262,8 @@ namespace Horo::Application::Internal {
             const auto &capture = data.evidence;
             if (!capture.trace || capture.trace->DroppedRecords() != 0 || !data.definition.IsValid() || !capture.subject.IsValid() ||
                 data.definitionRevision.value == 0 || data.sceneInput == Sha256Digest{} || data.canonicalRecord.empty() ||
-                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics))
+                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics) ||
+                !ValidNavigationCapture(data.navigation, capture.tick))
                 return Result<std::string>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
             const auto &header = capture.trace->Header();
             if (!header.MatchesObservation(header.planDigest, capture.tick, capture.blackboard, capture.blackboardRevision))
@@ -332,7 +352,8 @@ namespace Horo::Application::Internal {
         /** @brief Adapts the captured product evidence without synthesizing missing observations. */
         Result<ComparableCapture> ProjectComparison(const HeadlessDecisionReplayData &data) {
             if (!data.evidence.trace || data.canonicalRecord.empty() ||
-                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics))
+                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics) ||
+                !ValidNavigationCapture(data.navigation, data.evidence.tick))
                 return Result<ComparableCapture>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
 
             using enum AI::AiReplayBoundary;
@@ -354,9 +375,15 @@ namespace Horo::Application::Internal {
             if (const auto &gameplay = data.gameplay)
                 result.Observe(Gameplay, GameplaySchemaVersion, gameplay->profile.digest, {gameplay->profile.revision, data.evidence.tick},
                                HashRecords(EncodeGameplayRecords(*gameplay)));
-            if (const auto &navigation = data.navigation)
-                result.manifest.boundaries[static_cast<std::size_t>(Navigation)] = {AI::AiReplayCoverage::Nondeterministic,
-                                                                                    NavigationReplaySchemaVersion, navigation->profile};
+            if (const auto &navigation = data.navigation) {
+                if (navigation->fixedOwner)
+                    result.Observe(Navigation, HeadlessFixedOwnerNavigationSchemaVersion, navigation->profile,
+                                   {navigation->tick, navigation->topology}, HashRecords(EncodeNavigationResults(*navigation)));
+                else
+                    result.manifest.boundaries[static_cast<std::size_t>(Navigation)] = {AI::AiReplayCoverage::Nondeterministic,
+                                                                                        HeadlessBestEffortNavigationSchemaVersion,
+                                                                                        navigation->profile};
+            }
             if (const auto &queries = data.queries) {
                 result.Observe(QueryPublication, QueryPublicationSchemaVersion, queries->profile,
                                {data.evidence.subject.Value(), data.evidence.tick}, HashRecords(EncodeQueries(*queries, false)));

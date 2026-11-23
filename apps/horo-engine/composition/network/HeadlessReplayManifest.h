@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
         };
         using enum AI::AiReplayBoundary;
         auto providers = Json::object();
-        if (includes(Navigation))
+        if (coverage[static_cast<std::size_t>(Navigation)] == Nondeterministic)
             providers["navigation"] = {"native-navigation-path-worker"};
         Json omissions = {{"scene-input", {"streamed-cell-content", "runtime-structural-group-content"}}};
         if (includes(PerceptionInput))

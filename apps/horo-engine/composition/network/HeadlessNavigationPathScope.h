@@ -21,6 +21,10 @@ namespace Horo::AI {
     class AiTaskContinuation;
 }  // namespace Horo::AI
 
+namespace Horo::Navigation {
+    struct NavigationCrowdQualification;
+}
+
 namespace Horo::Application::Internal {
     struct HeadlessNavigationPathPolicy;
     struct HeadlessNavigationActorPolicy;
@@ -39,12 +43,13 @@ namespace Horo::Application::Internal {
         Sha256Digest digest;
     };
 
-    /** @brief One bounded best-effort Navigation publication captured for diagnostic use. */
+    /** @brief One bounded Navigation publication captured with its execution contract. */
     struct HeadlessReplayNavigation final {
         static constexpr std::size_t MaximumResults = 32;
         Sha256Digest profile;
         std::uint64_t tick{};
         std::uint64_t topology{};
+        bool fixedOwner{};
         std::array<HeadlessReplayNavigationResult, MaximumResults> results{};
         std::size_t count{};
         bool truncated{};
@@ -58,14 +63,15 @@ namespace Horo::Application::Internal {
          * @param world Installed owner and its canonical coordinator. It outlives this scope.
          * @param selection The admitted cooked project policy.
          * @param policy Explicit filter/deadline settings. @param scene Exact private Scene incarnation.
-         * @param module The one selected native principal for this authoritative world.
+         * @param moduleId The one selected native principal for this authoritative world.
+         * @param tacticalQueries Whether the scene admits an independent tactical caller.
+         * @param crowd Optional exact qualified crowd evidence for the replay profile.
          * @return Prepared scope with initial observation, or original typed admission error.
          */
-        [[nodiscard]] static Result<std::unique_ptr<HeadlessNavigationPathScope>> Create(ProjectSceneNavigationWorld &world,
-                                                                                         const ProjectSceneNavigationSelection &selection,
-                                                                                         const HeadlessNavigationPathPolicy &policy,
-                                                                                         Runtime::SceneRuntimeId scene,
-                                                                                         std::string_view module, bool tacticalQueries);
+        [[nodiscard]] static Result<std::unique_ptr<HeadlessNavigationPathScope>> Create(
+            ProjectSceneNavigationWorld &world, const ProjectSceneNavigationSelection &selection,
+            const HeadlessNavigationPathPolicy &policy, Runtime::SceneRuntimeId scene, std::string_view moduleId, bool tacticalQueries,
+            const Navigation::NavigationCrowdQualification *crowd);
 
         /** @brief Borrows the only module scope bound to the exact published static world. */
         [[nodiscard]] const std::shared_ptr<Gameplay::GameplayNavigationContext> &Context() const noexcept;
@@ -106,6 +112,11 @@ namespace Horo::Application::Internal {
     private:
         struct CrowdTick;
 
+        struct ReplayProfile final {
+            Sha256Digest digest;
+            bool fixedOwner{};
+        };
+
         struct Actor final {
             std::unique_ptr<SceneAiNavigationActor> owner;
             std::optional<Navigation::NavigationAgentOwner> target;
@@ -133,7 +144,8 @@ namespace Horo::Application::Internal {
                                     Navigation::NavigationOutcomeProvenance source, Navigation::NavigationAgentRegistry &agents,
                                     std::vector<Navigation::NavigationPathCaller> callers,
                                     std::optional<Navigation::NavigationPathSubmission> tacticalPolicy,
-                                    std::shared_ptr<Gameplay::GameplayNavigationContext> context, Sha256Digest replayProfile) noexcept;
+                                    std::shared_ptr<Gameplay::GameplayNavigationContext> context,
+                                    const ReplayProfile &replayProfile) noexcept;
 
         std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle_;
         Navigation::NavigationCoordinator &coordinator_;
@@ -149,6 +161,6 @@ namespace Horo::Application::Internal {
         std::uint64_t motionTick_{};
         float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;
-        Sha256Digest replayProfile_;
+        ReplayProfile replayProfile_;
     };
 }  // namespace Horo::Application::Internal

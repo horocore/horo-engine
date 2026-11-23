@@ -554,6 +554,108 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                           .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, scheduler, {}}});
             }, role, simulationAssets);
         }
+
+        /** @brief Composes the same qualified solver for a fixture's static cooked surface. */
+        void SelectQualifiedCrowd(Internal::HeadlessNavigationMotionPolicy &policy) {
+            using namespace Navigation;
+            const auto evidence = [](const std::string_view text) {
+                return ComputeSha256(std::as_bytes(std::span{text}));
+            };
+            const NavigationCrowdQualification admitted{.provider = DeterministicCrowdProviderFingerprint(),
+                                                        .buildPlatform = evidence("character product fixture build"),
+                                                        .goldenEvidence = evidence("character product fixture golden evidence"),
+                                                        .topologyContent = evidence("character product fixture topology"),
+                                                        .profile = evidence("character product fixture profile"),
+                                                        .fixedStepSeconds = 16'666'667.0F / 1'000'000'000.0F,
+                                                        .maximumAgents = 1};
+            auto provider = CreateDeterministicCrowdBackend(admitted);
+            REQUIRE(provider.HasValue());
+            policy.qualified.emplace(std::move(provider).Value(), admitted);
+        }
+
+        /** @brief Captures a real Headless path, decision and Character replay under one scheduler configuration. */
+        std::vector<Internal::HeadlessDecisionReplayData> CaptureQualifiedCrowdReplay(const NavigationProductFixture &fixture,
+                                                                                      DecisionFixture::Fixture &decision,
+                                                                                      const AI::AiControllerDescriptor &controller,
+                                                                                      const Assets::AssetId asset,
+                                                                                      const std::size_t workers) {
+            using namespace Navigation;
+            decision.probe = {};
+            decision.probe.succeedTick = std::numeric_limits<std::uint64_t>::max();
+            JobSystem jobs({.workerCount = workers});
+            constexpr std::uint64_t firstTick = 2;
+            constexpr std::size_t frameCount = 24;
+            const auto subject = DecisionFixture::MakeIdentity<AI::AgentId>(50);
+            auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(
+                Internal::HeadlessDecisionReplaySelection{subject, firstTick, frameCount});
+            auto policy = std::make_shared<Internal::HeadlessNavigationMotionPolicy>();
+            SelectQualifiedCrowd(*policy);
+            auto dynamic = NavigationDynamicRegistry::Create().Value();
+            const auto &admitted = policy->qualified->admitted;
+            bool initialized{};
+            float maximumSpeed{};
+            policy->capture = [&admitted, &dynamic, &initialized, &maximumSpeed](const auto &, const auto &active, const auto &agents,
+                                                                                 const auto samples, const std::uint64_t tick) {
+                for (const auto &sample : samples)
+                    maximumSpeed = std::max(maximumSpeed, std::hypot(sample.velocity.x, sample.velocity.z));
+                if (!std::exchange(initialized, true))
+                    REQUIRE(dynamic.CommitAtSafePoint(active, tick).HasValue());
+                const std::array profiles{NavigationCrowdProfileFacts{.profile = agents.Agents().front().profile}};
+                return BuildNavigationCrowdSnapshot(agents, dynamic.Snapshot().Value(), samples, profiles,
+                                                    {.mode = AvoidanceExecutionMode::DeterministicQualified,
+                                                     .deterministicStamp = {active.topology, admitted.topologyContent, admitted.profile}},
+                                                    tick);
+            };
+            bool staged{};
+            Math::Vec3 goal{3, 0, 2};
+            NativeNavigationProductWorld product;
+            decision.probe.onStart = [&decision, &goal, &product, &staged] {
+                staged = Internal::StageHeadlessNavigationMotion(product.PhysicsService(), decision.probe.continuation,
+                                                                 {.mode = NavigationMovementMode::MoveTo,
+                                                                  .destination = goal,
+                                                                  .acceptanceRadiusMeters = 0.2F,
+                                                                  .timeoutTicks = 350,
+                                                                  .query = {NavigationQueryKind::Path,
+                                                                            NavigationQualityLevel::Balanced,
+                                                                            {64, 16, 100}},
+                                                                  .capabilityRevision = 3},
+                                                                 product.tick)
+                             .HasValue();
+            };
+            const auto started = product.Start(fixture, NavigationGameplay(), {{{3}, 1}}, Physics::PhysicsRuntimeMode::Canonical,
+                                               [&controller, asset, &decision, &jobs, &policy, &replay](auto &input, auto &assets) {
+                input.aiControllers = std::span{&controller, 1};
+                input.navigationPath->execution = NavigationPathExecution::FixedOwner;
+                input.navigationMotion = policy;
+                input.decisionReplay = replay;
+                input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
+                    Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
+                                                          .environment = decision.Environment(),
+                                                          .bindings = {{controller.controller, asset}},
+                                                          .execution = AI::AiSceneCookedDecisionExecution{jobs, {}, {}}});
+            });
+            INFO((started.HasError() ? started.ErrorValue().message : "started"));
+            REQUIRE(started.HasValue());
+            const auto scene = Internal::InspectHeadlessScene(product.SceneService());
+            REQUIRE(scene);
+            const auto actor = scene->Find({3});
+            REQUIRE(actor);
+            goal.y = scene->Get(*actor).Value().localTransform->translation.y;
+            for (std::uint64_t tick = 1; tick < firstTick + frameCount; ++tick)
+                product.RunFrame();
+            CHECK(staged);
+            CAPTURE(maximumSpeed, decision.probe.starts, decision.probe.cleanups);
+            if (decision.probe.lastFailure)
+                UNSCOPED_INFO(decision.probe.lastFailure->code.Value() + ": " + decision.probe.lastFailure->message);
+            CHECK(maximumSpeed > 0.01F);
+            auto frames = replay->TakeCommittedWindow();
+            REQUIRE(frames);
+            INFO((frames->HasError() ? frames->ErrorValue().message : "captured"));
+            REQUIRE(frames->HasValue());
+            product.Stop();
+            decision.probe.onStart = {};
+            return std::move(*frames).Value();
+        }
     }  // namespace
 
     TEST_CASE("Cooked tactical point queries combine Navigation cost with Physics visibility",
@@ -1095,6 +1197,61 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK_FALSE(decision.probe.continuation.IsCurrent());
     }
 
+    TEST_CASE("Headless fixed-owner crowd produces repeatable product replay evidence", "[ai][navigation][character][product][replay]") {
+        NavigationProductFixture fixture;
+        DecisionFixture::Fixture decision;
+        auto source = DecisionFixture::TaskTree(11);
+        source.executionTask = DecisionFixture::MakeIdentity<AI::TaskId>(9000);
+        const AI::AiControllerDescriptor controller{.controller = DecisionFixture::MakeIdentity<AI::ControllerTypeId>(49),
+                                                    .decisionAsset = source.asset,
+                                                    .decisionKind = AI::DecisionPlanKind::BehaviorTree,
+                                                    .blackboardSchema = decision.schema};
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, controller, std::nullopt);
+        const auto baseline = CaptureQualifiedCrowdReplay(fixture, decision, controller, asset, 1);
+        auto replayed = CaptureQualifiedCrowdReplay(fixture, decision, controller, asset, 3);
+        REQUIRE(baseline.size() == 24);
+        REQUIRE(replayed.size() == baseline.size());
+        std::optional<std::size_t> pathFrame;
+        bool observedMovement{};
+        for (std::size_t index = 0; index < baseline.size(); ++index) {
+            const auto &frame = baseline[index];
+            REQUIRE(frame.navigation);
+            CHECK(frame.navigation->fixedOwner);
+            if (frame.navigation->count != 0 && frame.navigation->results.front().status == Navigation::NavigationPathStatus::Reachable)
+                pathFrame = index;
+            REQUIRE(frame.characterMotion);
+            observedMovement |= std::ranges::any_of(*frame.characterMotion, [](const auto &motion) {
+                return std::hypot(motion.achievedVelocity.x, motion.achievedVelocity.z) > 0.01F;
+            });
+            auto comparison = Internal::CompareHeadlessReplayCaptures(frame, replayed[index]);
+            REQUIRE(comparison.HasValue());
+            CHECK_FALSE(comparison.Value());
+        }
+        REQUIRE(pathFrame);
+        CHECK(observedMovement);
+        const auto publish = [&](const std::string_view name, const auto &frames) {
+            const auto directory = fixture.project.project.dir.path / name;
+            const auto output = Internal::HeadlessReplayOutput::Parse(Utf8Path(directory));
+            REQUIRE(output.HasValue());
+            REQUIRE(Internal::PublishHeadlessReplayWindow(output.Value(), frames).HasValue());
+            return directory / "evidence.json";
+        };
+        const auto original = publish("qualified-recorded", baseline);
+        const auto portable = Internal::CompareHeadlessReplayArtifacts(original, publish("qualified-replayed", replayed));
+        REQUIRE(portable.HasValue());
+        CHECK_FALSE(portable.Value());
+        replayed[*pathFrame].navigation->results.front().digest = replayed[*pathFrame].sceneInput;
+        const auto capture = Internal::CompareHeadlessReplayCaptures(baseline[*pathFrame], replayed[*pathFrame]);
+        REQUIRE(capture.HasValue());
+        REQUIRE(capture.Value());
+        CHECK(capture.Value()->boundary == AI::AiReplayBoundary::Navigation);
+        const auto changed = Internal::CompareHeadlessReplayArtifacts(original, publish("qualified-changed", replayed));
+        REQUIRE(changed.HasValue());
+        REQUIRE(changed.Value());
+        CHECK(changed.Value()->boundary == AI::AiReplayBoundary::Navigation);
+        CHECK(changed.Value()->tick == baseline[*pathFrame].evidence.tick);
+    }
+
     TEST_CASE("Cooked AI decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {
         using namespace Navigation;
         enum class Scenario {
@@ -1163,21 +1320,9 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                         product.tick)
                     .HasValue();
         };
-        if (qualifiedCrowd) {
-            const auto evidence = [](const std::string_view text) {
-                return ComputeSha256(std::as_bytes(std::span{text}));
-            };
-            const NavigationCrowdQualification admitted{.provider = DeterministicCrowdProviderFingerprint(),
-                                                        .buildPlatform = evidence("character product fixture build"),
-                                                        .goldenEvidence = evidence("character product fixture golden evidence"),
-                                                        .topologyContent = evidence("character product fixture topology"),
-                                                        .profile = evidence("character product fixture profile"),
-                                                        .fixedStepSeconds = 16'666'667.0F / 1'000'000'000.0F,
-                                                        .maximumAgents = 1};
-            auto provider = CreateDeterministicCrowdBackend(admitted);
-            REQUIRE(provider.HasValue());
-            policy->qualified.emplace(std::move(provider).Value(), admitted);
-        } else if (workerDeadline)
+        if (qualifiedCrowd)
+            SelectQualifiedCrowd(*policy);
+        else if (workerDeadline)
             policy->workerSolvers.emplace_back(CreateRecastDetourCrowdBackend().Value());
         else
             policy->solver = CreateRecastDetourCrowdBackend().Value();

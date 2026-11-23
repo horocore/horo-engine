@@ -723,13 +723,12 @@ namespace Horo::Application::Internal {
             if (!input.navigationMotion)
                 return true;
             const auto &decisions = input.cookedDecisions;
-            if (!input.navigationPath || input.decisionReplay || !decisions || !decisions->execution ||
-                !input.navigationMotion->HasSolverSelection())
+            if (!input.navigationPath || !decisions || !decisions->execution || !input.navigationMotion->HasSolverSelection())
                 return false;
             if (input.navigationPath->execution == Navigation::NavigationPathExecution::FixedOwner)
                 return input.navigationMotion->qualified.has_value() &&
                        decisions->execution->scheduler.mode == AI::AiSchedulingMode::Deterministic;
-            return decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
+            return !input.decisionReplay && decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
         }
 
         Result<void> ValidateConfiguredInput(const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
