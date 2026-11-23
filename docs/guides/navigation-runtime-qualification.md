@@ -69,14 +69,20 @@ The qualified provider must reproduce the same ordered agent indices, stop
 reasons and velocity bits when motion samples and solve requests are supplied
 in reverse order. The best-effort run uses one native Detour job per tick and
 prints median and p95 job execution time with the build, platform and compiler.
-Queue wait and snapshot construction are outside that timing. A separate run
+Queue wait and snapshot construction are outside that timing. The workload
+also reports the largest per-tick sum of owner-thread C++ allocation requests
+for capture and batch submission. A separate run
 saturates the one-job queue, replaces the capture after teleport and removal,
 and checks that the old work is rejected and its provider pin released.
 
-The workload advances authored input positions. It qualifies solver output,
-admission and lifetime at this population size. Native Character displacement
-is exercised by the separate integration cases below. Full-population
-Character displacement and whole-process memory require separate measurements.
+The solver workload advances authored input positions. A separate retirement
+case admits 64 actual Gameplay formation moves and queues 64 Character
+commands with feedback pending. It retires the group, rejects late command
+and feedback access, and checks that all Character, Navigation job, and
+topology owners drain. Sustained movement of all 64 Characters is outside
+this case. The ADR-109 4 MiB envelope still requires accounting for worker
+allocations, native allocator calls, retained and retired buffers, and
+allocator overhead on the reference configuration.
 
 ## Reference corpus and exact outcomes
 
