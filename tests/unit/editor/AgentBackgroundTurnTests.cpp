@@ -4,7 +4,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <semaphore>
 #include <stdexcept>
 #include <variant>
 
@@ -94,6 +96,45 @@ namespace Horo::Agent {
         CHECK(fresh->state == State::Ready);
         REQUIRE(fresh->reply);
         CHECK(std::get<ProviderDiscovery>(*fresh->reply).id == "fresh provider");
+    }
+
+    TEST_CASE("Agent completion waits for provider captures to retire on the worker", "[unit][editor][agent][background]") {
+        struct Capture final {
+            std::thread::id &retirementThread;
+            std::binary_semaphore &retiring;
+            std::binary_semaphore &release;
+
+            Capture(std::thread::id &thread, std::binary_semaphore &started, std::binary_semaphore &ready) noexcept
+                : retirementThread(thread), retiring(started), release(ready) {}
+
+            Capture(const Capture &) = delete;
+            Capture &operator=(const Capture &) = delete;
+
+            ~Capture() noexcept {
+                retirementThread = std::this_thread::get_id();
+                retiring.release();
+                static_cast<void>(release.try_acquire_for(5s));
+            }
+        };
+
+        std::thread::id retirementThread;
+        std::binary_semaphore retiring{0};
+        std::binary_semaphore release{0};
+        BackgroundTurn owner;
+        REQUIRE(owner.Start(BackgroundTurn::Operation{
+            [capture = std::make_unique<Capture>(retirementThread, retiring, release)](std::stop_token) -> BackgroundTurn::Reply {
+            return ProviderDiscovery{.id = "retiring"};
+        }}));
+
+        REQUIRE(retiring.try_acquire_for(5s));
+        CHECK(retirementThread != std::this_thread::get_id());
+        CHECK(owner.Busy());
+        CHECK_FALSE(owner.Poll());
+        release.release();
+        const auto completed = Await(owner);
+        REQUIRE(completed);
+        CHECK(completed->state == State::Ready);
+        CHECK_FALSE(owner.Busy());
     }
 
     TEST_CASE("Agent background shutdown joins cooperative work and reports provider exceptions", "[unit][editor][agent][background]") {

@@ -40,15 +40,18 @@ namespace Horo::Agent {
 
         /** @brief Starts one operation with owned inputs and cooperative cancellation.
          * @param operation Worker operation whose captures must not borrow editor services or presentation callbacks.
-         * @return True if admitted. A second operation is refused until the current completion is drained.
+         * @return True if admitted. A second operation is refused until worker retirement and completion drainage.
          */
         [[nodiscard]] bool Start(Operation operation) {
             if (Busy() || !operation.valid())
                 return false;
             try {
-                auto pending = operation.get_future();
-                worker_ = std::jthread{[operation = std::move(operation)](std::stop_token stop) mutable {
-                    operation(stop);
+                auto result = operation.get_future();
+                std::promise<Reply> completion;
+                auto pending = completion.get_future();
+                worker_ = std::jthread{[operation = std::move(operation), result = std::move(result),
+                                        completion = std::move(completion)](const std::stop_token stop) mutable {
+                    CompleteOnWorker(operation, result, completion, stop);
                 }};
                 reply_ = std::move(pending);
                 abandoned_ = false;
@@ -96,6 +99,25 @@ namespace Horo::Agent {
         }
 
     private:
+        /**
+         * @brief Releases the operation and its captured resources on the worker before exposing completion.
+         * @param operation The task that owns the provider or checkpoint operation.
+         * @param result Its single-owner result future.
+         * @param completion The editor's separate completion channel.
+         * @param stop The worker's cooperative stop token.
+         */
+        static void CompleteOnWorker(Operation &operation, std::future<Reply> &result, std::promise<Reply> &completion,
+                                     const std::stop_token stop) {
+            try {
+                operation(stop);
+                // The future may retain the packaged callable even after the task handle is released.
+                operation = {};
+                completion.set_value_at_thread_exit(result.get());
+            } catch (...) {
+                completion.set_exception_at_thread_exit(std::current_exception());
+            }
+        }
+
         std::jthread worker_;
         std::future<Reply> reply_;
         bool abandoned_{};
