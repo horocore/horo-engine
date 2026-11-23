@@ -101,6 +101,57 @@ namespace Horo::Tests::OpenXR {
         }
     }
 
+    TEST_CASE("XR color coverage is sampled only after native projection acceptance", "[xr][native][telemetry][resolution]") {
+        bool rejected{};
+        bool saturated{};
+        SECTION("runtime accepts the scaled projection") {
+            // The fixture defaults to a successful native submission and an available metrics queue.
+        }
+        SECTION("runtime rejects the same projection") {
+            rejected = true;
+        }
+        SECTION("runtime accepts while telemetry drops records") {
+            saturated = true;
+        }
+        FrameMetricRecorder metrics;
+        metrics.Start(saturated ? 2U : 128U);
+        {
+            CompositorFixture fixture;
+            REQUIRE(fixture.compositor.Bind({&FrameScript::GetProc}, {}, NativeCompositorColorSpace::RuntimeDefault, metrics.handles)
+                        .HasValue());
+            const auto frame = fixture.Begin();
+            const auto image = fixture.Acquire(frame);
+            const auto plan = fixture.Plan(frame, image, nullptr, false, 85);
+            fixture.images.complete = true;
+            const std::array submitted{image};
+            REQUIRE(fixture.frames.Submit(frame, submitted) == XRFrameStatus::Ok);
+            REQUIRE(fixture.color.PollRelease().Value());
+            REQUIRE(fixture.frames.Release(frame, image) == XRFrameStatus::Ok);
+            if (rejected)
+                fixture.script.endResult = XR_ERROR_RUNTIME_FAILURE;
+            const std::array targets{NativeProjectionTarget{&fixture.color, image}};
+            const auto dropped = Telemetry::Runtime::GetStatistics().droppedRecords;
+            CHECK(fixture.compositor.EndProjection(frame, plan, targets).HasError() == rejected);
+            if (saturated)
+                CHECK(Telemetry::Runtime::GetStatistics().droppedRecords > dropped);
+            if (rejected)
+                fixture.Recover();
+        }
+        metrics.Finish();
+        std::size_t count{};
+        for (std::size_t index = 0; index < metrics.sink->descriptors.size(); ++index) {
+            const auto &descriptor = metrics.sink->descriptors[index];
+            if (descriptor.name != "horo.xr.projection_color_coverage")
+                continue;
+            ++count;
+            CHECK(descriptor.unit == Telemetry::MetricUnit::Ratio);
+            CHECK(descriptor.dimensions.empty());
+            CHECK(descriptor.maxSeries == 1);
+            CHECK(metrics.sink->records[index].value == Catch::Approx(0.85 * 0.85));
+        }
+        CHECK(count == (rejected || saturated ? 0U : 1U));
+    }
+
     TEST_CASE("XR fixed foveation metrics describe the published plan only", "[xr][native][telemetry]") {
         using enum XRFeatureDecisionState;
         FrameMetricRecorder metrics;

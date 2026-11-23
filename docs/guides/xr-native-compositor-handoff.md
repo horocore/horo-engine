@@ -140,6 +140,15 @@ resource owner or completion lease.
 
 ## Timing and color/depth policy
 
+The compositor records native frame and swapchain outcomes with a finite
+vocabulary. The host measures CPU cutoff and observed render completion against
+the same frame's display prediction. The `horo.xr.projection_color_coverage`
+histogram records submitted color pixels as a fraction of the corresponding
+allocated color layers after native acceptance. Empty and rejected projections
+produce no coverage sample. The metric carries no frame, view or device identity
+and makes no claim about physical display completion. When the telemetry queue
+fills, the producer reports dropped records without delaying native submission.
+
 `ObservePacing` takes an explicitly converted timestamp in the runtime prediction
 clock domain. It reports the runtime period, exact predicted display time, finite
 CPU submission deadline (`prediction - GPU budget - compositor margin`), remaining

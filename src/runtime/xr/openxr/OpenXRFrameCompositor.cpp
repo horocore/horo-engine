@@ -665,7 +665,7 @@ namespace Horo::XR::OpenXRInternal {
                          : NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
         }
-        RecordOutcome(projection ? NativeFrameMetricOutcome::ProjectionAccepted : NativeFrameMetricOutcome::EmptyAccepted);
+        metrics_.RecordAcceptedEnd(projection);
         metrics_.frameDepth.Observe(0);
         const auto ended = projection ? frames_->EndProjection(frame, *projection) : frames_->End(frame, 0);
         nativeFrame_ = {};

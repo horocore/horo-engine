@@ -7,6 +7,7 @@
 #include <optional>
 
 namespace Horo::XR {
+    class XRViewRenderPlan;
     enum class XRFeatureDecisionState : std::uint8_t;
     enum class XRStageBoundaryProximity : std::uint8_t;
 }  // namespace Horo::XR
@@ -47,6 +48,7 @@ namespace Horo::XR::OpenXRInternal {
         std::array<Telemetry::Counter, static_cast<std::size_t>(NativeFrameMetricOutcome::Count)> outcomes;
         Telemetry::Histogram predictedPeriod;
         Telemetry::Histogram frameDepth;
+        Telemetry::Histogram projectionCoverage;
         NativeSwapchainMetricHandles swapchain;
         std::array<Telemetry::Counter, 5> fixedFoveationPlan;
         std::array<Telemetry::Counter, 3> stageBoundary;
@@ -67,6 +69,10 @@ namespace Horo::XR::OpenXRInternal {
         void RecordStageBoundary(XRStageBoundaryProximity proximity) const noexcept;
         /** @brief Records a runtime-accepted projection without its opacity or input history. */
         void RecordAcceptedProjectionComfort(bool vignette) const noexcept;
+        /** @brief Records native acceptance and, for projections, the fraction of allocated color pixels submitted.
+         * @param projection Validated projection plan, or null for an empty frame.
+         */
+        void RecordAcceptedEnd(const XRViewRenderPlan *projection) const noexcept;
     };
 
     /** @brief Registers the finite frame vocabulary at explicit process composition before activation.

@@ -63,6 +63,12 @@ namespace Horo::XR::OpenXRInternal {
                                                    .subsystem = "XR.OpenXR",
                                                    .unit = Telemetry::MetricUnit::Count,
                                                    .description = "Per-compositor native frame depth observed at native transitions"});
+        handles.projectionCoverage = Telemetry::Runtime::RegisterHistogram(
+            {.name = "horo.xr.projection_color_coverage",
+             .subsystem = "XR.OpenXR",
+             .unit = Telemetry::MetricUnit::Ratio,
+             .description = "Submitted color rectangle pixels divided by allocated pixels for the same views",
+             .maxSeries = 1});
         return handles;
     }
 
@@ -80,6 +86,24 @@ namespace Horo::XR::OpenXRInternal {
 
     void NativeFrameMetricHandles::RecordAcceptedProjectionComfort(bool vignette) const noexcept {
         projectionComfort[vignette ? 1 : 0].Add();
+    }
+
+    /** @copydoc NativeFrameMetricHandles::RecordAcceptedEnd */
+    void NativeFrameMetricHandles::RecordAcceptedEnd(const XRViewRenderPlan *projection) const noexcept {
+        const auto outcome = projection ? NativeFrameMetricOutcome::ProjectionAccepted : NativeFrameMetricOutcome::EmptyAccepted;
+        outcomes[static_cast<std::size_t>(outcome)].Add();
+        if (!projection || !projectionCoverage)
+            return;
+        double used{};
+        double allocated{};
+        for (const auto &target : projection->Targets()) {
+            if (target.role != XRExternalRenderTargetRole::ProjectionColor)
+                continue;
+            used += static_cast<double>(target.renderRectangle.width) * target.renderRectangle.height;
+            allocated += static_cast<double>(target.allocationExtent.width) * target.allocationExtent.height;
+        }
+        if (used > 0 && used <= allocated)
+            projectionCoverage.Observe(used / allocated);
     }
 
     void NativeFrameMetricHandles::RecordCpuDeadline(std::optional<NativeFrameDeadline> deadline) const noexcept {
