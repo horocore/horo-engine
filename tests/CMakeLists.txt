@@ -848,6 +848,7 @@ if(HORO_ENABLE_PIPEWIRE_DAEMON_TESTS)
     find_program(HORO_PIPEWIRE_SESSION_MANAGER wireplumber REQUIRED)
     find_program(HORO_PIPEWIRE_CLIENT pw-cli REQUIRED)
     find_program(HORO_PIPEWIRE_DUMP pw-dump REQUIRED)
+    find_program(HORO_PIPEWIRE_METADATA pw-metadata REQUIRED)
     find_program(HORO_PIPEWIRE_DBUS_SESSION dbus-run-session REQUIRED)
     add_executable(HoroPipeWireAudioBackendTests unit/runtime/audio/PipeWireAudioBackendTests.cpp)
     target_compile_features(HoroPipeWireAudioBackendTests PRIVATE cxx_std_20)
@@ -855,7 +856,7 @@ if(HORO_ENABLE_PIPEWIRE_DAEMON_TESTS)
     add_test(NAME HoroPipeWireAudioBackendTests COMMAND "${HORO_PIPEWIRE_DBUS_SESSION}" --
         "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/integration/pipewire_native_contract.py"
         "$<TARGET_FILE:HoroPipeWireAudioBackendTests>" "${HORO_PIPEWIRE_DAEMON}" "${HORO_PIPEWIRE_SESSION_MANAGER}"
-        "${HORO_PIPEWIRE_CLIENT}" "${HORO_PIPEWIRE_DUMP}")
+        "${HORO_PIPEWIRE_CLIENT}" "${HORO_PIPEWIRE_DUMP}" "${HORO_PIPEWIRE_METADATA}")
     set_tests_properties(HoroPipeWireAudioBackendTests PROPERTIES LABELS "audio;native;pipewire" TIMEOUT 45)
 endif()
 

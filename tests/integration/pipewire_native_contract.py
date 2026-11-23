@@ -42,7 +42,7 @@ def has_default(env, dump, key, expected):
 
 
 def add_default_device(env, logs, tools, label, priority, capture=False):
-    _, _, client, dump = tools
+    _, _, client, dump, _ = tools
     media = "Audio/Source/Virtual" if capture else "Audio/Sink"
     properties = (f"{{ factory.name=support.null-audio-sink media.class={media} object.linger=true "
                   f"node.name={label} node.description={label} priority.session={priority} audio.position=[ FL FR ] }}")
@@ -52,7 +52,7 @@ def add_default_device(env, logs, tools, label, priority, capture=False):
 
 
 def remove_device(env, logs, tools, label):
-    _, _, client, dump = tools
+    _, _, client, dump, _ = tools
     devices = [node["id"] for node in read_graph(env, dump)
                if node.get("info", {}).get("props", {}).get("node.name") == label]
     if len(devices) != 1:
@@ -64,7 +64,7 @@ def remove_device(env, logs, tools, label):
 
 
 def start_session(runtime, env, logs, tools, label, processes):
-    daemon, session, _, _ = tools
+    daemon, session, _, _, _ = tools
     server = subprocess.Popen([daemon], env=env, stdout=logs, stderr=logs)
     processes.append(server)
     wait_for(lambda: (runtime / "pipewire-0").is_socket(), "private PipeWire server did not start")
@@ -93,8 +93,15 @@ def main():
                 backend = subprocess.Popen([executable, "--reporter", "compact"], env=env)
                 processes.append(backend)
                 wait_for((root / "capture-ready").exists, "initial input was not discovered")
+                # CMake resolves the executable. The arguments and private runtime are fixture-owned.
+                subprocess.run([tools[-1], "-d", "0"],  # nosec B603
+                               env=env, stdout=logs, stderr=logs, check=True, timeout=3)
+                (root / "capture-default-cleared").touch()
+                wait_for((root / "capture-default-unavailable").exists, "cleared metadata retained the recording default")
                 remove_device(env, logs, tools, "horo-test-mic-a")
                 add_default_device(env, logs, tools, "horo-test-mic-b", 2000, capture=True)
+                wait_for(lambda: has_default(env, tools[3], "default.audio.sink", "horo-test-a"),
+                         "private session manager did not restore the playback default")
                 (root / "capture-changed").touch()
                 wait_for(lambda: (root / "switch-ready").exists(), "initial output did not reach native rendering")
                 add_default_device(env, logs, tools, "horo-test-b", 2000)

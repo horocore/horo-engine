@@ -769,13 +769,19 @@ namespace Horo::Audio::Backend {
             }
 
             static int Metadata(void *data, const std::uint32_t subject, const char *key, const char *, const char *value) noexcept {
+                if (subject != PW_ID_CORE)
+                    return 0;
                 auto &self = *static_cast<PipeWireDriver *>(data);
-                if (key && std::strcmp(key, "default.audio.sink") == 0) {
+                if (!key) {
+                    self.defaultMetadata_ = {};
+                    self.defaultSourceMetadata_ = {};
+                    ++self.changes_;
+                } else if (std::strcmp(key, "default.audio.sink") == 0) {
                     self.defaultMetadata_ = {};
                     if (value && !Copy(self.defaultMetadata_, value))
                         self.overflow_ = true;
                     ++self.changes_;
-                } else if (subject == PW_ID_CORE && key && std::strcmp(key, "default.audio.source") == 0) {
+                } else if (std::strcmp(key, "default.audio.source") == 0) {
                     self.defaultSourceMetadata_ = {};
                     if (value && !Copy(self.defaultSourceMetadata_, value))
                         self.captureOverflow_ = true;

@@ -142,6 +142,14 @@ namespace Horo::Audio::Backend {
             }
         }
 
+        /** @brief Waits for an acknowledged graph change from the private PipeWire test harness. */
+        void WaitForGraphChange(const std::filesystem::path &marker) {
+            const auto deadline = Clock::now() + 5s;
+            while (Clock::now() < deadline && !std::filesystem::exists(marker))
+                std::this_thread::sleep_for(2ms);
+            REQUIRE(std::filesystem::exists(marker));
+        }
+
         /** @brief Verifies the actual PipeWire recorder default and removal before opening playback. */
         void VerifyCaptureRefresh(AudioBackend &backend, const std::filesystem::path &control) {
             const auto first = backend.DiscoverCapture();
@@ -163,10 +171,16 @@ namespace Horo::Audio::Backend {
             CHECK(unchanged.Value().changes.empty());
 
             std::ofstream(control / "capture-ready").put('\n');
-            const auto deadline = Clock::now() + 5s;
-            while (Clock::now() < deadline && !std::filesystem::exists(control / "capture-changed"))
-                std::this_thread::sleep_for(2ms);
-            REQUIRE(std::filesystem::exists(control / "capture-changed"));
+            WaitForGraphChange(control / "capture-default-cleared");
+            const auto cleared = backend.DiscoverCapture();
+            REQUIRE(cleared.HasValue());
+            CHECK(cleared.Value().snapshot.revision > before.revision);
+            CHECK(cleared.Value().snapshot.devices == before.devices);
+            CHECK(cleared.Value().changes.empty());
+            REQUIRE(ResolveAudioCaptureDevice(cleared.Value().snapshot, AudioDefaultDeviceRole::Multimedia).status ==
+                    AudioDeviceResolutionStatus::Unavailable);
+            std::ofstream(control / "capture-default-unavailable").put('\n');
+            WaitForGraphChange(control / "capture-changed");
 
             const auto next = backend.DiscoverCapture();
             REQUIRE(next.HasValue());
