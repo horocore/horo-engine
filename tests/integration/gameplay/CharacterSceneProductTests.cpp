@@ -413,6 +413,10 @@ namespace Horo::Application::CharacterSceneProductTest {
         unknown.insert(unknown.end(), {std::to_string(fixture.pathFilter.Value() + 1), "32"});
         const auto reason = HORO_TEST_NAVIGATION_NATIVE ? Navigation::NavigationErrors::FilterUnknown.summary : std::string_view{};
         CHECK(RunCli(std::move(unknown), reason).exitCode == 3);
+        auto fixedOwner = arguments;
+        fixedOwner.back() = "--game-navigation-path-fixed-owner";
+        fixedOwner.insert(fixedOwner.end(), {filter, "32"});
+        CHECK(RunCli(std::move(fixedOwner)).exitCode == (HORO_TEST_NAVIGATION_NATIVE ? 0 : 3));
         arguments.insert(arguments.end(), {filter, "32"});
         CHECK(RunCli(std::move(arguments)).exitCode == (HORO_TEST_NAVIGATION_NATIVE ? 0 : 3));
     }
@@ -1209,13 +1213,18 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto started = product.Start(fixture, NavigationGameplay(), {actorPolicy}, Physics::PhysicsRuntimeMode::Canonical,
                                            [&](auto &input, auto &assets) {
             input.aiControllers = catalog;
+            if (qualifiedCrowd)
+                input.navigationPath->execution = NavigationPathExecution::FixedOwner;
+            AI::AiTaskSchedulerSettings scheduler;
+            if (!qualifiedCrowd)
+                scheduler.mode = AI::AiSchedulingMode::BestEffort;
             input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
                 Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
                                                       .environment = decision.Environment(),
                                                       .bindings = {{catalog.front().controller, decisionAsset}},
                                                       .execution =
                                                           AI::AiSceneCookedDecisionExecution{workerDeadline ? queuedJobs : assets.jobs,
-                                                                                             {.mode = AI::AiSchedulingMode::BestEffort},
+                                                                                             scheduler,
                                                                                              {}}});
             input.navigationMotion = policy;
             if (animated) {

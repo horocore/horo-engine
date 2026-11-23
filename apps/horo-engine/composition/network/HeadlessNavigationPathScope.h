@@ -94,8 +94,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick, HeadlessReplayNavigation *replay = nullptr);
         /** @brief Grants tactical tests access to this exact world and its bounded path caller. */
         [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryAccess(std::uint64_t tick) const noexcept;
-        /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane. */
-        void DispatchAtFixedTick(std::uint64_t tick) const;
+        /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane.
+         * @param tick Exact fixed tick. @param cancellation Fixed-attempt cancellation scope.
+         */
+        void DispatchAtFixedTick(std::uint64_t tick, const CancellationToken &cancellation) const;
         /** @brief Closes native admission before the Scene provider retires. */
         void Revoke() noexcept;
         /** @brief Polls existing coordinator fences without blocking or publishing late results. */

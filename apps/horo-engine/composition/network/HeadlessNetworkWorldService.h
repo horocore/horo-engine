@@ -575,9 +575,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &policy = input.navigationMotion;
             if (!policy)
                 return Result<void>::Success();
-            if (!OwnsCookedDecisionExecution() || !policy->HasSolverSelection() || !policy->capture || input.navigationActors.empty() ||
-                input.cookedDecisions->execution->intents)
+            if (!OwnsCookedDecisionExecution() || !input.navigationPath || !policy->HasSolverSelection() || !policy->capture ||
+                input.navigationActors.empty() || input.cookedDecisions->execution->intents)
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+            if (input.navigationPath->execution == Navigation::NavigationPathExecution::FixedOwner && input.perceptionProject &&
+                input.perceptionProject->policy && SelectsReactiveDecisions(*input.perceptionProject->policy))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid));
             auto motion =
                 AI::AiNavigationIntentDispatch::Create(settings.maximumAgents,
                                                        [weak = std::weak_ptr<WorldRecord>{record_},
@@ -649,7 +652,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             if (record_->decisionMotion) {
                 execution.intents = record_->decisionMotion;
-                execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
+                if (execution.scheduler.mode == AI::AiSchedulingMode::BestEffort)
+                    execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
             }
             return execution;
         }
@@ -715,7 +719,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &selection = owners_->configured->navigation;
             if (!selection || !IsAuthoritativeWorld())
                 return Result<void>::Success();
-            auto world = CreateProjectSceneNavigationWorld(*selection);
+            const auto &paths = owners_->configured->navigationPath;
+            const auto execution = paths ? paths->execution : Navigation::NavigationPathExecution::BestEffortJobs;
+            auto world = CreateProjectSceneNavigationWorld(*selection, execution);
             if (world.HasError())
                 return Result<void>::Failure(world.ErrorValue());
             record_->navigation = std::move(world).Value();
@@ -1076,7 +1082,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
             if (advanced.HasValue() && record_->navigationPath)
-                record_->navigationPath->DispatchAtFixedTick(context.simulationTick);
+                record_->navigationPath->DispatchAtFixedTick(context.simulationTick, context.cancellation);
             return advanced;
         }
 

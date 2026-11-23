@@ -259,10 +259,11 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads the native module's explicit bounded path-only grant. */
-        Result<void> ReadNavigationPathPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+        Result<void> ReadNavigationPathPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch,
+                                              const Navigation::NavigationPathExecution execution) {
             if (launch.navigationPath || arguments.size() - index < 3)
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --game-navigation-path <filter id> <deadline ticks> once."));
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Select one Navigation path mode with <filter id> <deadline ticks>."));
             const auto number = [](const std::string_view text, auto &value) {
                 const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
                 return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
@@ -276,7 +277,7 @@ namespace Horo::Application::Internal {
             auto filter = Navigation::NavigationFilterId::Create(filterValue);
             if (filter.HasError())
                 return Result<void>::Failure(filter.ErrorValue());
-            launch.navigationPath.emplace(HeadlessNavigationPathPolicy{filter.Value(), deadline});
+            launch.navigationPath.emplace(HeadlessNavigationPathPolicy{filter.Value(), deadline, execution});
             index += 3;
             return Result<void>::Success();
         }
@@ -286,14 +287,14 @@ namespace Horo::Application::Internal {
             return role == Net::NetworkProjectRole::Standalone || role == Net::NetworkProjectRole::DedicatedServer;
         }
 
-        /** @brief Validates the explicit best-effort path authority before project IO. */
+        /** @brief Validates the explicit path authority before project IO. */
         Result<void> ValidateNavigationPathPolicy(const ProductLaunch &launch) {
             if (launch.navigationPath &&
                 (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
                  launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                              "A best-effort Navigation path grant requires authoritative cooked Navigation and native gameplay."));
+                              "A Navigation path grant requires authoritative cooked Navigation and native gameplay."));
             return Result<void>::Success();
         }
 
@@ -482,8 +483,10 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
-                if (key == "--game-navigation-path") {
-                    if (auto policy = ReadNavigationPathPolicy(arguments, index, launch); policy.HasError())
+                if (key == "--game-navigation-path" || key == "--game-navigation-path-fixed-owner") {
+                    using enum Navigation::NavigationPathExecution;
+                    const auto execution = key == "--game-navigation-path-fixed-owner" ? FixedOwner : BestEffortJobs;
+                    if (auto policy = ReadNavigationPathPolicy(arguments, index, launch, execution); policy.HasError())
                         return policy;
                     continue;
                 }

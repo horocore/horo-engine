@@ -118,6 +118,24 @@ namespace Horo::Navigation {
         return true;
     }
 
+    /** @copydoc NavigationCoordinator::State::ExecuteOwnerBatch */
+    void NavigationCoordinator::State::ExecuteOwnerBatch(const std::uint32_t index, const CancellationToken &cancellation) {
+        auto &batch = batches[index];
+        for (const auto &work : batch.work) {
+            if (cancellation.IsCancellationRequested())
+                break;
+            auto &entry = *Find(work.query.handle);
+            Telemetry::ScopedOperationContext context{work.query.operation};
+            auto result = ExecuteQuery(work, cancellation);
+            Charge(work.caller.owner, work.query.request.requirement.limits.maximumNodeExpansions);
+            ++dispatched;
+            lastCaller = work.caller.owner.Value();
+            if (!cancellation.IsCancellationRequested())
+                entry.candidate.emplace(Complete(work, 0, std::move(result)));
+        }
+        batch.work.clear();
+    }
+
     /** @copydoc NavigationCoordinator::State::ValidPublication */
     bool NavigationCoordinator::State::ValidPublication(const NavigationPathPublication &current) const noexcept {
         const bool active = current.activation.IsValid();
@@ -200,7 +218,7 @@ namespace Horo::Navigation {
             if (!slot.entry)
                 continue;
             const auto &entry = *slot.entry;
-            if (entry.job != 0 || entry.published || entry.cancellation.Token().IsCancellationRequested() ||
+            if (entry.job != 0 || entry.candidate || entry.published || entry.cancellation.Token().IsCancellationRequested() ||
                 entry.query.worldLease.IsRevoked() || now > entry.submission.deadlineTick ||
                 Used(entry.submission.caller.owner, staged) >= limits.requestsPerCaller ||
                 std::ranges::any_of(staged.work, [&](const Work &work) {
@@ -276,9 +294,10 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCoordinator::State::ExecuteQuery */
-    Result<NavigationPath> NavigationCoordinator::State::ExecuteQuery(const Work &work) {
+    Result<NavigationPath> NavigationCoordinator::State::ExecuteQuery(const Work &work, const CancellationToken &cancellation) {
         try {
-            auto result = work.query.worldLease.Backend().FindPath(work.query.request, work.query.requestCancellation);
+            const auto token = CancellationToken::AnyOf(work.query.requestCancellation, cancellation);
+            auto result = work.query.worldLease.Backend().FindPath(work.query.request, token);
             if (result.HasValue() && !ValidResult(work.query.request, result.Value()))
                 return Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
             return result;
@@ -302,7 +321,7 @@ namespace Horo::Navigation {
             auto result = Result<NavigationPath>::Failure(MakeError(NavigationErrors::QueryCancelled));
             if (!cancellation.IsCancellationRequested() && !work.query.requestCancellation.IsCancellationRequested() &&
                 !work.query.worldLease.IsRevoked()) {
-                result = ExecuteQuery(work);
+                result = ExecuteQuery(work, {});
             }
             if (auto completion = Complete(work, 0, std::move(result));
                 state->completions.TryPush(completion) != NavigationQueueEnqueueResult::Enqueued)

@@ -147,7 +147,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (auto prepared = record->native.PrepareAnimationFixedCommit(context); prepared.HasError())
                     return prepared;
                 if (record->navigationPath)
-                    record->navigationPath->DispatchAtFixedTick(context.simulationTick);
+                    record->navigationPath->DispatchAtFixedTick(context.simulationTick, context.cancellation);
             }
             if (auto *replay = DecisionReplay()) {
                 for (const auto &record : pins_)

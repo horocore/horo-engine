@@ -26,6 +26,8 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationCoordinator::Create */
     Result<NavigationCoordinator> NavigationCoordinator::Create(JobSystem &jobs, NavigationPathBatchLimits limits) {
+        if (limits.execution != NavigationPathExecution::BestEffortJobs && limits.execution != NavigationPathExecution::FixedOwner)
+            return Failure<NavigationCoordinator>(NavigationErrors::CapabilityDescriptorInvalid);
         if (!std::has_single_bit(limits.requestSlots) || limits.requestSlots < 2 || limits.requestSlots > 4096 || limits.maximumJobs == 0 ||
             limits.maximumJobs > limits.requestSlots || limits.requestsPerJob == 0 || limits.requestsPerJob > limits.requestSlots ||
             limits.maximumJobs > limits.requestSlots / limits.requestsPerJob || limits.requestsPerTick == 0 ||
@@ -163,7 +165,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCoordinator::Dispatch */
-    std::uint32_t NavigationCoordinator::Dispatch(const std::uint64_t tick) {
+    std::uint32_t NavigationCoordinator::Dispatch(const std::uint64_t tick, const CancellationToken &cancellation) {
         const auto &state = MutableState();
         if (!state || state->closed || tick < state->tick)
             return 0;
@@ -178,11 +180,17 @@ namespace Horo::Navigation {
         }
         const auto before = state->dispatched;
         for (std::uint32_t index = 0; index < state->batches.size() && state->dispatched < state->limits.requestsPerTick; ++index) {
+            if (cancellation.IsCancellationRequested())
+                break;
             const auto &batch = state->batches[index];
             if (batch.job)
                 continue;
             state->PrepareBatch(index, tick);
-            if (!batch.work.empty() && !State::SubmitBatch(state, index))
+            if (batch.work.empty())
+                continue;
+            if (state->limits.execution == NavigationPathExecution::FixedOwner)
+                state->ExecuteOwnerBatch(index, cancellation);
+            else if (!State::SubmitBatch(state, index))
                 break;  // Foundation pressure retains accepted navigation requests for a later bounded attempt.
         }
         return state->dispatched - before;

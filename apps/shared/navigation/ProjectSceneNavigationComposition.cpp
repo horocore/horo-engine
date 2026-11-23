@@ -198,8 +198,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc CreateProjectSceneNavigationWorld */
-    Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(
-        const ProjectSceneNavigationSelection &selection) {
+    Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(const ProjectSceneNavigationSelection &selection,
+                                                                                           const Nav::NavigationPathExecution execution) {
         using World = Result<std::unique_ptr<ProjectSceneNavigationWorld>>;
         const auto &capacity = selection.policy.Capacities();
         auto cache = CreateNavigationTileCache(selection.policy);
@@ -208,7 +208,8 @@ namespace Horo::Application::Internal {
         auto agents = Nav::NavigationAgentRegistry::Create({capacity.maximumAgents});
         if (agents.HasError())
             return World::Failure(agents.ErrorValue());
-        const auto limits = CoordinatorLimits(selection.policy);
+        auto limits = CoordinatorLimits(selection.policy);
+        limits.execution = execution;
         auto coordinator = Nav::NavigationCoordinator::Create(selection.jobs, limits);
         if (coordinator.HasError())
             return World::Failure(coordinator.ErrorValue());

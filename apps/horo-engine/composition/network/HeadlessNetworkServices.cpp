@@ -718,7 +718,7 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         }
 
-        /** @brief Admits a crowd policy while path feedback still follows best-effort timing. */
+        /** @brief Pairs deterministic decisions with fixed-owner paths and a qualified crowd. */
         bool ValidConfiguredMotion(const HeadlessSceneActivationInput &input) {
             if (!input.navigationMotion)
                 return true;
@@ -726,6 +726,9 @@ namespace Horo::Application::Internal {
             if (!input.navigationPath || input.decisionReplay || !decisions || !decisions->execution ||
                 !input.navigationMotion->HasSolverSelection())
                 return false;
+            if (input.navigationPath->execution == Navigation::NavigationPathExecution::FixedOwner)
+                return input.navigationMotion->qualified.has_value() &&
+                       decisions->execution->scheduler.mode == AI::AiSchedulingMode::Deterministic;
             return decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
         }
 
@@ -760,7 +763,7 @@ namespace Horo::Application::Internal {
             if (input.navigationPath && (!input.navigationPath->IsValid() || !input.navigation || !gameplay || !gameplay->enabled ||
                                          gameplay->nativeArtifact.empty()))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
-                                                       "Best-effort paths require cooked Navigation and native gameplay."));
+                                                       "Navigation paths require cooked Navigation and native gameplay."));
             if (!ValidConfiguredMotion(input))
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)

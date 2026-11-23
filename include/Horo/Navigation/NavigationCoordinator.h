@@ -24,6 +24,12 @@ namespace Horo::Navigation {
         constexpr auto operator<=>(const NavigationPathCaller &) const noexcept = default;
     };
 
+    /** @brief Explicit execution contract for a world coordinator. */
+    enum class NavigationPathExecution : std::uint8_t {
+        BestEffortJobs,
+        FixedOwner,
+    };
+
     /** @brief Preparation bounds; admission and partition pressure retain pending work without blocking. */
     struct NavigationPathBatchLimits final {
         std::uint32_t requestSlots{64};                 /**< Power of two in [2, 4096], including unconsumed terminal results. */
@@ -37,6 +43,7 @@ namespace Horo::Navigation {
         std::uint32_t selectionProbesPerTick{4096};     /**< Full-table probes, in [requestSlots, MaximumNavigationPathSelectionProbes]. */
         std::uint64_t priorityAgingTicks{30};           /**< Oldest requests outrank fresh priority after this delay. */
         std::size_t maximumOwnedBytes{4 * 1024 * 1024}; /**< Prepared inline storage ceiling; provider output uses admitted limits. */
+        NavigationPathExecution execution{NavigationPathExecution::BestEffortJobs}; /**< FixedOwner requires a qualified provider. */
     };
 
     /** @brief Owned admission input captured from one committed world root. */
@@ -59,7 +66,7 @@ namespace Horo::Navigation {
         NavRequestHandle handle;
         NavigationPathCaller caller;
         std::uint64_t acceptedSequence{};
-        JobId job{}; /**< Zero when cancellation/deadline prevented dispatch. */
+        JobId job{}; /**< Zero for owner execution or when cancellation/deadline prevented dispatch. */
         NavigationOutcomeProvenance source;
         NavigationWorldActivationDescriptor activation;
         Result<NavigationPath> result;
@@ -86,7 +93,8 @@ namespace Horo::Navigation {
      * each invocation uses provider-owned exclusive scratch. Rotating caller service precedes per-caller deadline,
      * priority and aging selection. Worker arrival cannot bypass earlier eligible admission order or caller authority.
      * Prepared storage is bounded; Foundation callback/record and cancellation allocations are bounded by accepted
-     * requests/jobs. This is best-effort execution: deterministic fixed-tick kernels remain a distinct host contract.
+     * requests/jobs. FixedOwner executes within the same work ceilings without consulting the scheduler. The host
+     * must compose an exclusively owned, bounded provider qualified for the selected build and numeric profile.
      * All methods except worker execution are owner-thread only. Destruction closes admission and signals cancellation
      * without joining; jobs retain only owned state/leases. The host must drain/shutdown JobSystem before unloading
      * provider code. No live Scene, gameplay callback, TaskGroup destructor wait, or new worker pool is retained.
@@ -159,9 +167,11 @@ namespace Horo::Navigation {
          * @details Owner thread, no allocation or callback. Running provider work retains its immutable lease until terminal. */
         void RetireAgentQueriesAtSafePoint(std::span<const CrowdAgentHandle> retired) noexcept;
         /** @brief Dispatch one bounded tick slice without waiting; repeated calls cannot reset quotas.
-         * @param tick Monotonic simulation tick. @return Number of queries accepted by Foundation this call.
+         * @param tick Monotonic simulation tick.
+         * @param cancellation Fixed-attempt cancellation observed by owner-executed queries.
+         * @return Number of queries dispatched this call. Results remain private until Commit.
          */
-        [[nodiscard]] std::uint32_t Dispatch(std::uint64_t tick);
+        [[nodiscard]] std::uint32_t Dispatch(std::uint64_t tick, const CancellationToken &cancellation = {});
         /** @brief Publish a stable prefix of eligible terminal results at NavIntentCommit.
          * @param current Fresh exact Scene/root and active caller incarnations.
          * @param observer Optional borrowed diagnostic callback in publication order. It must not reenter the coordinator.

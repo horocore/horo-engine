@@ -54,9 +54,14 @@ namespace Horo::Application::Internal {
         const ProjectSceneNavigationSelection &selection, const Navigation::NavMeshAssetSource &assets,
         const Navigation::NavigationWorldActivationDescriptor &identity, const CancellationToken &cancellation);
 
-    /** @brief Reserves one distinct world-lifetime population and coordinator from the captured project limits. */
+    /** @brief Reserves one distinct world-lifetime population and coordinator from the captured project limits.
+     * @param selection Exact project scope and captured runtime limits.
+     * @param execution Host-selected path mode for the composed Recast/Detour world.
+     * @return World-lifetime owners or a typed preparation error.
+     */
     [[nodiscard]] Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(
-        const ProjectSceneNavigationSelection &selection);
+        const ProjectSceneNavigationSelection &selection,
+        Navigation::NavigationPathExecution execution = Navigation::NavigationPathExecution::BestEffortJobs);
 
     /** @brief Registers the provider, initial catalog and atomic prefab agent participant on the actual Scene service. */
     [[nodiscard]] Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,

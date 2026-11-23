@@ -47,6 +47,8 @@ namespace Horo::Application::Internal {
             HashWord(hash, query.limits.maximumNodeExpansions);
             HashWord(hash, query.limits.maximumResultPoints);
             HashFloat(hash, query.limits.maximumSearchDistanceMeters);
+            if (policy.execution == Nav::NavigationPathExecution::FixedOwner)
+                HashWord(hash, static_cast<std::uint64_t>(policy.execution));
             return hash.Finalize();
         }
 
@@ -91,6 +93,8 @@ namespace Horo::Application::Internal {
         using Scope = Result<std::unique_ptr<HeadlessNavigationPathScope>>;
         if (!policy.IsValid() || !selection.catalog || selection.policy.MaximumQuery().query != Nav::NavigationQueryKind::Path)
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapabilityDescriptorInvalid));
+        if (owner.streamCoverage && policy.execution == Nav::NavigationPathExecution::FixedOwner)
+            return Scope::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
         const auto filter = selection.catalog->Registry().ResolveFilter(policy.filter);
         if (filter.HasError())
             return Scope::Failure(filter.ErrorValue());
@@ -613,8 +617,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc HeadlessNavigationPathScope::DispatchAtFixedTick */
-    void HeadlessNavigationPathScope::DispatchAtFixedTick(const std::uint64_t tick) const {
-        static_cast<void>(coordinator_.Dispatch(tick));
+    void HeadlessNavigationPathScope::DispatchAtFixedTick(const std::uint64_t tick, const CancellationToken &cancellation) const {
+        static_cast<void>(coordinator_.Dispatch(tick, cancellation));
     }
 
     /** @copydoc HeadlessNavigationPathScope::Revoke */

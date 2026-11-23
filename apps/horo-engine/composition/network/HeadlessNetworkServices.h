@@ -8,6 +8,7 @@
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/Navigation/NavigationAreas.h"
+#include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Network/NetworkModeComposition.h"
@@ -230,14 +231,17 @@ namespace Horo::Application::Internal {
         bool consumed_{};
     };
 
-    /** @brief Exact registered traversal filter and bounded deadline for an authority world's best-effort path grant. */
+    /** @brief Exact registered traversal filter, deadline and execution for an authority world's path grant. */
     struct HeadlessNavigationPathPolicy final {
         static constexpr std::uint32_t MaximumDeadlineTicks = 10'000;
         Navigation::NavigationFilterId filter;
         std::uint32_t deadlineTicks{};
+        Navigation::NavigationPathExecution execution{Navigation::NavigationPathExecution::BestEffortJobs};
 
         [[nodiscard]] bool IsValid() const noexcept {
-            return filter.IsValid() && deadlineTicks != 0 && deadlineTicks <= MaximumDeadlineTicks;
+            using enum Navigation::NavigationPathExecution;
+            return filter.IsValid() && deadlineTicks != 0 && deadlineTicks <= MaximumDeadlineTicks &&
+                   (execution == BestEffortJobs || execution == FixedOwner);
         }
     };
 

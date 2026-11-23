@@ -3150,7 +3150,13 @@ record. The fixed owner prepares Character work after decision intents, solves
 the complete capture, and publishes prepared motion after Gameplay and Animation
 only if the original world and topology are still active. Captured agents
 without pending motion take part in avoidance without receiving a Character
-command. The path query policy retains its own timing contract.
+command. A static cooked Headless world can opt into fixed-owner Recast/Detour
+paths with `--game-navigation-path-fixed-owner <filter id> <deadline ticks>`.
+The coordinator runs bounded path batches on the fixed owner, stages the
+candidates, and publishes through the ordinary tick and generation fences.
+Worker queue availability cannot affect this mode. Deterministic decisions that
+issue Character motion also require the qualified crowd policy. Best-effort
+worlds continue to dispatch through the process scheduler.
 
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.

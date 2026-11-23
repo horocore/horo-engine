@@ -3,6 +3,46 @@
 namespace Horo::Navigation {
     using namespace CoordinatorTestSupport;
 
+    TEST_CASE("Fixed-owner path candidates publish on the declared tick under worker pressure", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 1}};
+        auto held = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(held.HasValue());
+        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
+        Activate(world, std::make_unique<ControlledBackend>());
+        auto limits = Limits();
+        limits.execution = NavigationPathExecution::FixedOwner;
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, limits)).Value();
+        auto input = Input();
+        input.targetTick = 2;
+        const auto completed = Admit(coordinator, world, input);
+        const auto withdrawn = Admit(coordinator, world, input);
+        CancellationSource aborted;
+        aborted.RequestCancellation();
+        CHECK(coordinator.Dispatch(1, aborted.Token()) == 0);
+        CHECK(coordinator.Dispatch(1) == 2);
+        CHECK(coordinator.Dispatch(1) == 0);
+        CHECK_FALSE(coordinator.Take(completed));
+        const std::array callers{Caller()};
+        CHECK(coordinator.Commit(Current(callers, 1)) == 0);
+        REQUIRE(coordinator.Cancel(withdrawn));
+        CHECK(coordinator.Dispatch(2) == 0);
+        CHECK(coordinator.Commit(Current(callers, 2)) == 2);
+        auto result = coordinator.Take(completed);
+        REQUIRE(result);
+        CHECK(result->result.HasValue());
+        CHECK(result->job == 0);
+        CHECK(result->source.completionTick == 2);
+        auto retired = coordinator.Take(withdrawn);
+        REQUIRE(retired);
+        CHECK(ErrorIs(*retired, NavigationErrors::QueryCancelled));
+        CHECK(coordinator.IsDrained());
+        const auto queued = held.Value().Snapshot();
+        REQUIRE(queued);
+        CHECK(queued->state == JobState::Queued);
+    }
+
     TEST_CASE("Coordinator rejects malformed bounds and admits no inline work", "[unit][navigation][coordinator]") {
         JobSystem jobs{{.workerCount = 0}};
         auto bad = Limits();
