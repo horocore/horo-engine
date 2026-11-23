@@ -733,13 +733,19 @@ namespace Horo::Editor::Theme {
         ApplyUiScale(percent, 1.0F);
     }
 
-    /** @copydoc ApplyUiScale */
+    /** @copydoc ApplyUiScale(int, float) */
     void ApplyUiScale(const int percent, const float displayToWindowScale) noexcept {
-        if (!std::isfinite(displayToWindowScale) || displayToWindowScale <= 0.0F)
+        ApplyUiScale(percent, displayToWindowScale, 1.0F);
+    }
+
+    /** @copydoc ApplyUiScale(int, float, float) */
+    void ApplyUiScale(const int percent, const float displayToWindowScale, const float accessibilityScale) noexcept {
+        if (!std::isfinite(displayToWindowScale) || displayToWindowScale <= 0.0F ||
+            !(accessibilityScale >= 0.5F && accessibilityScale <= 3.0F))
             return;
         const float userScale = static_cast<float>(std::clamp(percent, 75, 200)) / 100.0F;
         auto &state = VisualState();
-        const float scale = std::clamp(userScale * displayToWindowScale, 0.5F, 3.0F);
+        const float scale = std::clamp(userScale * displayToWindowScale * accessibilityScale, 0.5F, 3.0F);
         if (state.layoutScale == scale && state.layoutBase)
             return;
         state.layoutScale = scale;

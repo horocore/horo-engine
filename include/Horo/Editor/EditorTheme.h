@@ -523,6 +523,13 @@ namespace Horo::Editor::Theme {
      * @pre Called before starting a GUI frame on the owner thread. */
     void ApplyUiScale(int percent, float displayToWindowScale) noexcept;
 
+    /** @brief Applies the global accessibility scale together with the editor appearance and display scales.
+     * @param percent Persisted editor appearance percentage.
+     * @param displayToWindowScale Display content scale divided by the framebuffer pixel density.
+     * @param accessibilityScale Validated global UI accessibility multiplier in [0.5, 3].
+     * @pre Called before starting a GUI frame on the owner thread. */
+    void ApplyUiScale(int percent, float displayToWindowScale, float accessibilityScale) noexcept;
+
     /** @brief Returns the currently active theme index. */
     [[nodiscard]] int GetActiveThemeIndex();
 

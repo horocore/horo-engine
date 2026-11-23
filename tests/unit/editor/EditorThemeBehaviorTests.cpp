@@ -175,6 +175,36 @@ TEST_CASE("Editor scale follows logical DPI without rescaling the framebuffer or
     CHECK(Theme::TextPx::Label() == originalLabel);
 }
 
+TEST_CASE("Global visual scale follows editor display transitions in native style and design tokens", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    auto &style = ImGui::GetStyle();
+    auto &io = ImGui::GetIO();
+    Theme::Apply(style);
+    Theme::ApplyUiScale(100, 1.0F, 1.0F);
+    const auto basePadding = style.FramePadding.x;
+    const auto baseText = Theme::TextPx::Label();
+
+    io.DisplayFramebufferScale = {2.0F, 2.0F};
+    Theme::ApplyUiScale(125, 1.0F, 2.0F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 2.5F);
+    CHECK(style.FramePadding.x == basePadding * 2.5F);
+    CHECK(Theme::TextPx::Label() == baseText * 2.5F);
+
+    Theme::ApplyUiScale(125, 1.5F, 2.0F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 3.0F);
+    CHECK(style.FramePadding.x == basePadding * 3.0F);
+    CHECK(io.DisplayFramebufferScale.x == 2.0F);
+
+    Theme::ApplyUiScale(75, 1.0F, 0.5F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 0.5F);
+    CHECK(style.FramePadding.x == basePadding * 0.5F);
+    CHECK(Theme::TextPx::Label() == 16.0F);
+    Theme::ApplyUiScale(100, 1.0F, 0.0F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 0.5F);
+    Theme::ApplyUiScale(100, 1.0F, 1.0F);
+}
+
 TEST_CASE("Theme watcher publishes valid replacements and retains the last good theme after invalid saves",
           "[unit][editor][gui][theme][reload]") {
     using namespace Horo;

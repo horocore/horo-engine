@@ -633,9 +633,11 @@ migrates them once before validation (an explicitly supplied new key wins).
    atomic, tear-free application.
 
 The desktop editor applies high contrast and reduced motion before beginning its
-GUI frame. The editor theme derives both its native ImGui colours and its design
-tokens from one contrast palette. Applying or reloading a theme retains the user
-preferences. Turning contrast off restores the selected theme's authored colours.
+GUI frame. It composes the captured global UI scale with the editor appearance
+percentage and logical display scale. The editor theme derives both its native
+ImGui colours and its design tokens from one contrast palette. Applying or
+reloading a theme retains the user preferences. Turning contrast off restores the
+selected theme's authored colours.
 The extension theme frame carries the same contrast, effective motion and
 flash-suppression preferences as the host.
 

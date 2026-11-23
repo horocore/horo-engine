@@ -1955,6 +1955,7 @@ namespace Horo::Editor {
         struct EditorVisualPreferences final {
             Runtime::Ui::UiVisualPresentationPolicy ui;
             float cameraShakeScale;
+            float accessibilityScale;
         };
 
         /** @brief Resolves the UI and effect preferences from one configuration revision. */
@@ -1969,7 +1970,8 @@ namespace Horo::Editor {
             return Outcome::Success(
                 {{config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(), visual.Value().ScaleFactor(),
                   Runtime::Ui::DefaultUiAccessibleTargetDips, safety.Value().SuppressFlash()},
-                 safety.Value().Scale(Accessibility::VisualEffectIntent::CameraShake)});
+                 safety.Value().Scale(Accessibility::VisualEffectIntent::CameraShake),
+                 visual.Value().UiScale()});
         }
 
         /** @brief Projects one committed revision into each attached presentation owner. */
@@ -1996,6 +1998,7 @@ namespace Horo::Editor {
             ConfigurationRevision revision{};
             int scalePercent{100};
             float displayToWindowScale{1.0F};
+            float accessibilityScale{1.0F};
         };
 
         /** @brief Retains the last admitted content scale if the window system has no current report. */
@@ -2018,11 +2021,12 @@ namespace Horo::Editor {
                     return Result<void>::Failure(visual.ErrorValue());
                 const auto &preferences = visual.Value().ui;
                 applied.scalePercent = ResolveEditorUiScalePercent(config);
+                applied.accessibilityScale = visual.Value().accessibilityScale;
                 Theme::ApplyVisualPreferences({preferences.highContrast, preferences.reduceMotion, preferences.suppressFlash});
                 applied.revision = config.Revision();
             }
             applied.displayToWindowScale = RefreshDisplayToWindowScale(window, applied.displayToWindowScale);
-            Theme::ApplyUiScale(applied.scalePercent, applied.displayToWindowScale);
+            Theme::ApplyUiScale(applied.scalePercent, applied.displayToWindowScale, applied.accessibilityScale);
             return Result<void>::Success();
         }
 
