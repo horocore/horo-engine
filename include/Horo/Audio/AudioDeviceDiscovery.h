@@ -124,6 +124,7 @@ namespace Horo::Audio {
         std::string displayName; /**< At most 256 bytes, excluding private native identifiers. */
         AudioDeviceClass deviceClass{AudioDeviceClass::Physical};
         std::optional<AudioProcessingFormat> preferredFormat;
+        bool operator==(const AudioDiscoveredCaptureDevice &) const = default;
     };
 
     /** @brief Independently resolved recording defaults; missing bindings imply no fallback. */
@@ -171,4 +172,26 @@ namespace Horo::Audio {
      */
     [[nodiscard]] AudioCaptureDeviceResolution ResolveAudioCaptureDevice(const AudioCaptureDeviceSnapshot &snapshot,
                                                                          const AudioCaptureDeviceSelection &selection) noexcept;
+
+    /** @brief Membership changes between two complete recording discoveries. */
+    enum class AudioCaptureDeviceChangeKind : std::uint8_t {
+        Removed,
+        Added
+    };
+
+    /** @brief The exact generation retired or admitted at a recording discovery revision. */
+    struct AudioCaptureDeviceChange final {
+        AudioCaptureDeviceChangeKind kind{};
+        AudioCaptureDeviceId device;
+        std::uint64_t revision{};
+    };
+
+    /** @brief Derives ordered removal and addition facts for one backend's successive capture discoveries.
+     * @param before Previous validated snapshot of the same backend owner.
+     * @param after Current validated snapshot, with a strictly newer revision.
+     * @return Removed generations followed by added generations, or a typed validation/allocation failure.
+     * @details A slot reused with a new generation emits both changes. The routine runs on control.
+     */
+    [[nodiscard]] Result<std::vector<AudioCaptureDeviceChange>> DescribeAudioCaptureDeviceChanges(const AudioCaptureDeviceSnapshot &before,
+                                                                                                  const AudioCaptureDeviceSnapshot &after);
 }  // namespace Horo::Audio

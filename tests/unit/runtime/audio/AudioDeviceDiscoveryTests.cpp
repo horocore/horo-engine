@@ -233,5 +233,31 @@ namespace Horo::Audio {
             input.defaults.communications->generation = 1;
             CHECK(ResolveAudioCaptureDevice(input, device).status == AudioDeviceResolutionStatus::InvalidSnapshot);
         }
+
+        TEST_CASE("Recording discovery emits removal before reusing a slot at a new generation", "[audio][discovery][capture]") {
+            const auto owner = AudioRuntimeId::Create(7).Value();
+            const AudioCaptureDeviceId retired{owner, 1, 2};
+            const AudioCaptureDeviceId replacement{owner, 1, 3};
+            const AudioCaptureDeviceId unchanged{owner, 2, 1};
+            const AudioCaptureDeviceSnapshot before{.owner = owner,
+                                                    .backend = AudioBackendKind::SDL3Audio,
+                                                    .revision = 8,
+                                                    .devices = {{retired, "Microphone"}, {unchanged, "Headset"}}};
+            auto after = before;
+            after.revision = 9;
+            after.devices.front().id = replacement;
+            std::ranges::reverse(after.devices);
+            const auto changes = DescribeAudioCaptureDeviceChanges(before, after);
+            REQUIRE(changes.HasValue());
+            REQUIRE(changes.Value().size() == 2);
+            CHECK(changes.Value()[0].kind == AudioCaptureDeviceChangeKind::Removed);
+            CHECK(changes.Value()[0].device == retired);
+            CHECK(changes.Value()[0].revision == after.revision);
+            CHECK(changes.Value()[1].kind == AudioCaptureDeviceChangeKind::Added);
+            CHECK(changes.Value()[1].device == replacement);
+            CHECK(DescribeAudioCaptureDeviceChanges(after, before).HasError());
+            after.backend = AudioBackendKind::CoreAudio;
+            CHECK(DescribeAudioCaptureDeviceChanges(before, after).HasError());
+        }
     }  // namespace
 }  // namespace Horo::Audio

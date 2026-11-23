@@ -226,5 +226,34 @@ namespace Horo::Audio::Backend {
             auto reopened = std::move(CreateSdl3AudioBackend(Config())).Value();
             REQUIRE(std::holds_alternative<AudioBackendProbe>(Complete(*reopened, Probe{}).outcome));
         }
+
+        TEST_CASE("SDL3 discovers native recording endpoints independently of playback", "[unit][audio][sdl3][capture]") {
+            auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
+            const auto first = backend->DiscoverCapture();
+            REQUIRE(first.HasValue());
+            const auto &catalog = first.Value().snapshot;
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(catalog));
+            REQUIRE_FALSE(catalog.devices.empty());
+            REQUIRE(catalog.devices.front().preferredFormat);
+            REQUIRE(first.Value().changes.size() == catalog.devices.size());
+            CHECK(catalog.owner == Owner());
+            CHECK(catalog.permission == AudioCapturePermission::Unknown);
+            CHECK_FALSE(catalog.defaults.communications);
+            CHECK(backend->State() == Sdl3AudioBackendState::Closed);
+            for (const auto &change : first.Value().changes) {
+                CHECK(change.kind == AudioCaptureDeviceChangeKind::Added);
+                CHECK(change.revision == catalog.revision);
+                CHECK(ResolveAudioCaptureDevice(catalog, change.device).status == AudioDeviceResolutionStatus::Resolved);
+            }
+
+            const auto playback = Complete(*backend, Enumerate{});
+            CHECK(std::holds_alternative<AudioDeviceSnapshot>(playback.outcome));
+            const auto again = backend->DiscoverCapture();
+            REQUIRE(again.HasValue());
+            CHECK(again.Value().snapshot.devices == catalog.devices);
+            CHECK(again.Value().snapshot.revision == catalog.revision);
+            CHECK(again.Value().changes.empty());
+            CHECK(backend->State() == Sdl3AudioBackendState::Closed);
+        }
     }  // namespace
 }  // namespace Horo::Audio::Backend

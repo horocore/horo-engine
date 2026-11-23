@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace Horo::Audio::Backend {
     /** @brief Fixed construction facts; construction performs no SDL initialization or discovery. */
@@ -28,6 +29,12 @@ namespace Horo::Audio::Backend {
         Quiescing = 4,
         Quiesced = 5,
         Stopped = 6
+    };
+
+    /** @brief An owned capture inventory and the membership changes observed by this refresh. */
+    struct Sdl3CaptureDiscovery final {
+        AudioCaptureDeviceSnapshot snapshot;
+        std::vector<AudioCaptureDeviceChange> changes;
     };
 
     /**
@@ -63,6 +70,13 @@ namespace Horo::Audio::Backend {
          * @return Success when its outcome is published or remains asynchronously pending.
          */
         [[nodiscard]] Result<void> AdvanceControl();
+
+        /** @brief Refreshes SDL's recording inventory on the backend control thread without opening a device.
+         * @return Complete catalog and typed changes from the last successful refresh, or a typed error.
+         * @details SDL does not expose exact recording role bindings or host permission here. The host chooses
+         * when to refresh. This call does not consume SDL's shared event queue or start capture.
+         */
+        [[nodiscard]] Result<Sdl3CaptureDiscovery> DiscoverCapture();
 
         /** @copydoc AudioBackend::AcknowledgeCompletion */
         [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;

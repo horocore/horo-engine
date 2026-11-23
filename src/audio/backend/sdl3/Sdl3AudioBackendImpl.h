@@ -84,6 +84,11 @@ namespace Horo::Audio::Backend {
             bool operator==(const DeviceBinding &) const noexcept = default;
         };
 
+        struct CaptureDeviceBinding final {
+            AudioCaptureDeviceId horo;
+            SDL_AudioDeviceID native{};
+        };
+
         struct NativeOpenFacts final {
             SDL_AudioSpec actual{};
             int periodFrames{};
@@ -145,7 +150,9 @@ namespace Horo::Audio::Backend {
             }
         };
 
-        explicit Impl(const Sdl3AudioBackendConfig &value) noexcept : config(value), defaultDevice{value.owner, 1, 1} {}
+        explicit Impl(const Sdl3AudioBackendConfig &value) noexcept
+            : config(value), defaultDevice{value.owner, 1, 1},
+              captureSnapshot{.owner = value.owner, .backend = AudioBackendKind::SDL3Audio, .revision = 1} {}
 
         ~Impl() {
             if (stream) {
@@ -164,6 +171,9 @@ namespace Horo::Audio::Backend {
         AudioDeviceId defaultDevice;
         std::vector<DeviceBinding> devices;
         AudioDeviceSnapshot snapshot;
+        AudioCaptureDeviceSnapshot captureSnapshot;
+        std::vector<CaptureDeviceBinding> captureDevices;
+        std::uint32_t nextCaptureSlot{1};
         OperationState operations;
         std::uint64_t discoveryRevision{1};
         std::uint32_t nextDeviceSlot{2};
@@ -187,6 +197,13 @@ namespace Horo::Audio::Backend {
             initialized = SDL_InitSubSystem(SDL_INIT_AUDIO);
             return initialized;
         }
+
+        /** @brief Stages a recording refresh and its identity changes on the control thread. */
+        Result<Sdl3CaptureDiscovery> DiscoverCapture();
+
+        /** @brief Builds a complete candidate using only native identities and previously admitted capture slots. */
+        Result<void> ReadCaptureEndpoints(std::span<const SDL_AudioDeviceID> ids, std::vector<CaptureDeviceBinding> &bindings,
+                                          std::uint32_t &nextSlot, AudioCaptureDeviceSnapshot &candidate) const;
 
         void PushCallbackEvent(const Event &event) noexcept {
             const auto write = callback.write.load();

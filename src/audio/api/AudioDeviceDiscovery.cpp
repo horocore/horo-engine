@@ -1,6 +1,9 @@
 #include "Horo/Audio/AudioDeviceDiscovery.h"
 
+#include "Horo/Audio/AudioErrors.h"
+
 #include <algorithm>
+#include <new>
 
 namespace Horo::Audio {
     namespace {  // NOSONAR - internal-linkage validation helpers must not enter the public audio namespace.
@@ -40,6 +43,17 @@ namespace Horo::Audio {
             return deviceClass == Physical || deviceClass == Virtual || (backend == PipeWire && deviceClass == Unknown);
         }
 
+        /** @brief SDL capture inventory does not disclose physical-versus-virtual provenance. */
+        bool ValidClass(const AudioCaptureDeviceSnapshot &snapshot, const AudioDeviceClass deviceClass) noexcept {
+            return ValidClass(snapshot.backend, deviceClass) ||
+                   (snapshot.backend == AudioBackendKind::SDL3Audio && deviceClass == AudioDeviceClass::Unknown);
+        }
+
+        /** @brief Retains the playback classification contract. */
+        bool ValidClass(const AudioDeviceSnapshot &snapshot, const AudioDeviceClass deviceClass) noexcept {
+            return ValidClass(snapshot.backend, deviceClass);
+        }
+
         /** @brief Resolves a role without inventing cross-role or enumeration-order fallback. */
         template <class Resolution> Resolution ResolveDefault(const auto &snapshot, const AudioDefaultDeviceRole role) noexcept {
             using enum AudioDefaultDeviceRole;
@@ -68,7 +82,7 @@ namespace Horo::Audio {
             for (std::size_t index = 0; index < snapshot.devices.size(); ++index) {
                 const auto &device = snapshot.devices[index];
                 if (!device.id.IsValid() || device.id.owner != snapshot.owner || device.displayName.size() > 256 ||
-                    !ValidClass(snapshot.backend, device.deviceClass))
+                    !ValidClass(snapshot, device.deviceClass))
                     return false;
                 for (std::size_t previous = 0; previous < index; ++previous) {
                     if (snapshot.devices[previous].id.slot == device.id.slot)
@@ -85,6 +99,12 @@ namespace Horo::Audio {
                 return false;
             return ValidDevices(snapshot) && ValidDefault(snapshot, snapshot.defaults.console) &&
                    ValidDefault(snapshot, snapshot.defaults.multimedia) && ValidDefault(snapshot, snapshot.defaults.communications);
+        }
+
+        /** @brief A refresh compares successive complete observations of the same owner and backend. */
+        bool ValidCaptureTransition(const AudioCaptureDeviceSnapshot &before, const AudioCaptureDeviceSnapshot &after) noexcept {
+            return before.owner == after.owner && before.backend == after.backend && before.revision < after.revision &&
+                   ValidateAudioCaptureDeviceSnapshot(before) && ValidateAudioCaptureDeviceSnapshot(after);
         }
 
         /** @brief Keeps explicit selection fenced to this catalog's exact owner and generation. */
@@ -128,5 +148,25 @@ namespace Horo::Audio {
         if (!ValidateAudioCaptureDeviceSnapshot(snapshot))
             return {};
         return ResolveSelection<AudioCaptureDeviceResolution>(snapshot, selection);
+    }
+
+    /** @copydoc DescribeAudioCaptureDeviceChanges */
+    Result<std::vector<AudioCaptureDeviceChange>> DescribeAudioCaptureDeviceChanges(const AudioCaptureDeviceSnapshot &before,
+                                                                                    const AudioCaptureDeviceSnapshot &after) {
+        using Output = Result<std::vector<AudioCaptureDeviceChange>>;
+        if (!ValidCaptureTransition(before, after))
+            return Output::Failure(MakeError(AudioErrors::IdentityInvalid));
+        try {
+            std::vector<AudioCaptureDeviceChange> changes;
+            for (const auto &device : before.devices)
+                if (!Contains(after, device.id))
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::Removed, device.id, after.revision);
+            for (const auto &device : after.devices)
+                if (!Contains(before, device.id))
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::Added, device.id, after.revision);
+            return Output::Success(std::move(changes));
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
+        }
     }
 }  // namespace Horo::Audio
