@@ -1510,6 +1510,14 @@ if(HORO_BUILD_AUDIO_SDL3)
     target_link_libraries(HoroAudioSdl3
             PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
             PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set(_HORO_SDL3_MAC_CAPTURE_SOURCE audio/backend/sdl3/Sdl3MacCapturePermission.mm)
+        set_source_files_properties(${_HORO_SDL3_MAC_CAPTURE_SOURCE} PROPERTIES
+                LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+        target_sources(HoroAudioSdl3 PRIVATE ${_HORO_SDL3_MAC_CAPTURE_SOURCE})
+        target_compile_definitions(HoroAudioSdl3 PRIVATE HORO_SDL3_MAC_CAPTURE_PERMISSION=1)
+        target_link_libraries(HoroAudioSdl3 PRIVATE "-framework AVFoundation")
+    endif()
 endif()
 
 add_library(HoroAudioDsp STATIC

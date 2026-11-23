@@ -23,6 +23,15 @@ namespace Horo::Audio::Backend {
                 --length;
             return std::string{name.substr(0, length)};
         }
+
+        /** @brief Observes permission only for a driver that uses the native microphone. */
+        AudioCapturePermission CapturePermission() noexcept {
+#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
+            if (const char *driver = SDL_GetCurrentAudioDriver(); driver && std::string_view{driver} == "coreaudio")
+                return Sdl3Detail::ReadMacCapturePermission();
+#endif
+            return AudioCapturePermission::Unknown;
+        }
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::Impl::ReadCaptureEndpoints */
@@ -63,12 +72,21 @@ namespace Horo::Audio::Backend {
 
         AudioCaptureDeviceSnapshot candidate{.owner = config.owner,
                                              .backend = AudioBackendKind::SDL3Audio,
-                                             .revision = captureSnapshot.revision};
+                                             .revision = captureSnapshot.revision,
+                                             .permission = CapturePermission()};
         auto nextSlot = nextCaptureSlot;
         std::vector<CaptureDeviceBinding> bindings;
         if (const auto read = ReadCaptureEndpoints(ids, bindings, nextSlot, candidate); read.HasError())
             return Output::Failure(read.ErrorValue());
-        if (candidate.devices == captureSnapshot.devices)
+        return PublishCaptureEndpoints(std::move(candidate), std::move(bindings), nextSlot);
+    }
+
+    /** @copydoc Sdl3AudioBackend::Impl::PublishCaptureEndpoints */
+    Result<AudioCaptureDiscovery> Sdl3AudioBackend::Impl::PublishCaptureEndpoints(AudioCaptureDeviceSnapshot candidate,
+                                                                                  std::vector<CaptureDeviceBinding> bindings,
+                                                                                  const std::uint32_t nextSlot) {
+        using Output = Result<AudioCaptureDiscovery>;
+        if (candidate.devices == captureSnapshot.devices && candidate.permission == captureSnapshot.permission)
             return Output::Success({std::move(candidate), {}});
         if (candidate.revision == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));

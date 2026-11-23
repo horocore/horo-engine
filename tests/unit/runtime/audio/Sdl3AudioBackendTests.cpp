@@ -6,6 +6,10 @@
 #include <chrono>
 #include <thread>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace Horo::Audio::Backend {
     namespace {
         AudioRuntimeId Owner() {
@@ -256,5 +260,18 @@ namespace Horo::Audio::Backend {
             CHECK(again.Value().changes.empty());
             CHECK(backend->State() == Sdl3AudioBackendState::Closed);
         }
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+        TEST_CASE("SDL3 Core Audio discovery observes microphone authorization", "[.native][audio][sdl3][capture]") {
+            auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
+            const auto discovered = backend->DiscoverCapture();
+            REQUIRE(discovered.HasValue());
+            const auto &snapshot = discovered.Value().snapshot;
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(snapshot));
+            CHECK(snapshot.permission != AudioCapturePermission::Unknown);
+            CHECK(snapshot.permission != AudioCapturePermission::NotRequired);
+            CHECK(backend->State() == Sdl3AudioBackendState::Closed);
+        }
+#endif
     }  // namespace
 }  // namespace Horo::Audio::Backend

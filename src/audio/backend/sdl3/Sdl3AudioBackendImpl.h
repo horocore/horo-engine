@@ -19,6 +19,14 @@ namespace Horo::Audio::Backend {
     namespace Sdl3Detail {
         constexpr std::size_t EventCapacity = 64;
 
+#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
+        /**
+         * @brief Observes macOS microphone authorization without requesting access.
+         * @return The operating system's reported permission, or Unknown when observation is unavailable.
+         */
+        [[nodiscard]] AudioCapturePermission ReadMacCapturePermission() noexcept;
+#endif
+
         inline Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<void>::Failure(MakeError(descriptor));
         }
@@ -204,6 +212,16 @@ namespace Horo::Audio::Backend {
         /** @brief Builds a complete candidate using only native identities and previously admitted capture slots. */
         Result<void> ReadCaptureEndpoints(std::span<const SDL_AudioDeviceID> ids, std::vector<CaptureDeviceBinding> &bindings,
                                           std::uint32_t &nextSlot, AudioCaptureDeviceSnapshot &candidate) const;
+
+        /**
+         * @brief Publishes a complete recording inventory and permission observation together.
+         * @param candidate The observed catalog with the current revision.
+         * @param bindings The native device mapping for the candidate.
+         * @param nextSlot The next unused slot after constructing the candidate.
+         * @return The published catalog and membership changes, or an error without publishing.
+         */
+        Result<AudioCaptureDiscovery> PublishCaptureEndpoints(AudioCaptureDeviceSnapshot candidate,
+                                                              std::vector<CaptureDeviceBinding> bindings, std::uint32_t nextSlot);
 
         void PushCallbackEvent(const Event &event) noexcept {
             const auto write = callback.write.load();
