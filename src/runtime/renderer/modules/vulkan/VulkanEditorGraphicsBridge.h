@@ -21,6 +21,12 @@ namespace Horo::Render::Detail {
         std::uint32_t count{};
     };
 
+    /** @brief Exact completion state plus optional timing evidence for a measured graph. */
+    struct VulkanGraphGpuDuration {
+        bool completed{};
+        std::optional<std::chrono::nanoseconds> elapsed;
+    };
+
     /** @brief Borrowed exact device children held by the existing completion owner. */
     struct VulkanGuiSampleBinding {
         VkImageView view{};
@@ -136,6 +142,11 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] virtual Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const = 0;
 
+        /** @brief Reports timing availability for the selected queue without admitting a frame. */
+        [[nodiscard]] virtual Result<bool> SupportsGraphGpuDuration(RenderQueueId) const {
+            return Result<bool>::Success(false);
+        }
+
         /** @brief Selects one exact graph signal for GPU timing in the active frame.
          * @return True when armed, false when native timing is unsupported, or a typed ownership/admission error. */
         [[nodiscard]] virtual Result<bool> ArmGraphGpuDuration(FrameToken, RenderTimelinePoint) {
@@ -143,11 +154,13 @@ namespace Horo::Render::Detail {
         }
 
         /** @brief Revokes an unconsumed timing request when frontend graph admission fails before reaching Vulkan. */
-        virtual void DisarmGraphGpuDuration(FrameToken, RenderTimelinePoint) noexcept {}
+        virtual void DisarmGraphGpuDuration(FrameToken, RenderTimelinePoint) noexcept {
+            // Ports without GPU timing never arm a request.
+        }
 
         /** @brief Polls timing availability without waiting and preserves the selected device incarnation. */
-        [[nodiscard]] virtual Result<std::optional<std::chrono::nanoseconds>> ObserveGraphGpuDuration(RenderTimelinePoint, std::uint64_t) {
-            return Result<std::optional<std::chrono::nanoseconds>>::Success(std::nullopt);
+        [[nodiscard]] virtual Result<VulkanGraphGpuDuration> ObserveGraphGpuDuration(RenderTimelinePoint, std::uint64_t) {
+            return Result<VulkanGraphGpuDuration>::Success({});
         }
 
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;

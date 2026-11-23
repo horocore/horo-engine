@@ -3,6 +3,7 @@
  * @brief Selected Vulkan viewport using canonical cooked material, frontend resources and frame submission. */
 #include "EditorViewportForwardLighting.h"
 #include "EditorVulkanViewportShader.h"
+#include "Horo/Runtime/Render/DynamicResolution.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
@@ -56,6 +57,10 @@ namespace Horo::Editor {
                                                         const TemporalGuideCook &motion,
                                                         std::span<const Render::CookedNativeReconstructionKernel> kernels,
                                                         const Render::CookedNativeReconstructionKernel *upscaleFallback = nullptr);
+        /** @brief Opts a cold temporal-upscale viewport into GPU-timed scene scaling on its selected queue. */
+        [[nodiscard]] Result<void> EnableDynamicResolution(const Render::DynamicResolutionPolicy &policy, std::uint16_t initialPermille);
+        /** @brief Reads the current scale, pending candidate and budget evidence on the viewport owner. */
+        [[nodiscard]] Result<Render::DynamicResolutionSnapshot> DynamicResolutionDiagnostics() const;
         /** @copydoc IEditorViewportRenderer::PrepareTemporalFrame */
         [[nodiscard]] Result<void> PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &pass, std::uint64_t frameId) override;
         ~EditorViewportRendererVulkan() override;
@@ -357,6 +362,33 @@ namespace Horo::Editor {
         static constexpr std::uint32_t CrossFadeShadowPasses = 2;
         static_assert(2 * (CrossFadeShadowPasses + 1) + 1 <= Render::RenderGraphMaterialRaster::MaximumRetainedPasses);
         using FrameSlots = std::array<FrameSlot, 8>;
+
+        /** @brief Exact per-frame measurement journal bounded by the viewport's frame retention policy. */
+        struct DynamicResolutionState {
+            struct Frame {
+                Render::RenderTimelinePoint signal;
+                std::uint64_t id{};
+                std::uint64_t generation{};
+                std::uint64_t device{};
+            };
+
+            Render::DynamicResolutionController controller;
+            Render::DynamicResolutionPolicy policy;
+            std::array<Frame, std::tuple_size_v<FrameSlots>> pending;
+            Frame recorded;
+            std::size_t head{};
+            std::size_t count{};
+            std::uint16_t initialScale{};
+            bool configured{};
+        };
+
+        [[nodiscard]] Result<std::optional<Render::RenderTargetHandle>> PrepareDynamicResources(const Render::RenderSceneView &scene);
+        [[nodiscard]] Result<void> ConsumeViewportGpuTiming(DynamicResolutionState &state);
+        [[nodiscard]] Result<void> CommitDynamicExtent(DynamicResolutionState &state, Render::FramebufferExtent output,
+                                                       Render::FramebufferExtent desiredScene,
+                                                       const std::optional<Render::DynamicResolutionChange> &change);
+        [[nodiscard]] Result<bool> ArmViewportGpuTiming(Render::FrameToken frame, Render::RenderTimelinePoint signal);
+        void FinishViewportGpuTiming(Render::RenderTimelinePoint signal, bool accepted) noexcept;
 
         struct EmptyGraph {
             Render::CompiledRenderGraphExecution graph;
@@ -747,6 +779,7 @@ namespace Horo::Editor {
         EditorViewportLightVisualizerOptions requestedLightVisualizer_;
         std::uint64_t liveGeneration_{};
         bool initialized_{};
+        std::optional<DynamicResolutionState> dynamicResolution_;
         bool childAttached_{};
         bool recordedEver_{};
     };

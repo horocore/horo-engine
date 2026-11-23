@@ -1777,10 +1777,15 @@ namespace Horo::Editor {
             auto scene = LoadEditorVulkanSceneLinearCook(family.sceneLinear.payload, family.sceneLinear.reflection);
             if (scene.HasError())
                 return Result<void>::Failure(scene.ErrorValue());
-            return viewport.PrepareTemporalColor(std::move(scene).Value(), inputs, settings,
-                                                 {family.linearDepth.payload, family.linearDepth.reflection},
-                                                 {family.motion.payload, family.motion.reflection}, family.kernels,
-                                                 family.upscaleFallback ? &*family.upscaleFallback : nullptr);
+            const auto prepared = viewport.PrepareTemporalColor(std::move(scene).Value(), inputs, settings,
+                                                                {family.linearDepth.payload, family.linearDepth.reflection},
+                                                                {family.motion.payload, family.motion.reflection}, family.kernels,
+                                                                family.upscaleFallback ? &*family.upscaleFallback : nullptr);
+            if (prepared.HasError() || !request.viewportGpuBudget)
+                return prepared;
+            const auto lowerAbove = std::chrono::duration_cast<std::chrono::nanoseconds>(*request.viewportGpuBudget);
+            constexpr std::uint16_t initialPermille = 667;
+            return viewport.EnableDynamicResolution({.raiseBelow = lowerAbove * 4 / 5, .lowerAbove = lowerAbove}, initialPermille);
         }
 
         /** @brief Reads the exact independently signed provider and scene stage on the selected Vulkan owner. */

@@ -449,6 +449,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ReleaseDesktopPrograms */
     void EditorViewportRendererVulkan::ReleaseDesktopPrograms() noexcept {
         FinishColorFrame(false);
+        dynamicResolution_.reset();
         color_.reset();
         spatial_.reset();
         temporalGuides_.reset();
@@ -522,7 +523,7 @@ namespace Horo::Editor {
                                                                                                      const Render::RenderSceneView &scene) {
         if (&frontend != &frontend_ || owner_ != std::this_thread::get_id() || !initialized_)
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
-        const auto prepared = resources_.Prepare(scene, requestedExtent_);
+        const auto prepared = dynamicResolution_ ? PrepareDynamicResources(scene) : resources_.Prepare(scene, requestedExtent_);
         if (prepared.HasError()) {
             imageCapture_.Fail();
             return prepared;

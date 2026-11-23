@@ -450,6 +450,14 @@ output size, rounded up. This route also verifies the spatial kernel from the
 same inventory and uses it whenever temporal reconstruction is unavailable.
 Display overlays retain output-size geometry and depth testing.
 
+With TAAU activation, `--image-provider-gpu-budget-ms=12` enables adaptive
+scene resolution for a 12 ms GPU budget. It requires GPU timestamps on the
+selected Vulkan graphics queue. The viewport reads completed scene submissions,
+then publishes a new scene extent and fresh temporal history at a frame
+boundary. The smaller scene uses the same display extent. Adaptive resolution
+reports the active scale, last qualified GPU duration, and accepted and
+rejected changes through viewport diagnostics.
+
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned
 registries:

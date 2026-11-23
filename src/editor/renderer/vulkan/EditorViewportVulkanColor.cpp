@@ -229,14 +229,18 @@ namespace Horo::Editor {
             imageCapture_.Finish(accepted);
         }
         const auto submitted = std::exchange(pendingColorSubmission_, {});
-        if (!color_)
+        if (!color_) {
+            FinishViewportGpuTiming({}, false);
             return;
+        }
         if (!submitted.signal.IsValid() || !bridge_.Port()) {
+            FinishViewportGpuTiming({}, false);
             color_->Finish(false);
             return;
         }
         const auto accepted = bridge_.Port()->WasSubmissionAccepted(submitted.signal, submitted.deviceIncarnation);
         const bool committed = accepted.HasValue() && accepted.Value();
+        FinishViewportGpuTiming(submitted.signal, committed);
         color_->Finish(committed);
         if (committed)
             acceptedColorView_ = submitted.output;

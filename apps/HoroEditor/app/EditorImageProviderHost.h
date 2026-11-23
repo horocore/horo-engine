@@ -7,6 +7,7 @@
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -28,6 +29,7 @@ namespace Horo::Editor {
         std::filesystem::path trustedPublishers;
         bool activateViewport{};
         bool scaleViewport{}; /**< Explicit upscaling activation rather than same-size temporal rendering. */
+        std::optional<std::chrono::milliseconds> viewportGpuBudget;
     };
 
     /** @brief Current executable release identity compared to the signed installed inventory. */

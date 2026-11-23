@@ -109,6 +109,11 @@ namespace Horo::Render {
          * @return Success or a typed validation, exhaustion, owner or lifecycle failure. */
         [[nodiscard]] Result<void> UpdateOutputExtent(FramebufferExtent targetExtent);
 
+        /** @brief Projects the committed scale onto a prospective output size without changing the active generation.
+         * @param targetExtent Requested display size.
+         * @return Projected scene extent or a typed lifecycle, owner or configuration failure. */
+        [[nodiscard]] Result<FramebufferExtent> PreviewOutputExtent(FramebufferExtent targetExtent) const;
+
         /** @brief Copies current diagnostics on the owner thread. @return Live state or typed owner/lifecycle failure. */
         [[nodiscard]] Result<DynamicResolutionSnapshot> Snapshot() const;
 

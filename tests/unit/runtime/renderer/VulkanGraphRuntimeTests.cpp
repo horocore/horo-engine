@@ -299,10 +299,14 @@ namespace {
         CHECK(fixture.commandState.state.timestampWrites.size() == 2);
         REQUIRE(fixture.graph.SubmitFrame(later).HasValue());
         CHECK(fixture.graph.ObserveGraphGpuDuration(signal, 12).HasError());
-        CHECK_FALSE(fixture.graph.ObserveGraphGpuDuration(signal, 11).Value());
+        CHECK_FALSE(fixture.graph.ObserveGraphGpuDuration(signal, 11).Value().completed);
         fixture.commandState.state.Complete();
-        CHECK(fixture.graph.ObserveGraphGpuDuration(signal, 11).Value() == std::chrono::nanoseconds{60});
-        CHECK_FALSE(fixture.graph.ObserveGraphGpuDuration(transferSignal, 11).Value());
+        const auto measured = fixture.graph.ObserveGraphGpuDuration(signal, 11).Value();
+        CHECK(measured.completed);
+        CHECK(measured.elapsed == std::chrono::nanoseconds{60});
+        const auto unmeasured = fixture.graph.ObserveGraphGpuDuration(transferSignal, 11).Value();
+        CHECK(unmeasured.completed);
+        CHECK_FALSE(unmeasured.elapsed);
         CHECK(fixture.commandState.state.waitCalls == 0);
     }
 

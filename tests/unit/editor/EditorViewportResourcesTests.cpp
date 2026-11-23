@@ -475,6 +475,49 @@ TEST_CASE("Temporal viewport publishes and retires an atomic guide and history g
     Render::Test::RequireDrainedOwner(*frontend);
 }
 
+TEST_CASE("Temporal upscale publishes a raster-only change together with fresh history", "[unit][renderer][resource][dynamic-resolution]") {
+    auto frontend = CreateTemporalResourceFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    using enum EditorViewportResources::ColorReconstruction;
+    constexpr EditorViewportExtent display{128, 96};
+    constexpr FramebufferExtent lower{64, 48};
+    REQUIRE(resources.EnableColorPipeline(TemporalUpscale).HasValue());
+    SettleResources(resources, *frontend, {}, display);
+    const auto original = resources.Target();
+    const auto originalImages = resources.TemporalImages();
+    REQUIRE(originalImages);
+    CHECK(resources.SceneExtent() == FramebufferExtent{86, 64});
+    REQUIRE(resources.Prepare({}, display, FramebufferExtent{129, 48}).HasError());
+
+    imageResolver.reject = true;
+    bool failed = false;
+    for (int pass = 0; pass < MaxResourcePasses && !failed; ++pass) {
+        failed = resources.Prepare({}, display, lower).HasError();
+        CHECK(resources.Target() == original);
+        REQUIRE(resources.TemporalImages());
+        CHECK(resources.TemporalImages()->motion.view == originalImages->motion.view);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    }
+    REQUIRE(failed);
+    CHECK(resources.SceneExtent() == FramebufferExtent{86, 64});
+
+    imageResolver.reject = false;
+    for (int pass = 0; pass < MaxResourcePasses && resources.Target() == original; ++pass) {
+        REQUIRE(resources.Prepare({}, display, lower).HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    }
+    REQUIRE(resources.Target() != original);
+    CHECK(resources.AllocatedExtent() == display);
+    CHECK(resources.SceneColorDescriptor().extent == lower);
+    CHECK(resources.SpatialColorDescriptor().extent == FramebufferExtent{128, 96});
+    REQUIRE(resources.TemporalImages());
+    CHECK(resources.TemporalImages()->motion.view != originalImages->motion.view);
+    CHECK(frontend->ResourceState(originalImages->history[0].color.texture).HasError());
+    resources.Shutdown();
+    Render::Test::RequireDrainedOwner(*frontend);
+}
+
 TEST_CASE("Color activation cannot reinterpret already published legacy viewport storage", "[unit][headless][renderer][resource][color]") {
     auto frontend = CreateFrontend();
     ImageResolverFixture imageResolver;

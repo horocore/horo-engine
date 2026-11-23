@@ -38,8 +38,14 @@ namespace Horo::Editor {
 
         EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept;
 
-        [[nodiscard]] Result<std::optional<Render::RenderTargetHandle>> Prepare(const Render::RenderSceneView &scene,
-                                                                                EditorViewportExtent requestedExtent);
+        /** @brief Advances a complete viewport generation outside frame recording.
+         * @param scene Current mesh projection.
+         * @param requestedExtent Desired display size.
+         * @param requestedSceneExtent Optional exact lower or equal raster size for a temporal upscale recipe.
+         * @return The ready target, which may be the previous generation until the replacement is complete, or a typed error. */
+        [[nodiscard]] Result<std::optional<Render::RenderTargetHandle>> Prepare(
+            const Render::RenderSceneView &scene, EditorViewportExtent requestedExtent,
+            std::optional<Render::FramebufferExtent> requestedSceneExtent = {});
         /** @brief Prepares the SAME mesh owner without allocating an unrelated desktop camera target.
          * @param resources Canonical immutable mesh projection retained by the scene owner.
          * @return Success or original resource/upload failure; pending readiness remains observable through FindMesh.
@@ -224,6 +230,7 @@ namespace Horo::Editor {
             Render::ResourceOperationId depthViewOperation;
             Render::ResourceOperationId targetOperation;
             EditorViewportExtent extent;
+            Render::FramebufferExtent sceneExtent;
             std::uintptr_t imageIdentity{0};
             CameraCrossFadeSource crossFade;
             TemporalTarget temporal;
@@ -240,7 +247,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateResidentMeshBuffers(const EditorViewportMeshResourceView &resource, ResidentMesh &resident);
         [[nodiscard]] bool IsResidentMeshReady(const ResidentMesh &resident) const;
         void RetireMissingMeshes(std::span<const EditorViewportMeshResourceView> resources) noexcept;
-        [[nodiscard]] Result<void> SynchronizeTarget(EditorViewportExtent extent);
+        [[nodiscard]] Result<void> SynchronizeTarget(EditorViewportExtent extent, Render::FramebufferExtent sceneExtent);
         [[nodiscard]] Result<bool> AdvanceViewportTarget(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceCameraCrossFadeSource(CameraCrossFadeSource &source, Render::FramebufferExtent extent);
         [[nodiscard]] bool PrepareCameraCrossFadeSource(EditorViewportExtent extent);
@@ -258,7 +265,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceTemporalTargets(TemporalTarget &temporal, Render::FramebufferExtent renderExtent,
                                                           Render::FramebufferExtent targetExtent);
         /** @brief Computes the mode's scene resolution relative to the authoritatively allocated display extent. */
-        [[nodiscard]] Render::FramebufferExtent SceneExtent(Render::FramebufferExtent display) const noexcept;
+        [[nodiscard]] Render::FramebufferExtent DefaultSceneExtent(Render::FramebufferExtent display) const noexcept;
         /** @brief Reports whether the current attachment policy owns temporal resources. */
         [[nodiscard]] bool UsesTemporalTargets() const noexcept;
         /** @brief Retires partially prepared and ready temporal generations through the frontend resource owner. */

@@ -508,6 +508,11 @@ namespace Horo::Render::Detail {
         return impl_->commands.WasSubmissionAccepted(signal, deviceIncarnation);
     }
 
+    /** @copydoc VulkanGraphRuntime::SupportsGraphGpuDuration */
+    Result<bool> VulkanGraphRuntime::SupportsGraphGpuDuration(const RenderQueueId queue) const {
+        return impl_->commands.SupportsGpuDuration(queue);
+    }
+
     /** @copydoc VulkanGraphRuntime::ArmGraphGpuDuration */
     Result<bool> VulkanGraphRuntime::ArmGraphGpuDuration(const FrameToken frame, const RenderTimelinePoint signal) {
         if (auto access = impl_->Access(); access.HasError())
@@ -528,13 +533,18 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc VulkanGraphRuntime::ObserveGraphGpuDuration */
-    Result<std::optional<std::chrono::nanoseconds>> VulkanGraphRuntime::ObserveGraphGpuDuration(const RenderTimelinePoint signal,
-                                                                                                const std::uint64_t deviceIncarnation) {
-        using Outcome = Result<std::optional<std::chrono::nanoseconds>>;
+    Result<VulkanGraphGpuDuration> VulkanGraphRuntime::ObserveGraphGpuDuration(const RenderTimelinePoint signal,
+                                                                               const std::uint64_t deviceIncarnation) {
+        using Outcome = Result<VulkanGraphGpuDuration>;
         const auto ready = ObserveSubmission({.completion = signal, .expectedDeviceIncarnation = deviceIncarnation});
         if (ready.HasError())
             return Outcome::Failure(ready.ErrorValue());
-        return ready.Value() ? impl_->commands.GpuDuration(signal) : Outcome::Success(std::nullopt);
+        if (!ready.Value())
+            return Outcome::Success({});
+        const auto measured = impl_->commands.GpuDuration(signal);
+        if (measured.HasError())
+            return Outcome::Failure(measured.ErrorValue());
+        return Outcome::Success({true, measured.Value()});
     }
 
     /** @copydoc VulkanGraphRuntime::ObserveSubmission */

@@ -1484,8 +1484,15 @@ namespace Horo::Tests::VulkanEditor {
     }
 
     TEST_CASE("Native Vulkan viewport resolves temporal color before display encoding", "[native-smoke][vulkan][gui][temporal-color]") {
-        const bool upscale = GENERATE(false, true);
-        CAPTURE(upscale);
+        enum class Mode {
+            SameSize,
+            FixedUpscale,
+            DynamicUpscale
+        };
+        const auto mode = GENERATE(Mode::SameSize, Mode::FixedUpscale, Mode::DynamicUpscale);
+        const bool upscale = mode != Mode::SameSize;
+        const bool dynamic = mode == Mode::DynamicUpscale;
+        CAPTURE(upscale, dynamic);
         const auto *assets = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
         const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
         const auto *colorRoot = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
@@ -1521,6 +1528,20 @@ namespace Horo::Tests::VulkanEditor {
         const auto fallback = ReadViewportTemporalKernel(stage, NativeReconstructionEntry::Spatial);
         Check(host.viewport->PrepareTemporalColor(std::move(sceneCook).Value(), inputs, {}, {depth, depthLayout}, {motion, motionLayout},
                                                   kernels, upscale ? &fallback : nullptr));
+        if (dynamic) {
+            const auto device = host.bridge->Port()->QueryDevice();
+            Check(device);
+            const auto supported = host.bridge->Port()->SupportsGraphGpuDuration(device.Value().graphicsIdentity);
+            Check(supported);
+            if (!supported.Value())
+                SKIP("The selected Vulkan graphics queue does not support timing.");
+            constexpr DynamicResolutionPolicy policy{.raiseBelow = std::chrono::nanoseconds{1},
+                                                     .lowerAbove = std::chrono::nanoseconds{2},
+                                                     .stepPermille = 250,
+                                                     .lowerAfter = 1,
+                                                     .settlingSamples = 0};
+            Check(host.viewport->EnableDynamicResolution(policy, 750));
+        }
         const auto view = host.frontend->CreateRenderViewIdentity();
         Check(view);
         Check(host.viewport->BindLightingViewIdentity(view.Value()));
@@ -1551,10 +1572,13 @@ namespace Horo::Tests::VulkanEditor {
         Check(sampler);
         Check(host.frontend->ProcessResourceRequests());
         const auto waitIdle = host.viewportObservation->DeviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle");
-        for (std::uint64_t number = 1; number <= 5; ++number) {
+        const std::uint64_t frames = dynamic ? 10 : 5;
+        for (std::uint64_t number = 1; number <= frames; ++number) {
             CAPTURE(number);
             constexpr std::uint64_t fallbackFrame = 3;
             const bool tracked = number != fallbackFrame;
+            if (dynamic)
+                host.SynchronizeViewport(scene, size);
             if (tracked)
                 Check(host.viewport->PrepareTemporalMotion({1, objectIds}));
             Check(host.viewport->PrepareTemporalFrame(host.ViewportPass(scene), number));
@@ -1568,6 +1592,16 @@ namespace Horo::Tests::VulkanEditor {
             CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == number);
             REQUIRE(waitIdle(host.viewportObservation->Queue()) == VK_SUCCESS);
             Check(host.frontend->ProcessResourceRequests());
+        }
+        if (dynamic) {
+            const auto timing = host.viewport->DynamicResolutionDiagnostics();
+            Check(timing);
+            CHECK(timing.Value().publishedChanges == 1);
+            CHECK(timing.Value().rejectedChanges == 0);
+            CHECK(timing.Value().active.targetExtent == FramebufferExtent{size.width, size.height});
+            CHECK(timing.Value().active.renderExtent == FramebufferExtent{(size.width + 1) / 2, (size.height + 1) / 2});
+            REQUIRE(timing.Value().lastSample);
+            CHECK(timing.Value().lastSample->generation == timing.Value().active.generation);
         }
         const auto pixels = ReadViewportColor(host, sampler.Value().handle);
         REQUIRE(pixels.size() == size.width * size.height * 4);

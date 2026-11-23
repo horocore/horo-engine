@@ -1029,7 +1029,13 @@ namespace Horo::Editor {
                 temporal.reconstructionPlan.reset();
             return result;
         };
+        const auto signal = reserved.Value().signal;
+        const auto timed = ArmViewportGpuTiming(frame.Token(), signal);
+        if (timed.HasError())
+            return Result<void>::Failure(timed.ErrorValue());
         const auto recorded = execute();
+        if (timed.Value())
+            bridge_.Port()->DisarmGraphGpuDuration(frame.Token(), signal);
         if (recorded.HasValue() && variant.guidePasses && (variant.temporalWork || !color_))
             temporalGuides_->Recorded(reserved.Value().signal);
         if (recorded.HasValue() && color_)

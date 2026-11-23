@@ -156,6 +156,24 @@ TEST_CASE("Editor image provider activation explicitly selects spatial, TAA or T
     CHECK(upscaled->activateViewport);
     CHECK(upscaled->mode == ReconstructionKind::Temporal);
     CHECK(upscaled->scaleViewport);
+    CHECK_FALSE(upscaled->viewportGpuBudget);
+    options[4] = "--image-provider-gpu-budget-ms=16";
+    update();
+    const auto adaptive = RequireValue(ParseEditorImageProviderInspection(args));
+    REQUIRE(adaptive);
+    CHECK(adaptive->viewportGpuBudget == std::chrono::milliseconds{16});
+    for (const auto *invalid : {"0", "-1", "1001", "16.5", "16ms", "4294967296"}) {
+        options[4] = std::string{"--image-provider-gpu-budget-ms="} + invalid;
+        update();
+        CHECK(ParseEditorImageProviderInspection(args).HasError());
+    }
+    options[4] = "--image-provider-gpu-budget-ms=16";
+    for (const auto *incompatible :
+         {"--activate-image-provider=taa", "--activate-image-provider=spatial", "--inspect-image-provider=taau"}) {
+        options[1] = incompatible;
+        update();
+        CHECK(ParseEditorImageProviderInspection(args).HasError());
+    }
 }
 
 TEST_CASE("Editor image provider inspection admits only signed matching product inventory", "[renderer][image-provider][editor]") {

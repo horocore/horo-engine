@@ -213,6 +213,16 @@ namespace Horo::Render {
         return Result<void>::Success();
     }
 
+    /** @copydoc DynamicResolutionController::PreviewOutputExtent */
+    Result<FramebufferExtent> DynamicResolutionController::PreviewOutputExtent(const FramebufferExtent targetExtent) const {
+        using Outcome = Result<FramebufferExtent>;
+        if (const auto active = RequireActive(); active.HasError())
+            return Outcome::Failure(active.ErrorValue());
+        if (!targetExtent.IsValid())
+            return Outcome::Failure(MakeError(DynamicResolutionErrors::InvalidConfiguration));
+        return Outcome::Success(ScaleExtent(targetExtent, state_.active.scalePermille));
+    }
+
     /** @copydoc DynamicResolutionController::Snapshot */
     Result<DynamicResolutionSnapshot> DynamicResolutionController::Snapshot() const {
         if (const auto active = RequireActive(); active.HasError())

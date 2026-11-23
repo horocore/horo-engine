@@ -102,6 +102,11 @@ Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t dev
     return graph_.WasSubmissionAccepted(signal, deviceIncarnation);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::SupportsGraphGpuDuration */
+Result<bool> SupportsGraphGpuDuration(RenderQueueId queue) const override {
+    return graph_.SupportsGraphGpuDuration(queue);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::ArmGraphGpuDuration */
 Result<bool> ArmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) override {
     return graph_.ArmGraphGpuDuration(frame, signal);
@@ -113,7 +118,7 @@ void DisarmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) noexce
 }
 
 /** @copydoc IVulkanEditorGraphicsPort::ObserveGraphGpuDuration */
-Result<std::optional<std::chrono::nanoseconds>> ObserveGraphGpuDuration(RenderTimelinePoint signal, std::uint64_t incarnation) override {
+Result<Detail::VulkanGraphGpuDuration> ObserveGraphGpuDuration(RenderTimelinePoint signal, std::uint64_t incarnation) override {
     return graph_.ObserveGraphGpuDuration(signal, incarnation);
 }
 

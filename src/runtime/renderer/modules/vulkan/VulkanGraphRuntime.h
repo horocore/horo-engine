@@ -120,13 +120,14 @@ namespace Horo::Render::Detail {
         void AbortFrame(FrameToken frame) noexcept;
         /** @copydoc IVulkanEditorGraphicsPort::WasSubmissionAccepted */
         [[nodiscard]] Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const;
+        /** @copydoc IVulkanEditorGraphicsPort::SupportsGraphGpuDuration */
+        [[nodiscard]] Result<bool> SupportsGraphGpuDuration(RenderQueueId queue) const;
         /** @copydoc IVulkanEditorGraphicsPort::ArmGraphGpuDuration */
         [[nodiscard]] Result<bool> ArmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal);
         /** @copydoc IVulkanEditorGraphicsPort::DisarmGraphGpuDuration */
         void DisarmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) noexcept;
         /** @copydoc IVulkanEditorGraphicsPort::ObserveGraphGpuDuration */
-        [[nodiscard]] Result<std::optional<std::chrono::nanoseconds>> ObserveGraphGpuDuration(RenderTimelinePoint signal,
-                                                                                              std::uint64_t deviceIncarnation);
+        [[nodiscard]] Result<VulkanGraphGpuDuration> ObserveGraphGpuDuration(RenderTimelinePoint signal, std::uint64_t deviceIncarnation);
         [[nodiscard]] Result<bool> ObserveSubmission(const RenderCpuWait &wait);
         [[nodiscard]] Result<void> BeginShutdown();
         [[nodiscard]] Result<RenderBackendDrainProgress> PollDrain();

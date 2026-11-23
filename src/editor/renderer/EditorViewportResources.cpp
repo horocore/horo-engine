@@ -172,25 +172,34 @@ namespace Horo::Editor {
         return Result<bool>::Success(ready);
     }
 
-    Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(const Render::RenderSceneView &scene,
-                                                                                       const EditorViewportExtent requestedExtent) {
+    /** @copydoc EditorViewportResources::Prepare */
+    Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(
+        const Render::RenderSceneView &scene, const EditorViewportExtent requestedExtent,
+        const std::optional<Render::FramebufferExtent> requestedSceneExtent) {
+        using Outcome = Result<std::optional<Render::RenderTargetHandle>>;
+        if (requestedSceneExtent &&
+            (reconstruction_ != ColorReconstruction::TemporalUpscale || !requestedExtent.IsValid() || !requestedSceneExtent->IsValid() ||
+             requestedSceneExtent->width > requestedExtent.width || requestedSceneExtent->height > requestedExtent.height))
+            return Outcome::Failure(MakeError(RendererErrors::ViewportInvalidScene, "Invalid dynamic viewport raster extent."));
         if (const Result<void> meshes = SynchronizeMeshes(scene.meshResources); meshes.HasError())
-            return Result<std::optional<Render::RenderTargetHandle>>::Failure(meshes.ErrorValue());
+            return Outcome::Failure(meshes.ErrorValue());
         if (const Result<void> shadow = config_.prepareDirectionalShadow ? SynchronizeShadowResources() : Result<void>::Success();
             shadow.HasError())
-            return Result<std::optional<Render::RenderTargetHandle>>::Failure(shadow.ErrorValue());
-        if (const Result<void> target = requestedExtent.IsValid() ? SynchronizeTarget(requestedExtent) : Result<void>::Success();
+            return Outcome::Failure(shadow.ErrorValue());
+        const auto sceneExtent = requestedSceneExtent.value_or(DefaultSceneExtent({requestedExtent.width, requestedExtent.height}));
+        if (const Result<void> target =
+                requestedExtent.IsValid() ? SynchronizeTarget(requestedExtent, sceneExtent) : Result<void>::Success();
             target.HasError()) {
             if (UsesTemporalTargets())
                 ReleaseViewportTarget(pendingViewportTarget_);
-            return Result<std::optional<Render::RenderTargetHandle>>::Failure(target.ErrorValue());
+            return Outcome::Failure(target.ErrorValue());
         }
         if (viewportTarget_.target.IsValid()) {
             if (const auto ready = frontend_->ResourceState(viewportTarget_.target);
                 ready.HasValue() && ready.Value() == Render::RenderResourceState::Ready)
-                return Result<std::optional<Render::RenderTargetHandle>>::Success(viewportTarget_.target);
+                return Outcome::Success(viewportTarget_.target);
         }
-        return Result<std::optional<Render::RenderTargetHandle>>::Success(std::nullopt);
+        return Outcome::Success(std::nullopt);
     }
 
     void EditorViewportResources::Shutdown() noexcept {
@@ -391,18 +400,22 @@ namespace Horo::Editor {
         }
     }
 
-    Result<void> EditorViewportResources::SynchronizeTarget(const EditorViewportExtent extent) {
+    /** @brief Advances the exact display/raster pair, keeping the previous generation live while pending. */
+    Result<void> EditorViewportResources::SynchronizeTarget(const EditorViewportExtent extent,
+                                                            const Render::FramebufferExtent sceneExtent) {
         if (declinedCameraCrossFadeExtent_ == extent)
             return Result<void>::Success();
         declinedCameraCrossFadeExtent_ = {};
-        if (allocatedExtent_ == extent) {
+        if (allocatedExtent_ == extent && viewportTarget_.sceneExtent == sceneExtent) {
             if (pendingViewportTarget_.extent.IsValid())
                 ReleaseViewportTarget(pendingViewportTarget_);
             return Result<void>::Success();
         }
-        if (pendingViewportTarget_.extent.IsValid() && pendingViewportTarget_.extent != extent)
+        if (pendingViewportTarget_.extent.IsValid() &&
+            (pendingViewportTarget_.extent != extent || pendingViewportTarget_.sceneExtent != sceneExtent))
             ReleaseViewportTarget(pendingViewportTarget_);
         pendingViewportTarget_.extent = extent;
+        pendingViewportTarget_.sceneExtent = sceneExtent;
         const auto targetReady = AdvanceViewportTarget(pendingViewportTarget_);
         if (targetReady.HasError())
             return Result<void>::Failure(targetReady.ErrorValue());
@@ -459,12 +472,12 @@ namespace Horo::Editor {
         return AdvanceRenderTarget(*frontend_,
                                    {.colorAttachment = resources.colorView,
                                     .depthAttachment = resources.depthView,
-                                    .extent = SceneExtent(extent)},
+                                    .extent = resources.sceneExtent},
                                    resources.target, resources.targetOperation);
     }
 
     Result<bool> EditorViewportResources::AdvanceViewportTextures(ViewportTargetResources &resources) {
-        const auto extent = SceneExtent({resources.extent.width, resources.extent.height});
+        const auto extent = resources.sceneExtent;
         const auto color = AdvanceTexture(*frontend_, config_.memoryScope, SceneColorDescriptor(extent), resources.colorTexture,
                                           resources.colorTextureOperation);
         if (color.HasError())
@@ -611,11 +624,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportResources::SceneExtent() */
     Render::FramebufferExtent EditorViewportResources::SceneExtent() const noexcept {
-        return SceneExtent({allocatedExtent_.width, allocatedExtent_.height});
+        return viewportTarget_.sceneExtent;
     }
 
-    /** @copydoc EditorViewportResources::SceneExtent(Render::FramebufferExtent) */
-    Render::FramebufferExtent EditorViewportResources::SceneExtent(const Render::FramebufferExtent display) const noexcept {
+    /** @copydoc EditorViewportResources::DefaultSceneExtent */
+    Render::FramebufferExtent EditorViewportResources::DefaultSceneExtent(const Render::FramebufferExtent display) const noexcept {
         if (reconstruction_ != ColorReconstruction::TemporalUpscale)
             return display;
         const auto scaled = [](const std::uint32_t pixels) {
@@ -686,7 +699,7 @@ namespace Horo::Editor {
     Result<bool> EditorViewportResources::AdvanceReconstructionTargets(ViewportTargetResources &resources,
                                                                        const Render::FramebufferExtent extent) {
         const auto temporal =
-            UsesTemporalTargets() ? AdvanceTemporalTargets(resources.temporal, SceneExtent(extent), extent) : Result<bool>::Success(true);
+            UsesTemporalTargets() ? AdvanceTemporalTargets(resources.temporal, resources.sceneExtent, extent) : Result<bool>::Success(true);
         if (temporal.HasError())
             return temporal;
         if (reconstruction_ == ColorReconstruction::Spatial || reconstruction_ == ColorReconstruction::TemporalUpscale) {

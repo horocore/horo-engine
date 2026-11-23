@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <new>
 
 namespace Horo::Editor {
@@ -267,8 +268,8 @@ namespace Horo::Editor {
     /** @copydoc ParseEditorImageProviderInspection */
     Result<std::optional<EditorImageProviderInspection>> ParseEditorImageProviderInspection(std::span<char *const> args) {
         using Outcome = Result<std::optional<EditorImageProviderInspection>>;
-        constexpr std::array<std::string_view, 4> flags{"--inspect-image-provider", "--image-provider-root", "--image-provider-trust",
-                                                        "--activate-image-provider"};
+        constexpr std::array<std::string_view, 5> flags{"--inspect-image-provider", "--image-provider-root", "--image-provider-trust",
+                                                        "--activate-image-provider", "--image-provider-gpu-budget-ms"};
         std::array<std::optional<std::string_view>, flags.size()> values;
         std::size_t supplied{};
         for (const auto *raw : args.subspan(std::min<std::size_t>(1, args.size()))) {
@@ -289,13 +290,29 @@ namespace Horo::Editor {
             return Outcome::Success(std::nullopt);
         const bool activate = values[3].has_value();
         const auto &mode = activate ? values[3] : values[0];
-        if (supplied != 3 || !values[1] || !values[2] || !mode || (activate && values[0]) ||
+        const auto budget = values.back();
+        if (supplied != 3 + std::size_t{budget.has_value()} || !values[1] || !values[2] || !mode || (activate && values[0]) ||
             (*mode != "spatial" && *mode != "taau" && !(activate && *mode == "taa")))
             return Outcome::Failure(MakeError(InvalidRequest));
+        std::optional<std::chrono::milliseconds> gpuBudget;
+        if (budget) {
+            constexpr std::uint32_t maximumGpuBudgetMs = 1000;
+            std::uint32_t milliseconds{};
+            const auto end = budget->data() + budget->size();
+            const auto value = std::from_chars(budget->data(), end, milliseconds);
+            if (!activate || *mode != "taau" || value.ec != std::errc{} || value.ptr != end || milliseconds == 0 ||
+                milliseconds > maximumGpuBudgetMs)
+                return Outcome::Failure(
+                    MakeError(InvalidRequest, "The GPU budget requires TAAU activation and 1 to 1000 whole milliseconds."));
+            gpuBudget = std::chrono::milliseconds{milliseconds};
+        }
         try {
             EditorImageProviderInspection request{*mode == "spatial" ? ReconstructionKind::Spatial : ReconstructionKind::Temporal,
-                                                  std::filesystem::path{*values[1]}, std::filesystem::path{*values[2]}, activate,
-                                                  activate && *mode == "taau"};
+                                                  std::filesystem::path{*values[1]},
+                                                  std::filesystem::path{*values[2]},
+                                                  activate,
+                                                  activate && *mode == "taau",
+                                                  gpuBudget};
             if (!ValidHostPath(request.productRoot) || !ValidHostPath(request.trustedPublishers))
                 return Outcome::Failure(MakeError(InvalidRequest));
             return Outcome::Success(std::move(request));
