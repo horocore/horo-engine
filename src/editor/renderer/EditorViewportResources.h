@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Horo/Runtime/Render/DirectionalShadow.h"
+#include "Horo/Runtime/Render/NativeReconstructionViewHistory.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -75,10 +77,28 @@ namespace Horo::Editor {
         [[nodiscard]] Render::RenderTextureViewHandle ColorTextureView() const noexcept;
         /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
         [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
+        /** @brief Selects reconstruction attachments owned by the canonical color generation. */
+        enum class ColorReconstruction : std::uint8_t {
+            None,
+            Spatial,
+            Temporal
+        };
         /** @brief Enables canonical scene/display/presentation separation before allocating the first viewport target.
-         * @param spatial Whether to include the exact same-extent native spatial output in that generation.
+         * @param reconstruction Explicit additional reconstruction attachments for that generation.
          * @return Typed invalid lifecycle failure if resources already exist. */
-        [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
+        [[nodiscard]] Result<void> EnableColorPipeline(ColorReconstruction reconstruction = ColorReconstruction::None);
+        /** @brief Maps the existing same-extent spatial selection to the typed resource policy. */
+        [[nodiscard]] Result<void> EnableColorPipeline(bool spatial);
+
+        /** @brief The exact resident guide and history images from one completely prepared viewport generation. */
+        struct TemporalAttachments final {
+            Render::NativeReconstructionSceneImage linearDepth;
+            Render::NativeReconstructionSceneImage motion;
+            Render::NativeReconstructionViewHistory::ImagePairs history;
+        };
+
+        /** @brief Borrows the guide and ping-pong images of the published viewport extent, if temporal resources were selected. */
+        [[nodiscard]] std::optional<TemporalAttachments> TemporalImages() const noexcept;
         /** @brief Output access used by the selected compositor. */
         enum class CameraCrossFadeOutput : std::uint8_t {
             Sampled,
@@ -150,6 +170,21 @@ namespace Horo::Editor {
             Render::RenderMeshDescriptor descriptor;
         };
 
+        /** @brief Keeps pending texture and whole-view requests with their eventual exact engine handles. */
+        struct TemporalImage final {
+            Render::NativeReconstructionSceneImage image;
+            Render::ResourceOperationId textureOperation;
+            Render::ResourceOperationId viewOperation;
+        };
+
+        /** @brief Linear-depth and motion inputs and the four storage/sampled history attachments of a viewport target. */
+        struct TemporalTarget final {
+            TemporalImage linearDepth;
+            TemporalImage motion;
+            std::array<TemporalImage, 2> historyColor;
+            std::array<TemporalImage, 2> historyDepth;
+        };
+
         struct ViewportTargetResources {
             Render::RenderTextureHandle colorTexture;
             Render::RenderTextureHandle depthTexture;
@@ -176,6 +211,7 @@ namespace Horo::Editor {
             EditorViewportExtent extent;
             std::uintptr_t imageIdentity{0};
             CameraCrossFadeSource crossFade;
+            TemporalTarget temporal;
             bool crossFadeDeclined{};
         };
 
@@ -199,6 +235,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportViews(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceColorPipelineTargets(ViewportTargetResources &resources);
+        /** @brief Advances the selected optional reconstruction resources before publishing color. */
+        [[nodiscard]] Result<bool> AdvanceReconstructionTargets(ViewportTargetResources &resources, Render::FramebufferExtent extent);
+        /** @brief Advances all temporal images through the same asynchronous publication as the viewport target. */
+        [[nodiscard]] Result<bool> AdvanceTemporalTargets(TemporalTarget &temporal, Render::FramebufferExtent extent);
+        /** @brief Retires partially prepared and ready temporal generations through the frontend resource owner. */
+        void ReleaseTemporalTargets(TemporalTarget &temporal) noexcept;
         [[nodiscard]] Result<void> SynchronizeShadowResources();
 
         struct ShadowResources {
@@ -232,7 +274,7 @@ namespace Horo::Editor {
         EditorViewportExtent declinedCameraCrossFadeExtent_;
         bool meshesReady_{false};
         bool colorPipeline_{};
-        bool spatialColor_{};
+        ColorReconstruction reconstruction_{ColorReconstruction::None};
         std::optional<CameraCrossFadeOutput> cameraCrossFade_;
     };
 }  // namespace Horo::Editor

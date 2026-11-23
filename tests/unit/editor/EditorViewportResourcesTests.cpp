@@ -1,3 +1,5 @@
+#include "../../support/renderer/RenderBackendDrainTestSupport.h"
+#include "../runtime/renderer/RenderFrontendTestSupport.h"
 #include "EditorViewportMeshReadiness.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
@@ -76,10 +78,38 @@ namespace {
         };
     }
 
+    /** @brief Provides explicit reconstruction admission metadata without changing the Null backend's capability contract. */
+    struct TemporalResourceFrontend final {
+        std::unique_ptr<RenderFrontend> frontend;
+
+        TemporalResourceFrontend() {
+            using namespace Horo::Tests::RenderFrontendTesting;
+            using enum RenderCapability;
+            using enum RenderTextureUsage;
+            lifecycleState = {};
+            RenderCapabilitySnapshot support{.capabilityRevision = 1};
+            for (const auto feature : {TextureResources, RenderTargetResources, NativeReconstruction, Compute})
+                support.features.Enable(feature);
+            support.queues.graphics = true;
+            support.queues.compute = true;
+            support.limits.maxTextureDimension2D = 4096;
+            support.formats.sampleCountMask = 1 << 1;
+            support.formats.usages.fill(Sampled | RenderAttachment | Storage | CopySource);
+            lifecycleState.syntheticCapabilities = support;
+            frontend = CreateTrackingFrontend();
+        }
+
+        ~TemporalResourceFrontend() {
+            Render::Test::RequireDrainedOwner(*frontend);
+        }
+    };
+
     void SettleResources(EditorViewportResources &resources, RenderFrontend &frontend, const RenderSceneView &scene,
                          const EditorViewportExtent extent) {
         for (int step = 0; step < MaxResourcePasses && (!resources.IsReady() || resources.AllocatedExtent() != extent); ++step) {
-            REQUIRE(resources.Prepare(scene, extent).HasValue());
+            const auto prepared = resources.Prepare(scene, extent);
+            INFO((prepared.HasError() ? prepared.ErrorValue().message : "viewport resources prepared"));
+            REQUIRE(prepared.HasValue());
             REQUIRE(frontend.ProcessResourceRequests().HasValue());
         }
         REQUIRE(resources.IsReady());
@@ -219,8 +249,9 @@ TEST_CASE("Approved viewport pixels are published through the workspace and with
     const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, process.Token()};
     REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
     workspace.SynchronizeRuntimeScenePreview();
-    auto opened = EditorCommandMcpSession::Create({.debugCapture = workspace.BindDebugCapture("project-one", 3, &viewport)},
-                                                  {"viewport-client", "project-one", 3, {"editor.debug.capture"}}, Test::Authorization());
+    auto opened =
+        EditorCommandMcpSession::Create({.debugCapture = workspace.BindDebugCapture("project-one", 3, &viewport)},
+                                        {"viewport-client", "project-one", 3, {"editor.debug.capture"}}, Horo::Mcp::Test::Authorization());
     REQUIRE(opened.HasValue());
     auto &session = *opened.Value();
     const auto client = session.Client();
@@ -351,6 +382,7 @@ TEST_CASE("Color viewport publishes its encoded image while retaining distinct s
     CHECK(resources.ColorTexture() != resources.DisplayTexture());
     CHECK(resources.ColorTexture() != resources.PresentationTexture());
     CHECK(resources.DisplayTexture() != resources.PresentationTexture());
+    CHECK_FALSE(resources.TemporalImages());
     CHECK(imageResolver.lastView == resources.PresentationTextureView());
     CHECK(resources.ImageIdentity() == resources.PresentationTextureView().slot);
 
@@ -379,6 +411,55 @@ TEST_CASE("Color viewport publishes its encoded image while retaining distinct s
     CHECK(resources.PresentationTexture() != previousPresentation);
     CHECK(imageResolver.lastView == resources.PresentationTextureView());
     resources.Shutdown();
+}
+
+TEST_CASE("Temporal viewport publishes and retires an atomic guide and history generation", "[unit][headless][renderer][resource][color]") {
+    TemporalResourceFrontend owner;
+    auto &frontend = owner.frontend;
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    REQUIRE(resources.EnableColorPipeline(EditorViewportResources::ColorReconstruction::Temporal).HasValue());
+    REQUIRE(resources.Prepare({}, {128, 128}).HasValue());
+    CHECK_FALSE(resources.TemporalImages());
+    SettleResources(resources, *frontend, {}, {128, 128});
+    const auto first = resources.TemporalImages();
+    REQUIRE(first);
+    const std::array images{first->linearDepth,      first->motion,           first->history[0].color,
+                            first->history[0].depth, first->history[1].color, first->history[1].depth};
+    for (const auto &image : images) {
+        const auto texture = frontend->ResourceState(image.texture);
+        const auto view = frontend->ResourceState(image.view);
+        REQUIRE(texture.HasValue());
+        REQUIRE(view.HasValue());
+        CHECK(texture.Value() == RenderResourceState::Ready);
+        CHECK(view.Value() == RenderResourceState::Ready);
+        CHECK(std::ranges::count(images, image.texture, &NativeReconstructionSceneImage::texture) == 1);
+    }
+
+    imageResolver.reject = true;
+    bool rejected = false;
+    for (int step = 0; step < MaxResourcePasses; ++step) {
+        rejected = resources.Prepare({}, {256, 256}).HasError();
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        if (rejected)
+            break;
+    }
+    REQUIRE(rejected);
+    REQUIRE(resources.TemporalImages());
+    CHECK(resources.TemporalImages()->motion.view == first->motion.view);
+
+    imageResolver.reject = false;
+    SettleResources(resources, *frontend, {}, {256, 256});
+    const auto second = resources.TemporalImages();
+    REQUIRE(second);
+    CHECK(second->motion.view != first->motion.view);
+    for (const auto &image : images) {
+        CHECK(frontend->ResourceState(image.texture).HasError());
+        CHECK(frontend->ResourceState(image.view).HasError());
+    }
+    resources.Shutdown();
+    CHECK_FALSE(resources.TemporalImages());
+    CHECK(frontend->ResourceState(second->history[0].color.texture).HasError());
 }
 
 TEST_CASE("Color activation cannot reinterpret already published legacy viewport storage", "[unit][headless][renderer][resource][color]") {

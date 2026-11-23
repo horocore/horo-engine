@@ -180,8 +180,11 @@ namespace Horo::Editor {
             shadow.HasError())
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(shadow.ErrorValue());
         if (const Result<void> target = requestedExtent.IsValid() ? SynchronizeTarget(requestedExtent) : Result<void>::Success();
-            target.HasError())
+            target.HasError()) {
+            if (reconstruction_ == ColorReconstruction::Temporal)
+                ReleaseViewportTarget(pendingViewportTarget_);
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(target.ErrorValue());
+        }
         if (viewportTarget_.target.IsValid()) {
             if (const auto ready = frontend_->ResourceState(viewportTarget_.target);
                 ready.HasValue() && ready.Value() == Render::RenderResourceState::Ready)
@@ -487,12 +490,28 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportResources::EnableColorPipeline */
-    Result<void> EditorViewportResources::EnableColorPipeline(bool spatial) {
+    Result<void> EditorViewportResources::EnableColorPipeline(const ColorReconstruction reconstruction) {
         if (cameraCrossFade_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         colorPipeline_ = true;
-        spatialColor_ = spatial;
+        reconstruction_ = reconstruction;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::EnableColorPipeline(bool) */
+    Result<void> EditorViewportResources::EnableColorPipeline(const bool spatial) {
+        return EnableColorPipeline(spatial ? ColorReconstruction::Spatial : ColorReconstruction::None);
+    }
+
+    /** @copydoc EditorViewportResources::TemporalImages */
+    std::optional<EditorViewportResources::TemporalAttachments> EditorViewportResources::TemporalImages() const noexcept {
+        const auto &temporal = viewportTarget_.temporal;
+        if (!temporal.linearDepth.image.view.IsValid())
+            return std::nullopt;
+        TemporalAttachments attachments{.linearDepth = temporal.linearDepth.image, .motion = temporal.motion.image};
+        for (std::size_t index = 0; index < attachments.history.size(); ++index)
+            attachments.history[index] = {temporal.historyColor[index].image, temporal.historyDepth[index].image};
+        return attachments;
     }
 
     /** @copydoc EditorViewportResources::EnableCameraCrossFade */
@@ -616,22 +635,30 @@ namespace Horo::Editor {
         return colorPipeline_ ? viewportTarget_.presentationView : viewportTarget_.colorView;
     }
 
+    /** @copydoc EditorViewportResources::AdvanceReconstructionTargets */
+    Result<bool> EditorViewportResources::AdvanceReconstructionTargets(ViewportTargetResources &resources,
+                                                                       const Render::FramebufferExtent extent) {
+        if (reconstruction_ == ColorReconstruction::Temporal)
+            return AdvanceTemporalTargets(resources.temporal, extent);
+        if (reconstruction_ != ColorReconstruction::Spatial)
+            return Result<bool>::Success(true);
+        const auto descriptor = SpatialColorDescriptor(extent);
+        if (const auto created =
+                AdvanceTexture(*frontend_, config_.memoryScope, descriptor, resources.spatialTexture, resources.spatialOperation);
+            created.HasError() || !created.Value())
+            return created;
+        return AdvanceTextureView(*frontend_, {.texture = resources.spatialTexture, .format = descriptor.format}, resources.spatialView,
+                                  resources.spatialViewOperation);
+    }
+
     /** @copydoc EditorViewportResources::AdvanceColorPipelineTargets */
     Result<bool> EditorViewportResources::AdvanceColorPipelineTargets(ViewportTargetResources &resources) {
         using enum Horo::Render::RenderTextureUsage;
         using namespace Render;
-
-        if (spatialColor_) {
-            const auto descriptor = SpatialColorDescriptor({resources.extent.width, resources.extent.height});
-            const auto created =
-                AdvanceTexture(*frontend_, config_.memoryScope, descriptor, resources.spatialTexture, resources.spatialOperation);
-            if (created.HasError() || !created.Value())
-                return created;
-            const auto viewed = AdvanceTextureView(*frontend_, {.texture = resources.spatialTexture, .format = descriptor.format},
-                                                   resources.spatialView, resources.spatialViewOperation);
-            if (viewed.HasError() || !viewed.Value())
-                return viewed;
-        }
+        const FramebufferExtent extent{resources.extent.width, resources.extent.height};
+        if (const auto reconstruction = AdvanceReconstructionTargets(resources, extent);
+            reconstruction.HasError() || !reconstruction.Value())
+            return reconstruction;
 
         struct Attachment {
             RenderTextureHandle *texture;
@@ -650,7 +677,7 @@ namespace Horo::Editor {
         for (const auto &a : attachments) {
             const auto texture =
                 AdvanceTexture(*frontend_, config_.memoryScope,
-                               {.extent = {resources.extent.width, resources.extent.height},
+                               {.extent = extent,
                                 .format = a.format,
                                 .usage = a.format == RenderTextureFormat::Rgba8Unorm ? Sampled | RenderAttachment | CopySource
                                                                                      : Sampled | RenderAttachment},
@@ -667,6 +694,57 @@ namespace Horo::Editor {
             ready = ready && view.Value();
         }
         return Result<bool>::Success(ready);
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceTemporalTargets */
+    Result<bool> EditorViewportResources::AdvanceTemporalTargets(TemporalTarget &temporal, const Render::FramebufferExtent extent) {
+        using namespace Render;
+        using enum RenderTextureUsage;
+        using enum RenderTextureFormat;
+
+        struct Request {
+            TemporalImage &target;
+            RenderTextureFormat format;
+            RenderTextureUsage usage;
+        };
+
+        const std::array images{Request{temporal.linearDepth, R32Float, RenderAttachment | Sampled},
+                                Request{temporal.motion, Rg32Float, RenderAttachment | Sampled},
+                                Request{temporal.historyColor[0], Rgba32Float, Storage | Sampled},
+                                Request{temporal.historyDepth[0], R32Float, Storage | Sampled},
+                                Request{temporal.historyColor[1], Rgba32Float, Storage | Sampled},
+                                Request{temporal.historyDepth[1], R32Float, Storage | Sampled}};
+        bool ready = true;
+        for (const auto &[target, format, usage] : images) {
+            auto &image = target.image;
+            const auto texture = AdvanceTexture(*frontend_, config_.memoryScope, {.extent = extent, .format = format, .usage = usage},
+                                                image.texture, target.textureOperation);
+            if (texture.HasError())
+                return texture;
+            if (!texture.Value()) {
+                ready = false;
+                continue;
+            }
+            const auto view =
+                AdvanceTextureView(*frontend_, {.texture = image.texture, .format = format}, image.view, target.viewOperation);
+            if (view.HasError())
+                return view;
+            ready = ready && view.Value();
+        }
+        return Result<bool>::Success(ready);
+    }
+
+    /** @copydoc EditorViewportResources::ReleaseTemporalTargets */
+    void EditorViewportResources::ReleaseTemporalTargets(TemporalTarget &temporal) noexcept {
+        const std::array images{&temporal.linearDepth,     &temporal.motion,          &temporal.historyColor[0],
+                                &temporal.historyDepth[0], &temporal.historyColor[1], &temporal.historyDepth[1]};
+        for (const auto *target : images) {
+            if (target->image.view.IsValid())
+                static_cast<void>(frontend_->ReleaseTextureView(target->image.view));
+            if (target->image.texture.IsValid())
+                static_cast<void>(frontend_->ReleaseTexture(target->image.texture));
+        }
+        temporal = {};
     }
 
     Result<void> EditorViewportResources::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
@@ -764,6 +842,7 @@ namespace Horo::Editor {
 
     void EditorViewportResources::ReleaseViewportTarget(ViewportTargetResources &resources) noexcept {
         ReleaseCameraCrossFadeSource(resources.crossFade);
+        ReleaseTemporalTargets(resources.temporal);
         if (resources.target.IsValid())
             static_cast<void>(frontend_->ReleaseRenderTarget(resources.target));
         if (resources.depthView.IsValid())

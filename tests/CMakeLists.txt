@@ -4894,6 +4894,7 @@ target_compile_features(HoroAssetSceneDropTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetSceneDropTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroEditorViewportResourceTests
         unit/editor/EditorViewportResourcesTests.cpp
+        unit/runtime/renderer/RenderFrontendTestSupport.cpp
 )
 if (TARGET HoroGui)
     target_compile_definitions(HoroEditorViewportResourceTests PRIVATE HORO_TEST_VIEWPORT_MCP=1)
@@ -4909,6 +4910,7 @@ target_link_libraries(HoroEditorViewportResourceTests
         PRIVATE
         HoroEngine::EditorViewportResources
         HoroEngine::RenderNull
+        HoroRenderExternalImagesInterface
 )
 
 add_executable(HoroViewportOverlayTriangleTests unit/editor/ViewportOverlayTriangleTests.cpp)
