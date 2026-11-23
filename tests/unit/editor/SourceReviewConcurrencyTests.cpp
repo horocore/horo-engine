@@ -1149,7 +1149,7 @@ namespace {
         const auto previousTime = std::filesystem::last_write_time(path);
         workspace.project.Put("disk", "b.cpp");
         std::filesystem::last_write_time(path, previousTime);
-        REQUIRE(std::filesystem::last_write_time(path) == previousTime);
+        REQUIRE((std::filesystem::last_write_time(path) == previousTime));
         const auto applied = workspace.documents.EditBatchWithEvidence(edits, evidence.Value(), workspace.files);
         REQUIRE(applied.HasError());
         CHECK(applied.ErrorValue().code.Value() == SourceDocumentErrors::SaveConflict.code.Value());

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 
 namespace {
@@ -88,10 +89,16 @@ namespace {
             ++calls;
             if (!change.empty())
                 std::ofstream{change, std::ios::binary} << "// changed during tests\n";
+            if (reject) {
+                static const ErrorCodeDescriptor Rejected{ErrorDomainId{"test.fixture"}, ErrorCode{"runner_rejected"}, ErrorSeverity::Error,
+                                                          "The process runner refused the test."};
+                return Result<ExternalProcessResult>::Failure(MakeError(Rejected));
+            }
             return native_.Run(request, stop);
         }
 
         std::filesystem::path change;
+        bool reject{};
         std::atomic_uint calls{};
 
     private:
@@ -186,6 +193,7 @@ namespace {
         SECTION("Sources change while CTest runs") {
             staleDuring = true;
             process.change = source;
+            process.reject = GENERATE(false, true);
         }
         SECTION("A different build publication replaced the approved receipt") {
             staleBefore = true;

@@ -317,6 +317,16 @@ namespace Horo::Application {
             }
         };
 
+        /** @brief Rechecks approved sources before reporting a native process failure. */
+        [[nodiscard]] Result<void> ResolvePhaseFailure(const GameplayBuildService::State::Session &session, const Error &error) {
+            const auto &validate = session.request.validateSources;
+            if (const auto cancellation = session.cancellation.Token(); validate && !cancellation.IsCancellationRequested()) {
+                if (auto valid = validate(cancellation); valid.HasError())
+                    return valid;
+            }
+            return Result<void>::Failure(error);
+        }
+
         [[nodiscard]] Result<void> RunPhase(GameplayBuildService::State &state,
                                             const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                             const GameplayBuildState buildState, const char *phase, std::vector<std::string> arguments,
@@ -344,15 +354,15 @@ namespace Horo::Application {
             };
             Result<ExternalProcessResult> executed = state.processes->Run(request, session->cancellation.Token());
             if (executed.HasError())
-                return Result<void>::Failure(executed.ErrorValue());
+                return ResolvePhaseFailure(*session, executed.ErrorValue());
             if (executed.Value().reason == ProcessTerminationReason::TimedOut)
                 return Result<void>::Failure(MakeError(TimedOutDescriptor));
             if (executed.Value().reason == ProcessTerminationReason::Cancelled)
                 return Result<void>::Failure(MakeError(CancelledDescriptor));
 
             if (executed.Value().reason != ProcessTerminationReason::Exited || executed.Value().exitCode != 0)
-                return Result<void>::Failure(
-                    MakeError(BuildFailed, std::format("{} exited with code {}.", phase, executed.Value().exitCode)));
+                return ResolvePhaseFailure(*session, MakeError(BuildFailed,
+                                                               std::format("{} exited with code {}.", phase, executed.Value().exitCode)));
             return Result<void>::Success();
         }
 

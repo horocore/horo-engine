@@ -84,6 +84,18 @@ namespace Horo::Application {
             return validate ? validate(stop) : Result<void>::Success();
         }
 
+        /** @brief Checks approved inputs again before publishing the child outcome. */
+        Result<void> CompleteTestRun(Result<ExternalProcessResult> result, const std::optional<GameplayTestBuildInput> &expectedBuild,
+                                     const CancellationToken &stop) {
+            if (expectedBuild && !stop.IsCancellationRequested()) {
+                if (auto valid = ValidateBuild(*expectedBuild, stop); valid.HasError())
+                    return valid;
+            }
+            if (result.HasError())
+                return Result<void>::Failure(std::move(result).ErrorValue());
+            return TestOutcome(result.Value());
+        }
+
         /** @brief Holds the existing build lock while resolving and executing CTest. */
         Result<void> RunTests(IExternalProcessRunner &processes, DurableFileSystem &files, ExternalProcessRequest request,
                               const std::optional<GameplayTestBuildInput> &expectedBuild, const CancellationToken &stop) {
@@ -105,15 +117,7 @@ namespace Horo::Application {
             if (!ExactNativePath(inventory) || !std::filesystem::is_regular_file(inventory, error))
                 return Result<void>::Failure(MakeError(Unavailable));
             request.workingDirectory = build;
-            auto result = processes.Run(request, stop);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            auto outcome = TestOutcome(result.Value());
-            if (!stop.IsCancellationRequested() && expectedBuild) {
-                if (auto valid = ValidateBuild(*expectedBuild, stop); valid.HasError())
-                    return valid;
-            }
-            return outcome;
+            return CompleteTestRun(processes.Run(request, stop), expectedBuild, stop);
         }
 
         /** @brief Preserves timeout as a distinct terminal Build Output result. */

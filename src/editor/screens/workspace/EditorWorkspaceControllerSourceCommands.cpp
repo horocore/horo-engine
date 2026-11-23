@@ -18,19 +18,23 @@ namespace Horo::Editor {
         using Validation = Proposals::SourceReviewValidation;
 
         /** @brief Projects rejection of captured evidence independently from a compiler or test failure. */
-        bool StaleValidation(const std::optional<Error> &error) {
-            if (!error)
-                return false;
-            const auto code = error->code.Value();
-            return code == Proposals::Errors::StaleBase.code.Value() || code == SourceDocumentErrors::Stale.code.Value() ||
-                   code == SourceDocumentErrors::SaveConflict.code.Value() || code == "build_inputs_stale" ||
-                   code == "validation_inputs_changed";
+        bool StaleValidation(const Error &error) {
+            const auto matches = [&error](const ErrorCodeDescriptor &descriptor) {
+                return ErrorChainContains(error, descriptor.domain, descriptor.code);
+            };
+            static const ErrorDomainId TestDomain{"gameplay.test"};
+            static const ErrorCode TestInputsStale{"build_inputs_stale"};
+            static const ErrorDomainId BuildDomain{"horo.application.gameplay_build"};
+            static const ErrorCode BuildInputsStale{"validation_inputs_changed"};
+            return matches(Proposals::Errors::StaleBase) || matches(SourceDocumentErrors::Stale) ||
+                   matches(SourceDocumentErrors::SaveConflict) || ErrorChainContains(error, TestDomain, TestInputsStale) ||
+                   ErrorChainContains(error, BuildDomain, BuildInputsStale);
         }
 
         /** @brief Converts exact native build state to the panel's small presentation state. */
         Validation BuildValidationState(const std::optional<Application::GameplayBuildSnapshot> &build) {
             using enum Application::GameplayBuildState;
-            if (!build || StaleValidation(build->error))
+            if (!build || (build->error && StaleValidation(*build->error)))
                 return Validation::Stale;
             switch (build->state) {
                 case Succeeded:
@@ -46,7 +50,7 @@ namespace Horo::Editor {
 
         /** @brief Converts exact native test state to the panel's small presentation state. */
         Validation TestValidationState(const std::optional<Application::GameplayTestSnapshot> &test) {
-            if (!test || StaleValidation(test->error))
+            if (!test || (test->error && StaleValidation(*test->error)))
                 return Validation::Stale;
             switch (test->state) {
                 case OperationState::Succeeded:
@@ -97,6 +101,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RunSourceReviewValidation */
     void EditorWorkspaceController::RunSourceReviewValidation(const EditorWorkspaceViewCommandData &command) {
+        using enum Validation;
         const auto status = ReadSourceReviewStatus();
         if (!status.audit || command.sourceReviewValidationAudit != status.audit || command.sourceReviewLifetime.IsCancellationRequested())
             return;
@@ -104,30 +109,24 @@ namespace Horo::Editor {
             return command.sourceReviewLifetime.IsCancellationRequested();
         };
         if (command.command == EditorWorkspaceViewCommand::TestSourceReview) {
-            if (!status.canRunTests)
-                return;
-            auto &run = *m_sourceValidation;
-            const auto build = m_gameplayBuilds->Query(*run.build);
-            if (!build || build->state != Application::GameplayBuildState::Succeeded)
-                return;
-            const auto started = m_gameplayTests->StartForBuild({run.request, build->activeInputHash}, m_gameplayTestEnvironment, stop);
-            if (started.HasValue()) {
-                run.test = started.Value();
-                run.refused = Validation::Unavailable;
-            } else {
-                run.test.reset();
-                run.refused = Validation::TestsFailed;
-            }
+            if (status.canRunTests)
+                StartSourceReviewTests(stop);
             return;
         }
-        if ((status.validation != Validation::Ready && status.validation != Validation::BuildFailed) || m_playAfterGameplayBuild)
-            return;
+        if ((status.validation == Ready || status.validation == BuildFailed) && !m_playAfterGameplayBuild)
+            StartSourceReviewBuild(status.audit, stop);
+    }
+
+    /** @copydoc EditorWorkspaceController::StartSourceReviewBuild */
+    void EditorWorkspaceController::StartSourceReviewBuild(const std::shared_ptr<const Proposals::SourceReviewAudit> &audit,
+                                                           const std::function<bool()> &stop) {
+        using enum Validation;
         RevokeSourceReviewValidation();
         auto captured = m_sourceReviews.CaptureSavedReview(m_sourceOpenService.Documents());
         if (captured.HasError()) {
             m_sourceValidation =
-                SourceValidationRun{.evidence = std::make_shared<const SavedSourceReview>(SavedSourceReview{.audit = status.audit}),
-                                    .refused = Validation::Stale};
+                SourceValidationRun{.evidence = std::make_shared<const SavedSourceReview>(SavedSourceReview{.audit = audit}),
+                                    .refused = Stale};
             return;
         }
         auto evidence = std::make_shared<const SavedSourceReview>(std::move(captured).Value());
@@ -137,11 +136,27 @@ namespace Horo::Editor {
         };
         const auto started = m_gameplayBuilds->StartIsolated(request, stop);
         const auto build = started.HasValue() ? std::optional{started.Value()} : std::nullopt;
-        m_sourceValidation = SourceValidationRun{std::move(evidence),
-                                                 std::move(request),
-                                                 build,
-                                                 {},
-                                                 build ? Validation::Unavailable : Validation::BuildFailed};
+        auto refusal = Unavailable;
+        if (started.HasError())
+            refusal = StaleValidation(started.ErrorValue()) ? Stale : BuildFailed;
+        m_sourceValidation = SourceValidationRun{std::move(evidence), std::move(request), build, {}, refusal};
+    }
+
+    /** @copydoc EditorWorkspaceController::StartSourceReviewTests */
+    void EditorWorkspaceController::StartSourceReviewTests(const std::function<bool()> &stop) {
+        using enum Validation;
+        auto &run = *m_sourceValidation;
+        const auto build = m_gameplayBuilds->Query(*run.build);
+        if (!build || build->state != Application::GameplayBuildState::Succeeded)
+            return;
+        if (const auto started = m_gameplayTests->StartForBuild({run.request, build->activeInputHash}, m_gameplayTestEnvironment, stop);
+            started.HasValue()) {
+            run.test = started.Value();
+            run.refused = Unavailable;
+        } else {
+            run.test.reset();
+            run.refused = StaleValidation(started.ErrorValue()) ? Stale : TestsFailed;
+        }
     }
 
     /** @copydoc EditorWorkspaceController::BindSourcePresentation */

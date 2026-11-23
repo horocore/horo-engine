@@ -1501,6 +1501,18 @@ namespace Horo::Editor {
         [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
         /** @brief Consumes a deferred, explicitly approved build or test for the supplied audit. */
         void RunSourceReviewValidation(const EditorWorkspaceViewCommandData &command);
+        /**
+         * @brief Starts an isolated build for a newly approved saved source review.
+         * @param audit The exact audit of the approved application.
+         * @param stop Returns true when the editor command lifetime has ended.
+         */
+        void StartSourceReviewBuild(const std::shared_ptr<const Proposals::SourceReviewAudit> &audit, const std::function<bool()> &stop);
+        /**
+         * @brief Starts separately approved tests for the current successful review build.
+         * @param stop Returns true when the editor command lifetime has ended.
+         * @pre The current review status permits test execution.
+         */
+        void StartSourceReviewTests(const std::function<bool()> &stop);
         /** @brief Cancels operations owned by the current review and retires its presentation. */
         void RevokeSourceReviewValidation() noexcept;
         /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */
