@@ -3129,6 +3129,15 @@ their scheduler identity. Worker solver slots are independent and support overla
 of an earlier cancelled tick. An aborted tick or Scene retirement withdraws
 unconsumed work.
 
+The deterministic owner can run a complete capture through
+`NavigationCrowdBatch::RunQualified`. It compares the provider record with
+the host's verified build/platform, topology, profile and golden-evidence
+fingerprints and pins the current topology generation and fixed delta. One
+request per captured agent and complete neighborhood facts are required.
+Execution follows spatial cell and agent order without consulting worker
+completion. Cancellation or a malformed result withdraws the entire tick.
+Detour continues to use the best-effort entry point.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

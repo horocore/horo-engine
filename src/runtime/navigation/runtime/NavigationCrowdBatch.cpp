@@ -4,6 +4,8 @@
 #include "NavigationCrowdOutcomeValidation.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <new>
 #include <unordered_set>
 
@@ -11,6 +13,29 @@ namespace Horo::Navigation {
     namespace {
         using Batch = Result<std::unique_ptr<NavigationCrowdBatch>>;
         using Collection = Result<std::optional<std::vector<NavigationCrowdBatchResult>>>;
+        using QualifiedResults = Result<std::vector<NavigationCrowdBatchResult>>;
+
+        /** @brief A qualification must identify an exact, tested runtime tuple. */
+        bool ValidQualification(const NavigationCrowdQualification &evidence) noexcept {
+            const std::array digests{evidence.provider, evidence.buildPlatform, evidence.goldenEvidence, evidence.topologyContent,
+                                     evidence.profile};
+            return std::ranges::none_of(digests,
+                                        [](const Sha256Digest &digest) {
+                return digest == Sha256Digest{};
+            }) && std::isfinite(evidence.fixedStepSeconds) &&
+                   evidence.fixedStepSeconds > 0.0F && evidence.maximumAgents != 0;
+        }
+
+        /** @brief Missing constraints or a mismatched fixed delta invalidate the whole deterministic tick. */
+        bool CompleteQualifiedTick(const NavigationCrowdSnapshot &capture, const std::span<const NavigationAvoidanceRequest> requests,
+                                   const NavigationCrowdQualification &admitted) noexcept {
+            return requests.size() == capture.Agents().size() && requests.size() <= admitted.maximumAgents &&
+                   std::ranges::all_of(capture.ProfileTruncation(), [](const auto &entry) {
+                return entry.affectedAgents == 0;
+            }) && std::ranges::all_of(requests, [&admitted](const auto &request) {
+                return request.stepSeconds == admitted.fixedStepSeconds;
+            });
+        }
 
         /** @brief Indexes distinct requests for the duration of synchronous planning. */
         Result<void> IndexRequests(const std::span<const NavigationAvoidanceRequest> requests,
@@ -66,6 +91,28 @@ namespace Horo::Navigation {
                    outcome.dynamicRevision == capture.DynamicRevision() &&
                    Detail::ValidCrowdOutcome(outcome, request, capture.Agents()[request.agentIndex].velocity);
         }
+
+        /** @brief Runs a complete validated set in capture order. Results remain private until the entire tick succeeds. */
+        QualifiedResults SolveQualifiedTick(const NavigationCrowdSnapshot &capture,
+                                            const std::span<const NavigationAvoidanceRequest *const> indexed,
+                                            INavigationQualifiedCrowdBackend &provider, const CancellationToken &cancellation) {
+            std::vector<NavigationCrowdBatchResult> results;
+            results.reserve(indexed.size());
+            for (const auto agentIndex : capture.CellAgentIndices()) {
+                if (cancellation.IsCancellationRequested())
+                    return QualifiedResults::Failure(MakeError(NavigationErrors::QueryCancelled));
+                const auto &request = *indexed[agentIndex];
+                auto outcome = provider.Solve(capture, request);
+                if (outcome.HasError())
+                    return QualifiedResults::Failure(std::move(outcome).ErrorValue());
+                if (!ValidResult(capture, request, outcome.Value()))
+                    return QualifiedResults::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+                results.emplace_back(agentIndex, std::move(outcome).Value());
+            }
+            if (cancellation.IsCancellationRequested())
+                return QualifiedResults::Failure(MakeError(NavigationErrors::QueryCancelled));
+            return QualifiedResults::Success(std::move(results));
+        }
     }  // namespace
 
     struct NavigationCrowdBatch::State final {
@@ -100,6 +147,33 @@ namespace Horo::Navigation {
     /** @copydoc NavigationCrowdBatch::~NavigationCrowdBatch */
     NavigationCrowdBatch::~NavigationCrowdBatch() {
         Cancel();
+    }
+
+    /** @copydoc NavigationCrowdBatch::RunQualified */
+    QualifiedResults NavigationCrowdBatch::RunQualified(const NavigationCrowdSnapshot &capture,
+                                                        const std::span<const NavigationAvoidanceRequest> requests,
+                                                        INavigationQualifiedCrowdBackend &provider,
+                                                        const NavigationCrowdQualification &admitted,
+                                                        const NavigationGeneration activeTopology, const CancellationToken &cancellation) {
+        if (!capture.IsValid() || capture.Mode() != AvoidanceExecutionMode::DeterministicQualified)
+            return QualifiedResults::Failure(MakeError(NavigationErrors::OperationUnsupported));
+        if (!ValidQualification(admitted) || provider.Qualification() != admitted)
+            return QualifiedResults::Failure(MakeError(NavigationErrors::CapabilityDescriptorInvalid));
+        if (!activeTopology.IsValid() ||
+            capture.DeterministicStamp() != NavigationCrowdDeterministicStamp{activeTopology, admitted.topologyContent, admitted.profile})
+            return QualifiedResults::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        if (!CompleteQualifiedTick(capture, requests, admitted))
+            return QualifiedResults::Failure(MakeError(NavigationErrors::AdmissionRejected));
+        if (cancellation.IsCancellationRequested())
+            return QualifiedResults::Failure(MakeError(NavigationErrors::QueryCancelled));
+        try {
+            std::vector<const NavigationAvoidanceRequest *> indexed(capture.Agents().size());
+            if (const auto valid = IndexRequests(requests, indexed); valid.HasError())
+                return QualifiedResults::Failure(valid.ErrorValue());
+            return SolveQualifiedTick(capture, indexed, provider, cancellation);
+        } catch (const std::bad_alloc &) {
+            return QualifiedResults::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        }
     }
 
     /** @copydoc NavigationCrowdBatch::Submit */

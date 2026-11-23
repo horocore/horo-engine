@@ -5,7 +5,9 @@
 #include "navigation/NavigationRuntimeTestFixtures.h"
 #include "navigation/NavigationTestAssertions.h"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -121,14 +123,15 @@ namespace Horo::Navigation {
             return {.agents = std::move(agents), .dynamic = CaptureDynamic(binding), .motions = motions, .profiles = {Profile()}};
         }
 
-        [[nodiscard]] NavigationCrowdSnapshot BatchCapture() {
+        [[nodiscard]] NavigationCrowdSnapshot BatchCapture(const NavigationCrowdSnapshotLimits &limits = {},
+                                                           const std::uint32_t neighbors = 16) {
             const auto binding = Binding();
             const std::array descriptors{Agent(binding, 10), Agent(binding, 20), Agent(binding, 30)};
             const auto agents = CaptureAgents(binding, descriptors);
             const auto records = agents.Agents();
             const std::array motions{Motion(records[0], 8.0F), Motion(records[1], -4.0F), Motion(records[2], 9.0F)};
-            const std::array profiles{Profile()};
-            return BuildNavigationCrowdSnapshot(agents, CaptureDynamic(binding), motions, profiles, {}, 8).Value();
+            const std::array profiles{Profile(1, neighbors)};
+            return BuildNavigationCrowdSnapshot(agents, CaptureDynamic(binding), motions, profiles, limits, 8).Value();
         }
 
         class BatchTestProvider final : public INavigationCrowdBackend {
@@ -165,7 +168,88 @@ namespace Horo::Navigation {
             Behavior behavior_;
             std::shared_ptr<Gate> gate_;
         };
+
+        class QualifiedFixtureProvider final : public INavigationQualifiedCrowdBackend {
+        public:
+            NavigationCrowdQualification evidence;
+            std::size_t calls{};
+            CancellationSource *cancelAfterFirst{};
+
+            const NavigationCrowdQualification &Qualification() const noexcept override {
+                return evidence;
+            }
+
+            Result<NavigationAvoidanceOutcome> Solve(const NavigationCrowdSnapshot &capture,
+                                                     const NavigationAvoidanceRequest &request) override {
+                ++calls;
+                if (cancelAfterFirst)
+                    cancelAfterFirst->RequestCancellation();
+                return Result<NavigationAvoidanceOutcome>::Success(
+                    {.desiredVelocity = {0.75F + static_cast<float>(request.agentIndex) * 0.25F, 0, 0},
+                     .disposition = NavigationAvoidanceDisposition::Sampled,
+                     .stopReason = NavigationAvoidanceStopReason::None,
+                     .binding = capture.Binding(),
+                     .dynamicRevision = capture.DynamicRevision(),
+                     .captureTick = capture.CaptureTick()});
+            }
+        };
+
+        /** @brief Hashes ordered wire facts without depending on host byte order or structure padding. */
+        Sha256Digest QualifiedFixtureDigest(const std::span<const NavigationCrowdBatchResult> results) {
+            Sha256Builder digest;
+            for (const auto &result : results) {
+                const auto speed = std::bit_cast<std::uint32_t>(result.outcome.desiredVelocity.x);
+                const std::array bytes{std::byte(result.agentIndex), std::byte(speed >> 24), std::byte(speed >> 16), std::byte(speed >> 8),
+                                       std::byte(speed)};
+                REQUIRE(digest.Update(bytes));
+            }
+            return digest.Finalize();
+        }
     }  // namespace
+
+    TEST_CASE("Qualified crowd owner uses exact evidence and hashes the same complete tick in any request order",
+              "[unit][navigation][crowd][deterministic]") {
+        QualifiedFixtureProvider provider;
+        const auto evidence = [](const char key) {
+            return ComputeSha256(std::as_bytes(std::span{&key, 1}));
+        };
+        const auto parsedGolden = ParseSha256("sha256:2f2f4a07ed8bbfd5ec16244e8646017b2c9f75174464edd58c4b8591197ec61b");
+        REQUIRE(parsedGolden.HasValue());
+        const auto &golden = parsedGolden.Value();
+        const NavigationCrowdQualification admitted{evidence('k'), evidence('b'), golden, evidence('t'), evidence('p'), 0.05F, 3};
+        provider.evidence = admitted;
+        const auto topology = Id<NavigationGeneration>(1);
+        const NavigationCrowdSnapshotLimits limits{.mode = AvoidanceExecutionMode::DeterministicQualified,
+                                                   .deterministicStamp = {topology, admitted.topologyContent, admitted.profile}};
+        const auto capture = BatchCapture(limits);
+        std::array requests{NavigationAvoidanceRequest{.agentIndex = 2}, NavigationAvoidanceRequest{.agentIndex = 0},
+                            NavigationAvoidanceRequest{.agentIndex = 1}};
+        const auto first = NavigationCrowdBatch::RunQualified(capture, requests, provider, admitted, topology);
+        REQUIRE(first.HasValue());
+        CHECK(QualifiedFixtureDigest(first.Value()) == golden);
+        std::ranges::reverse(requests);
+        const auto second = NavigationCrowdBatch::RunQualified(capture, requests, provider, admitted, topology);
+        REQUIRE(second.HasValue());
+        CHECK(QualifiedFixtureDigest(second.Value()) == golden);
+        CHECK(provider.calls == 6);
+
+        RequireError(NavigationCrowdBatch::RunQualified(capture, std::span(requests).first(2), provider, admitted, topology),
+                     NavigationErrors::AdmissionRejected);
+        RequireError(NavigationCrowdBatch::RunQualified(capture, requests, provider, admitted, Id<NavigationGeneration>(2)),
+                     NavigationErrors::StaleSnapshot);
+        RequireError(NavigationCrowdBatch::RunQualified(BatchCapture(limits, 0), requests, provider, admitted, topology),
+                     NavigationErrors::AdmissionRejected);
+        auto wrong = admitted;
+        wrong.buildPlatform = evidence('x');
+        RequireError(NavigationCrowdBatch::RunQualified(capture, requests, provider, wrong, topology),
+                     NavigationErrors::CapabilityDescriptorInvalid);
+        CHECK(provider.calls == 6);
+        CancellationSource scene;
+        provider.cancelAfterFirst = &scene;
+        RequireError(NavigationCrowdBatch::RunQualified(capture, requests, provider, admitted, topology, scene.Token()),
+                     NavigationErrors::QueryCancelled);
+        CHECK(provider.calls == 7);
+    }
 
     TEST_CASE("crowd jobs collect only once in fixed cell and agent order", "[unit][navigation][crowd][jobs]") {
         using enum BatchTestProvider::Behavior;

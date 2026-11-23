@@ -156,6 +156,11 @@ namespace Horo::Navigation {
         return storage_ ? storage_->mode : AvoidanceExecutionMode::Disabled;
     }
 
+    /** @copydoc NavigationCrowdSnapshot::DeterministicStamp */
+    NavigationCrowdDeterministicStamp NavigationCrowdSnapshot::DeterministicStamp() const noexcept {
+        return storage_ ? storage_->deterministicStamp : NavigationCrowdDeterministicStamp{};
+    }
+
     /** @copydoc NavigationCrowdSnapshot::Agents */
     std::span<const NavigationCrowdAgentFact> NavigationCrowdSnapshot::Agents() const noexcept {
         return storage_ ? std::span<const NavigationCrowdAgentFact>{storage_->agents} : std::span<const NavigationCrowdAgentFact>{};
@@ -221,6 +226,8 @@ namespace Horo::Navigation {
         storage->dynamicRevision = dynamic.Revision();
         storage->captureTick = captureTick;
         storage->mode = limits.mode;
+        if (limits.mode == AvoidanceExecutionMode::DeterministicQualified)
+            storage->deterministicStamp = limits.deterministicStamp;
         if (const auto copiedLayers = CopyAvoidanceLayers(avoidanceLayers, *storage); copiedLayers.HasError())
             return Result<NavigationCrowdSnapshot>::Failure(copiedLayers.ErrorValue());
         storage->profiles.assign(profiles.begin(), profiles.end());

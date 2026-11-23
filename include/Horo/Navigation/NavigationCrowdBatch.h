@@ -8,6 +8,26 @@
 #include "Horo/Navigation/NavigationCrowdAvoidance.h"
 
 namespace Horo::Navigation {
+    /** @brief Recorded same-build, same-platform qualification supplied by the host for one exact provider and profile. */
+    struct NavigationCrowdQualification final {
+        Sha256Digest provider;
+        Sha256Digest buildPlatform;
+        Sha256Digest goldenEvidence;
+        Sha256Digest topologyContent;
+        Sha256Digest profile;
+        float fixedStepSeconds{};
+        std::uint32_t maximumAgents{};
+
+        bool operator==(const NavigationCrowdQualification &) const noexcept = default;
+    };
+
+    /** @brief Explicit qualification boundary. Best-effort providers implement only INavigationCrowdBackend. */
+    class INavigationQualifiedCrowdBackend : public INavigationCrowdBackend {
+    public:
+        /** @brief Reports the immutable qualification record for this provider instance. */
+        [[nodiscard]] virtual const NavigationCrowdQualification &Qualification() const noexcept = 0;
+    };
+
     /** @brief One solver result addressed to the request's index in the pinned crowd snapshot. */
     struct NavigationCrowdBatchResult final {
         std::size_t agentIndex{};
@@ -43,6 +63,21 @@ namespace Horo::Navigation {
         [[nodiscard]] static Result<std::unique_ptr<NavigationCrowdBatch>> Submit(
             const JobSystem &jobs, const NavigationCrowdSnapshot &capture, std::span<const NavigationAvoidanceRequest> requests,
             std::span<const std::shared_ptr<INavigationCrowdBackend>> providers, const CancellationToken &cancellation = {});
+
+        /** @brief Evaluates every captured agent in stable cell and agent order on the deterministic owner.
+         * @param capture Exact immutable fact capture with host-resolved topology and profile evidence.
+         * @param requests Exactly one finite fixed-step request for each captured agent.
+         * @param provider Host-composed qualified provider. Its numerical contract must match the admitted evidence.
+         * @param admitted Verified qualification for the active build, platform, topology content and profile.
+         * @param activeTopology Current topology generation from the publishing owner.
+         * @param cancellation Scene lifetime or superseding operation cancellation.
+         * @return Full ordered result set, or one typed failure without partial publication.
+         * @pre Runs at the declared fixed tick on the deterministic owner. No background completion is consulted.
+         */
+        [[nodiscard]] static Result<std::vector<NavigationCrowdBatchResult>> RunQualified(
+            const NavigationCrowdSnapshot &capture, std::span<const NavigationAvoidanceRequest> requests,
+            INavigationQualifiedCrowdBackend &provider, const NavigationCrowdQualification &admitted, NavigationGeneration activeTopology,
+            const CancellationToken &cancellation = {});
 
         /** @brief Collects complete results once in dispatch order without waiting on a job.
          * @param current Exact retained capture currently eligible for publication.
