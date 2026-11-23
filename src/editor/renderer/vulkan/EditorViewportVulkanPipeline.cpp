@@ -3,6 +3,7 @@
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <limits>
+#include <new>
 
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipeline */
@@ -59,6 +60,88 @@ namespace Horo::Editor {
         if (sampler.HasError())
             return Result<void>::Failure(sampler.ErrorValue());
         program.shadowSampler = sampler.Value().handle;
+        return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareDraws */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareDraws(const std::size_t count) {
+        const auto previous = draws.front().size();
+        if (count <= previous)
+            return Result<void>::Success();
+        if (count > Render::RenderMaterialPass::MaximumDraws)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene, "Temporal guide draw capacity exceeded."));
+        try {
+            for (std::uint32_t slot = 0; slot < owner.device_.frames; ++slot) {
+                if (const auto grown = GrowFrame(slot, count); grown.HasError()) {
+                    RetireDrawsAfter(previous);
+                    return grown;
+                }
+            }
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            RetireDrawsAfter(previous);
+            return Result<void>::Failure(
+                MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate viewport temporal guide draw slots."));
+        }
+    }
+
+    /** @brief Creates both material bindings for each new draw in one buffered frame. */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::GrowFrame(const std::uint32_t slot, const std::size_t count) {
+        auto &frame = draws[slot];
+        const auto start = frame.size();
+        frame.resize(count);
+        for (auto index = start; index < count; ++index) {
+            const auto identity = slot * Render::RenderMaterialPass::MaximumDraws + index + 1;
+            auto &draw = frame[index];
+            if (const auto depth =
+                    ProgramResources::CreateUniformSlot(owner.frontend_, linearDepth, draw.linearDepth, identity, linearDepth.pipeline);
+                depth.HasError())
+                return depth;
+            if (const auto vectors = ProgramResources::CreateUniformSlot(owner.frontend_, motion, draw.motion, identity, motion.pipeline);
+                vectors.HasError())
+                return vectors;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @brief Retires only the incomplete suffix when a draw-capacity increase fails. */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::RetireDrawsAfter(const std::size_t keep) noexcept {
+        const auto retire = [this](const ShaderResources &program, DrawSlot &draw) {
+            if (draw.material)
+                static_cast<void>(program.materials->Release(draw.material->Id()));
+            owner.RetireDraw(draw);
+        };
+        for (auto &frame : draws)
+            while (frame.size() > keep) {
+                retire(motion, frame.back().motion);
+                retire(linearDepth, frame.back().linearDepth);
+                frame.pop_back();
+            }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateTemporalGuidePipeline */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateTemporalGuidePipeline(Render::RenderFrontend &frontend,
+                                                                                             ShaderResources &program,
+                                                                                             const EditorVulkanTemporalInput input,
+                                                                                             const TemporalGuideCook &cook,
+                                                                                             const std::uint32_t frames) {
+        auto metadata = ValidateEditorVulkanTemporalInputCook(input, cook.payload, cook.reflection);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        const auto state = EditorVulkanTemporalInputPipelineState(input);
+        if (state.HasError())
+            return Result<void>::Failure(state.ErrorValue());
+        const auto manifest = EditorVulkanTemporalInputShaderManifest(input);
+        program.payload.assign(cook.payload.begin(), cook.payload.end());
+        program.metadata = std::move(metadata).Value();
+        if (const auto stages =
+                CreateProgramStages(frontend, program, manifest.entryPoints[1].name.c_str(), manifest.entryPoints[0].name.c_str());
+            stages.HasError())
+            return stages;
+        const auto pipeline = CreatePipelineState(frontend, program, manifest, state.Value());
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        program.pipeline = pipeline.Value();
         return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
     }
 

@@ -1377,6 +1377,47 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
+    TEST_CASE("Native Vulkan admits the cooked temporal guide pair through the viewport owner",
+              "[native-smoke][vulkan][gui][temporal-guides]") {
+        const auto *assets = SDL_getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
+        const auto *stage = SDL_getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
+        if (!assets || !stage)
+            SKIP("Supply the cooked Vulkan viewport assets and the temporal reconstruction cook stage.");
+        Host host{true};
+        if (!host.frontend->Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            SKIP("Selected Vulkan device cannot realize native reconstruction guides.");
+        auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{assets});
+        Check(cooked, "load exact viewport shaders");
+        host.viewport = std::make_unique<EditorViewportRendererVulkan>(*host.frontend, *host.bridge, std::move(cooked).Value());
+        Check(host.viewport->Initialize(), "initialize viewport before guide preparation");
+        const auto root = std::filesystem::path{stage} / "assets/shaders/editor";
+        const NativeDurableFileSystem files;
+        const auto loadGuidePart = [&](std::string_view name) {
+            auto bytes = files.ReadFileBounded(root / name, 16U * 1024U * 1024U);
+            Check(bytes, name);
+            return std::move(bytes).Value();
+        };
+        const auto depth = loadGuidePart("viewport-linear-depth-vulkan.horoshdr");
+        const auto depthMetadata = loadGuidePart("viewport-linear-depth-vulkan.reflection.json");
+        const auto motion = loadGuidePart("viewport-motion-vulkan.horoshdr");
+        const auto motionMetadata = loadGuidePart("viewport-motion-vulkan.reflection.json");
+        REQUIRE(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, depthMetadata}).HasError());
+        Check(host.viewport->PrepareTemporalGuidePrograms({depth, depthMetadata}, {motion, motionMetadata}),
+              "prepare the two native pipelines after rejecting a mismatched guide family");
+        const CameraViewportFixture fixture;
+        const auto scene = fixture.View(0);
+        host.viewport->RequestExtent({320, 240});
+        host.SynchronizeViewport(scene);
+        std::vector<RenderStaticMeshInstance> oversized(RenderMaterialPass::MaximumDraws + 1, scene.instances.front());
+        auto excessive = scene;
+        excessive.instances = oversized;
+        const auto refused = host.viewport->PrepareResources(*host.frontend, excessive);
+        REQUIRE(refused.HasError());
+        CHECK(refused.ErrorValue().code.Value() == RendererErrors::ViewportInvalidScene.code.Value());
+        Check(host.viewport->PrepareResources(*host.frontend, scene), "preserve the previously prepared guide draw slots");
+        REQUIRE(host.Drain());
+    }
+
     TEST_CASE("Native Vulkan replaces a font atlas after presentation and preserves the active atlas on rejection",
               "[native-smoke][vulkan][gui][font-atlas]") {
         Host host;

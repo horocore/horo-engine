@@ -36,6 +36,18 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareManualColor(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
                                                       const Render::ExposureSettings &settings,
                                                       const Render::CookedNativeReconstructionKernel *spatial = nullptr);
+
+        /** @brief Prepares both guide shaders and their native pipelines as one cold viewport generation. */
+        struct TemporalGuideCook final {
+            std::span<const std::uint8_t> payload;
+            std::span<const std::uint8_t> reflection;
+        };
+
+        /** @brief Admits both native guide pipelines before frame recording or publishing viewport targets.
+         * @param linearDepth Cooked linear depth payload and its exact reflected layout.
+         * @param motion Cooked motion payload and its exact reflected layout.
+         * @return Success only when both pipelines and their material tables are ready. */
+        [[nodiscard]] Result<void> PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion);
         ~EditorViewportRendererVulkan() override;
         /** @copydoc IEditorViewportRenderer::RequestImageCapture */
         [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
@@ -352,6 +364,31 @@ namespace Horo::Editor {
             std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
 
+        /** @brief Owns both viewport guide programs, including partially admitted candidates. */
+        struct TemporalGuidePrograms final {
+            explicit TemporalGuidePrograms(EditorViewportRendererVulkan &viewport) noexcept;
+            ~TemporalGuidePrograms();
+            TemporalGuidePrograms(const TemporalGuidePrograms &) = delete;
+            TemporalGuidePrograms &operator=(const TemporalGuidePrograms &) = delete;
+
+            /** @brief Grows all buffered frames together while preserving previously valid draw slots on failure. */
+            [[nodiscard]] Result<void> PrepareDraws(std::size_t count);
+
+            struct GuideDraw final {
+                DrawSlot linearDepth;
+                DrawSlot motion;
+            };
+
+            EditorViewportRendererVulkan &owner;
+            ShaderResources linearDepth;
+            ShaderResources motion;
+            std::array<std::vector<GuideDraw>, std::tuple_size_v<FrameSlots>> draws;
+
+        private:
+            [[nodiscard]] Result<void> GrowFrame(std::uint32_t slot, std::size_t count);
+            void RetireDrawsAfter(std::size_t keep) noexcept;
+        };
+
         /** @brief Owns one immutable canvas consumer and its slot-local mesh bindings. */
         struct CanvasQuadProgram final {
             static constexpr std::size_t StereoViews = 2;
@@ -439,6 +476,10 @@ namespace Horo::Editor {
             /** @brief Realizes the exact dedicated scene-linear Vulkan material. */
             [[nodiscard]] static Result<void> CreateSceneLinearPipeline(Render::RenderFrontend &frontend, ShaderResources &program,
                                                                         std::uint32_t frames);
+            /** @brief Realizes an exact temporal guide pipeline with the existing native material layout owner. */
+            [[nodiscard]] static Result<void> CreateTemporalGuidePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                                          EditorVulkanTemporalInput input, const TemporalGuideCook &cook,
+                                                                          std::uint32_t frames);
             /** @brief Creates a pipeline using exact selected-device and cooked-program identity. */
             [[nodiscard]] static Result<Render::RenderPipelineHandle> CreatePipelineState(Render::RenderFrontend &frontend,
                                                                                           const ShaderResources &program,
@@ -520,6 +561,10 @@ namespace Horo::Editor {
         void RetireProgram(ShaderResources &program, std::span<FrameSlot> slots) noexcept;
         void RetireDraw(DrawSlot &draw) noexcept;
         void ReleaseProgramObjects(ShaderResources &program) noexcept;
+        /** @brief Drops desktop material and guide owners when native recording stops. */
+        void ReleaseDesktopPrograms() noexcept;
+        /** @brief Finishes backend preparation for an already published viewport target. */
+        [[nodiscard]] Result<void> PrepareReadyViewport(std::size_t draws);
         void RetireXrProgram() noexcept;
         [[nodiscard]] Result<void> CreateOverlayMesh(OverlaySlot &slot);
         void ReleaseOverlaySlots() noexcept;
@@ -559,6 +604,7 @@ namespace Horo::Editor {
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;
         std::unique_ptr<EditorViewportColorPipeline> color_;
         std::shared_ptr<Render::IResidentNativeReconstructionKernel> spatial_;
+        std::unique_ptr<TemporalGuidePrograms> temporalGuides_;
 
         struct ColorSubmission final {
             Render::RenderTimelinePoint signal;

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 namespace Horo::Editor {
     namespace {
@@ -136,6 +137,44 @@ namespace Horo::Editor {
         std::swap(slots_, candidate.slots);
         std::swap(crossFadeSourceSlots_, candidate.crossFadeSlots);
         boundShadowAtlas_ = resources_.ShadowTextureView();
+    }
+
+    EditorViewportRendererVulkan::TemporalGuidePrograms::TemporalGuidePrograms(EditorViewportRendererVulkan &viewport) noexcept
+        : owner(viewport) {}
+
+    EditorViewportRendererVulkan::TemporalGuidePrograms::~TemporalGuidePrograms() {
+        RetireDrawsAfter(0);
+        owner.RetireProgram(motion, {});
+        owner.RetireProgram(linearDepth, {});
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalGuidePrograms */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalGuidePrograms(const TemporalGuideCook &linearDepth,
+                                                                            const TemporalGuideCook &motion) {
+        using namespace Render;
+        if (const auto boundary = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
+            return Result<void>::Failure(boundary.ErrorValue());
+        if (!initialized_ || recordedEver_ || resources_.ColorTexture().IsValid() ||
+            !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        try {
+            auto candidate = std::make_unique<TemporalGuidePrograms>(*this);
+            if (const auto depth =
+                    ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->linearDepth, EditorVulkanTemporalInput::LinearDepth,
+                                                                  linearDepth, device_.frames);
+                depth.HasError())
+                return depth;
+            if (const auto vectors =
+                    ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->motion, EditorVulkanTemporalInput::Motion, motion,
+                                                                  device_.frames);
+                vectors.HasError())
+                return vectors;
+            temporalGuides_ = std::move(candidate);
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(
+                MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate the viewport temporal guide programs."));
+        }
     }
 
     void EditorViewportRendererVulkan::RetireDraw(DrawSlot &draw) noexcept {
@@ -320,20 +359,7 @@ namespace Horo::Editor {
         for (auto &cascade : preparedShadowDraws_)
             for (auto &draw : cascade)
                 draw = {};
-        FinishColorFrame(false);
-        color_.reset();
-        spatial_.reset();
-        acceptedColorView_ = {};
-        ProgramResources::ReleaseMaterials(slots_);
-        if (sceneLinearShader_.materials)
-            static_cast<void>(sceneLinearShader_.materials->Shutdown());
-        sceneLinearShader_.materials.reset();
-        if (shader_.materials)
-            static_cast<void>(shader_.materials->Shutdown());
-        shader_.materials.reset();
-        if (shadowShader_.materials)
-            static_cast<void>(shadowShader_.materials->Shutdown());
-        shadowShader_.materials.reset();
+        ReleaseDesktopPrograms();
         for (auto &slot : xrDrawSlots_)
             for (auto &draw : slot)
                 draw.material.reset();
@@ -354,6 +380,21 @@ namespace Horo::Editor {
         initialized_ = false;
         childAttached_ = false;
         recordedEver_ = false;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ReleaseDesktopPrograms */
+    void EditorViewportRendererVulkan::ReleaseDesktopPrograms() noexcept {
+        FinishColorFrame(false);
+        color_.reset();
+        spatial_.reset();
+        temporalGuides_.reset();
+        acceptedColorView_ = {};
+        ProgramResources::ReleaseMaterials(slots_);
+        for (auto *shader : {&sceneLinearShader_, &shader_, &shadowShader_}) {
+            if (shader->materials)
+                static_cast<void>(shader->materials->Shutdown());
+            shader->materials.reset();
+        }
     }
 
     /** @copydoc EditorViewportRendererVulkan::Shutdown */
@@ -428,19 +469,25 @@ namespace Horo::Editor {
                                             std::span<std::byte> destination) {
                 return static_cast<Render::Detail::IVulkanEditorGraphicsPort *>(owner)->ReadCompletedColor(instance, signal, destination);
             }});
-        if (prepared.Value() && !color_ && resources_.ColorTexture() != emptyGraphTexture_) {
-            if (const auto clear = CreateEmptyGraph(); clear.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
-        }
-        if (prepared.Value()) {
-            if (auto bound = BindShadowAtlas(); bound.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
-            if (auto bound = BindCameraCrossFadeSource(); bound.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
-            if (auto budget = PrepareCameraCrossFadeScene(scene.instances.size()); budget.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(budget.ErrorValue());
-        }
+        if (prepared.Value())
+            if (const auto ready = PrepareReadyViewport(scene.instances.size()); ready.HasError())
+                return Result<std::optional<Render::RenderTargetHandle>>::Failure(ready.ErrorValue());
         return prepared;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareReadyViewport */
+    Result<void> EditorViewportRendererVulkan::PrepareReadyViewport(const std::size_t draws) {
+        if (!color_ && resources_.ColorTexture() != emptyGraphTexture_)
+            if (const auto clear = CreateEmptyGraph(); clear.HasError())
+                return clear;
+        if (temporalGuides_)
+            if (const auto guides = temporalGuides_->PrepareDraws(draws); guides.HasError())
+                return guides;
+        if (const auto bound = BindShadowAtlas(); bound.HasError())
+            return bound;
+        if (const auto bound = BindCameraCrossFadeSource(); bound.HasError())
+            return bound;
+        return PrepareCameraCrossFadeScene(draws);
     }
 
     /** @copydoc EditorViewportRendererVulkan::ImageSource */
