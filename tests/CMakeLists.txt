@@ -2011,6 +2011,14 @@ add_executable(HoroNavigationSceneAgentLifecyclePublicConsumer support/Navigatio
 target_link_libraries(HoroNavigationSceneAgentLifecyclePublicConsumer PRIVATE HoroEngine::NavigationSceneIntegration)
 add_test(NAME HoroNavigationSceneAgentLifecyclePublicConsumer COMMAND HoroNavigationSceneAgentLifecyclePublicConsumer)
 
+if(TARGET HoroProjectNavigationLinkClearanceInternal)
+    add_executable(HoroNavigationPhysicsClearanceTests unit/application/navigation/NavigationPhysicsClearanceTests.cpp)
+    target_compile_features(HoroNavigationPhysicsClearanceTests PRIVATE cxx_std_20)
+    target_compile_definitions(HoroNavigationPhysicsClearanceTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+    target_link_libraries(HoroNavigationPhysicsClearanceTests PRIVATE HoroProjectNavigationLinkClearanceInternal)
+    horo_register_catch_test(HoroNavigationPhysicsClearanceTests LABELS "unit;navigation;physics;headless")
+endif()
+
 add_executable(HoroNavigationBakeDiagnosticsPublicConsumer support/NavigationBakeDiagnosticsPublicConsumer.cpp)
 target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEngine::NavigationBakeService)
 add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigationBakeDiagnosticsPublicConsumer)
