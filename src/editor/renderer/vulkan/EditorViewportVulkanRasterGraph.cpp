@@ -19,7 +19,10 @@ namespace Horo::Editor {
         constexpr auto DisplayDepthPasses = 1;
         constexpr auto MaximumCanvasPasses = 1;
         constexpr auto MaximumCapturePasses = 1;
-        constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
+        constexpr auto MaximumColorPasses = 5;        // Two uploads, analytic output, overlay, SDR encode.
+        constexpr auto MaximumColorRasterPasses = 3;  // Analytic output, overlay and SDR encode.
+        static_assert(MaximumScenePasses + TemporalGuidePasses + DisplayDepthPasses + MaximumColorRasterPasses <=
+                      RenderGraphMaterialRaster::MaximumRetainedPasses);
         constexpr auto MaximumColorImports = 10;  // Two outputs, four analytic table/staging resources and four fullscreen buffers.
         constexpr auto MaximumColorUses = 32;     // Fixed transfer and fullscreen shader reads, including the optional overlay.
 

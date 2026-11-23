@@ -207,8 +207,8 @@ namespace Horo::Render {
     struct RenderGraphMaterialRaster final {
         static constexpr std::size_t MaximumDraws = 128;
         static constexpr std::size_t MaximumReads = RenderGraphLimits::HardMaxResources;
-        /** @brief Bounds four directional shadow tiles, opaque scene, display transform, overlays and output encode. */
-        static constexpr std::size_t MaximumRetainedPasses = 8;
+        /** @brief Bounds four shadow cascades, three guides, scene color and three display passes. */
+        static constexpr std::size_t MaximumRetainedPasses = 11;
         static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * MaximumRetainedPasses;
         RenderGraphResourceId color, depth;
         RenderTextureViewHandle colorView, depthView;

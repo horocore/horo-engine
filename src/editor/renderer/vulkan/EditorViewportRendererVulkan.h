@@ -354,7 +354,8 @@ namespace Horo::Editor {
             std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, Render::MaximumDirectionalShadowCascades> shadows;
         };
 
-        static constexpr std::uint32_t CrossFadeShadowPasses = (Render::RenderGraphMaterialRaster::MaximumRetainedPasses - 3) / 2;
+        static constexpr std::uint32_t CrossFadeShadowPasses = 2;
+        static_assert(2 * (CrossFadeShadowPasses + 1) + 1 <= Render::RenderGraphMaterialRaster::MaximumRetainedPasses);
         using FrameSlots = std::array<FrameSlot, 8>;
 
         struct EmptyGraph {

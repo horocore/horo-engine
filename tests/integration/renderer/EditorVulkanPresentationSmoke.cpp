@@ -1530,10 +1530,19 @@ namespace Horo::Tests::VulkanEditor {
         Check(host.viewport->RequestLightingProfile(lighting, selected.Value()));
         CameraViewportFixture fixture;
         auto scene = fixture.View(0);
-        scene.lights = {};
         constexpr auto size = Host::CameraQualificationExtent;
-        if (upscale)
+        if (upscale) {
             scene.camera.position.y = 1.5F;
+            const DirectionalShadowProfile profile{.cascadeCount = MaximumDirectionalShadowCascades, .tileResolution = 128};
+            Check(host.viewport->RequestDirectionalShadowProfile(profile));
+            const auto expected =
+                BuildDirectionalShadowFrame(scene, static_cast<float>(size.width) / size.height, Math::ClipDepthRange::ZeroToOne, profile);
+            Check(expected);
+            REQUIRE(expected.Value());
+            CHECK(expected.Value()->cascadeCount == MaximumDirectionalShadowCascades);
+        } else {
+            scene.lights = {};
+        }
         host.viewport->RequestExtent(size);
         host.viewport->RequestGrid({.visible = upscale});
         host.SynchronizeViewport(scene, size);
