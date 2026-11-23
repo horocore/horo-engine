@@ -91,6 +91,7 @@ namespace {
         REQUIRE((scene.instances.size() == 1));
         CHECK(scene.instances.front().presentation.tintStrength > 0.0F);
         CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U});
+        CHECK(scene.View().motion.objects.empty());
         CHECK(Math::TransformPoint(scene.instances.front().localToWorld, {}) == Math::Vec3{2.0F, 3.0F, 4.0F});
 
         const auto retained = scene;
@@ -109,6 +110,10 @@ namespace {
     TEST_CASE("Viewport asset placement prefers surface then ground plane then camera front", "[unit][editor][asset-drop]") {
         SECTION("surface hit") {
             ExtractedScene scene{true};
+            const auto view = scene.snapshot.View();
+            CHECK(view.motion.sceneDomain == scene.runtime->View().RuntimeId().value);
+            REQUIRE(view.motion.objects.size() == 1);
+            CHECK(view.motion.objects[0].IsValid());
             auto placed = ResolveAssetViewportPlacement(AssetViewportPlacementRequest{
                 .scene = scene.snapshot,
                 .normalizedX = 0.5F,

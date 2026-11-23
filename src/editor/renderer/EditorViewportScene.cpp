@@ -50,6 +50,37 @@ namespace Horo::Editor {
         return std::ranges::all_of(lights, &Render::RenderLight::IsValid);
     }
 
+    /** @copydoc BuildEditorViewportMotionSamples */
+    Result<std::span<const Render::RenderMotionObjectSample>> BuildEditorViewportMotionSamples(
+        const EditorViewportSceneView &scene, std::span<Render::RenderMotionObjectSample> scratch) {
+        using Outcome = Result<std::span<const Render::RenderMotionObjectSample>>;
+        using Sample = Render::RenderMotionObjectSample;
+        const auto &source = scene.motion;
+        if (source.objects.empty())
+            return Outcome::Success({});
+        if (!source.sceneDomain || source.objects.size() > std::min(scene.instances.size(), scratch.size()))
+            return Outcome::Failure(
+                MakeError(RendererErrors::ViewportInvalidScene, "Viewport motion identity or draw capacity is invalid."));
+
+        const auto samples = scratch.first(source.objects.size());
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+            samples[index] = {source.objects[index], scene.instances[index].localToWorld};
+            if (!samples[index].IsValid())
+                return Outcome::Failure(
+                    MakeError(RendererErrors::ViewportInvalidScene, "A tracked viewport draw has invalid motion data."));
+        }
+        std::ranges::sort(samples, {}, &Sample::object);
+        if (const auto incompatible = std::ranges::adjacent_find(samples,
+                                                                 [](const Sample &left, const Sample &right) {
+            return left.object == right.object && left.localToWorld != right.localToWorld;
+        });
+            incompatible != samples.end())
+            return Outcome::Failure(
+                MakeError(RendererErrors::ViewportInvalidScene, "One viewport motion identity has conflicting transforms."));
+        const auto duplicates = std::ranges::unique(samples, {}, &Sample::object);
+        return Outcome::Success({samples.begin(), duplicates.begin()});
+    }
+
     /** @copydoc BuildRenderMvp */
     Result<Math::Mat4> BuildRenderMvp(const Render::RenderCameraView &camera, const Math::Mat4 &localToWorld, const float aspect,
                                       const Math::ClipDepthRange depthRange) noexcept {

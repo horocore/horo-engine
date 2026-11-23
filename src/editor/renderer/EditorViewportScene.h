@@ -8,6 +8,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/Mesh.h"
+#include "Horo/Runtime/Render/MotionHistory.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/project_model/EditorViewportCamera.h"
 
@@ -34,6 +35,12 @@ namespace Horo::Editor {
         std::uint8_t availableViews{};
     };
 
+    /** @brief Runtime-scene identity and generational identities for the tracked prefix of the draw list. */
+    struct EditorViewportMotionSource final {
+        std::uint64_t sceneDomain{};
+        std::span<const Render::RenderMotionObjectId> objects{};
+    };
+
     /** @brief Non-owning immutable editor scene view consumed synchronously by Render. */
     struct EditorViewportSceneView {
         EditorViewportCamera camera{};
@@ -43,10 +50,20 @@ namespace Horo::Editor {
         std::uint64_t lightSceneDomain{};
         std::uint64_t lightSnapshotRevision{};
         std::optional<EditorViewportCameraCrossFade> cameraCrossFade;
+        EditorViewportMotionSource motion;
 
         /** @brief Reports whether the camera and every instance contain supported finite values. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
+
+    /** @brief Collects the exact current transforms for the editor view's tracked draws.
+     * @param scene Immutable snapshot also used to prepare the viewport mesh pass.
+     * @param scratch Caller-owned space for at least as many entries as the tracked draw prefix.
+     * @return Sorted, unique samples borrowing the scratch, or a typed failure for inconsistent identity or transform data.
+     * @details Multiple draws of the same entity share history only when their local-to-world transforms agree.
+     * Transient draws appended after the tracked prefix have no temporal predecessor. */
+    [[nodiscard]] Result<std::span<const Render::RenderMotionObjectSample>> BuildEditorViewportMotionSamples(
+        const EditorViewportSceneView &scene, std::span<Render::RenderMotionObjectSample> scratch);
 
     /** @brief Computes a bounded semantic revision from exact immutable light values and producer identities.
      * @param lights Complete scene table, not a per-draw selected subset.

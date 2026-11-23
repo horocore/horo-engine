@@ -76,6 +76,8 @@ namespace Horo::Editor {
         std::vector<EditorViewportMeshResourceView> meshResources;
         std::vector<EditorViewportInstance> instances;
         std::vector<SceneObjectId> instanceObjects;
+        std::vector<Render::RenderMotionObjectId>
+            instanceMotionObjects;                  /**< Tracked draw prefix. Transient editor previews append no IDs. */
         std::vector<std::uint8_t> instancePickable; /**< Parallel 0/1 editor-picking policy for render instances. */
         std::vector<Render::RenderLight> lights;
         std::vector<SceneObjectId> lightObjects;

@@ -15,6 +15,27 @@ namespace {
         return std::fabs(lhs - rhs) < 0.0001F;
     }
 
+    TEST_CASE("Viewport motion collects stable object transforms and omits transient draws", "[unit][editor][motion]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const auto first = Math::TranslationMatrix({1.0F, 0.0F, 0.0F});
+        const auto second = Math::TranslationMatrix({2.0F, 0.0F, 0.0F});
+        std::array instances{EditorViewportInstance{.localToWorld = first}, EditorViewportInstance{.localToWorld = second},
+                             EditorViewportInstance{.localToWorld = first}, EditorViewportInstance{}};
+        const std::array ids{Render::RenderMotionObjectId{30}, Render::RenderMotionObjectId{11}, Render::RenderMotionObjectId{30}};
+        const EditorViewportSceneView scene{.instances = instances, .motion = {21, ids}};
+        std::array<Render::RenderMotionObjectSample, ids.size()> scratch;
+        const auto samples = BuildEditorViewportMotionSamples(scene, scratch);
+        REQUIRE(samples.HasValue());
+        REQUIRE(samples.Value().size() == 2);
+        CHECK(samples.Value()[0] == Render::RenderMotionObjectSample{ids[1], second});
+        CHECK(samples.Value()[1] == Render::RenderMotionObjectSample{ids[0], first});
+        CHECK(BuildEditorViewportMotionSamples(scene, std::span{scratch}.first(1)).HasError());
+
+        instances[2].localToWorld = second;
+        CHECK(BuildEditorViewportMotionSamples(scene, scratch).HasError());
+    }
+
     TEST_CASE("Transform Uses Translation Rotation Scale Order", "[unit][editor]") {
         using namespace Horo::Math;
         const Transform transform{

@@ -16,6 +16,11 @@ namespace Horo::Editor {
             return MakeError(descriptor, std::move(message));
         }
 
+        /** @brief Packs the live slot and generation; the owning view separately carries its runtime scene domain. */
+        Render::RenderMotionObjectId MotionObjectId(const Runtime::EntityRef entity) noexcept {
+            return {(std::uint64_t{entity.entity.generation} << 32U) | entity.entity.index};
+        }
+
         [[nodiscard]] Result<Math::Mat4> ResolveWorld(const Runtime::RuntimeSceneView &scene, const Runtime::EntityRef entity,
                                                       const std::span<const SceneObjectTransformPreview> previews,
                                                       const std::size_t remainingDepth) {
@@ -123,6 +128,7 @@ namespace Horo::Editor {
             extracted.instances.push_back(
                 EditorViewportInstance{handle, world.Value(), resource->localBounds, Render::CoreDefaultMaterial, {}});
             extracted.instanceObjects.push_back(SceneObjectId{entity.authoredObject->value});
+            extracted.instanceMotionObjects.push_back(MotionObjectId(entity.entity));
             extracted.instanceEntities.push_back(entity.entity);
             extracted.instancePickable.push_back(editorState.has_value() && editorState->effectivelyLocked ? 0U : 1U);
             return Result<void>::Success();
@@ -167,6 +173,7 @@ namespace Horo::Editor {
             extracted.instances.push_back(
                 EditorViewportInstance{assetMesh->handle, world.Value(), assetMesh->mesh->localBounds, Render::CoreDefaultMaterial, {}});
             extracted.instanceObjects.push_back(object.id);
+            extracted.instanceMotionObjects.push_back(MotionObjectId(*entity));
             extracted.instanceEntities.push_back(*entity);
             extracted.instancePickable.push_back(editorState.has_value() && editorState->effectivelyLocked ? 0U : 1U);
             return Result<void>::Success();
@@ -265,9 +272,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportSceneSnapshot::View */
     EditorViewportSceneView EditorViewportSceneSnapshot::View() const noexcept {
-        return EditorViewportSceneView{camera,         meshResources,        instances,
-                                       lights,         runtimeSceneId.value, ComputeEditorViewportLightRevision(lights),
-                                       cameraCrossFade};
+        return EditorViewportSceneView{camera,
+                                       meshResources,
+                                       instances,
+                                       lights,
+                                       runtimeSceneId.value,
+                                       ComputeEditorViewportLightRevision(lights),
+                                       cameraCrossFade,
+                                       {runtimeSceneId.value, instanceMotionObjects}};
     }
 
     /** @copydoc EditorViewportSceneState::Replace */
@@ -361,6 +373,7 @@ namespace Horo::Editor {
         const std::size_t capacity = std::min(scene.SlotCount(), policy.maximumInstances);
         extracted.instances.reserve(capacity);
         extracted.instanceObjects.reserve(capacity);
+        extracted.instanceMotionObjects.reserve(capacity);
         extracted.instancePickable.reserve(capacity);
         extracted.lights.reserve(canonical.Value().count);
         extracted.lightObjects.reserve(canonical.Value().count);
