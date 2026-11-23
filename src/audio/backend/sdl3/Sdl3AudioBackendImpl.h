@@ -214,6 +214,26 @@ namespace Horo::Audio::Backend {
                                           std::uint32_t &nextSlot, AudioCaptureDeviceSnapshot &candidate) const;
 
         /**
+         * @brief Retains the generation of a live recording endpoint or reserves a new slot.
+         * @param native SDL recording device ID or default route sentinel.
+         * @param bindings Staged native mappings for the candidate catalog.
+         * @param nextSlot Next unused slot, advanced only for new endpoints.
+         * @return The bound capture identity, or an invalid ID if slots are exhausted.
+         */
+        [[nodiscard]] AudioCaptureDeviceId BindCaptureEndpoint(SDL_AudioDeviceID native, std::vector<CaptureDeviceBinding> &bindings,
+                                                               std::uint32_t &nextSlot) const;
+
+        /**
+         * @brief Publishes SDL's system recording route in the multimedia role when available.
+         * @param candidate Staged recording catalog.
+         * @param bindings Staged native mappings for the candidate catalog.
+         * @param nextSlot Next unused capture slot.
+         * @return Success or a typed capacity failure.
+         */
+        Result<void> ReadDefaultCaptureEndpoint(AudioCaptureDeviceSnapshot &candidate, std::vector<CaptureDeviceBinding> &bindings,
+                                                std::uint32_t &nextSlot) const;
+
+        /**
          * @brief Publishes a complete recording inventory and permission observation together.
          * @param candidate The observed catalog with the current revision.
          * @param bindings The native device mapping for the candidate.

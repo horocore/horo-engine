@@ -1,5 +1,6 @@
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -243,7 +244,17 @@ namespace Horo::Audio::Backend {
             REQUIRE(first.Value().changes.size() == catalog.devices.size());
             CHECK(catalog.owner == Owner());
             CHECK(catalog.permission == AudioCapturePermission::Unknown);
-            CHECK_FALSE(catalog.defaults.communications);
+            const auto system = ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Multimedia);
+            REQUIRE(system.status == AudioDeviceResolutionStatus::Resolved);
+            const auto endpoint = std::ranges::find(catalog.devices, system.device, &AudioDiscoveredCaptureDevice::id);
+            REQUIRE(endpoint != catalog.devices.end());
+            CHECK(endpoint->deviceClass == AudioDeviceClass::Virtual);
+            CHECK(endpoint->preferredFormat.has_value());
+            CHECK(std::ranges::any_of(catalog.devices, [system](const AudioDiscoveredCaptureDevice &device) {
+                return device.id != system.device && device.deviceClass == AudioDeviceClass::Unknown;
+            }));
+            CHECK(ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Communications).status ==
+                  AudioDeviceResolutionStatus::Unavailable);
             CHECK(backend->State() == Sdl3AudioBackendState::Closed);
             for (const auto &change : first.Value().changes) {
                 CHECK(change.kind == AudioCaptureDeviceChangeKind::Added);
@@ -257,6 +268,7 @@ namespace Horo::Audio::Backend {
             REQUIRE(again.HasValue());
             CHECK(again.Value().snapshot.devices == catalog.devices);
             CHECK(again.Value().snapshot.revision == catalog.revision);
+            CHECK(again.Value().snapshot.defaults.multimedia == system.device);
             CHECK(again.Value().changes.empty());
             CHECK(backend->State() == Sdl3AudioBackendState::Closed);
         }
@@ -270,6 +282,19 @@ namespace Horo::Audio::Backend {
             REQUIRE(ValidateAudioCaptureDeviceSnapshot(snapshot));
             CHECK(snapshot.permission != AudioCapturePermission::Unknown);
             CHECK(snapshot.permission != AudioCapturePermission::NotRequired);
+            CHECK(backend->State() == Sdl3AudioBackendState::Closed);
+        }
+
+        TEST_CASE("SDL3 Core Audio resolves a native system recording default", "[.native][audio][sdl3][capture]") {
+            auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
+            const auto discovered = backend->DiscoverCapture();
+            REQUIRE(discovered.HasValue());
+            const auto &snapshot = discovered.Value().snapshot;
+            const auto selected = ResolveAudioCaptureDevice(snapshot, AudioDefaultDeviceRole::Multimedia);
+            REQUIRE(selected.status == AudioDeviceResolutionStatus::Resolved);
+            const auto endpoint = std::ranges::find(snapshot.devices, selected.device, &AudioDiscoveredCaptureDevice::id);
+            REQUIRE(endpoint != snapshot.devices.end());
+            CHECK(endpoint->deviceClass == AudioDeviceClass::Virtual);
             CHECK(backend->State() == Sdl3AudioBackendState::Closed);
         }
 #endif
