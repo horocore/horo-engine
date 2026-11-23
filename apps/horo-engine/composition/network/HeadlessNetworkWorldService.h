@@ -994,9 +994,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Starts explicitly selected crowd jobs after decision intent dispatch. */
+        /** @brief Prepares the selected staged crowd work after decision intent dispatch. */
         Result<void> DispatchConfiguredMotion(const Runtime::FixedStepContext &context) {
-            if (!record_->decisionMotion || owners_->configured->navigationMotion->workerSolvers.empty())
+            if (!record_->decisionMotion || !owners_->configured->navigationMotion->UsesStagedMotion())
                 return Result<void>::Success();
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)
@@ -1014,7 +1014,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (!scene)
                 return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             const auto &policy = *owners_->configured->navigationMotion;
-            if (policy.workerSolvers.empty())
+            if (!policy.UsesStagedMotion())
                 return record_->navigationPath->SubmitMotion(*scene, policy);
             record_->navigationPath->PublishMotion(*scene, policy, context.cancellation);
             return Result<void>::Success();

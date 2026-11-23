@@ -2780,7 +2780,7 @@ add_executable(HoroCharacterSceneProductTests integration/gameplay/CharacterScen
 target_compile_features(HoroCharacterSceneProductTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::ProjectSurfaceSettings)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
-    target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::NavigationCrowdDetour
+    target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::NavigationCrowdDetour HoroEngine::NavigationCrowdDeterministic
         HoroEngine::AnimationAssetCook HoroEngine::AnimationGraphSourceCodec HoroNetworkModeHostInternal HoroEngine::NetworkTransportNull)
     target_include_directories(HoroCharacterSceneProductTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/animation
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/networking)

@@ -8,7 +8,7 @@
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/Navigation/NavigationAreas.h"
-#include "Horo/Navigation/NavigationCrowdAvoidance.h"
+#include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/SceneReplicationCommitSource.h"
@@ -250,9 +250,15 @@ namespace Horo::Application::Internal {
 
     /** @brief Explicit project-selected crowd authority, fixed envelope and live Follow observations. */
     struct HeadlessNavigationMotionPolicy final {
+        struct QualifiedCrowd final {
+            std::shared_ptr<Navigation::INavigationQualifiedCrowdBackend> provider;
+            Navigation::NavigationCrowdQualification admitted;
+        };
+
         std::shared_ptr<Navigation::INavigationCrowdBackend> solver;
         // Each slot owns independent scratch. Solvers handle overlap with an earlier cancelled tick safely.
         std::vector<std::shared_ptr<Navigation::INavigationCrowdBackend>> workerSolvers;
+        std::optional<QualifiedCrowd> qualified;
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
                                                                   const Navigation::NavigationWorldActivationDescriptor &,
@@ -263,9 +269,17 @@ namespace Horo::Application::Internal {
                                                                                   Navigation::NavigationAgentOwner, std::uint64_t)>
             follow;
 
-        /** @brief Selects exactly one inline or worker execution profile. */
+        /** @brief Checks the selected execution profile and exact qualified provider agreement. */
         [[nodiscard]] bool HasSolverSelection() const noexcept {
+            if (qualified)
+                return !solver && workerSolvers.empty() && qualified->provider && qualified->admitted.IsValid() &&
+                       qualified->provider->Qualification() == qualified->admitted;
             return solver ? workerSolvers.empty() : !workerSolvers.empty();
+        }
+
+        /** @brief Whether motion preparation and publication run in separate fixed stages. */
+        [[nodiscard]] bool UsesStagedMotion() const noexcept {
+            return qualified.has_value() || !workerSolvers.empty();
         }
     };
 

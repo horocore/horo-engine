@@ -3145,6 +3145,13 @@ an explicit stop when no candidate is valid. The factory requires the built-in
 algorithm fingerprint and a host-verified qualification record. The numeric
 scope is same-build and same-platform with round-to-nearest arithmetic.
 
+A Headless host can supply that qualified provider together with its admitted
+record. The fixed owner prepares Character work after decision intents, solves
+the complete capture, and publishes prepared motion after Gameplay and Animation
+only if the original world and topology are still active. Captured agents
+without pending motion take part in avoidance without receiving a Character
+command. The path query policy retains its own timing contract.
+
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.
 The fresh world/path observation revalidates logical agent registration, live

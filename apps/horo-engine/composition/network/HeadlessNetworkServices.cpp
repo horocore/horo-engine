@@ -718,6 +718,17 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         }
 
+        /** @brief Admits a crowd policy while path feedback still follows best-effort timing. */
+        bool ValidConfiguredMotion(const HeadlessSceneActivationInput &input) {
+            if (!input.navigationMotion)
+                return true;
+            const auto &decisions = input.cookedDecisions;
+            if (!input.navigationPath || input.decisionReplay || !decisions || !decisions->execution ||
+                !input.navigationMotion->HasSolverSelection())
+                return false;
+            return decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
+        }
+
         Result<void> ValidateConfiguredInput(const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
                                              const HeadlessSceneActivationInput &input,
                                              const std::optional<GameplayWorldSelection> &gameplay) {
@@ -746,14 +757,11 @@ namespace Horo::Application::Internal {
             if (needsPrefab && (!gameplay || gameplay->prefabPermission != GameplayPrefabPermission::Granted))
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires the actual host's prefab grant."));
-            const bool executesDecisions = decisions && decisions->execution;
-            const bool dispatchesMotion =
-                input.navigationMotion && executesDecisions && decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
             if (input.navigationPath && (!input.navigationPath->IsValid() || !input.navigation || !gameplay || !gameplay->enabled ||
                                          gameplay->nativeArtifact.empty()))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "Best-effort paths require cooked Navigation and native gameplay."));
-            if (input.navigationMotion && (!input.navigationPath || !dispatchesMotion || input.decisionReplay))
+            if (!ValidConfiguredMotion(input))
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
                 return Result<void>::Failure(

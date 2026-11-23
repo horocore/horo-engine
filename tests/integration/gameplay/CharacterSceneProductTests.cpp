@@ -14,6 +14,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
+#include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -1099,15 +1100,17 @@ namespace Horo::Application::CharacterSceneProductTest {
             Animated,
             Dedicated,
             MissedWorker,
-            SaturatedWorker
+            SaturatedWorker,
+            QualifiedCrowd
         };
         const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated,
-                                       Scenario::Dedicated, Scenario::MissedWorker, Scenario::SaturatedWorker);
+                                       Scenario::Dedicated, Scenario::MissedWorker, Scenario::SaturatedWorker, Scenario::QualifiedCrowd);
         const bool follows = scenario == Scenario::Follow;
         const bool dedicated = scenario == Scenario::Dedicated;
         const bool animated = scenario == Scenario::Animated || dedicated;
         const bool workerPressure = scenario == Scenario::SaturatedWorker;
         const bool workerDeadline = workerPressure || scenario == Scenario::MissedWorker;
+        const bool qualifiedCrowd = scenario == Scenario::QualifiedCrowd;
         JobSystem queuedJobs({.workerCount = 0, .maxQueuedJobs = 1});
         std::optional<JobHandle> blocker;
         if (workerPressure) {
@@ -1156,7 +1159,21 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                         product.tick)
                     .HasValue();
         };
-        if (workerDeadline)
+        if (qualifiedCrowd) {
+            const auto evidence = [](const std::string_view text) {
+                return ComputeSha256(std::as_bytes(std::span{text}));
+            };
+            const NavigationCrowdQualification admitted{.provider = DeterministicCrowdProviderFingerprint(),
+                                                        .buildPlatform = evidence("character product fixture build"),
+                                                        .goldenEvidence = evidence("character product fixture golden evidence"),
+                                                        .topologyContent = evidence("character product fixture topology"),
+                                                        .profile = evidence("character product fixture profile"),
+                                                        .fixedStepSeconds = 16'666'667.0F / 1'000'000'000.0F,
+                                                        .maximumAgents = 1};
+            auto provider = CreateDeterministicCrowdBackend(admitted);
+            REQUIRE(provider.HasValue());
+            policy->qualified.emplace(std::move(provider).Value(), admitted);
+        } else if (workerDeadline)
             policy->workerSolvers.emplace_back(CreateRecastDetourCrowdBackend().Value());
         else
             policy->solver = CreateRecastDetourCrowdBackend().Value();
@@ -1167,7 +1184,13 @@ namespace Horo::Application::CharacterSceneProductTest {
             position = samples.front().position;
             velocity = samples.front().velocity;
             const std::array profiles{NavigationCrowdProfileFacts{.profile = agents.Agents().front().profile}};
-            return BuildNavigationCrowdSnapshot(agents, dynamic.Snapshot().Value(), samples, profiles, {}, tick);
+            NavigationCrowdSnapshotLimits captureLimits;
+            if (policy->qualified) {
+                const auto &admitted = policy->qualified->admitted;
+                captureLimits.mode = AvoidanceExecutionMode::DeterministicQualified;
+                captureLimits.deterministicStamp = {active.topology, admitted.topologyContent, admitted.profile};
+            }
+            return BuildNavigationCrowdSnapshot(agents, dynamic.Snapshot().Value(), samples, profiles, captureLimits, tick);
         };
         policy->follow = [&](const Runtime::RuntimeSceneView &scene, const NavigationAgentOwner owner, const std::uint64_t) {
             using Target = Result<std::optional<NavigationMovementTarget>>;

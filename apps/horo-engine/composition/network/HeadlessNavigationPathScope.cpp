@@ -165,6 +165,8 @@ namespace Horo::Application::Internal {
     }
 
     struct HeadlessNavigationPathScope::CrowdTick final {
+        using Collection = Result<std::optional<std::vector<Nav::NavigationCrowdBatchResult>>>;
+
         struct Pending final {
             Actor *actor;
             Nav::NavigationVelocityWork work;
@@ -178,9 +180,41 @@ namespace Horo::Application::Internal {
         std::vector<Nav::NavigationAvoidanceRequest> requests;
         Nav::NavigationCrowdSnapshot capture;
         std::unique_ptr<Nav::NavigationCrowdBatch> batch;
+        std::optional<std::vector<Nav::NavigationCrowdBatchResult>> qualifiedResults;
+
+        /** @brief Solve the entire captured population, including stationary requests for inactive motion owners. */
+        Result<void> SolveQualified(const HeadlessNavigationMotionPolicy &policy, const Nav::NavigationGeneration topology,
+                                    const float step, const CancellationToken &cancellation) {
+            const auto &qualified = *policy.qualified;
+            if (capture.Agents().size() > qualified.admitted.maximumAgents)
+                return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+            try {
+                auto idle = policy.limits;
+                idle.preferredVelocity = {};
+                idle.stepSeconds = step;
+                requests.assign(capture.Agents().size(), idle);
+                for (std::size_t index = 0; index < requests.size(); ++index)
+                    requests[index].agentIndex = index;
+                for (const auto &entry : pending)
+                    requests[entry.AgentIndex()] = entry.work.request;
+            } catch (const std::bad_alloc &) {
+                return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+            }
+            auto solved =
+                Nav::NavigationCrowdBatch::RunQualified(capture, requests, *qualified.provider, qualified.admitted, topology, cancellation);
+            if (solved.HasError())
+                return Result<void>::Failure(std::move(solved).ErrorValue());
+            qualifiedResults = std::move(solved).Value();
+            return Result<void>::Success();
+        }
 
         /** @brief Retains admitted work. A full queue leaves the prepared tick eligible for a stop command. */
-        Result<void> Schedule(const JobSystem &jobs, const HeadlessNavigationMotionPolicy &policy, const CancellationToken &cancellation) {
+        Result<void> Schedule(const JobSystem &jobs, const HeadlessNavigationMotionPolicy &policy, const Nav::NavigationGeneration topology,
+                              const float step, const CancellationToken &cancellation) {
+            if (policy.qualified)
+                return SolveQualified(policy, topology, step, cancellation);
+            for (const auto &entry : pending)
+                requests.push_back(entry.work.request);
             auto submitted = Nav::NavigationCrowdBatch::Submit(jobs, capture, requests, policy.workerSolvers, cancellation);
             if (submitted.HasError()) {
                 if (IsJobAdmissionPressure(submitted.ErrorValue()))
@@ -189,6 +223,13 @@ namespace Horo::Application::Internal {
             }
             batch = std::move(submitted).Value();
             return Result<void>::Success();
+        }
+
+        /** @brief Consumes either owner-ordered results or the complete detached worker batch. */
+        Collection Collect(const std::uint64_t tick) {
+            if (batch)
+                return batch->TryTake(capture, tick);
+            return Collection::Success(std::move(qualifiedResults));
         }
 
         /** @brief Delivers a worker error to the actors still owning motion. */
@@ -356,8 +397,11 @@ namespace Horo::Application::Internal {
                 motion->Reject(std::move(sample).ErrorValue());
         }
         auto captured = policy.capture(scene, activation_, population.Value(), samples_, motionTick_);
-        if (captured.HasValue() && !captured.Value().IsValid())
-            return Capture::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        if (captured.HasValue()) {
+            const auto &snapshot = captured.Value();
+            if (!snapshot.IsValid() || snapshot.Binding() != context_->Binding().scene || snapshot.CaptureTick() != motionTick_)
+                return Capture::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        }
         return captured;
     }
 
@@ -420,15 +464,13 @@ namespace Horo::Application::Internal {
                 continue;
             }
             auto prepared = motion->Prepare(current.Value(), tick.capture, limits);
-            if (prepared.HasValue() && prepared.Value()) {
-                tick.requests.push_back(prepared.Value()->request);
+            if (prepared.HasValue() && prepared.Value())
                 tick.pending.push_back({&actor, std::move(*prepared.Value())});
-            }
         }
         if (tick.pending.empty())
             return Result<void>::Success();
         std::ranges::sort(tick.pending, std::ranges::less{}, &CrowdTick::Pending::AgentIndex);
-        auto scheduled = tick.Schedule(jobs, policy, cancellation);
+        auto scheduled = tick.Schedule(jobs, policy, activation_.topology, motionStep_, cancellation);
         if (scheduled.HasError())
             DiscardCrowdTick();
         return scheduled;
@@ -444,8 +486,15 @@ namespace Horo::Application::Internal {
             return;
         }
         auto &tick = *crowdTick_;
-        using Collection = Result<std::optional<std::vector<Nav::NavigationCrowdBatchResult>>>;
-        const auto completed = tick.batch ? tick.batch->TryTake(tick.capture, motionTick_) : Collection::Success(std::nullopt);
+        if (policy.qualified) {
+            const auto current = lifecycle_->ActiveDescriptor();
+            if (current.HasError() || current.Value() != activation_) {
+                tick.Reject(MakeError(Nav::NavigationErrors::StaleSnapshot));
+                DiscardCrowdTick();
+                return;
+            }
+        }
+        const auto completed = tick.Collect(motionTick_);
         if (completed.HasError()) {
             tick.Reject(completed.ErrorValue());
         } else if (const auto &results = completed.Value()) {
@@ -487,6 +536,7 @@ namespace Horo::Application::Internal {
             return;
         auto &tick = *crowdTick_;
         tick.batch.reset();
+        tick.qualifiedResults.reset();
         for (const auto &pending : tick.pending) {
             if (auto *motion = pending.actor->owner->Motion())
                 motion->DiscardPrepared();
