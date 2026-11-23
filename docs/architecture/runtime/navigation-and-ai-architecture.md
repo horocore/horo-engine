@@ -93,9 +93,13 @@ and profile, with both endpoints transformed through the saved Scene hierarchy.
 The bake worker checks the retained source before requiring candidate-topology
 projection and Physics clearance. Missing evidence leaves the prior publication
 available and exits before cache lookup or tile build.
+The cooked radius is bounded by both authored connection radii and the measured
+free radius in every admitted direction.
 
-An explicitly traversal-aware Recast consumer can query authored links within
-one admitted tile. The corridor carries the exact link identity and ordered
+An explicitly traversal-aware Recast consumer can query tile-local authored
+links within a joined tile closure. The join rebases both polygon indices and
+rejects duplicate link identities across the closure. The corridor carries the
+exact link identity and ordered
 endpoints. Entrance and exit waypoints name the same portal and remain distinct
 even if they coincide with another waypoint. Shared polygon edges and ordinary
 funnel output keep their existing representations. Consumers rebuild for the
@@ -1266,9 +1270,14 @@ header and target-private implementation, with no new backend dependency or
 change to the cooked NavMesh artifact format.
 
 The NavigationRuntime-owned `NavigationTraversalCatalog` gives each authored
-link incarnation in a published Scene topology one capacity owner. It admits
+link incarnation in a published Scene topology one capacity owner. The World
+record admits one catalog at a time. A replacement catalog receives a distinct
+generation, so retained grants and retirement requests cannot affect it. It admits
 only exact live agents from the bound registry and resolves each link's allowed
-profiles and action from host-prepared descriptors. The fixed owner advances
+profiles and action from host-prepared descriptors. At the owner safe point a
+gate reports available, at capacity, or retired before granting a reservation.
+Requests from other agents or obsolete generations cannot advance its clock.
+The fixed owner advances
 entry and execution, expires deadlines, and cancels work on agent or link
 retirement. Terminal receipts release link capacity immediately and remain
 available for one read within the configured receipt bound. A host retires a

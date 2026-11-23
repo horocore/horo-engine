@@ -74,25 +74,32 @@ namespace Horo::Navigation {
         /** @brief Exact cooked geometry used to exercise an authored transition between disconnected polygons. */
         [[nodiscard]] NavigationTileBuildResult LinkTopology(const NavigationPreparedTile &input) {
             const auto area = Id<NavigationAreaId>(1);
-            return {.state = NavigationTileBuildState::Built,
-                    .key = input.tile.key.tile,
-                    .bounds = input.tile.bounds,
-                    .vertices = {{0, 0, 0}, {2, 0, 0}, {0, 0, 2}, {4, 0, 0}, {6, 0, 0}, {4, 0, 2}},
-                    .polygons = {{{0, 3}, {0, 3}, area}, {{3, 3}, {3, 3}, area}},
-                    .polygonVertexIndices = {0, 1, 2, 3, 4, 5},
-                    .polygonAdjacencies = std::vector<std::uint32_t>(6, NavMeshBoundaryAdjacency),
-                    .offMeshLinks = {{.start = {0.75F, 0, 0.75F},
-                                      .end = {4.75F, 0, 0.75F},
-                                      .radiusMeters = 1.0F,
-                                      .startPolygon = 0,
-                                      .endPolygon = 1,
-                                      .area = area,
-                                      .authoredLink = Id<NavigationLinkId>(23)}},
-                    .provenance = {{.producer = Id<NavigationSourceProducerId>(1),
-                                    .contribution = Id<NavigationSourceContributionId>(1),
-                                    .revision = Id<NavigationSourceRevision>(1),
-                                    .sourceDigest = TestSupport::Digest(10),
-                                    .polygons = {0, 2}}}};
+            NavigationTileBuildResult topology{.state = NavigationTileBuildState::Built,
+                                               .key = input.tile.key.tile,
+                                               .bounds = input.tile.bounds,
+                                               .vertices = {{0, 0, 0}, {2, 0, 0}, {0, 0, 2}, {4, 0, 0}, {6, 0, 0}, {4, 0, 2}},
+                                               .polygons = {{{0, 3}, {0, 3}, area}, {{3, 3}, {3, 3}, area}},
+                                               .polygonVertexIndices = {0, 1, 2, 3, 4, 5},
+                                               .polygonAdjacencies = std::vector<std::uint32_t>(6, NavMeshBoundaryAdjacency),
+                                               .offMeshLinks = {{.start = {0.75F, 0, 0.75F},
+                                                                 .end = {4.75F, 0, 0.75F},
+                                                                 .radiusMeters = 1.0F,
+                                                                 .startPolygon = 0,
+                                                                 .endPolygon = 1,
+                                                                 .area = area,
+                                                                 .authoredLink = Id<NavigationLinkId>(23)}},
+                                               .provenance = {{.producer = Id<NavigationSourceProducerId>(1),
+                                                               .contribution = Id<NavigationSourceContributionId>(1),
+                                                               .revision = Id<NavigationSourceRevision>(1),
+                                                               .sourceDigest = TestSupport::Digest(10),
+                                                               .polygons = {0, 2}}}};
+            const auto offset = input.tile.bounds.minimum.x;
+            for (auto &vertex : topology.vertices)
+                vertex.x += offset;
+            auto &link = topology.offMeshLinks.front();
+            link.start.x += offset;
+            link.end.x += offset;
+            return topology;
         }
 
         /** @brief Drives cooked Recast admission with one exact authored tile and profile. */
@@ -101,9 +108,9 @@ namespace Horo::Navigation {
             const NavigationDefinition definition = PrepareDefinition();
             const std::array<std::shared_ptr<const NavigationCookedTile>, 1> tiles{RoundTrip(input)};
 
-            static NavigationPreparedTile PrepareInput() {
+            static NavigationPreparedTile PrepareInput(const std::size_t tileIndex = 0) {
                 const TestSupport::IncrementalBakeFixture bake;
-                auto prepared = PrepareNavigationBakeTile(*bake.Input(), bake.Tiles().front(), bake.compatibility);
+                auto prepared = PrepareNavigationBakeTile(*bake.Input(), bake.Tiles()[tileIndex], bake.compatibility);
                 REQUIRE(prepared.HasValue());
                 return std::move(prepared).Value();
             }
@@ -345,6 +352,46 @@ namespace Horo::Navigation {
             const auto wide = backend->FindPath(request, {});
             REQUIRE(wide.HasValue());
             CHECK(wide.Value().status == NavigationPathStatus::Unreachable);
+        }
+    }
+
+    TEST_CASE("A joined tile closure retains unambiguous authored traversal boundaries", "[unit][navigation][provider][path][traversal]") {
+        const CookedLinkFixture fixture;
+        const auto linked = CookedLinkFixture::RoundTrip(CookedLinkFixture::PrepareInput(1));
+        auto info = fixture.Info();
+        SECTION("A link in a later tile offsets both polygon endpoints") {
+            auto plain = fixture.tiles.front()->Topology();
+            plain.offMeshLinks.clear();
+            const auto ground = NavigationCookedTile::Create(fixture.input, std::move(plain));
+            REQUIRE(ground.HasValue());
+            const std::array tiles{ground.Value(), linked};
+            info.tiles = tiles;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+            info.allowAuthoredTraversal = true;
+            const auto backend = CreateRecastDetourCookedNavigationQueryBackend(info);
+            REQUIRE(backend.HasValue());
+            auto request = fixture.Request();
+            const auto &link = linked->Topology().offMeshLinks.front();
+            request.start = link.start;
+            request.destination = link.end;
+            const auto route = backend.Value()->FindPath(request, {});
+            REQUIRE(route.HasValue());
+            REQUIRE(route.Value().status == NavigationPathStatus::Reachable);
+            REQUIRE(route.Value().corridor.size() == 2);
+            CHECK(route.Value().corridor[0].provenance.polygonIndex == 2);
+            CHECK(route.Value().corridor[1].provenance.polygonIndex == 3);
+            REQUIRE(route.Value().portals.size() == 1);
+            const auto &portal = route.Value().portals.front();
+            CHECK(portal.kind == NavigationPathPortalKind::OffMeshLink);
+            CHECK(portal.link == link.authoredLink);
+            CHECK(portal.left == link.start);
+            CHECK(portal.right == link.end);
+        }
+        SECTION("Two valid tiles cannot publish the same link identity") {
+            info.allowAuthoredTraversal = true;
+            const std::array tiles{fixture.tiles.front(), linked};
+            info.tiles = tiles;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::DescriptorConflict);
         }
     }
 

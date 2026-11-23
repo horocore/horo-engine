@@ -9,10 +9,7 @@ namespace Horo::Navigation {
     /** @copydoc NavigationTraversalReservations::IsLive */
     bool NavigationTraversalReservations::IsLive(const NavigationTraversalReservation &reservation, const CrowdAgentHandle agent,
                                                  const std::uint64_t tick) {
-        if (!CanMutateAt(tick))
-            return false;
-        const auto *record = Find(reservation, agent);
-        return record && record->IsLive();
+        return FindLiveAt(reservation, agent, tick) != nullptr;
     }
 
     /** @copydoc NavigationTraversalReservations::Abandon */
@@ -22,13 +19,18 @@ namespace Horo::Navigation {
         if (!record)
             return;
         if (record->IsLive())
-            --active_;
+            Finish(*record, NavigationTraversalState::Cancelled, NavigationTraversalEnd::Cancelled);
         *record = {};
     }
 
     namespace {
         constexpr std::size_t MaximumTraversalSlots = 256;
         constexpr std::size_t MaximumTraversalProfiles = 64;
+
+        /** @brief Requires complete authored and catalog identity before reading World authority. */
+        [[nodiscard]] bool ValidLinkIdentity(const NavigationTraversalLink &link) noexcept {
+            return link.link.IsValid() && link.incarnation != 0 && link.catalogGeneration != 0;
+        }
 
         /** @brief Checks the live, retained and profile bounds before any storage is allocated. */
         [[nodiscard]] bool WithinTraversalLimits(const std::size_t capacity, const std::size_t receiptSlots,
@@ -76,7 +78,7 @@ namespace Horo::Navigation {
         const NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents, const NavigationTraversalLink &link,
         const NavigationLinkKind action, const std::span<const NavigationAgentProfileId> profiles, const std::size_t capacity,
         const std::size_t receiptSlots) {
-        if (!link.link.IsValid() || link.incarnation == 0 || action >= NavigationLinkKind::Count)
+        if (!ValidLinkIdentity(link) || action >= NavigationLinkKind::Count)
             return Result<NavigationTraversalReservations>::Failure(MakeError(NavigationErrors::CapabilityDescriptorInvalid));
         if (!WithinTraversalLimits(capacity, receiptSlots, profiles.size()))
             return Result<NavigationTraversalReservations>::Failure(MakeError(NavigationErrors::CapacityExceeded));
@@ -99,22 +101,20 @@ namespace Horo::Navigation {
                                                                                     const NavigationLinkKind action,
                                                                                     const std::uint64_t tick,
                                                                                     const std::uint64_t deadline) {
-        if (!CanMutateAt(tick))
-            return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::StaleSnapshot));
-        if (deadline <= tick)
-            return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         if (action != action_ || !IsAgentCompatible(agent))
             return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+        if (deadline <= tick)
+            return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
+        if (!CanMutateAt(tick))
+            return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (nextSequence_ == 0)
             return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::GenerationExhausted));
         if (active_ == capacity_ || std::ranges::any_of(records_, [&](const Record &record) {
             return record.IsLive() && record.agent == agent;
         }))
             return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::AdmissionRejected));
-        const auto free = std::ranges::find_if(records_, [](const Record &record) {
-            return record.reservation.sequence == 0;
-        });
-        if (free == records_.end())
+        auto *free = FreeRecord();
+        if (!free)
             return Result<NavigationTraversalReservation>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         const NavigationTraversalReservation reservation{link_, nextSequence_++};
         *free = {.reservation = reservation, .agent = agent, .deadline = deadline, .end = {}};
@@ -122,13 +122,26 @@ namespace Horo::Navigation {
         return Result<NavigationTraversalReservation>::Success(reservation);
     }
 
+    /** @copydoc NavigationTraversalReservations::AvailabilityAtSafePoint */
+    Result<NavigationTraversalAvailability> NavigationTraversalReservations::AvailabilityAtSafePoint(const std::uint64_t tick) {
+        using Return = Result<NavigationTraversalAvailability>;
+        using enum NavigationTraversalAvailability;
+        if (!AdvanceAtSafePoint(tick))
+            return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        if (retired_)
+            return Return::Success(Retired);
+        if (world_.State() != NavigationWorldLifecycleState::Active)
+            return Return::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+        if (nextSequence_ == 0)
+            return Return::Failure(MakeError(NavigationErrors::GenerationExhausted));
+        return Return::Success(active_ < capacity_ && FreeRecord() ? Available : AtCapacity);
+    }
+
     /** @copydoc NavigationTraversalReservations::Transition */
     bool NavigationTraversalReservations::Transition(const NavigationTraversalReservation &reservation, const CrowdAgentHandle agent,
                                                      const NavigationTraversalState next, const std::uint64_t tick) {
-        if (!CanMutateAt(tick))
-            return false;
-        auto *record = Find(reservation, agent);
-        if (!record || record->end)
+        auto *record = FindLiveAt(reservation, agent, tick);
+        if (!record)
             return false;
         switch (next) {
             case NavigationTraversalState::Cancelled:
@@ -177,9 +190,10 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationTraversalReservations::Take */
     std::optional<NavigationTraversalCompletion> NavigationTraversalReservations::Take(const NavigationTraversalReservation &reservation,
-                                                                                       const CrowdAgentHandle agent) noexcept {
+                                                                                       const CrowdAgentHandle agent,
+                                                                                       const std::uint64_t tick) {
         auto *record = Find(reservation, agent);
-        if (!record || !record->end)
+        if (!record || !AdvanceAtSafePoint(tick) || !record->end)
             return std::nullopt;
         const NavigationTraversalCompletion result{record->reservation, record->agent, record->state, *record->end};
         *record = {};
@@ -208,6 +222,24 @@ namespace Horo::Navigation {
             return candidate.reservation.sequence == reservation.sequence && candidate.agent == agent;
         });
         return record != records_.end() ? std::to_address(record) : nullptr;
+    }
+
+    /** @copydoc NavigationTraversalReservations::FreeRecord */
+    NavigationTraversalReservations::Record *NavigationTraversalReservations::FreeRecord() noexcept {
+        const auto record = std::ranges::find_if(records_, [](const Record &candidate) {
+            return candidate.reservation.sequence == 0;
+        });
+        return record != records_.end() ? std::to_address(record) : nullptr;
+    }
+
+    /** @copydoc NavigationTraversalReservations::FindLiveAt */
+    NavigationTraversalReservations::Record *NavigationTraversalReservations::FindLiveAt(const NavigationTraversalReservation &reservation,
+                                                                                         const CrowdAgentHandle agent,
+                                                                                         const std::uint64_t tick) {
+        auto *record = Find(reservation, agent);
+        if (!record || !record->IsLive() || !CanMutateAt(tick))
+            return nullptr;
+        return record->IsLive() ? record : nullptr;
     }
 
     /** @copydoc NavigationTraversalReservations::Finish */

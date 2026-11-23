@@ -18,6 +18,7 @@ namespace Horo::Navigation {
         NavigationWorldActivationDescriptor activation; /**< Exact world, Scene and topology binding. */
         NavigationLinkId link;                          /**< Stable identity of the admitted authored link. */
         std::uint64_t incarnation{};                    /**< Nonzero, never reused for this link within the topology. */
+        std::uint64_t catalogGeneration{};              /**< Exact authority generation issued within the topology. */
 
         constexpr auto operator<=>(const NavigationTraversalLink &) const noexcept = default;
     };
@@ -25,9 +26,16 @@ namespace Horo::Navigation {
     /** @brief Process-local identity of one accepted traversal operation. */
     struct NavigationTraversalReservation final {
         NavigationTraversalLink link;
-        std::uint64_t sequence{}; /**< Nonzero admission sequence within this link incarnation. */
+        std::uint64_t sequence{}; /**< Nonzero admission sequence within this catalog's link incarnation. */
 
         constexpr auto operator<=>(const NavigationTraversalReservation &) const noexcept = default;
+    };
+
+    /** @brief Gate admission state before a particular agent owns a reservation. */
+    enum class NavigationTraversalAvailability : std::uint8_t {
+        Available,
+        AtCapacity,
+        Retired
     };
 
     /** @brief Fixed owner-phase progression of one accepted operation. */
@@ -79,6 +87,7 @@ namespace Horo::Navigation {
     /** @brief Bounded reservation authority for one published Scene and topology.
      * @details All operations are fixed owner-lane calls. The World and agent registry outlive this catalog,
      * which in turn outlives its movement controllers. Link descriptors are copied during preparation.
+     * The same topology admits a replacement after destruction. A new topology has a separate claim.
      */
     class NavigationTraversalCatalog final {
         struct Implementation;
@@ -91,17 +100,30 @@ namespace Horo::Navigation {
 
     public:
         /** @brief Factory-only construction with the validated catalog storage. */
-        NavigationTraversalCatalog(ConstructionKey, std::unique_ptr<Implementation> implementation) noexcept;
+        NavigationTraversalCatalog(ConstructionKey, std::shared_ptr<Implementation> implementation) noexcept;
         /** @brief Prepares a bounded catalog against the exact active world and registered agent population.
-         * @param world Published navigation topology. @param agents Exact Scene's logical agent owner.
-         * @param links Unique enabled authored links. @return Owned catalog or a typed invalid or capacity failure.
+         * @param world Owner of the published navigation topology. @param agents Exact Scene's logical agent owner.
+         * @param links Unique enabled authored links.
+         * @return Owned catalog, AdmissionRejected when the topology already has a catalog, or a typed failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<NavigationTraversalCatalog>> Create(
-            const NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents,
-            std::span<const NavigationTraversalAdmission> links);
+            NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents, std::span<const NavigationTraversalAdmission> links);
         NavigationTraversalCatalog(const NavigationTraversalCatalog &) = delete;
         NavigationTraversalCatalog &operator=(const NavigationTraversalCatalog &) = delete;
         ~NavigationTraversalCatalog();
+
+        /** @brief Looks up this catalog's exact gate identity, including before the first reservation.
+         * @param link Stable authored link identity. @param topology Expected topology of this catalog.
+         * @return Identity accepted for retirement by this catalog, or empty when absent.
+         */
+        [[nodiscard]] std::optional<NavigationTraversalLink> ReadLink(NavigationLinkId link, NavigationGeneration topology) const noexcept;
+
+        /** @brief Advances retirement at the owner tick and reports whether the gate can admit a reservation.
+         * @param link Stable link identity. @param topology Exact topology. @param tick Current owner tick.
+         * @return Gate admission state, or a typed failure for stale, missing or paused authority.
+         */
+        [[nodiscard]] Result<NavigationTraversalAvailability> AvailabilityAtSafePoint(NavigationLinkId link, NavigationGeneration topology,
+                                                                                      std::uint64_t tick);
 
         /** @brief Admits one matching agent to the requested link at the given owner tick.
          * @param link Stable link identity from the installed path. @param topology Exact path topology.
@@ -131,13 +153,13 @@ namespace Horo::Navigation {
         [[nodiscard]] std::optional<NavigationTraversalCompletion> Take(const NavigationTraversalReservation &reservation,
                                                                         CrowdAgentHandle agent, std::uint64_t tick);
 
-        /** @brief Revokes an exact grant whose owner no longer consumes results.
+        /** @brief Cancels an exact live grant. The owner waives delivery of its terminal receipt.
          * @param reservation Accepted token. @param agent Original registered agent.
          */
         void Abandon(const NavigationTraversalReservation &reservation, CrowdAgentHandle agent) noexcept;
 
         /** @brief Permanently withdraws an exact gate incarnation and retains terminal receipts.
-         * @param link Stable authored identity and exact topology/gate incarnation.
+         * @param link Exact authority identity from ReadLink or an admitted reservation.
          * @return True if the catalog owns that exact incarnation.
          */
         [[nodiscard]] bool Retire(const NavigationTraversalLink &link) noexcept;
@@ -146,6 +168,6 @@ namespace Horo::Navigation {
         friend class NavigationMovementController;
         /** @brief Matches the concrete World and agent owners borrowed at creation. */
         [[nodiscard]] bool MatchesOwners(const NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents) const noexcept;
-        std::unique_ptr<Implementation> implementation_;
+        std::shared_ptr<Implementation> implementation_;
     };
 }  // namespace Horo::Navigation

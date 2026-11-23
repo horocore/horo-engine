@@ -10,7 +10,7 @@ namespace Horo::Navigation::Detail {
         std::size_t reservedBytes{};
     };
 
-    /** @brief Joins exact reciprocal tile boundary edges while retaining every local cooked neighbor. */
+    /** @brief Joins exact reciprocal tile boundary edges while retaining local cooked neighbors and authored links. */
     [[nodiscard]] Result<RecastDetourJoinedTileTopology> JoinRecastDetourCookedTiles(
         std::span<const std::shared_ptr<const NavigationCookedTile>> tiles, std::size_t maximumOwnedBytes);
 }  // namespace Horo::Navigation::Detail

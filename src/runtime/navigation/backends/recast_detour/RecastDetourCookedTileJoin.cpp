@@ -98,6 +98,22 @@ namespace Horo::Navigation::Detail {
             }
         }
 
+        /** @brief Preserves both endpoints of a decoded tile-local authored link in the aggregate polygon table. */
+        void AppendLinks(const NavigationTileBuildResult &tile, NavigationTileBuildResult &joined) {
+            const auto polygonBase = static_cast<std::uint32_t>(joined.polygons.size() - tile.polygons.size());
+            for (auto link : tile.offMeshLinks) {
+                link.startPolygon += polygonBase;
+                link.endPolygon += polygonBase;
+                joined.offMeshLinks.push_back(link);
+            }
+        }
+
+        /** @brief Requires one portable authored identity per routeable link in the exact provider closure. */
+        [[nodiscard]] bool HasUniqueLinks(std::vector<NavMeshOffMeshLink> &links) {
+            std::ranges::sort(links, {}, &NavMeshOffMeshLink::authoredLink);
+            return std::ranges::adjacent_find(links, {}, &NavMeshOffMeshLink::authoredLink) == links.end();
+        }
+
         /** @brief Returns a stable welded vertex representative and shortens subsequent lookups. */
         [[nodiscard]] std::uint32_t Representative(std::span<std::uint32_t> vertices, std::uint32_t id) noexcept {
             while (vertices[id] != id) {
@@ -142,20 +158,23 @@ namespace Horo::Navigation::Detail {
             std::size_t vertices{};
             std::size_t polygons{};
             std::size_t edges{};
+            std::size_t links{};
 
             [[nodiscard]] bool Add(const NavigationTileBuildResult &tile) noexcept {
                 if (tile.vertices.size() > RecastDetourProviderHardLimits::Vertices - vertices ||
-                    tile.polygons.size() > RecastDetourProviderHardLimits::Polygons - polygons)
+                    tile.polygons.size() > RecastDetourProviderHardLimits::Polygons - polygons ||
+                    tile.offMeshLinks.size() > NavMeshArtifactLimits::MaximumOffMeshLinks - links)
                     return false;
                 vertices += tile.vertices.size();
                 polygons += tile.polygons.size();
                 edges += tile.polygonVertexIndices.size();
+                links += tile.offMeshLinks.size();
                 return true;
             }
 
             [[nodiscard]] std::size_t Bytes() const noexcept {
                 return vertices * (sizeof(Math::Vec3) + sizeof(std::uint32_t)) + polygons * sizeof(NavMeshPolygon) +
-                       edges * (2 * sizeof(std::uint32_t) + sizeof(Edge));
+                       edges * (2 * sizeof(std::uint32_t) + sizeof(Edge)) + links * sizeof(NavMeshOffMeshLink);
             }
         };
     }  // namespace
@@ -175,10 +194,16 @@ namespace Horo::Navigation::Detail {
             topology.polygons.reserve(storage.polygons);
             topology.polygonVertexIndices.reserve(storage.edges);
             topology.polygonAdjacencies.reserve(storage.edges);
+            topology.offMeshLinks.reserve(storage.links);
             std::vector<Edge> edges;
             edges.reserve(storage.edges);
-            for (const auto &tile : tiles)
+            for (const auto &tile : tiles) {
                 AppendTile(tile->Topology(), topology, edges);
+                AppendLinks(tile->Topology(), topology);
+            }
+            if (!HasUniqueLinks(topology.offMeshLinks))
+                return Joined::Failure(
+                    MakeError(NavigationErrors::DescriptorConflict, "Duplicate authored link identity in the tile closure."));
             if (!JoinEdges(topology, edges))
                 return Joined::Failure(MakeError(NavigationErrors::OperationUnsupported, "Ambiguous cooked tile perimeter edges."));
             return Joined::Success({std::move(topology), reserved});

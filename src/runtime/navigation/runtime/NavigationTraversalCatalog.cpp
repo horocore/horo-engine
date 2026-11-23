@@ -21,7 +21,7 @@ namespace Horo::Navigation {
             return found != entries.end() && found->identity.link == link ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Rejects a token from any other topology or gate incarnation. */
+        /** @brief Rejects a token from any other topology, catalog or gate incarnation. */
         Entry *Find(const NavigationTraversalLink &link) noexcept {
             auto *entry = Find(link.link);
             return entry && entry->identity == link ? entry : nullptr;
@@ -35,8 +35,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationTraversalCatalog::Create */
     Result<std::unique_ptr<NavigationTraversalCatalog>> NavigationTraversalCatalog::Create(
-        const NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents,
-        const std::span<const NavigationTraversalAdmission> links) {
+        NavigationWorldLifecycle &world, const NavigationAgentRegistry &agents, const std::span<const NavigationTraversalAdmission> links) {
         using Output = Result<std::unique_ptr<NavigationTraversalCatalog>>;
         const auto active = world.ActiveDescriptor();
         if (active.HasError())
@@ -50,17 +49,20 @@ namespace Horo::Navigation {
             std::ranges::sort(sorted, {}, &NavigationTraversalAdmission::link);
             if (std::ranges::adjacent_find(sorted, {}, &NavigationTraversalAdmission::link) != sorted.end())
                 return Output::Failure(MakeError(NavigationErrors::DescriptorConflict));
-            auto catalog = std::make_unique<Implementation>();
+            auto catalog = std::make_shared<Implementation>();
             catalog->topology = active.Value().topology;
             catalog->world = &world;
             catalog->agents = &agents;
             catalog->entries.reserve(sorted.size());
+            const auto generation = world.ClaimTraversalCatalog(active.Value(), catalog);
+            if (generation.HasError())
+                return Output::Failure(generation.ErrorValue());
             std::size_t slots{};
             for (const auto &link : sorted) {
                 slots += link.receiptSlots;
                 if (slots > MaximumReceiptSlots)
                     return Output::Failure(MakeError(NavigationErrors::CapacityExceeded));
-                const NavigationTraversalLink identity{active.Value(), link.link, link.incarnation};
+                const NavigationTraversalLink identity{active.Value(), link.link, link.incarnation, generation.Value()};
                 auto owner = NavigationTraversalReservations::Create(world, agents, identity, link.action, link.profiles, link.capacity,
                                                                      link.receiptSlots);
                 if (owner.HasError())
@@ -74,7 +76,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationTraversalCatalog::NavigationTraversalCatalog */
-    NavigationTraversalCatalog::NavigationTraversalCatalog(ConstructionKey, std::unique_ptr<Implementation> implementation) noexcept
+    NavigationTraversalCatalog::NavigationTraversalCatalog(ConstructionKey, std::shared_ptr<Implementation> implementation) noexcept
         : implementation_(std::move(implementation)) {}
 
     NavigationTraversalCatalog::~NavigationTraversalCatalog() = default;
@@ -83,6 +85,26 @@ namespace Horo::Navigation {
     bool NavigationTraversalCatalog::MatchesOwners(const NavigationWorldLifecycle &world,
                                                    const NavigationAgentRegistry &agents) const noexcept {
         return implementation_->world == &world && implementation_->agents == &agents;
+    }
+
+    /** @copydoc NavigationTraversalCatalog::ReadLink */
+    std::optional<NavigationTraversalLink> NavigationTraversalCatalog::ReadLink(const NavigationLinkId link,
+                                                                                const NavigationGeneration topology) const noexcept {
+        if (topology != implementation_->topology)
+            return std::nullopt;
+        const auto *entry = implementation_->Find(link);
+        return entry ? std::optional{entry->identity} : std::nullopt;
+    }
+
+    /** @copydoc NavigationTraversalCatalog::AvailabilityAtSafePoint */
+    Result<NavigationTraversalAvailability> NavigationTraversalCatalog::AvailabilityAtSafePoint(const NavigationLinkId link,
+                                                                                                const NavigationGeneration topology,
+                                                                                                const std::uint64_t tick) {
+        using Return = Result<NavigationTraversalAvailability>;
+        if (topology != implementation_->topology)
+            return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
+        auto *entry = implementation_->Find(link);
+        return entry ? entry->owner.AvailabilityAtSafePoint(tick) : Return::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
     }
 
     /** @copydoc NavigationTraversalCatalog::Reserve */
@@ -119,9 +141,7 @@ namespace Horo::Navigation {
     std::optional<NavigationTraversalCompletion> NavigationTraversalCatalog::Take(const NavigationTraversalReservation &reservation,
                                                                                   const CrowdAgentHandle agent, const std::uint64_t tick) {
         auto *entry = implementation_->Find(reservation.link);
-        if (!entry || !entry->owner.AdvanceAtSafePoint(tick))
-            return {};
-        return entry->owner.Take(reservation, agent);
+        return entry ? entry->owner.Take(reservation, agent, tick) : std::nullopt;
     }
 
     /** @copydoc NavigationTraversalCatalog::Abandon */

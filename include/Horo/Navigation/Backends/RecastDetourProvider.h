@@ -84,7 +84,7 @@ namespace Horo::Navigation {
         std::uint32_t maximumConcurrentQueries{};
         std::size_t maximumOwnedBytes{};
         std::uint64_t capabilityRevision{};
-        bool allowAuthoredTraversal{}; /**< Enables authored single-tile link corridors for traversal-aware consumers. */
+        bool allowAuthoredTraversal{}; /**< Enables authored tile-local links in the admitted closure for traversal-aware consumers. */
     };
 
     /** @brief Prepared native query owner and the bounded storage reservation used to admit it. */

@@ -209,6 +209,14 @@ namespace Horo::Navigation {
 
     private:
         friend class NavigationStreamedTopologyPublication;
+        friend class NavigationTraversalCatalog;
+        /** @brief Claims the current topology for one catalog on the lifecycle owner lane.
+         * @param expected Exact activation observed by the catalog factory.
+         * @param owner Lifetime witness for the catalog's detached implementation.
+         * @return Monotonically issued catalog generation, or a typed stale, duplicate, or exhausted result.
+         */
+        [[nodiscard]] Result<std::uint64_t> ClaimTraversalCatalog(const NavigationWorldActivationDescriptor &expected,
+                                                                  std::weak_ptr<const void> owner);
         /** @brief Publishes the validated aggregate topology without waiting for cancellation observers. */
         void PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate, NavigationTopologyChange change) noexcept;
         /** @brief Wakes cancellation observers on the exact predecessor after aggregate publication. */

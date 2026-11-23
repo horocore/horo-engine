@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -21,6 +22,8 @@ namespace Horo::Navigation {
             std::unique_ptr<INavigationQueryBackend> backend;
             CancellationSource cancellation;
             std::atomic<NavigationWorldRevocation> revocation{NavigationWorldRevocation::None};
+            std::weak_ptr<const void> traversalCatalog;     /**< Owner-lane admission witness. Never pins a catalog or provider. */
+            std::uint64_t lastTraversalCatalogGeneration{}; /**< Owner-lane counter within this exact topology. */
         };
     }  // namespace Detail
 
@@ -364,6 +367,19 @@ namespace Horo::Navigation {
         if (!active_)
             return Failure<NavigationWorldActivationDescriptor>(NavigationErrors::NoNavigationData);
         return Result<NavigationWorldActivationDescriptor>::Success(active_->descriptor);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::ClaimTraversalCatalog */
+    Result<std::uint64_t> NavigationWorldLifecycle::ClaimTraversalCatalog(const NavigationWorldActivationDescriptor &expected,
+                                                                          std::weak_ptr<const void> owner) {
+        if (!active_ || active_->descriptor != expected || owner.expired())
+            return Failure<std::uint64_t>(NavigationErrors::StaleSnapshot);
+        if (!active_->traversalCatalog.expired())
+            return Failure<std::uint64_t>(NavigationErrors::AdmissionRejected);
+        if (active_->lastTraversalCatalogGeneration == std::numeric_limits<std::uint64_t>::max())
+            return Failure<std::uint64_t>(NavigationErrors::GenerationExhausted);
+        active_->traversalCatalog = std::move(owner);
+        return Result<std::uint64_t>::Success(++active_->lastTraversalCatalogGeneration);
     }
 
     /** @copydoc NavigationWorldLifecycle::State */

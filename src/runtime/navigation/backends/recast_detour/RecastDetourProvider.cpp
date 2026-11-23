@@ -570,7 +570,7 @@ namespace Horo::Navigation {
                 return Descriptor::Failure(
                     MakeError(NavigationErrors::OperationUnsupported, "Cooked polygons require one adjacency per supported edge."));
             if (!cooked.offMeshLinks.empty() &&
-                (!info.allowAuthoredTraversal || info.tiles.size() != 1 || !std::ranges::all_of(cooked.offMeshLinks, [](const auto &link) {
+                (!info.allowAuthoredTraversal || !std::ranges::all_of(cooked.offMeshLinks, [](const auto &link) {
                 return link.authoredLink.IsValid();
             })))
                 return Descriptor::Failure(MakeError(NavigationErrors::OperationUnsupported,

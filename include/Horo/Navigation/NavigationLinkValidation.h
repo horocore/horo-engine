@@ -71,7 +71,7 @@ namespace Horo::Navigation {
         NavigationAgentProfileId profile;
         NavigationBakeLinkEndpoint start;
         NavigationBakeLinkEndpoint end;
-        float radiusMeters{};
+        float radiusMeters{}; /**< Measured free radius for this exact direction. */
         float heightMeters{};
     };
 
@@ -146,7 +146,7 @@ namespace Horo::Navigation {
         NavigationLinkKind kind{NavigationLinkKind::Jump};
         NavigationLinkDirection direction{NavigationLinkDirection::StartToEnd};
         NavigationAreaId area;
-        float radiusMeters{};
+        float radiusMeters{}; /**< Usable radius bounded by both connections and all admitted directions. */
     };
 
     /** @brief Cook rows plus their complete semantic key, including the explicit suggestion policy. */
