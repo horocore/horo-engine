@@ -88,6 +88,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/ValidationResult.h
     Horo/Foundation/Handles.h
     Horo/Foundation/ImmutableFileStorage.h
+    Horo/Foundation/JobAdmission.h
     Horo/Foundation/JobSystem.h
     Horo/Foundation/Logging/LogContext.h
     Horo/Foundation/Logging/LogLevel.h

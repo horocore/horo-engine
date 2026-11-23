@@ -2,6 +2,7 @@
 
 #include "HeadlessNetworkServices.h"
 #include "Horo/Animation/AnimationErrors.h"
+#include "Horo/Foundation/JobAdmission.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
@@ -177,6 +178,26 @@ namespace Horo::Application::Internal {
         std::vector<Nav::NavigationAvoidanceRequest> requests;
         Nav::NavigationCrowdSnapshot capture;
         std::unique_ptr<Nav::NavigationCrowdBatch> batch;
+
+        /** @brief Retains admitted work. A full queue leaves the prepared tick eligible for a stop command. */
+        Result<void> Schedule(const JobSystem &jobs, const HeadlessNavigationMotionPolicy &policy, const CancellationToken &cancellation) {
+            auto submitted = Nav::NavigationCrowdBatch::Submit(jobs, capture, requests, policy.workerSolvers, cancellation);
+            if (submitted.HasError()) {
+                if (IsJobAdmissionPressure(submitted.ErrorValue()))
+                    return Result<void>::Success();
+                return Result<void>::Failure(std::move(submitted).ErrorValue());
+            }
+            batch = std::move(submitted).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Delivers a worker error to the actors still owning motion. */
+        void Reject(const Error &error) const {
+            for (const auto &entry : pending) {
+                if (auto *motion = entry.actor->owner->Motion())
+                    motion->Reject(error);
+            }
+        }
     };
 
     HeadlessNavigationPathScope::HeadlessNavigationPathScope(
@@ -407,26 +428,26 @@ namespace Horo::Application::Internal {
         if (tick.pending.empty())
             return Result<void>::Success();
         std::ranges::sort(tick.pending, std::ranges::less{}, &CrowdTick::Pending::AgentIndex);
-        auto batch = Nav::NavigationCrowdBatch::Submit(jobs, tick.capture, tick.requests, policy.workerSolvers, cancellation);
-        if (batch.HasError()) {
+        auto scheduled = tick.Schedule(jobs, policy, cancellation);
+        if (scheduled.HasError())
             DiscardCrowdTick();
-            return Result<void>::Failure(std::move(batch).ErrorValue());
-        }
-        tick.batch = std::move(batch).Value();
-        return Result<void>::Success();
+        return scheduled;
     }
 
     /** @copydoc HeadlessNavigationPathScope::PublishMotion */
-    void HeadlessNavigationPathScope::PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy) {
-        if (!crowdTick_ || !crowdTick_->batch)
+    void HeadlessNavigationPathScope::PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
+                                                    const CancellationToken &cancellation) {
+        if (!crowdTick_ || crowdTick_->pending.empty())
             return;
+        if (cancellation.IsCancellationRequested()) {
+            DiscardCrowdTick();
+            return;
+        }
         auto &tick = *crowdTick_;
-        const auto completed = tick.batch->TryTake(tick.capture, motionTick_);
+        using Collection = Result<std::optional<std::vector<Nav::NavigationCrowdBatchResult>>>;
+        const auto completed = tick.batch ? tick.batch->TryTake(tick.capture, motionTick_) : Collection::Success(std::nullopt);
         if (completed.HasError()) {
-            for (const auto &pending : tick.pending) {
-                if (auto *motion = pending.actor->owner->Motion())
-                    motion->Reject(completed.ErrorValue());
-            }
+            tick.Reject(completed.ErrorValue());
         } else if (const auto &results = completed.Value()) {
             for (const auto &result : *results)
                 PublishCrowdResult(scene, policy, result.agentIndex, result.outcome);

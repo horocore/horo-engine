@@ -3122,9 +3122,10 @@ stale capture, or an invalid solver result cannot expose a partial batch.
 Collection passes detached results to the per-agent publication checks.
 An explicit Headless best-effort worker policy reuses the process decision
 JobSystem. It dispatches after decision intents and polls after Gameplay and
-Animation, before Character. When the batch is still pending at that cutoff,
-the owner publishes a zero-motion command against the same tick and retires the
-jobs. Worker solver slots are independent and support overlap with retirement
+Animation, before Character. A full queue or a batch still pending at the
+cutoff produces a zero-motion command against the same tick. The task stays
+active and can submit again on the next tick. Other admission errors retain
+their scheduler identity. Worker solver slots are independent and support overlap with retirement
 of an earlier cancelled tick. An aborted tick or Scene retirement withdraws
 unconsumed work.
 

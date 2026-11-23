@@ -85,7 +85,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> DispatchMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
                                                   const JobSystem &jobs, const CancellationToken &cancellation);
         /** @brief Polls the exact tick once and submits ready motion or a bounded stop. */
-        void PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
+        void PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
+                           const CancellationToken &cancellation);
         /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;

@@ -1098,15 +1098,25 @@ namespace Horo::Application::CharacterSceneProductTest {
             MissingAnimation,
             Animated,
             Dedicated,
-            MissedWorker
+            MissedWorker,
+            SaturatedWorker
         };
         const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated,
-                                       Scenario::Dedicated, Scenario::MissedWorker);
+                                       Scenario::Dedicated, Scenario::MissedWorker, Scenario::SaturatedWorker);
         const bool follows = scenario == Scenario::Follow;
         const bool dedicated = scenario == Scenario::Dedicated;
         const bool animated = scenario == Scenario::Animated || dedicated;
-        const bool workerDeadline = scenario == Scenario::MissedWorker;
-        JobSystem queuedJobs({.workerCount = 0});
+        const bool workerPressure = scenario == Scenario::SaturatedWorker;
+        const bool workerDeadline = workerPressure || scenario == Scenario::MissedWorker;
+        JobSystem queuedJobs({.workerCount = 0, .maxQueuedJobs = 1});
+        std::optional<JobHandle> blocker;
+        if (workerPressure) {
+            auto occupied = queuedJobs.SubmitResult({}, [](const CancellationToken &) {
+                return Result<void>::Success();
+            });
+            REQUIRE(occupied.HasValue());
+            blocker.emplace(std::move(occupied).Value());
+        }
         const auto role = dedicated ? Network::NetworkProjectRole::DedicatedServer : Network::NetworkProjectRole::Standalone;
         const Network::NetworkModeWorld authority{Network::NetworkModeWorldKind::AuthorityServer, {31}};
         const auto motionTrigger = Animation::GraphParameterId::Create(2).Value();
@@ -1215,7 +1225,14 @@ namespace Horo::Application::CharacterSceneProductTest {
         goal.y = scene->Get(*actor).Value().localTransform->translation.y;
         if (workerDeadline) {
             const auto initial = scene->Get(*actor).Value().localTransform->translation;
-            for (std::size_t frame = 0; frame < 12; ++frame)
+            for (std::size_t frame = 0; frame < 6; ++frame)
+                product.RunFrame();
+            if (blocker) {
+                const auto admission = queuedJobs.AdmissionSnapshot();
+                CHECK(admission.rejected[static_cast<std::size_t>(JobPriority::Normal)] > 0);
+                REQUIRE(blocker->RequestCancel().HasValue());
+            }
+            for (std::size_t frame = 0; frame < 6; ++frame)
                 product.RunFrame();
             REQUIRE(staged);
             REQUIRE(captures > 1);

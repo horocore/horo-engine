@@ -1,3 +1,5 @@
+#include "Horo/Foundation/JobAdmission.h"
+
 #include "../FoundationErrors.h"
 #include "JobSystemState.h"
 
@@ -5,6 +7,15 @@
 #include <chrono>
 
 namespace Horo {
+    /** @copydoc IsJobAdmissionPressure */
+    bool IsJobAdmissionPressure(const Error &error) noexcept {
+        using namespace JobErrors;
+        if (error.domain.Value() != QueueFull.domain.Value())
+            return false;
+        const auto code = error.code.Value();
+        return code == QueueFull.code.Value() || code == QueueShed.code.Value() || code == WaitForbidden.code.Value();
+    }
+
     /** @copydoc JobDetail::WaitDeadline */
     std::chrono::steady_clock::time_point JobDetail::WaitDeadline(const Duration timeout) noexcept {
         const auto now = std::chrono::steady_clock::now();

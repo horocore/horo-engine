@@ -1007,7 +1007,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         /** @brief Submits the selected actors' safe motion after behavior and Animation evaluation. */
-        Result<void> SubmitConfiguredMotion() {
+        Result<void> SubmitConfiguredMotion(const Runtime::FixedStepContext &context) {
             if (!record_->decisionMotion)
                 return Result<void>::Success();
             const auto scene = record_->scenes->ActiveScene();
@@ -1016,7 +1016,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &policy = *owners_->configured->navigationMotion;
             if (policy.workerSolvers.empty())
                 return record_->navigationPath->SubmitMotion(*scene, policy);
-            record_->navigationPath->PublishMotion(*scene, policy);
+            record_->navigationPath->PublishMotion(*scene, policy, context.cancellation);
             return Result<void>::Success();
         }
 
@@ -1049,7 +1049,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     record_->navigationPath->DiscardMotionFeedback();
                 return overlap;
             }
-            if (auto motion = SubmitConfiguredMotion(); motion.HasError()) {
+            if (auto motion = SubmitConfiguredMotion(context); motion.HasError()) {
                 if (record_->decisionMotion)
                     record_->navigationPath->DiscardMotionFeedback();
                 return motion;
