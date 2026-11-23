@@ -12,6 +12,30 @@ namespace Horo::Navigation {
             std::atomic<std::size_t> providerBytes{};
         };
 
+        /** @brief Pins a portable closure and charges its storage until the last Scene or backend reader releases it. */
+        struct NavigationAssetRebuildTiles final {
+            using Tiles = std::vector<std::shared_ptr<const NavigationCookedTile>>;
+
+            NavigationAssetRebuildTiles(Tiles contents, std::shared_ptr<NavigationAssetWorldAccounting> counters, std::size_t bytes,
+                                        const std::optional<NavigationProjectProfile> &profile)
+                : tiles(std::move(contents)), policy(profile), accounting(std::move(counters)), reservation(bytes) {
+                accounting->providerBytes.fetch_add(reservation);
+            }
+
+            NavigationAssetRebuildTiles(const NavigationAssetRebuildTiles &) = delete;
+            NavigationAssetRebuildTiles &operator=(const NavigationAssetRebuildTiles &) = delete;
+
+            ~NavigationAssetRebuildTiles() {
+                Tiles{}.swap(tiles);
+                accounting->providerBytes.fetch_sub(reservation);
+            }
+
+            Tiles tiles;
+            std::optional<NavigationProjectProfile> policy;
+            std::shared_ptr<NavigationAssetWorldAccounting> accounting;
+            std::size_t reservation;
+        };
+
         /** @brief Host state shared with aggregate candidates, never borrowed by worker backend destruction. */
         struct NavigationAssetSceneState final {
             Assets::AssetPayloadCache *cache{};
@@ -23,7 +47,28 @@ namespace Horo::Navigation {
             std::shared_ptr<NavigationAssetWorldAccounting> accounting{std::make_shared<NavigationAssetWorldAccounting>()};
             std::shared_ptr<NavigationWorldLifecycle> active;
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance;
+            std::shared_ptr<const NavigationAssetRebuildTiles> rebuildTiles;
             bool closed{};
+        };
+
+        /** @brief Rechecks the host's fresh obstacle, source and command observation on the owner lane. */
+        struct RuntimeRebuildAdoption final {
+            NavigationRuntimeRebuildFence expected;
+            NavigationRuntimeRebuildAuthority observe;
+            CancellationToken cancellation;
+            std::shared_ptr<const NavigationAssetRebuildTiles> tiles;
+
+            [[nodiscard]] Result<void> CheckAuthority() const {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+                const auto current = observe();
+                if (current.HasError())
+                    return Result<void>::Failure(current.ErrorValue());
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+                return current.Value() == expected ? Result<void>::Success()
+                                                   : Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+            }
         };
     }  // namespace Detail
 
@@ -33,9 +78,9 @@ namespace Horo::Navigation {
         NavigationStreamedTopologyPublication(std::shared_ptr<Detail::NavigationAssetSceneState> state,
                                               std::shared_ptr<NavigationWorldLifecycle> world,
                                               const NavigationWorldActivationDescriptor &candidate, NavigationWorldReadLease predecessor,
-                                              NavigationTopologyChange change)
+                                              NavigationTopologyChange change, std::optional<Detail::RuntimeRebuildAdoption> rebuild = {})
             : state_(std::move(state)), world_(std::move(world)), candidate_(candidate), predecessor_(std::move(predecessor)),
-              change_(change) {}
+              change_(change), rebuild_(std::move(rebuild)) {}
 
         NavigationStreamedTopologyPublication(const NavigationStreamedTopologyPublication &) = delete;
         NavigationStreamedTopologyPublication &operator=(const NavigationStreamedTopologyPublication &) = delete;
@@ -53,17 +98,24 @@ namespace Horo::Navigation {
         Result<void> ValidatePublication() const override {
             if (state_->closed || state_->active != world_)
                 return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
+            if (rebuild_.has_value()) {
+                if (auto checked = rebuild_->CheckAuthority(); checked.HasError())
+                    return checked;
+            }
             return world_->ValidateStagedTopology(candidate_);
         }
 
         void Publish() noexcept override {
             world_->PublishValidatedTopology(candidate_, change_);
+            if (rebuild_.has_value())
+                state_->rebuildTiles.swap(rebuild_->tiles);
             ownsStage_ = false;
         }
 
         Result<void> AfterPublication() override {
             NavigationWorldLifecycle::NotifyRetired(predecessor_);
             predecessor_ = {};
+            rebuild_.reset();
             static_cast<void>(world_->CollectRetired());
             return Result<void>::Success();
         }
@@ -75,6 +127,7 @@ namespace Horo::Navigation {
         NavigationWorldReadLease predecessor_; /**< Pins retirement capacity through the no-fail publication phase. */
         NavigationTopologyChange change_;
         bool ownsStage_{};
+        std::optional<Detail::RuntimeRebuildAdoption> rebuild_;
     };
 
     namespace {
@@ -83,9 +136,10 @@ namespace Horo::Navigation {
         public:
             PinnedAssetBackend(NavigationPreparedAssetBackend prepared, std::vector<Assets::AssetPayloadLease> bytes,
                                std::shared_ptr<Detail::NavigationAssetWorldAccounting> accounting,
-                               std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance)
+                               std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance,
+                               std::shared_ptr<const Detail::NavigationAssetRebuildTiles> rebuildTiles = {})
                 : backend_(std::move(prepared.backend)), bytes_(std::move(bytes)), accounting_(std::move(accounting)),
-                  reservation_(prepared.reservedProviderBytes), provenance_(std::move(provenance)) {
+                  reservation_(prepared.reservedProviderBytes), provenance_(std::move(provenance)), rebuildTiles_(std::move(rebuildTiles)) {
                 accounting_->worlds.fetch_add(1);
                 accounting_->providerBytes.fetch_add(reservation_);
             }
@@ -133,6 +187,7 @@ namespace Horo::Navigation {
             std::shared_ptr<Detail::NavigationAssetWorldAccounting> accounting_;
             std::size_t reservation_{};
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance_;
+            std::shared_ptr<const Detail::NavigationAssetRebuildTiles> rebuildTiles_;
         };
 
         /** @brief Publication swaps a fully finalized detached owner, while shutdown targets only this candidate. */
@@ -140,8 +195,10 @@ namespace Horo::Navigation {
         public:
             AssetWorldCandidate(std::shared_ptr<Detail::NavigationAssetSceneState> state, const Runtime::RuntimeSceneView &scene,
                                 std::shared_ptr<NavigationWorldLifecycle> world,
-                                std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance)
-                : state_(std::move(state)), scene_(scene), world_(std::move(world)), provenance_(std::move(provenance)) {}
+                                std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance,
+                                std::shared_ptr<const Detail::NavigationAssetRebuildTiles> rebuildTiles)
+                : state_(std::move(state)), scene_(scene), world_(std::move(world)), provenance_(std::move(provenance)),
+                  rebuildTiles_(std::move(rebuildTiles)) {}
 
             [[nodiscard]] Result<void> ValidatePublication() const override {
                 if (state_->closed || !scene_.IsCurrent()) {
@@ -158,6 +215,7 @@ namespace Horo::Navigation {
             void Publish() noexcept override {
                 state_->active = world_;
                 state_->provenance = provenance_;
+                state_->rebuildTiles = std::move(rebuildTiles_);
             }
 
             void Shutdown() noexcept override {
@@ -166,6 +224,7 @@ namespace Horo::Navigation {
                 if (state_->active == world_) {
                     state_->active.reset();
                     state_->provenance.reset();
+                    state_->rebuildTiles.reset();
                 }
                 world_.reset();
             }
@@ -175,6 +234,7 @@ namespace Horo::Navigation {
             Runtime::RuntimeSceneView scene_;
             std::shared_ptr<NavigationWorldLifecycle> world_;
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance_;
+            std::shared_ptr<const Detail::NavigationAssetRebuildTiles> rebuildTiles_;
         };
 
         /** @brief Pending RuntimeScene incarnations are never reused and fence all provider/Scene identities. */
@@ -284,12 +344,54 @@ namespace Horo::Navigation {
         }
 
         /** @brief Retired query-pinned worlds consume the same finite provider budget as the active world. */
-        [[nodiscard]] Result<std::size_t> AvailableProviderBudget(const Detail::NavigationAssetSceneState &state) {
+        [[nodiscard]] Result<std::size_t> AvailableProviderBudget(const Detail::NavigationAssetSceneState &state,
+                                                                  bool needsProvider = true) {
             const auto retainedBytes = state.accounting->providerBytes.load();
-            if (state.accounting->worlds.load() >= state.limits.maximumLiveWorlds ||
+            if ((needsProvider && state.accounting->worlds.load() >= state.limits.maximumLiveWorlds) ||
                 retainedBytes >= state.limits.maximumReservedProviderBytes)
                 return Result<std::size_t>::Failure(MakeError(NavigationErrors::CapacityExceeded));
             return Result<std::size_t>::Success(state.limits.maximumReservedProviderBytes - retainedBytes);
+        }
+
+        using RuntimeTilePins = std::shared_ptr<const Detail::NavigationAssetRebuildTiles>;
+
+        /** @brief Charges a detached tile vector using the existing provider accounting. */
+        [[nodiscard]] Result<std::size_t> TileClosureBytes(const Detail::NavigationAssetRebuildTiles::Tiles &tiles, std::size_t budget) {
+            const auto bytes = tiles.capacity() * sizeof(Detail::NavigationAssetRebuildTiles::Tiles::value_type);
+            if (bytes > budget)
+                return Result<std::size_t>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            auto total = bytes;
+            for (const auto &tile : tiles) {
+                const auto tileBytes = tile->StorageBytes();
+                if (tileBytes > budget - total)
+                    return Result<std::size_t>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+                total += tileBytes;
+            }
+            return Result<std::size_t>::Success(total);
+        }
+
+        /** @brief Retains only the exactly selected non-streamed partition for subsequent rebuild authorizations. */
+        [[nodiscard]] Result<RuntimeTilePins> PinInitialRebuildTiles(const Detail::NavigationAssetSceneState &state,
+                                                                     std::span<const NavigationLoadedSurface> surfaces,
+                                                                     std::span<const LoadedNavMeshAsset> assets) {
+            using Return = Result<RuntimeTilePins>;
+            if (!state.selection.runtimeRebuild)
+                return Return::Success({});
+            if (state.selection.streamCoverage || surfaces.size() != 1 || !surfaces.front().partition ||
+                surfaces.front().partition->tiles.empty())
+                return Return::Failure(MakeError(NavigationErrors::OperationUnsupported));
+            const auto budget = AvailableProviderBudget(state);
+            if (budget.HasError())
+                return Return::Failure(budget.ErrorValue());
+            auto tiles = surfaces.front().partition->tiles;
+            const auto bytes = TileClosureBytes(tiles, budget.Value());
+            if (bytes.HasError())
+                return Return::Failure(bytes.ErrorValue());
+            const auto asset = std::ranges::find(assets, surfaces.front().definition, &LoadedNavMeshAsset::id);
+            const auto &policy = (asset != assets.end() && asset->contentProvenance) ? asset->contentProvenance->projectProfile
+                                                                                     : state.selection.requiredProfile;
+            return Return::Success(
+                std::make_shared<Detail::NavigationAssetRebuildTiles>(std::move(tiles), state.accounting, bytes.Value(), policy));
         }
 
         /** @brief Close preparation on shutdown or invalid host bounds, independently of provider availability. */
@@ -416,7 +518,7 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<std::shared_ptr<NavigationWorldLifecycle>> PrepareWorld(
             const NavigationWorldActivationDescriptor &descriptor, const std::span<const NavigationLoadedSurface> surfaces,
             std::vector<LoadedNavMeshAsset> &assets, Detail::NavigationAssetSceneState &state,
-            std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance) {
+            std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance, RuntimeTilePins rebuildTiles) {
             if (state.selection.streamCoverage)
                 return FinalizeWorld(descriptor, {});
             auto prepared = PrepareProvider(descriptor, surfaces, state);
@@ -430,8 +532,76 @@ namespace Horo::Navigation {
             }
             auto bytes = TakeTilePins(assets);
             auto backend = std::make_unique<PinnedAssetBackend>(std::move(prepared).Value(), std::move(bytes), state.accounting,
-                                                                std::move(provenance));
+                                                                std::move(provenance), std::move(rebuildTiles));
             return FinalizeWorld(descriptor, std::move(backend));
+        }
+
+        /** @brief Pins the retiring provider, allowing a previously committed empty topology. */
+        [[nodiscard]] Result<NavigationWorldReadLease> PinPredecessor(const NavigationWorldLifecycle &world, NavigationWorldId id) {
+            auto lease = world.Acquire(id);
+            if (lease.HasError() && lease.ErrorValue().code.Value() == NavigationErrors::NoNavigationData.code.Value())
+                return Result<NavigationWorldReadLease>::Success({});
+            return lease;
+        }
+
+        /** @brief Uses the same accounting for the prepared successor and every active or pinned predecessor. */
+        [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> PinRebuildStorage(Detail::RuntimeRebuildAdoption &adoption,
+                                                                                         const Detail::NavigationAssetSceneState &state,
+                                                                                         Detail::NavigationAssetRebuildTiles::Tiles tiles,
+                                                                                         std::unique_ptr<INavigationQueryBackend> backend,
+                                                                                         std::size_t reserved) {
+            using Return = Result<std::unique_ptr<INavigationQueryBackend>>;
+            if (auto budget = AvailableProviderBudget(state, backend != nullptr); budget.HasError() || reserved > budget.Value())
+                return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            const auto tileBytes = TileClosureBytes(tiles, reserved);
+            if (tileBytes.HasError())
+                return Return::Failure(tileBytes.ErrorValue());
+            const auto &policy = state.rebuildTiles->policy;
+            if (backend && policy) {
+                const auto capabilities = backend->Capabilities();
+                if (auto admitted = AdmitNavigationProjectProfile(*policy, capabilities, capabilities.revision); admitted.HasError())
+                    return Return::Failure(admitted.ErrorValue());
+            }
+            adoption.tiles =
+                std::make_shared<Detail::NavigationAssetRebuildTiles>(std::move(tiles), state.accounting, tileBytes.Value(), policy);
+            if (backend) {
+                backend =
+                    std::make_unique<PinnedAssetBackend>(NavigationPreparedAssetBackend{std::move(backend), reserved - tileBytes.Value()},
+                                                         std::vector<Assets::AssetPayloadLease>{}, state.accounting, state.provenance,
+                                                         adoption.tiles);
+            }
+            return Return::Success(std::move(backend));
+        }
+
+        /** @brief Fences publication after observing host authority, including incidental Scene replacement. */
+        [[nodiscard]] bool MatchesRuntimeRoot(const Detail::NavigationAssetSceneState &state, const NavigationWorldLifecycle &world,
+                                              const Detail::NavigationAssetRebuildTiles &tiles,
+                                              const NavigationWorldActivationDescriptor &expected) {
+            const auto active = world.ActiveDescriptor();
+            return !state.closed && state.active.get() == &world && state.rebuildTiles.get() == &tiles && active.HasValue() &&
+                   active.Value() == expected;
+        }
+
+        /** @brief Stages an accounted successor and transfers exact rollback authority only after staging succeeds. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> StageRuntimeAdoption(
+            const std::shared_ptr<Detail::NavigationAssetSceneState> &state, const std::shared_ptr<NavigationWorldLifecycle> &world,
+            NavigationGeneration next, Detail::RuntimeRebuildAdoption adoption, std::unique_ptr<INavigationQueryBackend> backend) {
+            using Return = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+            auto successor = adoption.expected.activation;
+            successor.topology = next;
+            auto predecessor = PinPredecessor(*world, successor.world);
+            if (predecessor.HasError())
+                return Return::Failure(predecessor.ErrorValue());
+            const auto expected = adoption.expected.activation;
+            auto prepared =
+                std::make_unique<NavigationStreamedTopologyPublication>(state, world, successor, std::move(predecessor).Value(),
+                                                                        NavigationTopologyChange::Replacement, std::move(adoption));
+            if (auto staged =
+                    backend ? world->StageTopology(expected, next, std::move(backend)) : world->StageEmptyTopology(expected, next);
+                staged.HasError())
+                return Return::Failure(staged.ErrorValue());
+            prepared->OwnStagedTopology();
+            return Return::Success(std::move(prepared));
         }
     }  // namespace
 
@@ -488,17 +658,21 @@ namespace Horo::Navigation {
                     {asset.id, asset.registryRevision, asset.cookedContentDigest, asset.sourceDigest, asset.cacheKeyDigest});
             }
             std::shared_ptr<NavigationWorldLifecycle> world;
+            auto rebuildTiles = PinInitialRebuildTiles(*state_, surfaces, assets);
+            if (rebuildTiles.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(rebuildTiles.ErrorValue());
             if (!surfaces.empty()) {
                 if (!state_->factory)
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                         MakeError(NavigationErrors::CapabilityUnavailable));
-                auto prepared = PrepareWorld(descriptor.Value(), surfaces, assets, *state_, provenance);
+                auto prepared = PrepareWorld(descriptor.Value(), surfaces, assets, *state_, provenance, rebuildTiles.Value());
                 if (prepared.HasError())
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(prepared.ErrorValue());
                 world = std::move(prepared).Value();
             }
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
-                std::make_unique<AssetWorldCandidate>(state_, scene, std::move(world), std::move(provenance)));
+                std::make_unique<AssetWorldCandidate>(state_, scene, std::move(world), std::move(provenance),
+                                                      std::move(rebuildTiles).Value()));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
@@ -519,10 +693,46 @@ namespace Horo::Navigation {
         return state_->closed ? nullptr : state_->active;
     }
 
+    /** @copydoc NavigationAssetSceneActivationParticipant::ActiveRuntimeRebuildTiles */
+    std::shared_ptr<const Detail::NavigationAssetRebuildTiles::Tiles> NavigationAssetSceneActivationParticipant::ActiveRuntimeRebuildTiles()
+        const noexcept {
+        const auto &pins = state_->rebuildTiles;
+        return pins && !state_->closed ? std::shared_ptr<const Detail::NavigationAssetRebuildTiles::Tiles>{pins, &pins->tiles} : nullptr;
+    }
+
+    /** @copydoc NavigationAssetSceneActivationParticipant::PrepareRuntimeRebuildPublication */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NavigationAssetSceneActivationParticipant::PrepareRuntimeRebuildPublication(
+        NavigationRuntimeTileRebuildCandidate rebuild, NavigationRuntimeRebuildAuthority observe, CancellationToken cancellation) {
+        using Return = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        const auto world = ActiveWorld();
+        const auto active = state_->rebuildTiles;
+        if (!world || !active || !observe)
+            return Return::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+        try {
+            Detail::RuntimeRebuildAdoption adoption{rebuild.expected_, std::move(observe), std::move(cancellation), {}};
+            if (auto checked = adoption.CheckAuthority(); checked.HasError())
+                return Return::Failure(checked.ErrorValue());
+            if (!MatchesRuntimeRoot(*state_, *world, *active, rebuild.expected_.activation) || !rebuild.MatchesPredecessor(active->tiles))
+                return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
+            if (world->HasStagedCandidate())
+                return Return::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
+            static_cast<void>(world->CollectRetired());
+            const auto reserved = rebuild.ReservedBytes();
+            auto backend = PinRebuildStorage(adoption, *state_, std::move(rebuild.tiles_), std::move(rebuild.backend_), reserved);
+            if (backend.HasError())
+                return Return::Failure(backend.ErrorValue());
+            return StageRuntimeAdoption(state_, world, rebuild.next_, std::move(adoption), std::move(backend).Value());
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        }
+    }
+
     /** @copydoc NavigationAssetSceneActivationParticipant::StageStreamedTopology */
     Result<void> NavigationAssetSceneActivationParticipant::StageStreamedTopology(const NavigationWorldActivationDescriptor &expected,
                                                                                   NavigationGeneration next,
                                                                                   std::span<const NavigationStreamedSurface> selections) {
+        if (state_->selection.runtimeRebuild)
+            return Result<void>::Failure(MakeError(NavigationErrors::OperationUnsupported));
         const auto world = ActiveWorld();
         if (!world || !state_->provenance)
             return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
@@ -610,5 +820,6 @@ namespace Horo::Navigation {
             state_->active->BeginShutdown();
         state_->active.reset();
         state_->provenance.reset();
+        state_->rebuildTiles.reset();
     }
 }  // namespace Horo::Navigation

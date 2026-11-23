@@ -1248,6 +1248,13 @@ The candidate exposes its retained tile and provider reservation for Scene
 admission. Its provider factory reports measured storage independently of the
 remaining preparation budget, and over-budget results fail before publication.
 
+A non-streamed asset Scene can opt into rebuild adoption by retaining the exact
+selected portable closure. The structural transaction verifies the predecessor
+tile identities, profile and live command fence. The resulting provider and
+portable tiles charge the existing Scene accounting, including predecessor
+leases. The Scene swaps the closure with its topology and refunds rejected
+stages. Runtime tile bytes stay outside the asset cache and cooked provenance.
+
 ```cpp
 struct DynamicObstacle {
     WorldCoordinate64  center;

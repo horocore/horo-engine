@@ -4,6 +4,7 @@
  * @brief Host-composed atomic Scene navigation asset loading and query lifetime pins. */
 
 #include "Horo/Navigation/NavMeshAssetLoading.h"
+#include "Horo/Navigation/NavigationRuntimeTileRebuild.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -66,7 +67,11 @@ namespace Horo::Navigation {
         NavigationBakeScopeId scope;
         std::optional<NavigationProjectProfile> requiredProfile; /**< Requires a real world and exact cooked project policy. */
         bool streamCoverage{}; /**< Start with a verified catalog and grant coverage only through streamed cell commits. */
+        bool runtimeRebuild{}; /**< Explicitly retain a non-streamed closure for authorized runtime rebuilds. */
     };
+
+    /** @brief Re-observes current owner-lane source and command authority before structural publication. */
+    using NavigationRuntimeRebuildAuthority = std::function<Result<NavigationRuntimeRebuildFence>()>;
 
     namespace Detail {
         struct NavigationAssetSceneState;
@@ -108,6 +113,19 @@ namespace Horo::Navigation {
         /** @brief Pins the active lifecycle for structural registration on the same host owner thread.
          * @return Exact published lifecycle or null. The Scene participant still owns replacement and shutdown. */
         [[nodiscard]] std::shared_ptr<NavigationWorldLifecycle> ActiveWorld() const noexcept;
+        /** @brief Pins the active opt-in portable closure on the owner lane.
+         * @return Immutable tile pins with lifetime accounting, or an empty pointer when rebuild is unavailable.
+         */
+        [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<const NavigationCookedTile>>> ActiveRuntimeRebuildTiles()
+            const noexcept;
+        /** @brief Adopts a detached rebuild as a staged Scene structural candidate.
+         * @param rebuild Consumed candidate from the active opted-in closure.
+         * @param observe Owned authority observation called during admission and immediately before publication.
+         * @param cancellation Optional cancellation observed at both boundaries.
+         * @return Candidate rolling back its stage on destruction, or a typed failure preserving the active world.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareRuntimeRebuildPublication(
+            NavigationRuntimeTileRebuildCandidate rebuild, NavigationRuntimeRebuildAuthority observe, CancellationToken cancellation = {});
         /** @brief Builds and stages the complete desired resident set for the active world.
          * @param expected Exact live predecessor before cell work started.
          * @param next New unique topology generation.

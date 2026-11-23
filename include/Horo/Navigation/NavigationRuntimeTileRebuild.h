@@ -89,6 +89,7 @@ namespace Horo::Navigation {
             NavigationWorldLifecycle &world, const NavigationRuntimeRebuildFence &current, const CancellationToken &cancellation = {}) &&;
 
     private:
+        friend class NavigationAssetSceneActivationParticipant;
         friend Result<NavigationRuntimeTileRebuildCandidate> PrepareRuntimeNavigationTileRebuild(
             const NavigationRuntimeTileRebuildRequest &, const INavigationMeshBuilder &, const INavigationRuntimeRebuildBackendFactory &,
             const CancellationToken &);
@@ -99,12 +100,16 @@ namespace Horo::Navigation {
                                               std::unique_ptr<INavigationQueryBackend> backend, std::size_t rebuiltTiles,
                                               std::size_t reservedBytes) noexcept;
 
+        /** @brief Verifies the Scene owner still holds the exact tile content used by this rebuild. */
+        [[nodiscard]] bool MatchesPredecessor(std::span<const std::shared_ptr<const NavigationCookedTile>> tiles) const noexcept;
+
         NavigationRuntimeRebuildFence expected_;
         NavigationGeneration next_;
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles_;
         std::unique_ptr<INavigationQueryBackend> backend_;
         std::size_t rebuiltTiles_{};
         std::size_t reservedBytes_{};
+        Sha256Digest predecessorTiles_{};
     };
 
     /** @brief Rebuilds changed dependency keys and prepares a complete immutable replacement without publishing it.

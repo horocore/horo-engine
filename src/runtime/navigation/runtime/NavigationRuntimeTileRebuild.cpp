@@ -10,6 +10,14 @@ namespace Horo::Navigation {
         using TileClosure = std::vector<Tile>;
         using Candidate = Result<NavigationRuntimeTileRebuildCandidate>;
 
+        /** @brief Fences ordered, fixed-width identities of the exact prepared tile closure. */
+        [[nodiscard]] Sha256Digest ClosureIdentity(const std::span<const Tile> tiles) noexcept {
+            Sha256Builder hash;
+            for (const auto &tile : tiles)
+                static_cast<void>(hash.Update(std::as_bytes(std::span{tile->ContentIdentity().bytes})));
+            return hash.Finalize();
+        }
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &reason) {
             return Result<T>::Failure(MakeError(reason));
         }
@@ -201,12 +209,19 @@ namespace Horo::Navigation {
                 return Failure<NavigationRuntimeTileRebuildCandidate>(NavigationErrors::BakeInputCancelled);
             auto provider = std::move(backend).Value();
             const auto reserved = request.maximumOwnedBytes - closure.remaining + provider.reservedProviderBytes;
-            return Candidate::Success(NavigationRuntimeTileRebuildCandidate{request.expected, request.nextTopology,
-                                                                            std::move(closure.tiles), std::move(provider.backend),
-                                                                            closure.rebuilt, reserved});
+            NavigationRuntimeTileRebuildCandidate candidate{request.expected,         request.nextTopology,
+                                                            std::move(closure.tiles), std::move(provider.backend),
+                                                            closure.rebuilt,          reserved};
+            candidate.predecessorTiles_ = ClosureIdentity(request.activeTiles);
+            return Candidate::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             return Failure<NavigationRuntimeTileRebuildCandidate>(NavigationErrors::CapacityExceeded);
         }
+    }
+
+    /** @copydoc NavigationRuntimeTileRebuildCandidate::MatchesPredecessor */
+    bool NavigationRuntimeTileRebuildCandidate::MatchesPredecessor(const std::span<const Tile> tiles) const noexcept {
+        return tiles.size() == tiles_.size() && ClosureIdentity(tiles) == predecessorTiles_;
     }
 
     /** @copydoc NavigationRuntimeTileRebuildCandidate::PublishAtSafePoint */
