@@ -256,6 +256,10 @@ namespace Horo::Audio {
             CHECK(changes.Value()[1].kind == AudioCaptureDeviceChangeKind::Added);
             CHECK(changes.Value()[1].device == replacement);
             CHECK(DescribeAudioCaptureDeviceChanges(after, before).HasError());
+            auto staleGeneration = before;
+            staleGeneration.revision = 10;
+            REQUIRE(ValidateAudioCaptureDeviceSnapshot(staleGeneration));
+            CHECK(DescribeAudioCaptureDeviceChanges(after, staleGeneration).HasError());
             after.backend = AudioBackendKind::CoreAudio;
             CHECK(DescribeAudioCaptureDeviceChanges(before, after).HasError());
         }

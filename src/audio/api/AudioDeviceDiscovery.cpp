@@ -158,9 +158,15 @@ namespace Horo::Audio {
             return Output::Failure(MakeError(AudioErrors::IdentityInvalid));
         try {
             std::vector<AudioCaptureDeviceChange> changes;
-            for (const auto &device : before.devices)
-                if (!Contains(after, device.id))
+            for (const auto &device : before.devices) {
+                const auto current = std::ranges::find_if(after.devices, [&device](const auto &candidate) {
+                    return candidate.id.slot == device.id.slot;
+                });
+                if (current != after.devices.end() && current->id.generation < device.id.generation)
+                    return Output::Failure(MakeError(AudioErrors::IdentityInvalid));
+                if (current == after.devices.end() || current->id != device.id)
                     changes.emplace_back(AudioCaptureDeviceChangeKind::Removed, device.id, after.revision);
+            }
             for (const auto &device : after.devices)
                 if (!Contains(before, device.id))
                     changes.emplace_back(AudioCaptureDeviceChangeKind::Added, device.id, after.revision);

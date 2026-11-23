@@ -190,7 +190,8 @@ namespace Horo::Audio {
      * @param before Previous validated snapshot of the same backend owner.
      * @param after Current validated snapshot, with a strictly newer revision.
      * @return Removed generations followed by added generations, or a typed validation/allocation failure.
-     * @details A slot reused with a new generation emits both changes. The routine runs on control.
+     * @details A slot reused with a higher generation emits both changes. A lower generation
+     * in the same slot is invalid even at a newer catalog revision. The routine runs on control.
      */
     [[nodiscard]] Result<std::vector<AudioCaptureDeviceChange>> DescribeAudioCaptureDeviceChanges(const AudioCaptureDeviceSnapshot &before,
                                                                                                   const AudioCaptureDeviceSnapshot &after);
