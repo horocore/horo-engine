@@ -82,14 +82,15 @@ Missing service or registration failure is reported as `unsupported` or
 its native frame owner. Retirement revokes that Activity's mailbox token before
 attempting Java cleanup. JNI binding and retirement run outside frame admission.
 
-At resume, the Activity samples Android's system low-memory state once.
-While resumed, Android's legacy running trim levels can publish
-`moderate`, `low`, or `critical`. UI-hidden events describe visibility
-and background trim levels describe the process's reclaim priority.
-Android 14 and later use the resume snapshot because the platform no longer
-delivers the legacy running levels. Memory conservation clears on pause.
-The next resume sample decides whether to request it again. The deployment
-report contains the typed state and its process-local revision.
+The Activity samples Android's system low-memory state on resume. On Android 14
+and later it samples every five seconds while foregrounded to detect new pressure
+during a session, since the platform no longer delivers the running trim callbacks.
+Older devices use running trim levels to report `moderate`, `low`, or `critical`
+and schedule checks only while conserving to detect recovery.
+A transient sample failure reports `unavailable` and retains the last accepted
+conservation decision until a successful recovery sample or pause. Backgrounding
+cancels the pending sample and clears the Activity's conservation request. The
+deployment report contains the typed state and its process-local revision.
 
 The resumed Vulkan Activity reads Android Battery Saver on entry and whenever
 the protected power-mode broadcast arrives. The observer reads the current

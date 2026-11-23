@@ -741,7 +741,8 @@ class AndroidAssemblyTests(unittest.TestCase):
         arguments = self.arguments()
         tools = self.prepare(arguments)
         paths = [Path("java/org/horocore/qualification") / name for name in
-                 ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java")]
+                 ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java",
+                  "MemoryObservation.java")]
         crash_observer = Path("java/org/horocore/qualification/OpenXRLaunchCrashObserver.java")
         for renderer_profile in ("qualification-vulkan-development", android_package.OPENXR_DEVELOPMENT_PROFILE):
             with self.subTest(profile=renderer_profile):

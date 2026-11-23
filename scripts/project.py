@@ -647,7 +647,9 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         package = Path("org/horocore/qualification")
         destination = stage / "java" / package
         destination.mkdir(parents=True, exist_ok=True)
-        for source_name in ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java"):
+        for source_name in (
+            "HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java", "MemoryObservation.java"
+        ):
             shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
         activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
     if "openxrProfile" in profile:

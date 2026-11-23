@@ -3,16 +3,18 @@ package org.horocore.qualification;
 import android.app.ActivityManager;
 import android.content.ComponentCallbacks2;
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
+import java.util.Locale;
 import org.horocore.platform.HoroInputActivity;
 
 /** The Android Vulkan profile observes platform conditions independently of frame attempts. */
 public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static ThermalObservation thermal;
-    private static final MemoryObservation memory = new MemoryObservation();
+    private static final MemoryObservation<HoroVulkanQualificationActivity> memory = createMemoryObservation();
     private static final PowerObservation power = new PowerObservation();
     private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
     private enum PacingMode {
@@ -119,107 +121,52 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         super.onDetachedFromWindow();
     }
 
-    @Override public void onTrimMemory(int level) {
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        memory.trim(this, level);
+        if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE || level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return;
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            memory.trim(this, MemoryObservation.State.CRITICAL);
+        } else {
+            memory.trim(this, level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+                    ? MemoryObservation.State.LOW : MemoryObservation.State.MODERATE);
+        }
     }
 
-    /** Observes pressure and recovery on the main Activity lane. */
-    private static final class MemoryObservation {
-        private static final long RECOVERY_CHECK_DELAY_MS = 5000;
-
-        private enum State {
-            INACTIVE("inactive"), UNSUPPORTED("unsupported"), UNAVAILABLE("unavailable"),
-            NORMAL("normal"), MODERATE("moderate"), LOW("low"), CRITICAL("critical");
-
-            final String diagnostic;
-
-            State(String diagnostic) {
-                this.diagnostic = diagnostic;
+    /** Keeps Android service access and diagnostics outside the portable foreground sampler. */
+    private static MemoryObservation<HoroVulkanQualificationActivity> createMemoryObservation() {
+        Handler handler = new Handler(Looper.getMainLooper());
+        return new MemoryObservation<>(new MemoryObservation.Port<>() {
+            @Override public MemoryObservation.State sample(HoroVulkanQualificationActivity owner) {
+                try {
+                    ActivityManager manager = owner.getSystemService(ActivityManager.class);
+                    if (manager == null) return MemoryObservation.State.UNSUPPORTED;
+                    ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+                    manager.getMemoryInfo(info);
+                    return info.lowMemory ? MemoryObservation.State.LOW : MemoryObservation.State.NORMAL;
+                } catch (RuntimeException unavailable) {
+                    return MemoryObservation.State.UNAVAILABLE;
+                }
             }
 
-            boolean conservesAttempts() {
-                return this == LOW || this == CRITICAL;
+            @Override public boolean schedule(Runnable action, long delayMs) {
+                return handler.postDelayed(action, delayMs);
             }
-        }
 
-        private final Handler handler = new Handler(Looper.getMainLooper());
-        private final Runnable recoveryCheck = this::checkRecovery;
-        private HoroVulkanQualificationActivity owner;
-        private State previous;
-        private long revision;
-        private boolean recoveryCheckPending;
-
-        void resume(HoroVulkanQualificationActivity activity) {
-            if (owner == activity) return;
-            cancelRecoveryCheck();
-            if (owner != null) owner.updateMemoryPacing(false);
-            owner = activity;
-            publish(sample(activity));
-        }
-
-        void pause(Object activity) {
-            if (owner != activity) return;
-            owner = null;
-            publish(State.INACTIVE);
-        }
-
-        @SuppressWarnings("deprecation")
-        void trim(Object activity, int level) {
-            if (owner != activity || level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE ||
-                    level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return;
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-                publish(State.CRITICAL);
-            } else {
-                publish(level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ? State.LOW : State.MODERATE);
+            @Override public void cancel(Runnable action) {
+                handler.removeCallbacks(action);
             }
-        }
 
-        private static State sample(Context context) {
-            try {
-                ActivityManager manager = context.getSystemService(ActivityManager.class);
-                if (manager == null) return State.UNSUPPORTED;
-                ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
-                manager.getMemoryInfo(info);
-                return info.lowMemory ? State.LOW : State.NORMAL;
-            } catch (RuntimeException unavailable) {
-                return State.UNAVAILABLE;
+            @Override public void pace(HoroVulkanQualificationActivity owner, boolean conserve) {
+                owner.updateMemoryPacing(conserve);
             }
-        }
 
-        /** A trim notification does not report when pressure clears. Recheck only while conserving. */
-        private void checkRecovery() {
-            recoveryCheckPending = false;
-            if (owner == null) return;
-            if (sample(owner) == State.NORMAL) {
-                publish(State.NORMAL);
-            } else {
-                scheduleRecoveryCheck();
+            @Override public void report(long revision, MemoryObservation.State state) {
+                Log.i("HoroPackageQualification",
+                        "host-memory revision=" + revision + " state=" + state.name().toLowerCase(Locale.ROOT));
             }
-        }
-
-        private void scheduleRecoveryCheck() {
-            if (!recoveryCheckPending) recoveryCheckPending = handler.postDelayed(recoveryCheck, RECOVERY_CHECK_DELAY_MS);
-        }
-
-        private void cancelRecoveryCheck() {
-            if (!recoveryCheckPending) return;
-            handler.removeCallbacks(recoveryCheck);
-            recoveryCheckPending = false;
-        }
-
-        private void publish(State state) {
-            boolean conserve = owner != null && state.conservesAttempts();
-            if (owner != null) owner.updateMemoryPacing(conserve);
-            if (conserve) {
-                scheduleRecoveryCheck();
-            } else {
-                cancelRecoveryCheck();
-            }
-            if (state == previous || revision == Long.MAX_VALUE) return;
-            previous = state;
-            Log.i("HoroPackageQualification", "host-memory revision=" + ++revision + " state=" + state.diagnostic);
-        }
+        }, Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE);
     }
 
     /** Lifecycle, listener callbacks and revision publication are serialized by the main executor. */
