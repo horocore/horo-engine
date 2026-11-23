@@ -920,7 +920,7 @@ namespace Horo::Editor {
             return refreshed;
 
         if (variant.guidePasses)
-            if (const auto uploaded = temporalGuides_->UploadSeed(frame.Token(), slot, pass); uploaded.HasError())
+            if (const auto uploaded = temporalGuides_->Upload(frame.Token(), slot, pass); uploaded.HasError())
                 return uploaded;
         if (variant.spatialWork) {
             const auto spatial = PrepareSpatialDispatch(frame.Token(), pass);
@@ -936,6 +936,8 @@ namespace Horo::Editor {
         const std::array submissions{RenderGraphQueueSubmission{reserved.Value(), {0, variant.count}}};
         recordedEver_ = true;
         const auto recorded = frame.ExecuteSubmittedGraph(*variant.graph, std::span{variant.workloads}.first(variant.count), submissions);
+        if (recorded.HasValue() && variant.guidePasses)
+            temporalGuides_->Recorded(reserved.Value().signal);
         if (recorded.HasValue() && color_)
             RecordViewportColor(reserved.Value().signal);
         if (withCapture) {

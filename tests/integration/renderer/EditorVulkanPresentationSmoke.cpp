@@ -1377,10 +1377,12 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
-    /** @brief Observes the two guide draws and the scene draw before the GUI records its own work. */
-    void VerifyTemporalGuideSubmission(Host &host, const RenderSceneView &scene) {
+    /** @brief Observes the two guide draws and the scene draw, then settles the real frame attempt. */
+    void VerifyTemporalGuideSubmission(Host &host, const RenderSceneView &scene, const std::uint64_t frameId, const bool submit) {
         host.PrepareScene(scene);
-        auto frame = host.Frame(1);
+        constexpr std::array objectIds{RenderMotionObjectId{1}};
+        Check(host.viewport->PrepareTemporalMotion({1, objectIds}));
+        auto frame = host.Frame(frameId);
         host.viewportObservation->ResetDraws();
         const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = host.ViewportPass(scene)},
                                 RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
@@ -1389,7 +1391,11 @@ namespace Horo::Tests::VulkanEditor {
         const auto texture = host.viewport->TextureView();
         REQUIRE(texture.IsValid());
         host.ComposeGui(frame, &texture);
-        Check(frame.Present(), "submit both guide draws and the ordinary viewport");
+        if (submit)
+            Check(frame.Present(), "submit both guide draws and the ordinary viewport");
+        else
+            frame.Cancel();
+        host.viewport->FinishColorFrame(submit);
     }
 
     TEST_CASE("Native Vulkan admits the cooked temporal guide pair through the viewport owner",
@@ -1441,7 +1447,11 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(refused.HasError());
         CHECK(refused.ErrorValue().code.Value() == RendererErrors::ViewportInvalidScene.code.Value());
         Check(host.viewport->PrepareResources(*host.frontend, scene), "preserve the previously prepared guide draw slots");
-        VerifyTemporalGuideSubmission(host, scene);
+        VerifyTemporalGuideSubmission(host, scene, 1, true);
+        fixture.instances.front().localToWorld.values[12] = 1.0F;
+        VerifyTemporalGuideSubmission(host, scene, 2, false);
+        fixture.instances.front().localToWorld.values[12] = 2.0F;
+        VerifyTemporalGuideSubmission(host, scene, 3, true);
         REQUIRE(host.Drain());
     }
 

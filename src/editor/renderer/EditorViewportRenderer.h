@@ -109,6 +109,15 @@ namespace Horo::Editor {
             static_cast<void>(deltaSeconds);
         }
 
+        /** @brief Captures the identity prefix for the next ordinary desktop mesh pass.
+         * @param source Identities from the same extracted draw list, or empty for an untracked scene.
+         * @return Success or a typed validation failure before the mesh pass starts.
+         */
+        [[nodiscard]] virtual Result<void> PrepareTemporalMotion(EditorViewportMotionSource source) {
+            static_cast<void>(source);
+            return Result<void>::Success();
+        }
+
         /** @brief Resolves prepared color after the host finishes or cancels the frame.
          * @param accepted The host present result; a viewport with its own exact native submission receipt uses that authority.
          */

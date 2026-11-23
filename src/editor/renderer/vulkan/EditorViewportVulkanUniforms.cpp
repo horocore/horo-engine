@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <utility>
 
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteParameter */
@@ -66,9 +67,121 @@ namespace Horo::Editor {
         return WriteParameter(layout, bytes, {20}, baseColor);
     }
 
-    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeed */
-    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeed(const Render::FrameToken frame, const std::uint32_t slot,
-                                                                                 const Render::StaticMeshPassDescriptor &pass) const {
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareSource */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareSource(const EditorViewportMotionSource source) {
+        source_ = {};
+        if (source.objects.size() > sourceIds_.size() || (!source.sceneDomain && !source.objects.empty()))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        std::ranges::copy(source.objects, sourceIds_.begin());
+        source_ = {source.sceneDomain, std::span{sourceIds_}.first(source.objects.size())};
+        return Result<void>::Success();
+    }
+
+    /** @brief Compares the projection parameters used by both guide passes. */
+    [[nodiscard]] static bool SameMotionProjection(const Render::RenderProjectionDescriptor &left,
+                                                   const Render::RenderProjectionDescriptor &right) noexcept {
+        if (left.kind != right.kind || left.nearPlane != right.nearPlane || left.farPlane != right.farPlane)
+            return false;
+        return left.kind == Render::RenderProjectionKind::Perspective ? left.verticalFovRadians == right.verticalFovRadians
+                                                                      : left.orthographicHeight == right.orthographicHeight;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::BeginMotion */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::BeginMotion(const Render::FrameToken frame,
+                                                                                  const Render::StaticMeshPassDescriptor &pass,
+                                                                                  const Math::Mat4 &viewProjection) {
+        using namespace Render;
+        if (!source_.sceneDomain)
+            return Result<void>::Success();
+        const auto images = owner.resources_.TemporalImages();
+        if (!images || pending_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto samples = BuildEditorViewportMotionSamples({.instances = pass.scene.instances, .motion = source_}, samples_);
+        if (samples.HasError())
+            return Result<void>::Failure(samples.ErrorValue());
+
+        const auto color = owner.resources_.ColorTexture();
+        const auto surfaceGeneration = (std::uint64_t{color.slot} << 32) | color.generation;
+        // This owner admits one immutable desktop guide recipe and an unjittered, fixed-extent raster.
+        constexpr std::uint64_t desktopGuideContract = 1;
+        const TemporalHistoryCompatibility compatibility{
+            .view = owner.LightingViewIdentity(),
+            .provider = {desktopGuideContract},
+            .mode = {desktopGuideContract},
+            .renderExtent = pass.extent,
+            .targetExtent = pass.extent,
+            .providerGeneration = desktopGuideContract,
+            .modeGeneration = desktopGuideContract,
+            .surfaceGeneration = surfaceGeneration,
+            .rasterGeneration = desktopGuideContract,
+            .colorGeneration = desktopGuideContract,
+            .exposureGeneration = desktopGuideContract,
+            .inputSchemaGeneration = desktopGuideContract,
+            .deviceGeneration = owner.frontend_.Capabilities().support.deviceIncarnation,
+            .projectionGeneration = desktopGuideContract,
+            .jitterGeneration = desktopGuideContract,
+            .sceneOriginGeneration = source_.sceneDomain,
+            .motionGeneration = desktopGuideContract,
+            .recipeGeneration = desktopGuideContract,
+        };
+        projection_ = pass.scene.camera.projection;
+        auto attempted = history_.BeginFrame({.compatibility = compatibility,
+                                              .frameId = frame.value,
+                                              .predecessorFrameId = lastAcceptedFrame_,
+                                              .camera = {viewProjection},
+                                              .disocclusion = {images->linearDepth.texture, images->motion.texture},
+                                              .invalidation = {.cameraCut = !SameMotionProjection(projection_, acceptedProjection_)},
+                                              .objects = samples.Value()});
+        if (attempted.HasError())
+            return Result<void>::Failure(attempted.ErrorValue());
+        pending_ = std::move(attempted).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded(const Render::RenderTimelinePoint signal) noexcept {
+        if (pending_)
+            signal_ = signal;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Finish */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::Finish(const bool presented) noexcept {
+        source_ = {};
+        if (!pending_) {
+            if (presented)
+                lastAcceptedFrame_ = 0;
+            return;
+        }
+        const auto signal = std::exchange(signal_, {});
+        const auto *port = owner.bridge_.Port();
+        if (signal.IsValid() && port) {
+            const auto accepted = port->WasSubmissionAccepted(signal, pending_->compatibility.deviceGeneration);
+            if (accepted.HasValue() && accepted.Value() && history_.Publish(*pending_).HasValue()) {
+                lastAcceptedFrame_ = pending_->frameId;
+                acceptedProjection_ = projection_;
+                pending_.reset();
+                return;
+            }
+        }
+        static_cast<void>(history_.Abandon(*pending_));
+        pending_.reset();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::MotionForDraw */
+    Render::RenderMotionObjectPair EditorViewportRendererVulkan::TemporalGuidePrograms::MotionForDraw(
+        const std::size_t index, const Math::Mat4 &localToWorld) const noexcept {
+        if (pending_ && index < source_.objects.size()) {
+            const auto id = source_.objects[index];
+            const auto found = std::ranges::lower_bound(pending_->objects, id, {}, &Render::RenderMotionObjectPair::object);
+            if (found != pending_->objects.end() && found->object == id)
+                return *found;
+        }
+        return {.currentLocalToWorld = localToWorld};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Upload */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::Upload(const Render::FrameToken frame, const std::uint32_t slot,
+                                                                             const Render::StaticMeshPassDescriptor &pass) {
         const auto &instances = pass.scene.instances;
         if (slot >= draws.size() || instances.size() > draws[slot].size())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
@@ -80,19 +193,24 @@ namespace Horo::Editor {
         const auto projection = BuildRenderMvp(camera, Math::Mat4::Identity(), aspect, Math::ClipDepthRange::ZeroToOne);
         if (projection.HasError())
             return Result<void>::Failure(projection.ErrorValue());
-        const Render::RenderMotionCameraPair seed{.currentUnjitteredViewProjection = projection.Value()};
+        if (const auto tracked = BeginMotion(frame, pass, projection.Value()); tracked.HasError())
+            return tracked;
+        const auto cameraPair =
+            pending_ ? pending_->camera : Render::RenderMotionCameraPair{.currentUnjitteredViewProjection = projection.Value()};
         for (std::size_t index = 0; index < instances.size(); ++index)
-            if (const auto uploaded = UploadSeedDraw(frame, draws[slot][index], view.Value(), seed, instances[index].localToWorld);
+            if (const auto uploaded =
+                    UploadDraw(frame, draws[slot][index], view.Value(), cameraPair, MotionForDraw(index, instances[index].localToWorld));
                 uploaded.HasError())
                 return uploaded;
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeedDraw */
-    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadSeedDraw(const Render::FrameToken frame, const GuideDraw &draw,
-                                                                                     const Math::Mat4 &view,
-                                                                                     const Render::RenderMotionCameraPair &camera,
-                                                                                     const Math::Mat4 &localToWorld) const {
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDraw */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDraw(const Render::FrameToken frame, const GuideDraw &draw,
+                                                                                 const Math::Mat4 &view,
+                                                                                 const Render::RenderMotionCameraPair &camera,
+                                                                                 const Render::RenderMotionObjectPair &object) const {
+        const auto &localToWorld = object.currentLocalToWorld;
         auto raster = Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld);
         // Match the ordinary Vulkan raster's top-left orientation.
         for (std::size_t column = 0; column < 4; ++column)
@@ -104,8 +222,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(packed.ErrorValue());
         std::array<std::byte, MaximumUniformBytes> motionBytes{};
         const auto motionBlock = std::span{motionBytes}.first(motion.uniformBytes);
-        const Render::RenderMotionObjectPair seed{.currentLocalToWorld = localToWorld};
-        if (const auto packed = PackEditorVulkanTemporalMotion(motion.layout, raster, camera, seed, motionBlock); packed.HasError())
+        if (const auto packed = PackEditorVulkanTemporalMotion(motion.layout, raster, camera, object, motionBlock); packed.HasError())
             return Result<void>::Failure(packed.ErrorValue());
         auto *port = owner.bridge_.Port();
         if (const auto uploaded = port->WriteFrameBuffer(frame, draw.linearDepth.instance, depthBlock); uploaded.HasError())

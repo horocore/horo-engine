@@ -122,7 +122,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::FinishColorFrame */
-    void EditorViewportRendererVulkan::FinishColorFrame(bool) noexcept {
+    void EditorViewportRendererVulkan::FinishColorFrame(const bool presented) noexcept {
+        if (temporalGuides_)
+            temporalGuides_->Finish(presented);
         if (const auto signal = imageCapture_.UnconfirmedSignal(); signal.IsValid()) {
             const auto *port = bridge_.Port();
             bool accepted = false;

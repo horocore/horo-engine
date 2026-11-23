@@ -62,6 +62,8 @@ namespace Horo::Editor {
         void SetColorFrameDelta(float deltaSeconds) noexcept override;
         /** @copydoc IEditorViewportRenderer::FinishColorFrame */
         void FinishColorFrame(bool presented) noexcept override;
+        /** @copydoc IEditorViewportRenderer::PrepareTemporalMotion */
+        [[nodiscard]] Result<void> PrepareTemporalMotion(EditorViewportMotionSource source) override;
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> Initialize();
@@ -366,16 +368,21 @@ namespace Horo::Editor {
 
         /** @brief Owns both viewport guide programs, including partially admitted candidates. */
         struct TemporalGuidePrograms final {
-            explicit TemporalGuidePrograms(EditorViewportRendererVulkan &viewport) noexcept;
+            TemporalGuidePrograms(EditorViewportRendererVulkan &viewport, Render::RenderMotionHistoryTracker history) noexcept;
             ~TemporalGuidePrograms();
             TemporalGuidePrograms(const TemporalGuidePrograms &) = delete;
             TemporalGuidePrograms &operator=(const TemporalGuidePrograms &) = delete;
 
             /** @brief Grows all buffered frames together while preserving previously valid draw slots on failure. */
             [[nodiscard]] Result<void> PrepareDraws(std::size_t count);
-            /** @brief Uploads the exact unjittered first-frame guide bindings for the selected viewport slot. */
-            [[nodiscard]] Result<void> UploadSeed(Render::FrameToken frame, std::uint32_t slot,
-                                                  const Render::StaticMeshPassDescriptor &pass) const;
+            /** @brief Begins a motion attempt and uploads both raster guides to the selected slot. */
+            [[nodiscard]] Result<void> Upload(Render::FrameToken frame, std::uint32_t slot, const Render::StaticMeshPassDescriptor &pass);
+            /** @brief Associates the pending attempt with the recorded graphics submission. */
+            void Recorded(Render::RenderTimelinePoint signal) noexcept;
+            /** @brief Settles the pending attempt using the exact queue receipt and clears the source. */
+            void Finish(bool presented) noexcept;
+            /** @brief Captures the bounded per-draw identity prefix before native execution. */
+            [[nodiscard]] Result<void> PrepareSource(EditorViewportMotionSource source);
 
             struct GuideDraw final {
                 DrawSlot linearDepth;
@@ -389,10 +396,27 @@ namespace Horo::Editor {
 
         private:
             [[nodiscard]] Result<void> GrowFrame(std::uint32_t slot, std::size_t count);
-            /** @brief Packs and uploads both guides for one draw without allocating or retaining scene data. */
-            [[nodiscard]] Result<void> UploadSeedDraw(Render::FrameToken frame, const GuideDraw &draw, const Math::Mat4 &view,
-                                                      const Render::RenderMotionCameraPair &camera, const Math::Mat4 &localToWorld) const;
+            /** @brief Resolves current transforms and their accepted predecessors for the exact mesh pass. */
+            [[nodiscard]] Result<void> BeginMotion(Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass,
+                                                   const Math::Mat4 &viewProjection);
+            /** @brief Returns the accepted transform pair, or the current transform for an untracked draw. */
+            [[nodiscard]] Render::RenderMotionObjectPair MotionForDraw(std::size_t index, const Math::Mat4 &localToWorld) const noexcept;
+            /** @brief Packs and uploads both guides for one draw without retaining scene data. */
+            [[nodiscard]] Result<void> UploadDraw(Render::FrameToken frame, const GuideDraw &draw, const Math::Mat4 &view,
+                                                  const Render::RenderMotionCameraPair &camera,
+                                                  const Render::RenderMotionObjectPair &object) const;
             void RetireDrawsAfter(std::size_t keep) noexcept;
+
+            static constexpr auto MaximumDraws = Render::RenderMaterialPass::MaximumDraws;
+            std::array<Render::RenderMotionObjectId, MaximumDraws> sourceIds_{};
+            std::array<Render::RenderMotionObjectSample, MaximumDraws> samples_{};
+            EditorViewportMotionSource source_;
+            Render::RenderMotionHistoryTracker history_;
+            std::optional<Render::RenderMotionFrame> pending_;
+            Render::RenderTimelinePoint signal_;
+            Render::RenderProjectionDescriptor projection_;
+            Render::RenderProjectionDescriptor acceptedProjection_;
+            std::uint64_t lastAcceptedFrame_{};
         };
 
         /** @brief Owns one immutable canvas consumer and its slot-local mesh bindings. */

@@ -2898,9 +2898,12 @@ namespace Horo::Editor {
                     CanSubmitViewportPass(viewportExtent)) {
                     if (const Result<void> resized = ResizeLegacyViewportTarget(viewportExtent); resized.HasError())
                         return resized;
-                    const auto crossFade = currentWorld.owner.IsValid() ? std::nullopt : viewportSceneState_->View().cameraCrossFade;
-                    if (const auto camera = p_->presentation.viewportRenderer.PrepareCameraCrossFadeFrame(crossFade); camera.HasError())
+                    const auto editorScene = currentWorld.owner.IsValid() ? EditorViewportSceneView{} : viewportSceneState_->View();
+                    auto &renderer = p_->presentation.viewportRenderer;
+                    if (const auto camera = renderer.PrepareCameraCrossFadeFrame(editorScene.cameraCrossFade); camera.HasError())
                         return camera;
+                    if (const auto motion = renderer.PrepareTemporalMotion(editorScene.motion); motion.HasError())
+                        return motion;
                     frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                         Render::RenderPassDescriptor{.id = Render::RenderPassId{1},
                                                      .kind = Render::RenderPassKind::Graphics,

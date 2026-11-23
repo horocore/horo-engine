@@ -139,8 +139,9 @@ namespace Horo::Editor {
         boundShadowAtlas_ = resources_.ShadowTextureView();
     }
 
-    EditorViewportRendererVulkan::TemporalGuidePrograms::TemporalGuidePrograms(EditorViewportRendererVulkan &viewport) noexcept
-        : owner(viewport) {}
+    EditorViewportRendererVulkan::TemporalGuidePrograms::TemporalGuidePrograms(EditorViewportRendererVulkan &viewport,
+                                                                               Render::RenderMotionHistoryTracker history) noexcept
+        : owner(viewport), history_(std::move(history)) {}
 
     EditorViewportRendererVulkan::TemporalGuidePrograms::~TemporalGuidePrograms() {
         RetireDrawsAfter(0);
@@ -157,8 +158,11 @@ namespace Horo::Editor {
         if (!initialized_ || recordedEver_ || resources_.ColorTexture().IsValid() ||
             !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
             return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        auto history = RenderMotionHistoryTracker::Create({RenderMaterialPass::MaximumDraws});
+        if (history.HasError())
+            return Result<void>::Failure(history.ErrorValue());
         try {
-            auto candidate = std::make_unique<TemporalGuidePrograms>(*this);
+            auto candidate = std::make_unique<TemporalGuidePrograms>(*this, std::move(history).Value());
             if (const auto depth =
                     ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->linearDepth, EditorVulkanTemporalInput::LinearDepth,
                                                                   linearDepth, device_.frames);
@@ -177,6 +181,11 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate the viewport temporal guide programs."));
         }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalMotion */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalMotion(const EditorViewportMotionSource source) {
+        return temporalGuides_ ? temporalGuides_->PrepareSource(source) : Result<void>::Success();
     }
 
     void EditorViewportRendererVulkan::RetireDraw(DrawSlot &draw) noexcept {
