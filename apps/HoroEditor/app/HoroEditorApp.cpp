@@ -11,6 +11,7 @@
 #include "EditorMcpCommandPanel.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Accessibility/VisualSafety.h"
 #include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
@@ -4797,6 +4798,7 @@ namespace Horo::Editor {
         }
         const std::array accessibilitySettings{Runtime::Ui::MakeUiVisualAccessibilityContribution(),
                                                Runtime::Ui::MakeCaptionSettingsContribution(),
+                                               Accessibility::MakeColorAccessibilityContribution(),
                                                Accessibility::MakeVisualSafetyContribution(),
                                                Gameplay::MakeGameplayAccessibilityContribution()};
         for (const auto &contribution : accessibilitySettings)
