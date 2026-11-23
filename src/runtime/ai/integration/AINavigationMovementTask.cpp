@@ -196,6 +196,22 @@ namespace Horo::AI {
         return Return::Success(std::move(work).Value());
     }
 
+    /** @copydoc AiNavigationMovementTask::ValidateSafeMotionAuthority */
+    Result<void> AiNavigationMovementTask::ValidateSafeMotionAuthority(const N::NavigationVelocityWork &work) {
+        if (!movement_ || owner_ != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (work.preferred.operation != operation_)
+            return Result<void>::Failure(MakeError(N::NavigationErrors::StaleSnapshot));
+        // Preparation can terminalize the task while the exact tick still owes Character a stop.
+        using enum N::NavigationMovementState;
+        if (work.preferred.state == Arrived || work.preferred.state == Cancelled || work.preferred.state == TimedOut)
+            return Result<void>::Success();
+        const auto active = CanAdvance();
+        if (active.HasError())
+            return Result<void>::Failure(active.ErrorValue());
+        return active.Value() ? Result<void>::Success() : Result<void>::Failure(MakeError(N::NavigationErrors::StaleSnapshot));
+    }
+
     /** @copydoc AiNavigationMovementTask::Cancel */
     Result<AiTaskTransitionDisposition> AiNavigationMovementTask::Cancel() {
         if (!movement_ || owner_ != std::this_thread::get_id())

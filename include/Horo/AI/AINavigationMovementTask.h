@@ -67,6 +67,12 @@ namespace Horo::AI {
             Navigation::NavigationVelocityPipeline &pipeline, const Navigation::NavigationMovementObservation &current,
             const Navigation::NavigationCrowdSnapshot &snapshot, Navigation::NavigationAvoidanceRequest request);
 
+        /** @brief Rechecks execution authority before publishing delayed solver work on the owner lane.
+         * @param work Exact work retained by the owner after PrepareSafeMotion.
+         * @return Success for live motion or a terminal stop already prepared by this binding, otherwise a typed failure.
+         */
+        [[nodiscard]] Result<void> ValidateSafeMotionAuthority(const Navigation::NavigationVelocityWork &work);
+
         /** @brief Cancels the operation and its exact AI execution.
          * @return Original AI lifecycle transition, decision mailbox admission, or typed owner/identity failure.
          * @details A contended decision mailbox keeps the terminal candidate for retry at the next advancement.

@@ -14,40 +14,72 @@ namespace Horo::Application::Internal {
         : task_(std::move(task)), velocity_(velocity), character_(character) {}
 
     SceneAiNavigationMotion::~SceneAiNavigationMotion() {
+        DiscardPrepared();
         DiscardFeedback();
     }
 
     /** @copydoc SceneAiNavigationMotion::Submit */
     Result<std::optional<Nav::NavigationVelocityPublication>> SceneAiNavigationMotion::Submit(
         const Nav::NavigationMovementObservation &current, const Nav::NavigationCrowdSnapshot &capture,
-        Nav::NavigationAvoidanceRequest request, Nav::INavigationCrowdBackend &solver) {
+        const Nav::NavigationAvoidanceRequest &request, Nav::INavigationCrowdBackend &solver) {
         using Publication = Result<std::optional<Nav::NavigationVelocityPublication>>;
-        if (pendingTick_ != 0 || !character_.UsesPipeline(velocity_))
-            return Publication::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
-        auto work = task_.PrepareSafeMotion(velocity_, current, capture, request);
+        auto work = Prepare(current, capture, request);
         if (work.HasError())
             return Publication::Failure(std::move(work).ErrorValue());
         if (!work.Value())
             return Publication::Success(std::nullopt);
-        auto submitted = SubmitWork(*work.Value(), current, capture, solver);
-        if (submitted.HasError()) {
-            (void)velocity_.CancelPending(*work.Value());
-            return Publication::Failure(task_.FailMotion(std::move(submitted).ErrorValue()));
-        }
-        pendingTick_ = current.path.tick;
+        const auto &prepared = *work.Value();
+        auto submitted = Complete(prepared, solver.Solve(capture, prepared.request), current, capture);
+        if (submitted.HasError())
+            return Publication::Failure(std::move(submitted).ErrorValue());
         return Publication::Success(std::move(submitted).Value());
     }
 
-    /** @copydoc SceneAiNavigationMotion::SubmitWork */
-    Result<Nav::NavigationVelocityPublication> SceneAiNavigationMotion::SubmitWork(const Nav::NavigationVelocityWork &work,
-                                                                                   const Nav::NavigationMovementObservation &current,
-                                                                                   const Nav::NavigationCrowdSnapshot &capture,
-                                                                                   Nav::INavigationCrowdBackend &solver) {
+    /** @copydoc SceneAiNavigationMotion::Prepare */
+    Result<std::optional<Nav::NavigationVelocityWork>> SceneAiNavigationMotion::Prepare(const Nav::NavigationMovementObservation &current,
+                                                                                        const Nav::NavigationCrowdSnapshot &capture,
+                                                                                        const Nav::NavigationAvoidanceRequest &request) {
+        using Work = Result<std::optional<Nav::NavigationVelocityWork>>;
+        if (prepared_ || pendingTick_ != 0 || !character_.UsesPipeline(velocity_))
+            return Work::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        auto selected = task_.PrepareSafeMotion(velocity_, current, capture, request);
+        if (selected.HasValue())
+            prepared_ = selected.Value();
+        return selected;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Complete */
+    Result<Nav::NavigationVelocityPublication> SceneAiNavigationMotion::Complete(const Nav::NavigationVelocityWork &work,
+                                                                                 Result<Nav::NavigationAvoidanceOutcome> solved,
+                                                                                 const Nav::NavigationMovementObservation &current,
+                                                                                 const Nav::NavigationCrowdSnapshot &capture) {
         using Publication = Result<Nav::NavigationVelocityPublication>;
-        auto sampled = solver.Solve(capture, work.request);
-        if (sampled.HasError())
-            return Publication::Failure(std::move(sampled).ErrorValue());
-        auto safe = velocity_.Commit(work, sampled.Value(), capture, current);
+        if (!prepared_ || work.sequence != prepared_->sequence || work.binding != prepared_->binding ||
+            work.preferred.operation != prepared_->preferred.operation || work.preferred.tick != prepared_->preferred.tick ||
+            work.characterRevision != prepared_->characterRevision)
+            return Publication::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        if (auto authority = task_.ValidateSafeMotionAuthority(*prepared_); authority.HasError()) {
+            DiscardPrepared();
+            return Publication::Failure(std::move(authority).ErrorValue());
+        }
+        auto submitted = solved.HasError() ? Publication::Failure(std::move(solved).ErrorValue())
+                                           : Publish(*prepared_, solved.Value(), current, capture);
+        if (submitted.HasError()) {
+            DiscardPrepared();
+            return Publication::Failure(task_.FailMotion(std::move(submitted).ErrorValue()));
+        }
+        prepared_.reset();
+        pendingTick_ = current.path.tick;
+        return submitted;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Publish */
+    Result<Nav::NavigationVelocityPublication> SceneAiNavigationMotion::Publish(const Nav::NavigationVelocityWork &work,
+                                                                                const Nav::NavigationAvoidanceOutcome &solved,
+                                                                                const Nav::NavigationMovementObservation &current,
+                                                                                const Nav::NavigationCrowdSnapshot &capture) {
+        using Publication = Result<Nav::NavigationVelocityPublication>;
+        auto safe = velocity_.Commit(work, solved, capture, current);
         if (safe.HasError())
             return safe;
         auto motion = character_.Prepare(safe.Value(), current, current.path.tick);
@@ -59,6 +91,14 @@ namespace Horo::Application::Internal {
         if (admitted.Value().absent || admitted.Value().admission.status != Character::CharacterCommandAdmissionStatus::Deferred)
             return Publication::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
         return safe;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::DiscardPrepared */
+    void SceneAiNavigationMotion::DiscardPrepared() noexcept {
+        if (prepared_) {
+            (void)velocity_.CancelPending(*prepared_);
+            prepared_.reset();
+        }
     }
 
     /** @copydoc SceneAiNavigationMotion::Observe */
@@ -84,6 +124,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc SceneAiNavigationMotion::Reject */
     void SceneAiNavigationMotion::Reject(Error error) {
+        DiscardPrepared();
         DiscardFeedback();
         (void)task_.FailMotion(std::move(error));
     }

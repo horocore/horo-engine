@@ -3110,6 +3110,9 @@ the declared fixed tick and emits a typed preferred-velocity request over an
 exact pinned `NavigationCrowdSnapshot`. Workers execute the host-selected
 `INavigationCrowdBackend` through the existing JobSystem; they retain immutable
 work/capture values and never access the pipeline, controller or live Scene.
+The shared application motion owner splits preparation from solver completion.
+It retains one exact request, rechecks AI execution before admitting motion, and
+withdraws unconsumed work on retirement. The inline host uses these same phases.
 
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.

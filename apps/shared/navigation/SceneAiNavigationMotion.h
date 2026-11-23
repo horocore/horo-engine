@@ -29,7 +29,26 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<std::optional<Navigation::NavigationVelocityPublication>> Submit(
             const Navigation::NavigationMovementObservation &current, const Navigation::NavigationCrowdSnapshot &capture,
-            Navigation::NavigationAvoidanceRequest request, Navigation::INavigationCrowdBackend &solver);
+            const Navigation::NavigationAvoidanceRequest &request, Navigation::INavigationCrowdBackend &solver);
+
+        /** @brief Prepares an owned solver request on the Scene lane without submitting Character motion.
+         * @param current Committed pre-Character observation. @param capture Exact owned crowd snapshot.
+         * @param request Selected avoidance envelope.
+         * @return Work for the solver, empty for a retired task, or the typed admission failure.
+         */
+        [[nodiscard]] Result<std::optional<Navigation::NavigationVelocityWork>> Prepare(
+            const Navigation::NavigationMovementObservation &current, const Navigation::NavigationCrowdSnapshot &capture,
+            const Navigation::NavigationAvoidanceRequest &request);
+
+        /** @brief Consumes the exact prepared result on the Scene lane before the Character step.
+         * @param work Owner-issued work returned by Prepare. @param solved Outcome or solver failure.
+         * @param current Fresh pre-Character observation. @param capture Exact same-tick snapshot.
+         * @return Character-admitted desired motion, or the original typed failure.
+         */
+        [[nodiscard]] Result<Navigation::NavigationVelocityPublication> Complete(const Navigation::NavigationVelocityWork &work,
+                                                                                 Result<Navigation::NavigationAvoidanceOutcome> solved,
+                                                                                 const Navigation::NavigationMovementObservation &current,
+                                                                                 const Navigation::NavigationCrowdSnapshot &capture);
 
         /** @brief Returns achieved motion after Character publishes the admitted tick.
          * @param tick Committed fixed tick. @return Success or the original stale or Character failure.
@@ -41,15 +60,18 @@ namespace Horo::Application::Internal {
         void DiscardFeedback() noexcept;
 
     private:
-        /** @brief Solves, validates and submits exactly one work item, without stepping native simulation. */
-        [[nodiscard]] Result<Navigation::NavigationVelocityPublication> SubmitWork(const Navigation::NavigationVelocityWork &work,
-                                                                                   const Navigation::NavigationMovementObservation &current,
-                                                                                   const Navigation::NavigationCrowdSnapshot &capture,
-                                                                                   Navigation::INavigationCrowdBackend &solver);
+        /** @brief Validates one solved intent and admits it to Character without stepping simulation. */
+        [[nodiscard]] Result<Navigation::NavigationVelocityPublication> Publish(const Navigation::NavigationVelocityWork &work,
+                                                                                const Navigation::NavigationAvoidanceOutcome &solved,
+                                                                                const Navigation::NavigationMovementObservation &current,
+                                                                                const Navigation::NavigationCrowdSnapshot &capture);
+        /** @brief Releases the exact prepared velocity work during error or owner retirement. */
+        void DiscardPrepared() noexcept;
 
         AI::AiNavigationMovementTask task_;
         Navigation::NavigationVelocityPipeline &velocity_;
         Navigation::NavigationCharacterAdapter &character_;
+        std::optional<Navigation::NavigationVelocityWork> prepared_;
         std::uint64_t pendingTick_{};
     };
 

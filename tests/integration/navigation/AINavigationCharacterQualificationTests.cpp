@@ -30,7 +30,27 @@ namespace Horo::Navigation {
         REQUIRE(admitted.HasValue());
         Application::Internal::SceneAiNavigationMotion motion(std::move(admitted).Value(), *host.velocity, host.bridge);
 
-        if (GENERATE(false, true)) {
+        enum class SolverScenario {
+            Success,
+            ProviderFailure,
+            Cancelled
+        };
+        const auto scenario = GENERATE(SolverScenario::Success, SolverScenario::ProviderFailure, SolverScenario::Cancelled);
+        if (scenario == SolverScenario::Cancelled) {
+            const auto current = host.Now(1);
+            const auto capture = host.Capture(1);
+            const auto work = motion.Prepare(current, capture, {.stepSeconds = Qualification::StepSeconds});
+            REQUIRE(work.HasValue());
+            REQUIRE(work.Value());
+            REQUIRE(capability.CancelTask(agent, task).HasValue());
+            const auto solved = host.crowd->Solve(capture, work.Value()->request);
+            REQUIRE(solved.HasValue());
+            REQUIRE(motion.Complete(*work.Value(), solved, current, capture).HasError());
+            CHECK(capability.InspectTask(agent, task).Value().state == AI::AiTaskState::Cancelled);
+            CHECK(host.character->ControllerTransform(host.controller).Value().sourceTick == 0);
+            return;
+        }
+        if (scenario == SolverScenario::ProviderFailure) {
             RejectedSolver rejected;
             const auto result = motion.Submit(host.Now(1), host.Capture(1), {.stepSeconds = Qualification::StepSeconds}, rejected);
             REQUIRE(result.HasError());
@@ -106,10 +126,19 @@ namespace Horo::Navigation {
         const auto actual = actor.Capture(sample);
         REQUIRE(actual.HasValue());
         CHECK(actual.Value().position == before.position);
-        const auto submitted =
-            actor.Motion()->Submit(actual.Value(), host.Capture(1), {.stepSeconds = Qualification::StepSeconds}, *host.crowd);
+        const auto capture = host.Capture(1);
+        const auto work = actor.Motion()->Prepare(actual.Value(), capture, {.stepSeconds = Qualification::StepSeconds});
+        REQUIRE(work.HasValue());
+        REQUIRE(work.Value());
+        CHECK(actor.Motion()->Prepare(actual.Value(), capture, {.stepSeconds = Qualification::StepSeconds}).HasError());
+        const auto solved = host.crowd->Solve(capture, work.Value()->request);
+        REQUIRE(solved.HasValue());
+        auto mismatched = *work.Value();
+        ++mismatched.sequence;
+        CHECK(actor.Motion()->Complete(mismatched, solved, actual.Value(), capture).HasError());
+        const auto submitted = actor.Motion()->Complete(*work.Value(), solved, actual.Value(), capture);
         REQUIRE(submitted.HasValue());
-        REQUIRE(submitted.Value());
+        CHECK(actor.Motion()->Complete(*work.Value(), solved, actual.Value(), capture).HasError());
         host.StepCharacter(1);
         REQUIRE(actor.Motion()->Observe(1).HasValue());
         host.DispatchTick(1);
