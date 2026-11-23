@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <thread>
 #include <vector>
@@ -176,6 +177,11 @@ namespace Horo::Render::Test::VfxInstanced {
             return family_;
         }
 
+        /** @brief Reports the mode of the last successful native swapchain creation. */
+        [[nodiscard]] std::optional<VkPresentModeKHR> CreatedPresentationMode() const noexcept {
+            return presentationMode_;
+        }
+
         /** @brief Starts a bounded observation window without changing any driver command or resource state. */
         void ResetDraws() noexcept {
             drawCount_ = 0;
@@ -236,6 +242,10 @@ namespace Horo::Render::Test::VfxInstanced {
                 self.createImage_ = std::bit_cast<PFN_vkCreateImage>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&CreateImage);
             }
+            if (std::strcmp(name, "vkCreateSwapchainKHR") == 0) {
+                self.createSwapchain_ = std::bit_cast<PFN_vkCreateSwapchainKHR>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&CreateSwapchain);
+            }
             if (std::strcmp(name, "vkDestroyImage") == 0) {
                 self.destroyImage_ = std::bit_cast<PFN_vkDestroyImage>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DestroyImage);
@@ -261,6 +271,16 @@ namespace Horo::Render::Test::VfxInstanced {
                 return std::bit_cast<PFN_vkVoidFunction>(&Dispatch);
             }
             return actual;
+        }
+
+        /** @brief Retains the exact mode admitted by the actual driver without changing the request. */
+        static VKAPI_ATTR VkResult VKAPI_CALL CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
+                                                              const VkAllocationCallbacks *allocator, VkSwapchainKHR *chain) noexcept {
+            auto &self = *active_;
+            const auto result = self.createSwapchain_(device, info, allocator, chain);
+            if (result == VK_SUCCESS)
+                self.presentationMode_ = info->presentMode;
+            return result;
         }
 
         /** @brief Observes a forwarded compute dispatch on the actual selected device. */
@@ -396,6 +416,8 @@ namespace Horo::Render::Test::VfxInstanced {
         inline static thread_local ObservedLoader *active_{};
         PFN_vkGetInstanceProcAddr instanceResolver_{};
         PFN_vkGetDeviceProcAddr deviceResolver_{};
+        PFN_vkCreateSwapchainKHR createSwapchain_{};
+        std::optional<VkPresentModeKHR> presentationMode_;
         PFN_vkCreateDevice createDevice_{};
         PFN_vkGetDeviceQueue getQueue_{};
         PFN_vkCreateImage createImage_{};

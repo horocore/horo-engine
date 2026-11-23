@@ -11,7 +11,7 @@ system, driver, adapter, or monitor.
 
 | Behavior | Automated evidence | Pass threshold |
 | --- | --- | --- |
-| Present mode | `HoroPresentModeTests`, Vulkan WSI contract tests, SDL OpenGL exact-interval smoke | A supported explicit request returns the exact mode. An unsupported request returns its typed failure. Auto selects only from its declared order and reports the selection. A failed native interval query or mismatched readback cannot publish Exact. |
+| Present mode | `HoroPresentModeTests`, Vulkan WSI contract tests, SDL Vulkan exact-swapchain-mode smoke, SDL OpenGL exact-interval smoke | A supported explicit request returns the exact mode. An unsupported request returns its typed failure. Auto selects only from its declared order and reports the selection. A failed native interval query or mismatched readback cannot publish Exact. |
 | Display and output negotiation | `HoroRenderDisplayTests`, including presentation output tests, and `HoroRenderFrontendTests` | Invalid, stale, contradictory, and detached facts leave the previous publication intact. Explicit HDR requires the exact encoding and qualified display evidence. Unsupported color or transfer requests preserve the previous output. |
 | Pacing and latency budget | `HoroFramePacingTests` and backend admission tests | The host cap accepts 0 through 1000 Hz and waits in slices no greater than 2 ms. Late work cannot cause a catch-up burst. Resize, focus change, and suspension discard the timing baseline. Native time has exact provenance. CPU return alone supplies no display timestamp or refresh ordinal. Frame-count budget rejection cannot silently reduce the requested bound. |
 | Resize, monitor, DPI, and fullscreen | `HoroRenderSurfaceLifecycleTests`, `HoroEditorPresentationSurfaceTests`, native SDL Vulkan and OpenGL smoke, native Metal resize smoke | Each accepted transition advances once after realization. A stale, superseded, or active-frame operation cannot change the output. A same-size display change still advances the exact display revision. Native resize resumes presentation only at the observed pixel extent and denies the retired one. |
@@ -36,15 +36,20 @@ ctest --test-dir build/presentation-contract --no-tests=error --output-on-failur
 | SDL Vulkan on Linux or Windows | Configure the native GUI build with `BUILD_TESTING=ON`, `HORO_BUILD_RENDER_VULKAN=ON` and `HORO_ENABLE_GPU_SMOKE_TESTS=ON`. Build `HoroEditorVulkanPresentationSmoke` and `HoroRenderVulkanTests`. Run the latter with `[renderer][vulkan][wsi]` for scripted debt/failure checks. Run the smoke on a Vulkan display with validation layers and the [locked viewport cook](vulkan-editor-presentation-integration.md). Record the exact ICD/device and validation log. The Linux shader job already uses Xvfb and retains the driver facts, cook catalog, CTest XML, and native log. Reject validation errors, warnings, and VUID diagnostics. |
 | Metal on macOS | The `ci-macos-debug` producer builds the native GUI with `HORO_ENABLE_GPU_SMOKE_TESTS=ON`. The `macos-metal` job consumes the verified same-commit artifact and runs the packaged native tests. For local hardware, run `ctest --test-dir build/ci-metal --no-tests=error --output-on-failure -R '^HoroEditorViewportMetalSmoke::'` after the producer build. Retain the native result and display facts. A linear EDR skip leaves that row unqualified even if SDR and drawable lifecycle pass. |
 
-The standalone Vulkan resize and suspension cases use a real SDL window without
-viewport shader cooking. The suspension case waits for the window manager to
+The standalone Vulkan cases use a real SDL window without viewport shader cooking.
+The mode case observes the mode passed to successful native swapchain creation
+and presents in explicit FIFO and, where supported, Immediate mode. An unsupported
+Immediate request must return its typed error and leave no drawable available.
+The fullscreen case presents at the observed pixel extent after entering and
+leaving SDL fullscreen. A window manager that does not acknowledge fullscreen
+leaves that case unqualified. The suspension case waits for the window manager to
 acknowledge minimization, verifies that the host's empty drawable extent admits
 no presentation, then restores and presents at the observed pixel extent. The
 resize case can run on Xvfb. An environment without native minimization leaves
 the suspension case unqualified.
 
 ```sh
-ctest --test-dir build/presentation-vulkan --no-tests=error --output-on-failure -R '^HoroEditorVulkanPresentationSmoke::Native Vulkan (keeps frame ownership|suspends and resumes)'
+ctest --test-dir build/presentation-vulkan --no-tests=error --output-on-failure -R '^HoroEditorVulkanPresentationSmoke::Native Vulkan (presents with the exact requested|presents at the current extent|keeps frame ownership|suspends and resumes)'
 ```
 
 ## Physical Display Lane

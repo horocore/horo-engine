@@ -67,6 +67,11 @@ namespace Horo::Tests::VulkanEditor {
 
     /** @brief Test host retains the production native parents through every finite drain poll. */
     struct Host {
+        enum class StartupSurface {
+            Realize,
+            Deferred
+        };
+
         SdlContext sdl;
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{nullptr, &SDL_DestroyWindow};
         std::unique_ptr<SdlVulkanPresentationPort> port;
@@ -81,7 +86,8 @@ namespace Horo::Tests::VulkanEditor {
         const FramebufferExtent extent{640, 480};
         static constexpr EditorViewportExtent CameraQualificationExtent{64, 32};
 
-        explicit Host(bool compute = false, bool captureViewportColor = false) {
+        explicit Host(bool compute = false, bool captureViewportColor = false, PresentMode mode = PresentMode::Fifo,
+                      StartupSurface startup = StartupSurface::Realize) {
             window.reset(
                 SDL_CreateWindow("Horo Vulkan qualification", extent.width, extent.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
             REQUIRE(window);
@@ -93,7 +99,7 @@ namespace Horo::Tests::VulkanEditor {
             auto &loader = viewportObservation ? static_cast<IVulkanLoaderPort &>(*viewportObservation) : *port;
             Check(RegisterVulkanRenderBackend(*registry, loader, bridge.get()));
             Check(registry->Seal());
-            RenderBackendConfig config{.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2};
+            RenderBackendConfig config{.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2, .presentMode = mode};
             if (compute) {
                 const auto graphics = std::ranges::find(config.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
                 REQUIRE(graphics != config.queueAssignments.end());
@@ -102,7 +108,13 @@ namespace Horo::Tests::VulkanEditor {
             auto created = RenderFrontend::Create(*registry, RenderBackendId{"vulkan"}, config, {}, {.budget = {.maximumBlocks = 4096}});
             Check(created);
             frontend = std::move(created).Value();
-            Check(frontend->Resize(extent));
+            if (startup == StartupSurface::Realize) {
+                Check(frontend->Resize(extent));
+                InitializeGui();
+            }
+        }
+
+        void InitializeGui() {
             ImGui::CreateContext();
             ImGui::GetIO().IniFilename = nullptr;
             gui = std::make_unique<EditorGuiRendererVulkan>(*window, *frontend, *bridge);
@@ -1102,11 +1114,11 @@ namespace Horo::Tests::VulkanEditor {
     }
 
     /** @brief Observes an actual window-manager flag change in the finite native test lane. */
-    bool WaitForWindowMinimized(SDL_Window *window, const bool minimized) {
+    bool WaitForWindowFlag(SDL_Window *window, const SDL_WindowFlags flag, const bool set) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         do {
             SDL_PumpEvents();
-            if (((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) == minimized)
+            if (((SDL_GetWindowFlags(window) & flag) != 0) == set)
                 return true;
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         } while (std::chrono::steady_clock::now() < deadline);
@@ -1124,7 +1136,7 @@ namespace Horo::Tests::VulkanEditor {
             Check(initial.Present(), "present before minimizing");
         }
 
-        if (!SDL_MinimizeWindow(host.window.get()) || !WaitForWindowMinimized(host.window.get(), true))
+        if (!SDL_MinimizeWindow(host.window.get()) || !WaitForWindowFlag(host.window.get(), SDL_WINDOW_MINIMIZED, true))
             SKIP("The window manager did not acknowledge SDL minimization: " << SDL_GetError());
         const auto suspended = host.frontend->PollPresentationAvailability({});
         Check(suspended, "poll the minimized window without a drawable");
@@ -1132,7 +1144,7 @@ namespace Horo::Tests::VulkanEditor {
 
         INFO(SDL_GetError());
         REQUIRE(SDL_RestoreWindow(host.window.get()));
-        REQUIRE(WaitForWindowMinimized(host.window.get(), false));
+        REQUIRE(WaitForWindowFlag(host.window.get(), SDL_WINDOW_MINIMIZED, false));
         int width{}, height{};
         REQUIRE(SDL_GetWindowSizeInPixels(host.window.get(), &width, &height));
         REQUIRE(width > 0);
@@ -1256,6 +1268,80 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
         CHECK(host.port->GetInstanceProcAddr() == nullptr);
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
+    }
+
+    TEST_CASE("Native Vulkan presents with the exact requested swapchain mode", "[native-smoke][vulkan][presentation][mode]") {
+        const auto mode = GENERATE(PresentMode::Fifo, PresentMode::Immediate);
+        const bool immediate = mode == PresentMode::Immediate;
+        Host host{false, true, mode, Host::StartupSurface::Deferred};
+        INFO("Vulkan / " << SDL_GetCurrentVideoDriver() << " / requested present mode " << (immediate ? "Immediate" : "FIFO"));
+        const auto realized = host.frontend->Resize(host.extent);
+        if (realized.HasError()) {
+            const auto &error = realized.ErrorValue();
+            INFO("Vulkan / present-mode realization: " << error.domain.Value() << "/" << error.code.Value() << ": " << error.message);
+            REQUIRE(immediate);
+            REQUIRE(error.code.Value() == "render.vulkan.presentation_unsupported");
+            CHECK_FALSE(host.viewportObservation->CreatedPresentationMode());
+            const auto drawable = host.frontend->PollPresentationAvailability(host.extent);
+            Check(drawable, "poll after unsupported native mode");
+            CHECK_FALSE(drawable.Value());
+        } else {
+            host.RecordCapabilities();
+            const auto expected = immediate ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
+            REQUIRE(host.viewportObservation->CreatedPresentationMode() == expected);
+            host.InitializeGui();
+            auto frame = host.Frame(1);
+            host.ExecuteGuiOnly(frame);
+            Check(frame.Present(), "present in the actual admitted native swapchain mode");
+        }
+        REQUIRE(host.Drain());
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
+    }
+
+    TEST_CASE("Native Vulkan presents at the current extent across SDL fullscreen and windowed transitions",
+              "[native-smoke][vulkan][presentation][fullscreen]") {
+        Host host{false, true};
+        const auto window = host.window.get();
+        INFO("Vulkan / SDL fullscreen and windowed transition / " << SDL_GetCurrentVideoDriver());
+        host.RecordCapabilities();
+        {
+            auto initial = host.Frame(1);
+            host.ExecuteGuiOnly(initial);
+            Check(initial.Present(), "present at the initial windowed extent");
+        }
+        const auto initialOutput = host.frontend->PresentationOutput();
+        const auto transition = [&host, window](const bool fullscreen, const std::uint64_t number) {
+            CAPTURE(fullscreen);
+            INFO(SDL_GetError());
+            REQUIRE(SDL_SetWindowFullscreen(window, fullscreen));
+            const bool acknowledged = WaitForWindowFlag(window, SDL_WINDOW_FULLSCREEN, fullscreen);
+            if (fullscreen && !acknowledged)
+                SKIP("The window manager did not acknowledge SDL fullscreen: " << SDL_GetError());
+            REQUIRE(acknowledged);
+            REQUIRE(SDL_SyncWindow(window));
+            int width{}, height{};
+            REQUIRE(SDL_GetWindowSizeInPixels(window, &width, &height));
+            REQUIRE(width > 0);
+            REQUIRE(height > 0);
+            const FramebufferExtent observed{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+            RealizeNativePresentation(host, observed, std::chrono::steady_clock::now() + std::chrono::seconds{5});
+            CHECK(host.viewportObservation->CreatedPresentationMode() == VK_PRESENT_MODE_FIFO_KHR);
+            auto frame = host.Frame(number, observed);
+            host.ExecuteGuiOnly(frame);
+            Check(frame.Present(), "present at the observed fullscreen/windowed pixel extent");
+            return host.frontend->PresentationOutput();
+        };
+        const auto fullscreen = transition(true, 2);
+        const auto windowed = transition(false, 3);
+        if (initialOutput.HasValue()) {
+            Check(fullscreen, "observe fullscreen output facts");
+            Check(windowed, "observe restored windowed output facts");
+            CHECK(fullscreen.Value().revision > initialOutput.Value().revision);
+            CHECK(windowed.Value().revision > fullscreen.Value().revision);
+            CHECK(windowed.Value().active == initialOutput.Value().active);
+        }
+        REQUIRE(host.Drain());
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
     }
 
     TEST_CASE("Native Vulkan manual ColorOutput preserves graph acceptance and publishes the encoded GUI view",
