@@ -3120,6 +3120,13 @@ host-selected solver instances. The Navigation owner can collect the result once
 at the capture's fixed tick and with the same snapshot. Pending work, cancellation,
 stale capture, or an invalid solver result cannot expose a partial batch.
 Collection passes detached results to the per-agent publication checks.
+An explicit Headless best-effort worker policy reuses the process decision
+JobSystem. It dispatches after decision intents and polls after Gameplay and
+Animation, before Character. When the batch is still pending at that cutoff,
+the owner publishes a zero-motion command against the same tick and retires the
+jobs. Worker solver slots are independent and support overlap with retirement
+of an earlier cancelled tick. An aborted tick or Scene retirement withdraws
+unconsumed work.
 
 At `NavIntentCommit`, `Commit` accepts only the latest pending work at the same
 capture tick, exact agent/binding/dynamic revision and pinned capture identity.

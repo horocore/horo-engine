@@ -251,6 +251,8 @@ namespace Horo::Application::Internal {
     /** @brief Explicit project-selected crowd authority, fixed envelope and live Follow observations. */
     struct HeadlessNavigationMotionPolicy final {
         std::shared_ptr<Navigation::INavigationCrowdBackend> solver;
+        // Each slot owns independent scratch. Solvers handle overlap with an earlier cancelled tick safely.
+        std::vector<std::shared_ptr<Navigation::INavigationCrowdBackend>> workerSolvers;
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
                                                                   const Navigation::NavigationWorldActivationDescriptor &,
@@ -260,6 +262,11 @@ namespace Horo::Application::Internal {
         std::function<Result<std::optional<Navigation::NavigationMovementTarget>>(const Runtime::RuntimeSceneView &,
                                                                                   Navigation::NavigationAgentOwner, std::uint64_t)>
             follow;
+
+        /** @brief Selects exactly one inline or worker execution profile. */
+        [[nodiscard]] bool HasSolverSelection() const noexcept {
+            return solver ? workerSolvers.empty() : !workerSolvers.empty();
+        }
     };
 
     /** @brief Maps one explicitly public authored action to a stable positive presentation tag. */

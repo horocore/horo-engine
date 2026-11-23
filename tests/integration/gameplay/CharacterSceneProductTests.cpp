@@ -1097,13 +1097,16 @@ namespace Horo::Application::CharacterSceneProductTest {
             Follow,
             MissingAnimation,
             Animated,
-            Dedicated
+            Dedicated,
+            MissedWorker
         };
-        const auto scenario =
-            GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated, Scenario::Dedicated);
+        const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated,
+                                       Scenario::Dedicated, Scenario::MissedWorker);
         const bool follows = scenario == Scenario::Follow;
         const bool dedicated = scenario == Scenario::Dedicated;
         const bool animated = scenario == Scenario::Animated || dedicated;
+        const bool workerDeadline = scenario == Scenario::MissedWorker;
+        JobSystem queuedJobs({.workerCount = 0});
         const auto role = dedicated ? Network::NetworkProjectRole::DedicatedServer : Network::NetworkProjectRole::Standalone;
         const Network::NetworkModeWorld authority{Network::NetworkModeWorldKind::AuthorityServer, {31}};
         const auto motionTrigger = Animation::GraphParameterId::Create(2).Value();
@@ -1143,7 +1146,10 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                         product.tick)
                     .HasValue();
         };
-        policy->solver = CreateRecastDetourCrowdBackend().Value();
+        if (workerDeadline)
+            policy->workerSolvers.emplace_back(CreateRecastDetourCrowdBackend().Value());
+        else
+            policy->solver = CreateRecastDetourCrowdBackend().Value();
         policy->capture = [&](const auto &, const auto &active, const auto &agents, const auto samples, const std::uint64_t tick) {
             REQUIRE(samples.size() == 1);
             if (captures++ == 0)
@@ -1175,7 +1181,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                       .environment = decision.Environment(),
                                                       .bindings = {{catalog.front().controller, decisionAsset}},
                                                       .execution =
-                                                          AI::AiSceneCookedDecisionExecution{assets.jobs,
+                                                          AI::AiSceneCookedDecisionExecution{workerDeadline ? queuedJobs : assets.jobs,
                                                                                              {.mode = AI::AiSchedulingMode::BestEffort},
                                                                                              {}}});
             input.navigationMotion = policy;
@@ -1207,6 +1213,29 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto actor = scene->Find({3});
         REQUIRE(actor);
         goal.y = scene->Get(*actor).Value().localTransform->translation.y;
+        if (workerDeadline) {
+            const auto initial = scene->Get(*actor).Value().localTransform->translation;
+            for (std::size_t frame = 0; frame < 12; ++frame)
+                product.RunFrame();
+            REQUIRE(staged);
+            REQUIRE(captures > 1);
+            CHECK(decision.probe.cleanups == 0);
+            CHECK(position.x == initial.x);
+            CHECK(position.z == initial.z);
+            const auto submitted = queuedJobs.SnapshotIfChanged(0);
+            REQUIRE(submitted);
+            CHECK(std::ranges::any_of(submitted->jobs, [](const JobSnapshot &job) {
+                return job.state == JobState::Queued;
+            }));
+            product.Stop();
+            queuedJobs.Shutdown(ShutdownPolicy::Drain);
+            const auto retired = queuedJobs.SnapshotIfChanged(0);
+            REQUIRE(retired);
+            CHECK(std::ranges::none_of(retired->jobs, [](const JobSnapshot &job) {
+                return job.state == JobState::Succeeded;
+            }));
+            return;
+        }
         if (follows) {
             const auto following = scene->Find({1});
             REQUIRE(following);

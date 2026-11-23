@@ -58,6 +58,8 @@ namespace Horo::Application::Internal {
         void Reject(Error error);
         /** @brief Discards feedback for a failed or abandoned Character attempt before retirement. */
         void DiscardFeedback() noexcept;
+        /** @brief Withdraws an unconsumed solver request without failing the task. */
+        void DiscardPrepared() noexcept;
 
     private:
         /** @brief Validates one solved intent and admits it to Character without stepping simulation. */
@@ -65,8 +67,6 @@ namespace Horo::Application::Internal {
                                                                                 const Navigation::NavigationAvoidanceOutcome &solved,
                                                                                 const Navigation::NavigationMovementObservation &current,
                                                                                 const Navigation::NavigationCrowdSnapshot &capture);
-        /** @brief Releases the exact prepared velocity work during error or owner retirement. */
-        void DiscardPrepared() noexcept;
 
         AI::AiNavigationMovementTask task_;
         Navigation::NavigationVelocityPipeline &velocity_;

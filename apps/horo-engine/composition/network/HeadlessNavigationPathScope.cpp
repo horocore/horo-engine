@@ -2,6 +2,7 @@
 
 #include "HeadlessNetworkServices.h"
 #include "Horo/Animation/AnimationErrors.h"
+#include "Horo/Navigation/NavigationCrowdBatch.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
 #include "SceneAiNavigationMotion.h"
@@ -162,6 +163,22 @@ namespace Horo::Application::Internal {
         }
     }
 
+    struct HeadlessNavigationPathScope::CrowdTick final {
+        struct Pending final {
+            Actor *actor;
+            Nav::NavigationVelocityWork work;
+
+            std::size_t AgentIndex() const noexcept {
+                return work.request.agentIndex;
+            }
+        };
+
+        std::vector<Pending> pending;
+        std::vector<Nav::NavigationAvoidanceRequest> requests;
+        Nav::NavigationCrowdSnapshot capture;
+        std::unique_ptr<Nav::NavigationCrowdBatch> batch;
+    };
+
     HeadlessNavigationPathScope::HeadlessNavigationPathScope(
         std::shared_ptr<Nav::NavigationWorldLifecycle> lifecycle, Nav::NavigationCoordinator &coordinator,
         const Nav::NavigationWorldActivationDescriptor activation, const Nav::NavigationOutcomeProvenance source,
@@ -193,6 +210,9 @@ namespace Horo::Application::Internal {
             callers.reserve(callers.size() + selected.size());
             actors.reserve(selected.size());
             samples_.reserve(selected.size());
+            auto crowd = std::make_unique<CrowdTick>();
+            crowd->pending.reserve(selected.size());
+            crowd->requests.reserve(selected.size());
             for (const auto &policy : selected) {
                 const auto entity = scene.Find(policy.object);
                 if (!entity || policy.principal == 0 || (policy.motionStartTrigger && !policy.motionStartTrigger->IsValid()))
@@ -219,6 +239,7 @@ namespace Horo::Application::Internal {
                 callers.push_back(tacticalPolicy_->caller);
             actors_ = std::move(actors);
             callers_ = std::move(callers);
+            crowdTick_ = std::move(crowd);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
@@ -227,6 +248,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessNavigationPathScope::BeginMotionTick */
     void HeadlessNavigationPathScope::BeginMotionTick(const std::uint64_t tick, const float stepSeconds) noexcept {
+        DiscardCrowdTick();
         motionTick_ = tick;
         motionStep_ = stepSeconds;
     }
@@ -293,16 +315,17 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc HeadlessNavigationPathScope::SubmitMotion */
-    Result<void> HeadlessNavigationPathScope::SubmitMotion(const Runtime::RuntimeSceneView &scene,
-                                                           const HeadlessNavigationMotionPolicy &policy) {
+    /** @copydoc HeadlessNavigationPathScope::CaptureMotion */
+    Result<Nav::NavigationCrowdSnapshot> HeadlessNavigationPathScope::CaptureMotion(const Runtime::RuntimeSceneView &scene,
+                                                                                    const HeadlessNavigationMotionPolicy &policy) {
+        using Capture = Result<Nav::NavigationCrowdSnapshot>;
         if (std::ranges::none_of(actors_, [](const Actor &entry) {
             return entry.owner->Motion() != nullptr;
         }))
-            return Result<void>::Success();
+            return Capture::Success({});
         auto population = agents_.Snapshot();
         if (population.HasError())
-            return Result<void>::Failure(std::move(population).ErrorValue());
+            return Capture::Failure(std::move(population).ErrorValue());
         samples_.clear();
         for (auto &actor : actors_) {
             auto sample = actor.owner->Sample(motionTick_);
@@ -311,31 +334,145 @@ namespace Horo::Application::Internal {
             else if (auto *motion = actor.owner->Motion())
                 motion->Reject(std::move(sample).ErrorValue());
         }
-        auto capture = policy.capture(scene, activation_, population.Value(), samples_, motionTick_);
+        auto captured = policy.capture(scene, activation_, population.Value(), samples_, motionTick_);
+        if (captured.HasValue() && !captured.Value().IsValid())
+            return Capture::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        return captured;
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::ObserveMotionInput */
+    Result<Nav::NavigationMovementObservation> HeadlessNavigationPathScope::ObserveMotionInput(
+        const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const Actor &actor,
+        const Nav::NavigationCrowdSnapshot &capture, Nav::NavigationAvoidanceRequest &limits) const {
+        const auto sampled = capture.Agents();
+        const auto sample = std::ranges::find(sampled, actor.owner->Agent(), &Nav::NavigationCrowdAgentFact::handle);
+        if (sample == sampled.end())
+            return Result<Nav::NavigationMovementObservation>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        limits.agentIndex = static_cast<std::size_t>(sample - sampled.begin());
+        limits.stepSeconds = motionStep_;
+        return ObserveActor(scene, policy, *actor.owner, actor.target);
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::SubmitMotion */
+    Result<void> HeadlessNavigationPathScope::SubmitMotion(const Runtime::RuntimeSceneView &scene,
+                                                           const HeadlessNavigationMotionPolicy &policy) {
+        auto capture = CaptureMotion(scene, policy);
         if (capture.HasError())
             return Result<void>::Failure(std::move(capture).ErrorValue());
-        const auto sampled = capture.Value().Agents();
+        if (!capture.Value().IsValid())
+            return Result<void>::Success();
         for (auto &actor : actors_) {
             auto *motion = actor.owner->Motion();
             if (!motion)
                 continue;
-            auto current = ObserveActor(scene, policy, *actor.owner, actor.target);
+            auto limits = policy.limits;
+            auto current = ObserveMotionInput(scene, policy, actor, capture.Value(), limits);
             if (current.HasError()) {
                 motion->Reject(std::move(current).ErrorValue());
                 continue;
             }
-            const auto sample = std::ranges::find(sampled, actor.owner->Agent(), &Nav::NavigationCrowdAgentFact::handle);
-            if (sample == sampled.end()) {
-                motion->Reject(MakeError(Nav::NavigationErrors::StaleSnapshot));
-                continue;
-            }
-            auto limits = policy.limits;
-            limits.agentIndex = static_cast<std::size_t>(sample - sampled.begin());
-            limits.stepSeconds = motionStep_;
             // Motion-stage failures are delivered by the binding to this actor's task.
             (void)motion->Submit(current.Value(), capture.Value(), limits, *policy.solver);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::DispatchMotion */
+    Result<void> HeadlessNavigationPathScope::DispatchMotion(const Runtime::RuntimeSceneView &scene,
+                                                             const HeadlessNavigationMotionPolicy &policy, const JobSystem &jobs,
+                                                             const CancellationToken &cancellation) {
+        auto capture = CaptureMotion(scene, policy);
+        if (capture.HasError())
+            return Result<void>::Failure(std::move(capture).ErrorValue());
+        if (!capture.Value().IsValid())
+            return Result<void>::Success();
+        auto &tick = *crowdTick_;
+        tick.capture = std::move(capture).Value();
+        for (auto &actor : actors_) {
+            auto *motion = actor.owner->Motion();
+            if (!motion)
+                continue;
+            auto limits = policy.limits;
+            auto current = ObserveMotionInput(scene, policy, actor, tick.capture, limits);
+            if (current.HasError()) {
+                motion->Reject(std::move(current).ErrorValue());
+                continue;
+            }
+            auto prepared = motion->Prepare(current.Value(), tick.capture, limits);
+            if (prepared.HasValue() && prepared.Value()) {
+                tick.requests.push_back(prepared.Value()->request);
+                tick.pending.push_back({&actor, std::move(*prepared.Value())});
+            }
+        }
+        if (tick.pending.empty())
+            return Result<void>::Success();
+        std::ranges::sort(tick.pending, std::ranges::less{}, &CrowdTick::Pending::AgentIndex);
+        auto batch = Nav::NavigationCrowdBatch::Submit(jobs, tick.capture, tick.requests, policy.workerSolvers, cancellation);
+        if (batch.HasError()) {
+            DiscardCrowdTick();
+            return Result<void>::Failure(std::move(batch).ErrorValue());
+        }
+        tick.batch = std::move(batch).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::PublishMotion */
+    void HeadlessNavigationPathScope::PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy) {
+        if (!crowdTick_ || !crowdTick_->batch)
+            return;
+        auto &tick = *crowdTick_;
+        const auto completed = tick.batch->TryTake(tick.capture, motionTick_);
+        if (completed.HasError()) {
+            for (const auto &pending : tick.pending) {
+                if (auto *motion = pending.actor->owner->Motion())
+                    motion->Reject(completed.ErrorValue());
+            }
+        } else if (const auto &results = completed.Value()) {
+            for (const auto &result : *results)
+                PublishCrowdResult(scene, policy, result.agentIndex, result.outcome);
+        } else {
+            const Nav::NavigationAvoidanceOutcome stopped{.stopReason = Nav::NavigationAvoidanceStopReason::CapacityBusy,
+                                                          .binding = tick.capture.Binding(),
+                                                          .dynamicRevision = tick.capture.DynamicRevision(),
+                                                          .captureTick = tick.capture.CaptureTick()};
+            for (const auto agent : tick.capture.CellAgentIndices())
+                PublishCrowdResult(scene, policy, agent, stopped);
+        }
+        DiscardCrowdTick();
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::PublishCrowdResult */
+    void HeadlessNavigationPathScope::PublishCrowdResult(const Runtime::RuntimeSceneView &scene,
+                                                         const HeadlessNavigationMotionPolicy &policy, const std::size_t agent,
+                                                         const Nav::NavigationAvoidanceOutcome &outcome) {
+        const auto &tick = *crowdTick_;
+        const auto found = std::ranges::lower_bound(tick.pending, agent, std::ranges::less{}, &CrowdTick::Pending::AgentIndex);
+        if (found == tick.pending.end() || found->AgentIndex() != agent)
+            return;
+        auto &actor = *found->actor;
+        auto *motion = actor.owner->Motion();
+        if (!motion)
+            return;
+        auto current = ObserveActor(scene, policy, *actor.owner, actor.target);
+        if (current.HasError())
+            motion->Reject(std::move(current).ErrorValue());
+        else
+            (void)motion->Complete(found->work, Result<Nav::NavigationAvoidanceOutcome>::Success(outcome), current.Value(), tick.capture);
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::DiscardCrowdTick */
+    void HeadlessNavigationPathScope::DiscardCrowdTick() noexcept {
+        if (!crowdTick_)
+            return;
+        auto &tick = *crowdTick_;
+        tick.batch.reset();
+        for (const auto &pending : tick.pending) {
+            if (auto *motion = pending.actor->owner->Motion())
+                motion->DiscardPrepared();
+        }
+        tick.pending.clear();
+        tick.requests.clear();
+        tick.capture = {};
     }
 
     /** @copydoc HeadlessNavigationPathScope::ObserveMotion */
@@ -350,6 +487,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessNavigationPathScope::DiscardMotionFeedback */
     void HeadlessNavigationPathScope::DiscardMotionFeedback() noexcept {
+        DiscardCrowdTick();
         for (auto &actor : actors_)
             if (auto *motion = actor.owner->Motion())
                 motion->DiscardFeedback();
@@ -411,6 +549,7 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNavigationPathScope::Revoke */
     void HeadlessNavigationPathScope::Revoke() noexcept {
         revoked_ = true;
+        DiscardCrowdTick();
         actors_.clear();
         context_->Revoke();
     }

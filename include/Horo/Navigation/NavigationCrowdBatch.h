@@ -38,7 +38,7 @@ namespace Horo::Navigation {
          * @param providers Distinct, host-selected bounded solver instances. The selected prefix caps job count.
          * @param cancellation Scene lifetime or superseding operation cancellation.
          * @return Owner handle or an admission error. On partial admission, cancellation withdraws the whole batch.
-         * @pre Called on the publication lane, with provider leases reserved for this work until worker retirement.
+         * @pre Called on the publication lane. Each provider lease stays exclusive until retirement unless the provider supports overlap.
          */
         [[nodiscard]] static Result<std::unique_ptr<NavigationCrowdBatch>> Submit(
             const JobSystem &jobs, const NavigationCrowdSnapshot &capture, std::span<const NavigationAvoidanceRequest> requests,

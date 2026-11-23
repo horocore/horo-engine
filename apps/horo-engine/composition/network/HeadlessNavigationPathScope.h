@@ -7,6 +7,7 @@
 #include "Horo/Animation/AnimationGraph.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
+#include "Horo/Navigation/NavigationCrowdAvoidance.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
@@ -80,6 +81,11 @@ namespace Horo::Application::Internal {
                                                Runtime::SceneAnimationRuntime *animation);
         /** @brief Submits safe Navigation motion before the native Character step. */
         [[nodiscard]] Result<void> SubmitMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
+        /** @brief Dispatches detached crowd work after decision intents and ahead of gameplay and Animation. */
+        [[nodiscard]] Result<void> DispatchMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
+                                                  const JobSystem &jobs, const CancellationToken &cancellation);
+        /** @brief Polls the exact tick once and submits ready motion or a bounded stop. */
+        void PublishMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
         /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;
@@ -95,6 +101,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<bool> PollRetirement() const;
 
     private:
+        struct CrowdTick;
+
         struct Actor final {
             std::unique_ptr<SceneAiNavigationActor> owner;
             std::optional<Navigation::NavigationAgentOwner> target;
@@ -104,6 +112,18 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveActor(
             const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const SceneAiNavigationActor &actor,
             std::optional<Navigation::NavigationAgentOwner> target) const;
+        /** @brief Binds the caller's solver envelope to the exact captured actor and tick. */
+        [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveMotionInput(
+            const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const Actor &actor,
+            const Navigation::NavigationCrowdSnapshot &capture, Navigation::NavigationAvoidanceRequest &limits) const;
+        /** @brief Captures authoritative Character and crowd facts for the exact owner tick. */
+        [[nodiscard]] Result<Navigation::NavigationCrowdSnapshot> CaptureMotion(const Runtime::RuntimeSceneView &scene,
+                                                                                const HeadlessNavigationMotionPolicy &policy);
+        /** @brief Resolves the exact actor and fresh observation before admitting a detached result. */
+        void PublishCrowdResult(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, std::size_t agent,
+                                const Navigation::NavigationAvoidanceOutcome &outcome);
+        /** @brief Withdraws this tick's detached jobs and any unconsumed per-actor requests. */
+        void DiscardCrowdTick() noexcept;
         HeadlessNavigationPathScope(std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle,
                                     Navigation::NavigationCoordinator &coordinator,
                                     Navigation::NavigationWorldActivationDescriptor activation,
@@ -122,6 +142,7 @@ namespace Horo::Application::Internal {
         bool revoked_{};
         std::vector<Actor> actors_;
         std::vector<Navigation::NavigationCrowdMotionSample> samples_;
+        std::unique_ptr<CrowdTick> crowdTick_;
         std::uint64_t motionTick_{};
         float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;

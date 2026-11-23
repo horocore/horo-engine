@@ -575,7 +575,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &policy = input.navigationMotion;
             if (!policy)
                 return Result<void>::Success();
-            if (!OwnsCookedDecisionExecution() || !policy->solver || !policy->capture || input.navigationActors.empty() ||
+            if (!OwnsCookedDecisionExecution() || !policy->HasSolverSelection() || !policy->capture || input.navigationActors.empty() ||
                 input.cookedDecisions->execution->intents)
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             auto motion =
@@ -994,13 +994,39 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Starts explicitly selected crowd jobs after decision intent dispatch. */
+        Result<void> DispatchConfiguredMotion(const Runtime::FixedStepContext &context) {
+            if (!record_->decisionMotion || owners_->configured->navigationMotion->workerSolvers.empty())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto &configuration = *owners_->configured;
+            return record_->navigationPath->DispatchMotion(*scene, *configuration.navigationMotion,
+                                                           configuration.cookedDecisions->execution->jobs, context.cancellation);
+        }
+
         /** @brief Submits the selected actors' safe motion after behavior and Animation evaluation. */
         Result<void> SubmitConfiguredMotion() {
             if (!record_->decisionMotion)
                 return Result<void>::Success();
             const auto scene = record_->scenes->ActiveScene();
-            return scene ? record_->navigationPath->SubmitMotion(*scene, *owners_->configured->navigationMotion)
-                         : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto &policy = *owners_->configured->navigationMotion;
+            if (policy.workerSolvers.empty())
+                return record_->navigationPath->SubmitMotion(*scene, policy);
+            record_->navigationPath->PublishMotion(*scene, policy);
+            return Result<void>::Success();
+        }
+
+        /** @brief Runs the fixed stages between Navigation dispatch and native motion publication. */
+        Result<void> RunMotionOverlap(const Runtime::FixedStepContext &context) {
+            if (auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
+                return gameplay;
+            if (record_->animation)
+                return owners_->fixed->Evaluate(record_, context);
+            return Result<void>::Success();
         }
 
         /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
@@ -1016,15 +1042,18 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return perception;
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
                 return decisions;
-            if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
-                return gameplay;
-            if (record_->animation) {
-                auto animation = owners_->fixed->Evaluate(record_, context);
-                if (animation.HasError())
-                    return animation;
+            if (auto dispatched = DispatchConfiguredMotion(context); dispatched.HasError())
+                return dispatched;
+            if (auto overlap = RunMotionOverlap(context); overlap.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
+                return overlap;
             }
-            if (auto motion = SubmitConfiguredMotion(); motion.HasError())
+            if (auto motion = SubmitConfiguredMotion(); motion.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
                 return motion;
+            }
             auto advanced = AdvanceConfiguredNative(context);
             if (advanced.HasError()) {
                 if (record_->decisionMotion)
