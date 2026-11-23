@@ -10,6 +10,7 @@
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "VulkanEditorGraphicsBridge.h"
 
+#include <chrono>
 #include <functional>
 #include <memory>
 
@@ -280,7 +281,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static Result<ProjectionSubmission> Execute(EditorViewportRendererVulkan &viewport, Render::RenderFrameScope &frame,
                                                                   const Render::PrimaryOutputAttachment &output,
-                                                                  const CanvasSource *canvas = nullptr);
+                                                                  const CanvasSource *canvas = nullptr, bool measureGpuDuration = false);
+        /** @brief Reports timestamp support on the selected projection queue. */
+        [[nodiscard]] static Result<bool> SupportsGpuDuration(const EditorViewportRendererVulkan &viewport);
+        /** @brief Reads completed timing from the exact current projection, if available. */
+        [[nodiscard]] static Result<std::optional<std::chrono::nanoseconds>> GpuDuration(const EditorViewportRendererVulkan &viewport,
+                                                                                         const ProjectionSubmission &submission);
         /** @brief Resolves native acceptance for this exact recording and discards a closed unissued signal. */
         [[nodiscard]] static Result<SubmissionState> ResolveSubmission(EditorViewportRendererVulkan &viewport,
                                                                        const ProjectionSubmission &submission);

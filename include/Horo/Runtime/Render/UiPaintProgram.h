@@ -11,6 +11,7 @@
 
 namespace Horo::Render {
     struct RenderGraphImportedState;
+    struct RenderQueueSubmission;
 
     namespace Detail {
         class RenderFrontendResourceAccess;
@@ -244,7 +245,7 @@ namespace Horo::Render {
         /** @brief Records the current combined graph, optionally returning its explicit submission signal on success. */
         [[nodiscard]] Result<void> RecordSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared,
                                                      UiRenderSubmission source, std::span<const RenderGraphPassWorkload> sceneWorkloads,
-                                                     RenderTimelinePoint *signal);
+                                                     RenderTimelinePoint *signal, const RenderQueueSubmission *reserved = nullptr);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.
          * @param frontend Actual selected owner. @param kernel Exact cooked interface and formats.
          * @param cancellation Source preparation fence.

@@ -653,6 +653,12 @@ separates allocation extent, active render rectangle, scale, VRS/density mechani
 privacy state and fallback. Runtime asynchronous reprojection and guardian/
 chaperone composition never become Horo passes.
 
+OpenXR Play compares completed Vulkan projection GPU time with the predicted
+display period. The controller reserves a quarter of that period for the
+compositor and applies bounded changes across later frames. Missing timestamp
+support uses the full recommended projection rectangles. Fixed foveation and
+motion-reprojection routes keep their own extent and history contracts.
+
 A project can request optional space warp through `xr.features.space_warp` with
 the ordinary projection fallback. The selected OpenXR Play composition publishes
 baseline projection. It has a color producer and omits the optional feature

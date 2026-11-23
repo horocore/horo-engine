@@ -289,9 +289,12 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
     }
     RenderTimelinePoint recordedSignal;
     if (explicitSubmissions) {
-        recordedSignal = UiRequire(
-            Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*program, frame, prepared,
-                                                                             fixture.Submission(*program, geometry, bindings), workloads));
+        const auto reserved = UiRequire(frame.ReserveSubmission(RenderQueueRole::Graphics));
+        recordedSignal =
+            UiRequire(Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*program, frame, prepared,
+                                                                                       fixture.Submission(*program, geometry, bindings),
+                                                                                       workloads, &reserved));
+        CHECK(recordedSignal == reserved.signal);
     } else {
         CHECK(Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*program, frame, prepared,
                                                                                fixture.Submission(*program, geometry, bindings), workloads)

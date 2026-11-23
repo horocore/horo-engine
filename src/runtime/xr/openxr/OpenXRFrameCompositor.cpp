@@ -252,11 +252,15 @@ namespace Horo::XR::OpenXRInternal {
         return frame.IsValid() && frame == frame_ && !completed_;
     }
 
-    void NativeProjectionResolution::ObserveCompletion(const NativeFramePacingObservation &observation) noexcept {
-        if (!AwaitsCompletion(observation.frame) || observation.predictedPeriodNanoseconds <= 0)
+    /** @copydoc NativeProjectionResolution::ObserveCompletion */
+    void NativeProjectionResolution::ObserveCompletion(const NativeFramePacingObservation &observation,
+                                                       const std::chrono::nanoseconds gpuElapsed) noexcept {
+        if (!AwaitsCompletion(observation.frame) || observation.predictedPeriodNanoseconds <= 0 || gpuElapsed.count() <= 0)
             return;
         completed_ = true;
-        if (observation.deadline != NativeFrameDeadline::WithinBudget) {
+        // Keep one quarter of the native refresh interval outside scene rendering for the compositor.
+        const auto budget = observation.predictedPeriodNanoseconds - observation.predictedPeriodNanoseconds / 4;
+        if (gpuElapsed.count() > budget) {
             headroom_ = 0;
             if (++late_ == LateFrames) {
                 scale_ = std::max(MinimumPercent, scale_ - StepPercent);
@@ -265,7 +269,7 @@ namespace Horo::XR::OpenXRInternal {
             return;
         }
         late_ = 0;
-        if (observation.remainingNanoseconds < observation.predictedPeriodNanoseconds / 4) {
+        if (observation.deadline != NativeFrameDeadline::WithinBudget || gpuElapsed.count() >= budget - budget / 5) {
             headroom_ = 0;
             return;
         }

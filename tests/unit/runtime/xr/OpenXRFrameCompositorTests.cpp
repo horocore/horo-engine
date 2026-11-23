@@ -570,42 +570,45 @@ namespace Horo::Tests::OpenXR {
             const auto begin = [&](const XRFrameId &id, bool adaptive = true, std::uint64_t rendererRevision = 1) {
                 return resolution.BeginFrame(id, adaptive, 1, rendererRevision);
             };
-            const auto observe = [&](const NativeFrameDeadline deadline, const std::int64_t slack) {
-                const NativeFramePacingObservation sample{.frame = frame,
-                                                          .predictedPeriodNanoseconds = 10'000'000,
-                                                          .remainingNanoseconds = slack,
-                                                          .deadline = deadline};
-                resolution.ObserveCompletion(sample);
-                resolution.ObserveCompletion(sample);
+            const auto observe = [&resolution, &frame](const NativeFrameDeadline deadline, const std::int64_t gpuNanoseconds) {
+                const NativeFramePacingObservation sample{.frame = frame, .predictedPeriodNanoseconds = 10'000'000, .deadline = deadline};
+                resolution.ObserveCompletion(sample, std::chrono::nanoseconds{gpuNanoseconds});
+                resolution.ObserveCompletion(sample, std::chrono::nanoseconds{gpuNanoseconds});
                 CHECK_FALSE(resolution.AwaitsCompletion(frame));
                 ++frame.sequence;
             };
             using enum NativeFrameDeadline;
             for (std::uint32_t index = 0; index < 2; ++index) {
                 CHECK(begin(frame) == 100);
-                observe(CpuSubmissionMissed, -10);
+                observe(CpuSubmissionMissed, 9'000'000);
             }
             ++frame.sequence;
             CHECK(begin(frame) == 100);
-            observe(CpuSubmissionMissed, -10);
+            resolution.ObserveCompletion({.frame = frame, .predictedPeriodNanoseconds = 10'000'000, .deadline = DisplayMissed}, {});
+            CHECK(resolution.AwaitsCompletion(frame));
+            ++frame.sequence;
             CHECK(begin(frame) == 100);
             CHECK(begin({}) == 100);
             for (std::uint32_t index = 0; index < 3; ++index) {
                 CHECK(begin(frame) == 100);
-                observe(CpuSubmissionMissed, -10);
+                observe(WithinBudget, 9'000'000);
             }
             auto last = frame;
             --last.sequence;
             CHECK(begin(last) == 100);
             CHECK(begin(frame) == 95);
-            observe(DisplayMissed, -2'000'000);
+            observe(DisplayMissed, 9'000'000);
             for (std::uint32_t index = 0; index < 12; ++index) {
                 CHECK(begin(frame) == 95);
-                observe(index % 2 == 0 ? WithinBudget : CpuSubmissionMissed, 100'000);
+                observe(DisplayMissed, 1'000'000);
+            }
+            for (std::uint32_t index = 0; index < 12; ++index) {
+                CHECK(begin(frame) == 95);
+                observe(WithinBudget, index % 2 == 0 ? 7'000'000 : 9'000'000);
             }
             for (std::uint32_t index = 0; index < 24; ++index) {
                 static_cast<void>(begin(frame));
-                observe(DisplayMissed, -2'000'000);
+                observe(DisplayMissed, 9'000'000);
             }
             CHECK(begin(frame) == 70);
             for (std::uint32_t index = 0; index < 10; ++index) {
@@ -613,12 +616,19 @@ namespace Horo::Tests::OpenXR {
                 observe(WithinBudget, 4'000'000);
             }
             CHECK(begin(frame) == 75);
+            auto recovered = frame;
+            ++recovered.session.slot.generation;
+            recovered.configuration.session = recovered.session;
+            CHECK(begin(recovered) == 100);
+            resolution.ObserveCompletion({.frame = frame, .predictedPeriodNanoseconds = 10'000'000}, std::chrono::milliseconds{9});
+            CHECK(resolution.AwaitsCompletion(recovered));
             CHECK(begin(frame, true, 2) == 100);
             auto replacement = frame;
             replacement.capabilityRevision = IdentityValue<XRCapabilityRevision>(frame.capabilityRevision.Value() + 1);
             ++replacement.sequence;
             CHECK(begin(replacement, true, 2) == 100);
-            resolution.ObserveCompletion({.frame = frame, .predictedPeriodNanoseconds = 10'000'000, .deadline = DisplayMissed});
+            resolution.ObserveCompletion({.frame = frame, .predictedPeriodNanoseconds = 10'000'000, .deadline = DisplayMissed},
+                                         std::chrono::milliseconds{9});
             CHECK(resolution.AwaitsCompletion(replacement));
             CHECK(begin(replacement, false, 2) == 100);
             CHECK_FALSE(resolution.AwaitsCompletion(replacement));

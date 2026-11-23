@@ -866,8 +866,13 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(revision.ErrorValue());
         const XRViewConfigurationId configuration{render_->session, {.index = 0, .generation = 1}};
         const auto fixed = scene_->projection->plan.Decision(XRCapability::FixedFoveation).state;
-        const bool adaptive = !support.synthetic && fixed != XRFeatureDecisionState::OptionalEnabled &&
+        const bool eligible = !support.synthetic && fixed != XRFeatureDecisionState::OptionalEnabled &&
                               fixed != XRFeatureDecisionState::Required && !WantsMotionHistory(scene_->projection->plan);
+        const auto timing =
+            eligible ? Editor::EditorVulkanXrViewportAccess::SupportsGpuDuration(composition_.viewport) : Result<bool>::Success(false);
+        if (timing.HasError())
+            return Result<void>::Failure(timing.ErrorValue());
+        const bool adaptive = timing.Value();
         const auto scale = render_->resolution.BeginFrame(frame.frame, adaptive, support.deviceIncarnation, support.capabilityRevision);
         auto plan = PlanProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
                                    *scene_->projection, *render_->acquisition, render_->allocation, scale);
@@ -962,7 +967,8 @@ namespace Horo::Application::Internal {
         if (!FrameLightingAuthorized())
             return AbortForLostFrameLighting();
         auto executed =
-            Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output, render_->canvasBound ? canvas : nullptr);
+            Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output, render_->canvasBound ? canvas : nullptr,
+                                                          render_->resolution.AwaitsCompletion(frames_.Snapshot().frame));
         if (executed.HasError()) {
             const auto aborted = AbortRenderFrame();
             (void)aborted;
@@ -1178,8 +1184,11 @@ namespace Horo::Application::Internal {
             return;
         completionTimingObserved = true;
         const auto pacing = ObservePacing(frame);
-        if (pacing.HasValue())
-            resolution.ObserveCompletion(pacing.Value());
+        if (pacing.HasValue() && resolution.AwaitsCompletion(frame)) {
+            const auto measured = Editor::EditorVulkanXrViewportAccess::GpuDuration(host.composition_.viewport, *encoded);
+            if (measured.HasValue() && measured.Value())
+                resolution.ObserveCompletion(pacing.Value(), *measured.Value());
+        }
         metrics.RecordRenderCompletion(pacing.HasValue() ? std::optional{pacing.Value().deadline} : std::nullopt);
     }
 

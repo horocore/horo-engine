@@ -10,6 +10,7 @@
 #include "OpenXRSwapchain.h"
 
 #include <array>
+#include <chrono>
 #include <optional>
 #include <thread>
 
@@ -55,7 +56,7 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t framesInFlight{};
     };
 
-    /** @brief Selects a bounded projection rectangle scale at frame admission using completed pacing evidence. */
+    /** @brief Selects a bounded projection rectangle scale at frame admission using exact completed GPU work. */
     class NativeProjectionResolution final {
     public:
         static constexpr std::uint32_t FullPercent = 100;
@@ -65,8 +66,11 @@ namespace Horo::XR::OpenXRInternal {
                                                std::uint64_t rendererRevision) noexcept;
         /** @brief True only for the current eligible frame with no retained completion sample. */
         [[nodiscard]] bool AwaitsCompletion(const XRFrameId &frame) const noexcept;
-        /** @brief Observes completed work once. Changes apply to the next admitted frame. */
-        void ObserveCompletion(const NativeFramePacingObservation &observation) noexcept;
+        /** @brief Compares the exact completed GPU duration with the runtime's predicted frame period.
+         * @param observation Current frame identity and runtime period.
+         * @param gpuElapsed Positive scene submission duration from the selected renderer.
+         * @details Changes apply to the next admitted frame. Invalid or missing evidence cannot change scale. */
+        void ObserveCompletion(const NativeFramePacingObservation &observation, std::chrono::nanoseconds gpuElapsed) noexcept;
         /** @brief Converts the admitted scale to an active rectangle without changing the allocation. */
         [[nodiscard]] static XRRenderRectangle Rectangle(Render::FramebufferExtent extent, std::uint32_t percent) noexcept;
 

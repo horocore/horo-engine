@@ -121,8 +121,9 @@ namespace Horo::Editor {
     Result<EditorVulkanXrViewportAccess::ProjectionSubmission> EditorVulkanXrViewportAccess::Execute(EditorViewportRendererVulkan &viewport,
                                                                                                      RenderFrameScope &frame,
                                                                                                      const PrimaryOutputAttachment &output,
-                                                                                                     const CanvasSource *canvas) {
-        return viewport.ExecuteXrFrame(frame, output, canvas);
+                                                                                                     const CanvasSource *canvas,
+                                                                                                     bool measureGpuDuration) {
+        return viewport.ExecuteXrFrame(frame, output, canvas, measureGpuDuration);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Mirror */
@@ -818,13 +819,14 @@ namespace Horo::Editor {
 
         /** @brief Records the canvas raster and both eye draws in the same native submission as the projection. */
         Result<RenderTimelinePoint> RecordCanvas(RenderFrameScope &frame, UiRenderSubmission source,
-                                                 std::span<const RenderGraphPassWorkload> workloads) {
+                                                 std::span<const RenderGraphPassWorkload> workloads,
+                                                 const RenderQueueSubmission &reserved) {
             auto &program = *canvas->canvas->paint;
             const auto prepared = program.PrepareSceneFrame(frame, 0, source);
             if (prepared.HasError())
                 return Result<RenderTimelinePoint>::Failure(prepared.ErrorValue());
             return Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(program, frame, prepared.Value(), std::move(source),
-                                                                                    workloads);
+                                                                                    workloads, &reserved);
         }
 
         /** @brief Cold-prepares the one ordinary XR projection plus its sampled canvas, using the same owned depth. */
@@ -1864,9 +1866,28 @@ namespace Horo::Editor {
         return bridge_.Port()->WriteFrameBuffer(frame, xrComfort_.eyes[eye].instance, bytes);
     }
 
+    namespace {
+        /** @brief Applies a timing request only to the exact graphics submission used by this projection. */
+        template <typename Record>
+        auto RecordProjection(Render::Detail::IVulkanEditorGraphicsPort &port, FrameToken frame, RenderTimelinePoint signal,
+                              bool measureGpuDuration, const Record &record) -> decltype(record()) {
+            using Outcome = decltype(record());
+            if (!measureGpuDuration)
+                return record();
+            const auto armed = port.ArmGraphGpuDuration(frame, signal);
+            if (armed.HasError())
+                return Outcome::Failure(armed.ErrorValue());
+            const auto result = record();
+            if (armed.Value())
+                port.DisarmGraphGpuDuration(frame, signal);
+            return result;
+        }
+    }  // namespace
+
     /** @copydoc EditorViewportRendererVulkan::ExecuteXrFrame */
     Result<EditorVulkanXrViewportAccess::ProjectionSubmission> EditorViewportRendererVulkan::ExecuteXrFrame(
-        RenderFrameScope &frame, const PrimaryOutputAttachment &output, const EditorVulkanXrViewportAccess::CanvasSource *canvas) {
+        RenderFrameScope &frame, const PrimaryOutputAttachment &output, const EditorVulkanXrViewportAccess::CanvasSource *canvas,
+        const bool measureGpuDuration) {
         using Outcome = Result<EditorVulkanXrViewportAccess::ProjectionSubmission>;
         const auto fail = [&frame](const Error &error) {
             frame.Cancel();
@@ -2002,7 +2023,13 @@ namespace Horo::Editor {
                 return fail(source.ErrorValue());
             if (xrGraph_ != retained)
                 return fail(MakeError(RendererErrors::ViewportStaleTarget));
-            auto executed = retained->RecordCanvas(frame, std::move(source).Value(), workloads);
+            const auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);
+            if (reserved.HasError())
+                return fail(reserved.ErrorValue());
+            auto executed = RecordProjection(*bridge_.Port(), frame.Token(), reserved.Value().signal, measureGpuDuration,
+                                             [&retained, &frame, &source, workloads, &reserved] {
+                return retained->RecordCanvas(frame, std::move(source).Value(), workloads, reserved.Value());
+            });
             if (executed.HasError())
                 return fail(executed.ErrorValue());
             if (xrGraph_ != retained)
@@ -2014,7 +2041,11 @@ namespace Horo::Editor {
                 return fail(reserved.ErrorValue());
             const RenderGraphQueueSubmission submission{reserved.Value(), {0, workloads.size()}};
             recordedEver_ = true;
-            if (auto executed = frame.ExecuteSubmittedGraph(*bound, workloads, std::span{&submission, 1}); executed.HasError())
+            const auto executed = RecordProjection(*bridge_.Port(), frame.Token(), reserved.Value().signal, measureGpuDuration,
+                                                   [&frame, bound, workloads, &submission] {
+                return frame.ExecuteSubmittedGraph(*bound, workloads, std::span{&submission, 1});
+            });
+            if (executed.HasError())
                 return fail(executed.ErrorValue());
             storage.submitted = reserved.Value().signal;
         }
@@ -2057,6 +2088,24 @@ namespace Horo::Editor {
                                                            const ProjectionSubmission &submission) noexcept {
         return viewport.owner_ == std::this_thread::get_id() && viewport.initialized_ && viewport.xrGraph_ &&
                viewport.xrGraph_->encoded == submission && viewport.xrGraph_->observed == submission.signal;
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::SupportsGpuDuration */
+    Result<bool> EditorVulkanXrViewportAccess::SupportsGpuDuration(const EditorViewportRendererVulkan &viewport) {
+        auto *port = viewport.bridge_.Port();
+        if (viewport.owner_ != std::this_thread::get_id() || !viewport.initialized_ || !port)
+            return Result<bool>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
+        return port->SupportsGraphGpuDuration(viewport.device_.graphicsIdentity);
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::GpuDuration */
+    Result<std::optional<std::chrono::nanoseconds>> EditorVulkanXrViewportAccess::GpuDuration(const EditorViewportRendererVulkan &viewport,
+                                                                                              const ProjectionSubmission &submission) {
+        using Outcome = Result<std::optional<std::chrono::nanoseconds>>;
+        if (!SubmissionCompleted(viewport, submission) || !viewport.bridge_.Port())
+            return Outcome::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto timing = viewport.bridge_.Port()->ObserveGraphGpuDuration(submission.signal, submission.publication.deviceIncarnation);
+        return timing.HasError() ? Outcome::Failure(timing.ErrorValue()) : Outcome::Success(timing.Value().elapsed);
     }
 
     /** @copydoc EditorViewportRendererVulkan::CompleteXrMotion */

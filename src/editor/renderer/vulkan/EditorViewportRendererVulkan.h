@@ -224,7 +224,7 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<EditorVulkanXrViewportAccess::ProjectionSubmission> ExecuteXrFrame(
             Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
-            const EditorVulkanXrViewportAccess::CanvasSource *canvas = nullptr);
+            const EditorVulkanXrViewportAccess::CanvasSource *canvas, bool measureGpuDuration);
         /** @brief Returns only the exact admitted current first-eye sample, never a desktop-camera fallback.
          * @param frame Exact App bind frame. @param expected Exact retained acquired first-eye generation.
          * @return Typed GUI binding or empty when no fresh XR frame is bound/retained by its native owner.
