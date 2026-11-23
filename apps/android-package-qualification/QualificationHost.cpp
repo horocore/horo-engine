@@ -188,8 +188,11 @@ namespace Horo::AndroidQualification {
                 !PacingDiagnosticRevision.compare_exchange_strong(previous, previous + 1, std::memory_order_relaxed))
                 return;
             observedPacing = mode;
-            __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification", "host-pacing revision=%llu state=%s",
-                                static_cast<unsigned long long>(previous + 1), PacingModeName(mode));
+            const auto interval = std::chrono::duration_cast<std::chrono::milliseconds>(pacing.AttemptInterval(mode));
+            __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification",
+                                "host-pacing revision=%llu state=%s intervalMs=%lld attempts=%llu",
+                                static_cast<unsigned long long>(previous + 1), PacingModeName(mode),
+                                static_cast<long long>(interval.count()), static_cast<unsigned long long>(frame));
         }
 
         /** @brief Reports transition-only canonical/window facts already obtained by the ordinary host pump. */

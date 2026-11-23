@@ -68,8 +68,11 @@ presentation loss stop attempts, and resume starts without a backlog. The
 policy gates frame attempts after input
 commit and leaves display refresh, simulation scheduling and authored
 settings to their existing owners.
-The deployment report carries the native owner's selected pacing mode
-alongside the distinct Android observations when those facts are available.
+The deployment report carries the native owner's selected pacing mode,
+its minimum attempt interval in milliseconds, and the number of attempts
+issued before that transition, alongside the distinct Android observations.
+These are policy and attempt measurements. Presentation and GPU completion
+have their own evidence.
 
 The Vulkan qualification Activity observes Android's thermal status while it
 is resumed. Its optional deployment evidence contains a process-local

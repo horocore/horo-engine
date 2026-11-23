@@ -1269,7 +1269,8 @@ PLATFORM_STATE_LINES = {
         r"percent=(?P<percent>-1|0|[1-9][0-9]{0,2})"),
     "pacing": re.compile(
         r"host-pacing revision=(?P<revision>[1-9][0-9]{0,18}) "
-        r"state=(?P<state>baseline|power-conservation|thermal-conservation|memory-conservation)"),
+        r"state=(?P<state>baseline|power-conservation|thermal-conservation|memory-conservation)"
+        r"(?: intervalMs=(?P<intervalMs>[1-9][0-9]{0,9}) attempts=(?P<attempts>0|[1-9][0-9]{0,19}))?"),
     "refresh": re.compile(
         r"host-refresh revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|observed) milliHz=(?P<milliHz>0|[1-9][0-9]{0,9})"),
@@ -1401,6 +1402,11 @@ def record_platform_state(evidence: dict, category: str, state: re.Match) -> Non
             return
         if measured:
             value["percent"] = percent
+    elif category == "pacing" and state["intervalMs"] is not None:
+        interval, attempts = int(state["intervalMs"]), int(state["attempts"])
+        if interval >= 2**31 or attempts >= 2**64:
+            return
+        value.update(intervalMs=interval, attempts=attempts)
     evidence[category] = value
 
 

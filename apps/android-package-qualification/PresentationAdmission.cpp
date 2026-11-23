@@ -94,13 +94,18 @@ namespace Horo::AndroidQualification {
     FramePacing::FramePacing(const Clock::duration minimumInterval, const Clock::duration conservationInterval) noexcept
         : minimumInterval_(minimumInterval), conservationInterval_(std::max(minimumInterval, conservationInterval)) {}
 
+    /** @copydoc FramePacing::AttemptInterval */
+    FramePacing::Clock::duration FramePacing::AttemptInterval(const Mode mode) const noexcept {
+        const bool conserving = mode > Mode::Baseline && mode <= Mode::MemoryConservation;
+        return conserving ? conservationInterval_ : minimumInterval_;
+    }
+
     /** @copydoc FramePacing::TryAdmit */
     bool FramePacing::TryAdmit(const Platform::AndroidLifecycleSnapshot &state, const Clock::time_point now, const Mode mode) noexcept {
         if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
             state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
             return false;
-        const bool conserving = mode > Mode::Baseline && mode <= Mode::MemoryConservation;
-        const auto interval = conserving ? conservationInterval_ : minimumInterval_;
+        const auto interval = AttemptInterval(mode);
         if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < interval))
             return false;
         lastAttempt_ = now;

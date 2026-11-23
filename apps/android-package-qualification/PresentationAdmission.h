@@ -52,6 +52,11 @@ namespace Horo::AndroidQualification {
          * @param conservationInterval Optional longer delay when the current Activity requests conservation. */
         explicit FramePacing(Clock::duration minimumInterval, Clock::duration conservationInterval = {}) noexcept;
 
+        /** @brief Returns the configured minimum interval for an attempt in this mode.
+         * @param mode Current owner-scoped attempt budget.
+         * @return Monotonic duration between admitted attempts. */
+        [[nodiscard]] Clock::duration AttemptInterval(Mode mode) const noexcept;
+
         /** @brief Consumes at most one attempt for a committed foreground presentation.
          * @param state Current committed lifecycle snapshot after native readiness reconciliation.
          * @param now Monotonic time on the frame owner.

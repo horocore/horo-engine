@@ -252,10 +252,16 @@ namespace Horo::AndroidQualification::Tests {
         CHECK_FALSE(pacing.TryAdmit(foreground, start + 47ms));
         REQUIRE(pacing.TryAdmit(foreground, start + 48ms));
 
-        std::size_t attempts{};
-        for (auto elapsed = 49ms; elapsed <= 10048ms; elapsed += 1ms)
-            attempts += pacing.TryAdmit(foreground, start + elapsed, MemoryConservation);
-        CHECK(attempts == 312);
+        CHECK(pacing.AttemptInterval(Baseline) == 16ms);
+        for (const auto mode : {ThermalConservation, MemoryConservation, PowerConservation}) {
+            FramePacing sustained{16ms, 32ms};
+            REQUIRE(sustained.TryAdmit(foreground, start, mode));
+            CHECK(sustained.AttemptInterval(mode) == 32ms);
+            std::size_t attempts{};
+            for (auto elapsed = 1ms; elapsed <= 10s; elapsed += 1ms)
+                attempts += sustained.TryAdmit(foreground, start + elapsed, mode);
+            CHECK(attempts == 312);
+        }
 
         Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
         CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, MemoryConservation));
