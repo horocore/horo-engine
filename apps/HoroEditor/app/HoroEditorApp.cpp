@@ -116,6 +116,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "Horo/Runtime/Ui/UiCaptionSettings.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "HostModuleComposition.h"
 #include "PackageHostPolicy.h"
@@ -4795,6 +4796,7 @@ namespace Horo::Editor {
             }
         }
         const std::array accessibilitySettings{Runtime::Ui::MakeUiVisualAccessibilityContribution(),
+                                               Runtime::Ui::MakeCaptionSettingsContribution(),
                                                Accessibility::MakeVisualSafetyContribution(),
                                                Gameplay::MakeGameplayAccessibilityContribution()};
         for (const auto &contribution : accessibilitySettings)

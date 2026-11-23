@@ -74,6 +74,11 @@ namespace Horo::Runtime::Ui {
     private:
         /** @brief Takes the canonical extractor and reserves matching bounded scratch; setup may allocate. */
         CaptionRenderer(UiRenderExtractor extractor, UiRenderSnapshotLimits limits);
+        /** @brief Adds distinct font generations referenced by a prepared cue to reserved frame storage.
+         * @param fonts Cue-local font references.
+         * @return Success or a typed malformed/capacity error.
+         */
+        [[nodiscard]] Result<void> RegisterFonts(std::span<const UiRenderResourceReference> fonts);
         /** @brief Copies one placed cue into bounded scratch after validating local geometry and indices.
          * @param cue Prepared text at this frame's appearance. @param placement Safe-area position.
          * @param text Linear text color. @param background Linear background with final opacity.

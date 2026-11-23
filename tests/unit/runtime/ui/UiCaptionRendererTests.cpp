@@ -181,6 +181,41 @@ namespace Horo::Runtime::Ui {
                     .HasError());
     }
 
+    TEST_CASE("Concurrent dialogue and sound captions share one exact font binding", "[runtime_ui][captions][render]") {
+        CaptionPaintFixture fixture;
+        fixture.limits.resources = 1;
+        fixture.appearance.showSoundDescriptions = true;
+        fixture.Enqueue();
+        fixture.Enqueue({1, 2}, CaptionCueKind::Sound);
+        fixture.timeline.BeginFrame(10);
+        REQUIRE(fixture.timeline.Drain(*fixture.queue) == 0);
+        auto renderer = CaptionRenderer::Create({fixture.view, fixture.limits, 2}).Value();
+        std::array prepared{fixture.Prepare(), fixture.Prepare({1, 2})};
+        const UiLogicalRect viewport{{0, 0}, {1280 * 64, 720 * 64}};
+
+        const auto before = accessibilityAllocations.load();
+        const auto rendered = renderer.Render(fixture.tree, fixture.RenderDescriptor(), viewport, fixture.timeline, fixture.appearance,
+                                              fixture.localization, prepared);
+        const auto after = accessibilityAllocations.load();
+        REQUIRE(rendered.HasValue());
+        CHECK(after == before);
+        const auto &frame = rendered.Value();
+        REQUIRE(frame.layout.count == 2);
+        CHECK(frame.snapshot.Commands().size() == 4);
+        REQUIRE(frame.snapshot.Resources().size() == 1);
+        REQUIRE(frame.snapshot.TextRuns().size() == 2);
+        CHECK(frame.snapshot.TextRuns()[0].fontResource == 0);
+        CHECK(frame.snapshot.TextRuns()[1].fontResource == 0);
+
+        auto replacement = fixture.resources;
+        replacement[0].revision = UiRenderResourceRevision::Create(2).Value();
+        prepared[1].resources = replacement;
+        const auto overCapacity = renderer.Render(fixture.tree, fixture.RenderDescriptor(2), viewport, fixture.timeline, fixture.appearance,
+                                                  fixture.localization, prepared);
+        CHECK(overCapacity.HasError());
+        CHECK(frame.snapshot.Resources()[0].revision == fixture.resources[0].revision);
+    }
+
     TEST_CASE("Caption presenter rejects command capacity overflow without partial publication", "[runtime_ui][captions][render]") {
         CaptionPaintFixture fixture;
         fixture.Enqueue();

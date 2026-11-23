@@ -19,6 +19,27 @@ namespace Horo::Runtime::Ui {
             return {DecodeSrgb(color[0]), DecodeSrgb(color[1]), DecodeSrgb(color[2]), color[3]};
         }
 
+        /** @brief Finds the exact generation of a font; the table contains only FontFace entries. */
+        std::uint32_t FindFont(const std::span<const UiRenderResourceReference> fonts, const UiRenderResourceReference &font) noexcept {
+            const auto found = std::ranges::find_if(fonts, [&font](const UiRenderResourceReference &candidate) {
+                return candidate.asset == font.asset && candidate.revision == font.revision;
+            });
+            return found == fonts.end() ? static_cast<std::uint32_t>(fonts.size()) : static_cast<std::uint32_t>(found - fonts.begin());
+        }
+
+        /** @brief Checks that a cue-local glyph fits inside its placed bounds. */
+        bool GlyphFits(const UiPositionedGlyph &glyph, const UiLogicalExtent extent) noexcept {
+            return glyph.extent.IsValid() && glyph.origin.x >= 0 && glyph.origin.y >= 0 &&
+                   static_cast<std::int64_t>(glyph.origin.x) + glyph.extent.width <= extent.width &&
+                   static_cast<std::int64_t>(glyph.origin.y) + glyph.extent.height <= extent.height;
+        }
+
+        /** @brief Checks that the run references only the cue's fonts and glyphs. */
+        bool RunFits(const UiTextRun &run, const CaptionPaintCue &cue) noexcept {
+            return run.fontResource < cue.resources.size() && run.firstGlyph <= cue.glyphs.size() &&
+                   run.glyphCount <= cue.glyphs.size() - run.firstGlyph;
+        }
+
         /** @brief Applies only semantic time and caption-owned display preferences, never audio/device/backend state. */
         bool Visible(const CaptionActiveCue &active, const CaptionTimeline &timeline, const CaptionAppearance &appearance) noexcept {
             return appearance.enabled && active.cue.startTick <= timeline.Tick() &&
@@ -67,28 +88,37 @@ namespace Horo::Runtime::Ui {
         }
     }
 
+    /** @copydoc CaptionRenderer::RegisterFonts */
+    Result<void> CaptionRenderer::RegisterFonts(const std::span<const UiRenderResourceReference> fonts) {
+        for (const auto &font : fonts) {
+            if (font.role != UiRenderResourceRole::FontFace)
+                return Result<void>::Failure(MakeError(UiErrors::RenderResourceReferenceInvalid));
+            if (FindFont(resources_, font) < resources_.size())
+                continue;
+            if (resources_.size() == limits_.resources)
+                return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
+            resources_.push_back(font);
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc CaptionRenderer::AppendCue */
     Result<void> CaptionRenderer::AppendCue(const CaptionPaintCue &cue, const CaptionPlacement &placement, const UiLinearColor text,
                                             const UiLinearColor background) {
         if (cue.runs.size() >= limits_.commands - commands_.size() || cue.runs.size() > limits_.textRuns - runs_.size() ||
-            cue.glyphs.size() > limits_.glyphs - glyphs_.size() || cue.resources.size() > limits_.resources - resources_.size())
+            cue.glyphs.size() > limits_.glyphs - glyphs_.size() || cue.resources.size() > limits_.resources)
             return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
-        for (const auto &glyph : cue.glyphs) {
-            if (!glyph.extent.IsValid() || glyph.origin.x < 0 || glyph.origin.y < 0 ||
-                static_cast<std::int64_t>(glyph.origin.x) + glyph.extent.width > placement.bounds.extent.width ||
-                static_cast<std::int64_t>(glyph.origin.y) + glyph.extent.height > placement.bounds.extent.height)
-                return Result<void>::Failure(MakeError(UiErrors::CaptionInvalid));
-        }
-        for (const auto &run : cue.runs)
-            if (run.fontResource >= cue.resources.size() || run.firstGlyph > cue.glyphs.size() ||
-                run.glyphCount > cue.glyphs.size() - run.firstGlyph)
-                return Result<void>::Failure(MakeError(UiErrors::CaptionInvalid));
+        if (!std::ranges::all_of(cue.glyphs, [&placement](const UiPositionedGlyph &glyph) {
+            return GlyphFits(glyph, placement.bounds.extent);
+        }))
+            return Result<void>::Failure(MakeError(UiErrors::CaptionInvalid));
+        if (!std::ranges::all_of(cue.runs, [&cue](const UiTextRun &run) {
+            return RunFits(run, cue);
+        }))
+            return Result<void>::Failure(MakeError(UiErrors::CaptionInvalid));
+        if (auto registered = RegisterFonts(cue.resources); registered.HasError())
+            return registered;
         const auto glyphOffset = static_cast<std::uint32_t>(glyphs_.size());
-        for (const auto &resource : cue.resources)
-            if (resource.role != UiRenderResourceRole::FontFace)
-                return Result<void>::Failure(MakeError(UiErrors::RenderResourceReferenceInvalid));
-        const auto resourceOffset = static_cast<std::uint32_t>(resources_.size());
-        resources_.insert(resources_.end(), cue.resources.begin(), cue.resources.end());
         for (auto glyph : cue.glyphs) {
             glyph.origin.x += placement.bounds.origin.x;
             glyph.origin.y += placement.bounds.origin.y;
@@ -97,7 +127,7 @@ namespace Horo::Runtime::Ui {
         commands_.push_back({cue.element, placement.bounds, 0, 0, NoUiRenderIndex, 1, UiSolidDraw{background}});
         for (auto run : cue.runs) {
             run.firstGlyph += glyphOffset;
-            run.fontResource += resourceOffset;
+            run.fontResource = FindFont(resources_, cue.resources[run.fontResource]);
             run.color = text;
             const auto runIndex = static_cast<std::uint32_t>(runs_.size());
             runs_.push_back(run);
