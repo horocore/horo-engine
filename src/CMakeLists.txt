@@ -1212,7 +1212,9 @@ add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerAppl
 target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
-add_library(HoroGameplayNavigationIntegration STATIC gameplay/runtime/GameplayNavigationContext.cpp)
+add_library(HoroGameplayNavigationIntegration STATIC
+        gameplay/runtime/GameplayFormation.cpp
+        gameplay/runtime/GameplayNavigationContext.cpp)
 add_library(HoroEngine::GameplayNavigationIntegration ALIAS HoroGameplayNavigationIntegration)
 target_compile_features(HoroGameplayNavigationIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayNavigationIntegration PUBLIC HoroEngine::NavigationRuntime)

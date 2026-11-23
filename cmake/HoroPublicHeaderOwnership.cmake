@@ -618,6 +618,7 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/SaveContentWorld.h
 )
 horo_configure_target_header_boundary(HoroGameplayNavigationIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayFormation.h
     Horo/Gameplay/GameplayNavigationContext.h
 )
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS

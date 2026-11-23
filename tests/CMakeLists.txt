@@ -3005,6 +3005,7 @@ target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
 )
 add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameplayNavigationTests
+        unit/gameplay/GameplayFormationTests.cpp
         unit/gameplay/GameplayNavigationContextTests.cpp
         unit/gameplay/GameplayNavigationHostTests.cpp
         ${PROJECT_SOURCE_DIR}/examples/gameplay-ai/source/gameplay/GuardTargetBeacon.cpp)
