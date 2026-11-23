@@ -4,6 +4,50 @@
 #include <thread>
 
 namespace Horo::Render::VulkanTest {
+    TEST_CASE("Vulkan GPU timestamps follow exact accepted completion without waiting", "[unit][renderer][vulkan][timing]") {
+        CommandFixture fixture;
+        auto queues = fixture.queues;
+        queues[0].timestampValidBits = 36;
+        queues[0].timestampPeriodNs = 2.5F;
+        fixture.state.queryResults[0] = (std::uint64_t{1} << 36) - 6;
+        REQUIRE(fixture.runtime.Initialize(NativeHandle<VkDevice>(1), queues, 2, 1024, 11, Resolver).HasValue());
+
+        const auto submit = [&](std::uint64_t value, bool measure) {
+            const auto ticket = fixture.runtime.Begin({1}, measure);
+            REQUIRE(ticket.HasValue());
+            REQUIRE(fixture.runtime.Finish(ticket.Value()).HasValue());
+            REQUIRE(fixture.runtime.Submit(ticket.Value(), {{1}, {value}, {}, {{1}, value}}).HasValue());
+        };
+
+        submit(1, true);
+        submit(2, false);
+        CHECK(fixture.state.timestampWrites == std::vector<std::uint32_t>{0, 1});
+        REQUIRE(fixture.runtime.Poll().HasValue());
+        CHECK(fixture.state.queryReads == 0);
+        const auto pending = fixture.runtime.GpuDuration({{1}, 1});
+        REQUIRE(pending.HasValue());
+        CHECK_FALSE(pending.Value());
+        CHECK(fixture.runtime.GpuDuration({{2}, 1}).HasError());
+        fixture.state.Complete();
+        REQUIRE(fixture.runtime.Poll().HasValue());
+        REQUIRE(fixture.runtime.GpuDuration({{1}, 1}).HasValue());
+        CHECK(fixture.runtime.GpuDuration({{1}, 1}).Value() == std::chrono::nanoseconds{25});
+        REQUIRE(fixture.runtime.GpuDuration({{1}, 2}).HasValue());
+        CHECK_FALSE(fixture.runtime.GpuDuration({{1}, 2}).Value());
+
+        submit(3, true);
+        fixture.state.queryResults[3] = 0;
+        fixture.state.Complete();
+        REQUIRE(fixture.runtime.Poll().HasValue());
+        REQUIRE(fixture.runtime.GpuDuration({{1}, 3}).HasValue());
+        CHECK_FALSE(fixture.runtime.GpuDuration({{1}, 3}).Value());
+        CHECK(fixture.state.queryReads == 2);
+        CHECK(fixture.state.validQueryRead);
+        CHECK(fixture.state.waitCalls == 0);
+        Test::RequireDrainedOwner(fixture.runtime);
+        CHECK(fixture.state.destroyedQueryPools == 1);
+    }
+
     TEST_CASE("Vulkan canonical submission signals WSI binary without replacing timeline completion", "[unit][renderer][vulkan]") {
         CommandFixture fixture;
         fixture.Initialize(1);

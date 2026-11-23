@@ -345,8 +345,10 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @brief Carries timestamp capability alongside the exact selected native queue mappings. */
             Result<std::vector<Detail::VulkanCommandQueue>> PrepareCommandQueues(VkPhysicalDevice physical,
-                                                                                 const VulkanDeviceRequest &request) {
+                                                                                 const VulkanDeviceRequest &request,
+                                                                                 const float timestampPeriodNs) {
                 using Outcome = Result<std::vector<Detail::VulkanCommandQueue>>;
                 const auto queueFacts = EnumerateQueues(physical);
                 if (queueFacts.HasError())
@@ -364,7 +366,7 @@ namespace Horo::Render {
                     if (facts == queueFacts.Value().end())
                         return Outcome::Failure(MakeError(VulkanBackendErrors::GraphicsQueueUnavailable));
                     queues.emplace_back(assignment.queue, family, graphics ? graphicsQueue_ : transferQueue_, graphics,
-                                        facts->supportsCompute);
+                                        facts->supportsCompute, facts->timestampValidBits, timestampPeriodNs);
                 }
                 return Outcome::Success(std::move(queues));
             }
@@ -384,7 +386,7 @@ namespace Horo::Render {
                                                                      .pNext = &allocationLimits};
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
                 dispatch_.getPhysicalDeviceProperties2(physical, &properties);
-                const auto queues = PrepareCommandQueues(physical, request);
+                const auto queues = PrepareCommandQueues(physical, request, properties.properties.limits.timestampPeriod);
                 if (queues.HasError())
                     return Result<void>::Failure(queues.ErrorValue());
                 const auto incarnation = AcquireRenderDeviceIncarnation();
@@ -961,6 +963,7 @@ namespace Horo::Render {
                             properties[index].queueCount > 0 &&
                             (properties[index].queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0,
                         .supportsCompute = properties[index].queueCount > 0 && (properties[index].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0,
+                        .timestampValidBits = properties[index].timestampValidBits,
                     });
                 }
                 return Result<std::vector<VulkanQueueFamily>>::Success(std::move(queues));

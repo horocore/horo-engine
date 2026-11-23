@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vulkan/vulkan.h>
 
 namespace Horo::Render::Detail {
@@ -18,6 +19,8 @@ namespace Horo::Render::Detail {
         VkQueue native{VK_NULL_HANDLE};
         bool supportsGraphics{false};
         bool supportsCompute{false};
+        std::uint32_t timestampValidBits{};
+        float timestampPeriodNs{};
     };
 
     /** @brief Non-reused owner-local command identity; no native handle crosses RenderApi. */
@@ -74,7 +77,10 @@ namespace Horo::Render::Detail {
                                               std::uint64_t maximumTimelineDifference, std::uint64_t deviceIncarnation,
                                               const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         /** @brief Reserves one completed slot without waiting; returns typed busy when all are retained. */
-        [[nodiscard]] Result<VulkanCommandTicket> Begin(RenderQueueId queue);
+        [[nodiscard]] Result<VulkanCommandTicket> Begin(RenderQueueId queue, bool measureGpuDuration = false);
+        /** @brief Reads retained GPU duration for an exact completed submission after Poll without waiting.
+         * @return No sample for pending, unmeasured, unavailable or evicted timing. Invalid ownership or identity is an error. */
+        [[nodiscard]] Result<std::optional<std::chrono::nanoseconds>> GpuDuration(RenderTimelinePoint completion) const;
         /** @brief Returns a borrowed recording buffer for this exact owner-local ticket. */
         [[nodiscard]] Result<VkCommandBuffer> RecordingBuffer(VulkanCommandTicket ticket) const;
         /** @brief Ends native recording; failure leaves the unsent ticket abortable. */

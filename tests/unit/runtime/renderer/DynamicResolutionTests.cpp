@@ -128,7 +128,7 @@ TEST_CASE("Dynamic resolution owns configuration and rejects use after stop", "[
     ExpectError(controller.Configure(View, Policy, Output, 400), DynamicResolutionErrors::InvalidConfiguration);
     REQUIRE(controller.Configure(View, Policy, Output, 900).HasValue());
     auto foreign = Result<void>::Success();
-    std::thread other([&] {
+    std::jthread other([&controller, &foreign] {
         foreign = controller.Stop();
     });
     other.join();

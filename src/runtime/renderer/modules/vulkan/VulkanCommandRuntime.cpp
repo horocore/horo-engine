@@ -40,6 +40,11 @@ namespace Horo::Render::Detail {
         dispatch.submit = Resolve<PFN_vkQueueSubmit2>(resolver, device, "vkQueueSubmit2");
         dispatch.counter = Resolve<PFN_vkGetSemaphoreCounterValue>(resolver, device, "vkGetSemaphoreCounterValue");
         dispatch.wait = Resolve<PFN_vkWaitSemaphores>(resolver, device, "vkWaitSemaphores");
+        timestamps = {Resolve<PFN_vkCreateQueryPool>(resolver, device, "vkCreateQueryPool"),
+                      Resolve<PFN_vkDestroyQueryPool>(resolver, device, "vkDestroyQueryPool"),
+                      Resolve<PFN_vkCmdResetQueryPool>(resolver, device, "vkCmdResetQueryPool"),
+                      Resolve<PFN_vkCmdWriteTimestamp2>(resolver, device, "vkCmdWriteTimestamp2"),
+                      Resolve<PFN_vkGetQueryPoolResults>(resolver, device, "vkGetQueryPoolResults")};
         if (dispatch.createPool == nullptr || dispatch.destroyPool == nullptr || dispatch.allocateBuffers == nullptr ||
             dispatch.resetBuffer == nullptr || dispatch.beginBuffer == nullptr || dispatch.endBuffer == nullptr ||
             dispatch.createSemaphore == nullptr || dispatch.destroySemaphore == nullptr || dispatch.submit == nullptr ||
@@ -75,7 +80,7 @@ namespace Horo::Render::Detail {
                     MakeError(VulkanBackendErrors::NativeCallFailed, "Vulkan returned a null allocated command buffer."));
             queue.slots[index].command = buffers[index];
         }
-        return Result<void>::Success();
+        return PrepareTimestamps(queue, slots);
     }
 
     VulkanCommandRuntime::VulkanCommandRuntime() : impl_(std::make_unique<Impl>()) {}
@@ -133,7 +138,7 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc VulkanCommandRuntime::Begin */
-    Result<VulkanCommandTicket> VulkanCommandRuntime::Begin(const RenderQueueId identity) {
+    Result<VulkanCommandTicket> VulkanCommandRuntime::Begin(const RenderQueueId identity, const bool measureGpuDuration) {
         if (const auto access = impl_->Access(true); access.HasError())
             return Result<VulkanCommandTicket>::Failure(access.ErrorValue());
         auto *queue = impl_->FindQueue(identity);
@@ -154,6 +159,12 @@ namespace Horo::Render::Detail {
                 return Result<VulkanCommandTicket>::Failure(impl_->NativeError("vkBeginCommandBuffer", result));
             slot.ticket = VulkanCommandTicket{impl_->nextTicket++};
             slot.state = Impl::State::Recording;
+            slot.timed = measureGpuDuration && queue->timestampPool != VK_NULL_HANDLE;
+            if (slot.timed) {
+                const auto first = queue->FirstTimestamp(slot);
+                impl_->timestamps.reset(slot.command, queue->timestampPool, first, 2);
+                impl_->timestamps.write(slot.command, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, queue->timestampPool, first);
+            }
             return Result<VulkanCommandTicket>::Success(slot.ticket);
         }
         return Result<VulkanCommandTicket>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
@@ -175,9 +186,11 @@ namespace Horo::Render::Detail {
         if (const auto access = impl_->Access(true); access.HasError())
             return access;
         const auto [queue, slot] = impl_->FindTicket(ticket);
-        static_cast<void>(queue);
         if (slot == nullptr || slot->state != Impl::State::Recording)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        if (slot->timed)
+            impl_->timestamps.write(slot->command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queue->timestampPool,
+                                    queue->FirstTimestamp(*slot) + 1);
         if (const auto result = impl_->dispatch.endBuffer(slot->command); result != VK_SUCCESS)
             return Result<void>::Failure(impl_->NativeError("vkEndCommandBuffer", result));
         slot->state = Impl::State::Executable;

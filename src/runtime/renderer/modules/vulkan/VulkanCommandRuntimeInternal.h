@@ -25,12 +25,18 @@ namespace Horo::Render::Detail {
             RenderTimelinePoint completion;
             VulkanCommandRetention *retention{nullptr};
             State state{State::Idle};
+            bool timed{};
 
             void ReleaseRetention() noexcept {
                 if (retention != nullptr)
                     retention->Release();
                 retention = nullptr;
             }
+        };
+
+        struct Timing {
+            std::uint64_t signal{};
+            std::chrono::nanoseconds duration{};
         };
 
         struct Queue {
@@ -40,6 +46,13 @@ namespace Horo::Render::Detail {
             std::uint64_t signaled{};
             std::uint64_t observed{};
             std::vector<Slot> slots;
+            VkQueryPool timestampPool{};
+            std::vector<Timing> timings;
+            std::size_t nextTiming{};
+
+            [[nodiscard]] std::uint32_t FirstTimestamp(const Slot &slot) const noexcept {
+                return 2U * static_cast<std::uint32_t>(&slot - slots.data());
+            }
 
             struct IssuedRange {
                 std::uint64_t first{};
@@ -83,6 +96,14 @@ namespace Horo::Render::Detail {
         };
 
         Dispatch dispatch;
+
+        struct TimestampDispatch {
+            PFN_vkCreateQueryPool create{};
+            PFN_vkDestroyQueryPool destroy{};
+            PFN_vkCmdResetQueryPool reset{};
+            PFN_vkCmdWriteTimestamp2 write{};
+            PFN_vkGetQueryPoolResults results{};
+        } timestamps;
 
         VkDevice device{VK_NULL_HANDLE};
         std::thread::id owner;
@@ -142,6 +163,8 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] Result<void> LoadDispatch(const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         [[nodiscard]] Result<void> CreateQueue(Queue &queue, std::uint32_t slots);
+        [[nodiscard]] Result<void> PrepareTimestamps(Queue &queue, std::uint32_t slots);
+        [[nodiscard]] Result<void> ReadTimestamps(Queue &queue, Slot &slot);
         [[nodiscard]] Result<void> ValidateSubmission(const Queue &queue, const RenderQueueSubmission &submission) const;
 
         [[nodiscard]] Result<void> ValidateWaits(std::span<const RenderTimelinePoint> waits,
@@ -162,6 +185,8 @@ namespace Horo::Render::Detail {
                 queue.slots.clear();
                 if (queue.pool != VK_NULL_HANDLE)
                     dispatch.destroyPool(device, queue.pool, nullptr);
+                if (queue.timestampPool != VK_NULL_HANDLE)
+                    timestamps.destroy(device, queue.timestampPool, nullptr);
                 if (queue.timeline != VK_NULL_HANDLE)
                     dispatch.destroySemaphore(device, queue.timeline, nullptr);
             }

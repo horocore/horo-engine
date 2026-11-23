@@ -157,6 +157,9 @@ namespace Horo::Render::Detail {
             queue.observed = observed;
             for (auto &slot : queue.slots) {
                 if (slot.state == Impl::State::Pending && slot.completion.value <= observed) {
+                    if (slot.timed)
+                        if (const auto timing = impl_->ReadTimestamps(queue, slot); timing.HasError())
+                            return timing;
                     slot.ReleaseRetention();
                     slot.state = Impl::State::Idle;
                 }

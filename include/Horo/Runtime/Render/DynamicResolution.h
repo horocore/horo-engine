@@ -122,6 +122,7 @@ namespace Horo::Render {
             Stopped
         };
         [[nodiscard]] Result<void> RequireActive() const;
+        [[nodiscard]] std::optional<DynamicResolutionReason> AccumulateTiming(std::chrono::nanoseconds elapsed) noexcept;
         void ResetEvidence() noexcept;
         [[nodiscard]] std::uint16_t NextScale(DynamicResolutionReason reason) const noexcept;
 

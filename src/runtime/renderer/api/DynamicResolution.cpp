@@ -110,8 +110,8 @@ namespace Horo::Render {
     std::uint16_t DynamicResolutionController::NextScale(const DynamicResolutionReason reason) const noexcept {
         const auto &current = state_.active;
         const bool lowering = reason == DynamicResolutionReason::AboveBudget;
-        const auto limit = lowering ? policy_.minimumPermille : policy_.maximumPermille;
-        if (ScaleExtent(current.targetExtent, limit) == current.renderExtent)
+        if (const auto limit = lowering ? policy_.minimumPermille : policy_.maximumPermille;
+            ScaleExtent(current.targetExtent, limit) == current.renderExtent)
             return current.scalePermille;
         auto scale = current.scalePermille;
         const int step = lowering ? -int{policy_.stepPermille} : int{policy_.stepPermille};
@@ -119,6 +119,24 @@ namespace Horo::Render {
             scale = static_cast<std::uint16_t>(std::clamp<int>(scale + step, policy_.minimumPermille, policy_.maximumPermille));
         } while (ScaleExtent(current.targetExtent, scale) == current.renderExtent);
         return scale;
+    }
+
+    /** @brief Tracks a consecutive run on one side of the budget after the settling window. */
+    std::optional<DynamicResolutionReason> DynamicResolutionController::AccumulateTiming(const std::chrono::nanoseconds elapsed) noexcept {
+        if (settling_ > 0) {
+            --settling_;
+            return std::nullopt;
+        }
+        if (const auto direction = Direction(policy_, elapsed); direction != direction_) {
+            direction_ = direction;
+            consecutive_ = 0;
+        }
+        if (!direction_)
+            return std::nullopt;
+        const auto threshold = *direction_ == DynamicResolutionReason::AboveBudget ? policy_.lowerAfter : policy_.raiseAfter;
+        if (consecutive_ < threshold)
+            ++consecutive_;
+        return consecutive_ == threshold ? direction_ : std::nullopt;
     }
 
     /** @copydoc DynamicResolutionController::Observe */
@@ -135,25 +153,11 @@ namespace Horo::Render {
         state_.lastSample = sample;
         if (state_.pending)
             return Outcome::Success(std::nullopt);
-        if (settling_ > 0) {
-            --settling_;
-            return Outcome::Success(std::nullopt);
-        }
-
-        const auto direction = Direction(policy_, sample.elapsed);
-        if (direction != direction_) {
-            direction_ = direction;
-            consecutive_ = 0;
-        }
-        if (!direction_)
-            return Outcome::Success(std::nullopt);
-        const auto threshold = *direction_ == DynamicResolutionReason::AboveBudget ? policy_.lowerAfter : policy_.raiseAfter;
-        if (consecutive_ < threshold)
-            ++consecutive_;
-        if (consecutive_ < threshold)
+        const auto direction = AccumulateTiming(sample.elapsed);
+        if (!direction)
             return Outcome::Success(std::nullopt);
 
-        const auto scale = NextScale(*direction_);
+        const auto scale = NextScale(*direction);
         if (scale == current.scalePermille)
             return Outcome::Success(std::nullopt);
         if (current.generation == LastGeneration)
@@ -161,7 +165,7 @@ namespace Horo::Render {
         const auto extent = ScaleExtent(current.targetExtent, scale);
         state_.pending = DynamicResolutionChange{{current.view, current.targetExtent, extent, current.generation + 1, scale},
                                                  sample.frameId,
-                                                 *direction_};
+                                                 *direction};
         return Outcome::Success(state_.pending);
     }
 
