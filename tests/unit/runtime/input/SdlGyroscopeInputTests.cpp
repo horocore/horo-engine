@@ -1,4 +1,4 @@
-#include "SdlInputBackend.h"
+#include "SdlInputTestSupport.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -109,7 +109,7 @@ namespace {
               "[unit][input][sdl][gyroscope]") {
         MotionDevice device;
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         const auto id = device.Id(device.Pump(backend));
         CHECK(device.enables == 0);
         backend.SetGamepadGyroscopeEnabled(true);
@@ -149,7 +149,7 @@ namespace {
               "[unit][input][sdl][gyroscope][lifecycle]") {
         MotionDevice device;
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.SetGamepadGyroscopeEnabled(true);
         const auto id = device.Id(device.Pump(backend));
         SDL_Delay(1);
@@ -176,7 +176,7 @@ namespace {
         for (const bool supported : {false, true}) {
             MotionDevice device{supported, false};
             SdlInputBackend backend;
-            backend.BindWindow(7);
+            Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
             backend.SetGamepadGyroscopeEnabled(true);
             const auto &raw = device.Pump(backend);
             const auto id = device.Id(raw);
@@ -194,7 +194,7 @@ namespace {
               "[unit][input][sdl][gyroscope][focus]") {
         MotionDevice device;
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.SetGamepadGyroscopeEnabled(true);
         const auto id = device.Id(device.Pump(backend));
         SDL_Event focus{};
@@ -213,6 +213,12 @@ namespace {
         backend.BindWindow(9);
         device.Begin(backend);
         backend.ProcessEvent(queued);
+        const auto &rebound = backend.Commit();
+        CHECK_FALSE(rebound.window.focused);
+        CHECK(rebound.FindGamepad(id)->gyroscope.availability == SensorAvailability::Suspended);
+        device.Begin(backend);
+        Horo::Tests::SendSdlWindowEvent(backend, 9, SDL_EVENT_WINDOW_FOCUS_GAINED);
+        backend.ProcessEvent(queued);
         CHECK(backend.Commit().FindGamepad(id)->gyroscope.availability == SensorAvailability::AwaitingSample);
         SDL_Delay(1);
         device.Send(6);
@@ -224,7 +230,7 @@ namespace {
     TEST_CASE("SDL malformed gyro samples stay neutral and fresh valid evidence can recover", "[unit][input][sdl][gyroscope][validation]") {
         MotionDevice device;
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.SetGamepadGyroscopeEnabled(true);
         const auto id = device.Id(device.Pump(backend));
         SDL_Delay(1);
@@ -249,7 +255,7 @@ namespace {
         MotionDevice device;
         {
             SdlInputBackend backend;
-            backend.BindWindow(7);
+            Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
             backend.SetGamepadGyroscopeEnabled(true);
             (void)device.Pump(backend);
             REQUIRE(device.enables == 1);
@@ -265,7 +271,7 @@ namespace {
             MotionDevice device;
             {
                 SdlInputBackend backend;
-                backend.BindWindow(7);
+                Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
                 backend.SetGamepadGyroscopeEnabled(true);
                 const auto id = device.Id(device.Pump(backend));
                 REQUIRE(device.enables == 1);

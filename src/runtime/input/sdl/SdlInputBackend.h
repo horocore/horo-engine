@@ -32,7 +32,7 @@ namespace Horo::Input {
         void SetGamepadGyroscopeEnabled(bool enabled) noexcept;
         /** @brief Selects the exact window supplying keyboard, pointer, and text events.
          * @param windowId SDL window identity, or zero to detach the current window.
-         * @details Detaching retires focus and pointer hover before the next snapshot is committed.
+         * @details Changing the binding retires current focus and hover. A replacement needs its own native observations.
          */
         void BindWindow(SDL_WindowID windowId) noexcept;
         void ProcessEvent(const SDL_Event &event);

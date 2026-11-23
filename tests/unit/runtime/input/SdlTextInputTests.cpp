@@ -1,4 +1,4 @@
-#include "SdlInputBackend.h"
+#include "SdlInputTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -7,7 +7,7 @@ namespace {
 
     TEST_CASE("SDL committed text and editing events share the bounded snapshot pipeline", "[unit][runtime][input][sdl][text]") {
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.BeginFrame(1);
         SDL_Event editing{};
         editing.type = SDL_EVENT_TEXT_EDITING;
@@ -35,20 +35,13 @@ namespace {
         REQUIRE(second.compositionRevision > first.compositionRevision);
     }
 
-    TEST_CASE("SDL text from a different window cannot enter the focused snapshot", "[unit][runtime][input][sdl][text]") {
+    TEST_CASE("SDL keyboard and text require focus from the exact bound window across replacement", "[unit][runtime][input][sdl][text]") {
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.BeginFrame(1);
-        SDL_Event event{};
-        event.type = SDL_EVENT_TEXT_INPUT;
-        event.text.windowID = 8;
-        event.text.text = "foreign";
-        backend.ProcessEvent(event);
-        SDL_Event foreignKey{};
-        foreignKey.type = SDL_EVENT_KEY_DOWN;
-        foreignKey.key.windowID = 8;
-        foreignKey.key.scancode = SDL_SCANCODE_A;
-        foreignKey.key.down = true;
+        const SDL_Event foreignText{.text = {.type = SDL_EVENT_TEXT_INPUT, .windowID = 8, .text = "foreign"}};
+        backend.ProcessEvent(foreignText);
+        const SDL_Event foreignKey{.key = {.type = SDL_EVENT_KEY_DOWN, .windowID = 8, .scancode = SDL_SCANCODE_A, .down = true}};
         backend.ProcessEvent(foreignKey);
         const RawInputSnapshot &foreign = backend.Commit();
         REQUIRE(foreign.text.empty());
@@ -63,9 +56,29 @@ namespace {
 
         backend.BindWindow(9);
         backend.BeginFrame(3);
+        Horo::Tests::SendSdlWindowEvent(backend, 7, SDL_EVENT_WINDOW_FOCUS_GAINED);
+        const SDL_Event beforeFocus{.text = {.type = SDL_EVENT_TEXT_INPUT, .windowID = 9, .text = "before focus"}};
+        backend.ProcessEvent(beforeFocus);
+        ownKey.key.windowID = 9;
+        ownKey.key.scancode = SDL_SCANCODE_B;
+        backend.ProcessEvent(ownKey);
         const RawInputSnapshot &rebound = backend.Commit();
-        REQUIRE_FALSE(rebound.State(Key::A).down);
-        REQUIRE(rebound.State(Key::A).released);
+        CHECK_FALSE(rebound.window.focused);
+        CHECK_FALSE(rebound.window.pointerInside);
+        CHECK_FALSE(rebound.State(Key::A).down);
+        CHECK(rebound.State(Key::A).released);
+        CHECK_FALSE(rebound.State(Key::B).pressed);
+        CHECK(rebound.text.empty());
+
+        backend.BeginFrame(4);
+        Horo::Tests::SendSdlWindowEvent(backend, 9, SDL_EVENT_WINDOW_FOCUS_GAINED);
+        backend.ProcessEvent(ownKey);
+        const SDL_Event afterFocus{.text = {.type = SDL_EVENT_TEXT_INPUT, .windowID = 9, .text = "after focus"}};
+        backend.ProcessEvent(afterFocus);
+        const RawInputSnapshot &focused = backend.Commit();
+        CHECK(focused.window.focused);
+        CHECK(focused.State(Key::B).pressed);
+        CHECK(focused.text == "after focus");
     }
 
     TEST_CASE("SDL candidate area hook rejects missing windows and invalid geometry", "[unit][runtime][input][sdl][text]") {
@@ -79,7 +92,7 @@ namespace {
 TEST_CASE("SDL punctuation keys retain their physical identity for configurable zoom chords", "[unit][runtime][input][sdl][keymap]") {
     using namespace Horo::Input;
     SdlInputBackend backend;
-    backend.BindWindow(7);
+    Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
     backend.BeginFrame(1);
     SDL_Event event{};
     event.type = SDL_EVENT_KEY_DOWN;

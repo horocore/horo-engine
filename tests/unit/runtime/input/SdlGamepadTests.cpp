@@ -1,4 +1,4 @@
-#include "SdlInputBackend.h"
+#include "SdlInputTestSupport.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -54,7 +54,7 @@ namespace {
     TEST_CASE("SDL virtual gamepad routes native events and cancels rumble on focus loss", "[unit][input][sdl][gamepad]") {
         NativeVirtualPad native{true};
         SdlInputBackend backend;
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.BeginFrame(1);
         backend.PollEvents();
         const auto &first = backend.Commit();

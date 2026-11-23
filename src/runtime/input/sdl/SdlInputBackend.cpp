@@ -718,10 +718,9 @@ namespace Horo::Input {
         impl_->windowId = windowId;
         impl_->pointerWidth = 0;
         impl_->pointerHeight = 0;
-        if (windowId == 0) {
-            impl_->windowState.focused = false;
-            impl_->windowState.pointerInside = false;
-        } else if (auto *window = SDL_GetWindowFromID(windowId)) {
+        impl_->windowState.focused = false;
+        impl_->windowState.pointerInside = false;
+        if (auto *window = windowId != 0 ? SDL_GetWindowFromID(windowId) : nullptr) {
             (void)SDL_GetWindowSize(window, &impl_->pointerWidth, &impl_->pointerHeight);
             const auto flags = SDL_GetWindowFlags(window);
             impl_->windowState.focused = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;

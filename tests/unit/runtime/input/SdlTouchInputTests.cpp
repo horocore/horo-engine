@@ -1,4 +1,4 @@
-#include "SdlInputBackend.h"
+#include "SdlInputTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -19,7 +19,7 @@ namespace {
     }
 
     void BindSurface(SdlInputBackend &backend) {
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.BeginFrame(1);
         SDL_Event resize{};
         resize.type = SDL_EVENT_WINDOW_RESIZED;
