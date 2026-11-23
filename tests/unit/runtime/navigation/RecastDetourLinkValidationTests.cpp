@@ -91,6 +91,7 @@ namespace Horo::Navigation {
         REQUIRE(tile.Value().tables.offMeshLinks.front().bidirectional);
         REQUIRE(tile.Value().tables.offMeshLinks.front().startPolygon == 0);
         REQUIRE(tile.Value().tables.offMeshLinks.front().endPolygon == 1);
+        CHECK_FALSE(tile.Value().tables.offMeshLinks.front().authoredLink.IsValid());
     }
 
     TEST_CASE("Neutral polygon boundaries automatically generate stable anchors with count work and reference validation",

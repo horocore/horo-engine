@@ -2429,7 +2429,6 @@ target_link_libraries(HoroCinematicCameraRuntime PUBLIC HoroEngine::CinematicRun
 
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
-        runtime/navigation/api/NavigationTileDescriptor.cpp
         runtime/navigation/api/NavigationAreas.cpp
         runtime/navigation/api/NavigationAgentProfiles.cpp
         runtime/navigation/api/NavigationBakeFingerprint.cpp
@@ -2823,6 +2822,7 @@ target_compile_features(HoroNavigationRecastDetour PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRecastDetour PUBLIC HoroEngine::NavigationApi)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationRecastDetour PRIVATE
+            runtime/navigation/backends/recast_detour/RecastDetourAuthoredTraversal.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProvider.cpp
             runtime/navigation/backends/recast_detour/RecastDetourCookedTileJoin.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderEndpoint.cpp

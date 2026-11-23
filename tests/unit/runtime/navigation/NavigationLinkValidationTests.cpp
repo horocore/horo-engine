@@ -38,6 +38,7 @@ namespace Horo::Navigation {
         REQUIRE(cooked.Value().links.front().end == fixture.link.end.position);
         REQUIRE(cooked.Value().links.front().startPolygon == 0);
         REQUIRE(cooked.Value().links.front().endPolygon == 1);
+        CHECK(cooked.Value().links.front().authoredLink == fixture.link.id);
         REQUIRE_FALSE(cooked.Value().links.front().bidirectional);
     }
 

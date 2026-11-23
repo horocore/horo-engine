@@ -82,42 +82,6 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<Math::Vec3>::Success({projected[0], projected[1], projected[2]});
         }
 
-        [[nodiscard]] Result<float> CalculatePathCost(const std::vector<std::uint32_t> &pathIndices, const std::uint32_t count,
-                                                      const Math::Vec3 start, const Math::Vec3 destination,
-                                                      const NavigationAreaRegistry &areaRegistry, const NavigationFilterId filter,
-                                                      const std::vector<GroundedNavigationPolygon> &polygons,
-                                                      const std::vector<Math::Vec3> &centers) {
-            if (count == 0)
-                return Result<float>::Success(0.0F);
-            double cost{};
-            const auto firstPolicy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[0]].area);
-            if (firstPolicy.HasError())
-                return Result<float>::Failure(firstPolicy.ErrorValue());
-            auto firstDistance = Detail::PointDistance(start, centers[pathIndices[0]]);
-            if (firstDistance.HasError())
-                return firstDistance;
-            cost += static_cast<double>(firstDistance.Value()) * firstPolicy.Value().traversalCost;
-            for (std::uint32_t index = 1; index < count; ++index) {
-                const auto policy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[index]].area);
-                if (policy.HasError())
-                    return Result<float>::Failure(policy.ErrorValue());
-                const auto distance = Detail::PointDistance(centers[pathIndices[index - 1U]], centers[pathIndices[index]]);
-                if (distance.HasError())
-                    return distance;
-                cost += static_cast<double>(distance.Value()) * policy.Value().traversalCost;
-            }
-            const auto lastPolicy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[count - 1U]].area);
-            if (lastPolicy.HasError())
-                return Result<float>::Failure(lastPolicy.ErrorValue());
-            const auto lastDistance = Detail::PointDistance(centers[pathIndices[count - 1U]], destination);
-            if (lastDistance.HasError())
-                return lastDistance;
-            cost += static_cast<double>(lastDistance.Value()) * lastPolicy.Value().traversalCost;
-            if (!std::isfinite(cost) || cost > std::numeric_limits<float>::max())
-                return Failure<float>(NavigationErrors::QueryLimitExceeded);
-            return Result<float>::Success(static_cast<float>(cost));
-        }
-
         struct SharedEdge final {
             std::uint32_t first{};
             std::uint32_t second{};
@@ -185,13 +149,9 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                    .rawLength = rawLength});
         }
 
-        [[nodiscard]] Result<NavigationPathPortal> MakePortal(const PathBuildContext &context, const std::uint32_t corridorIndex) {
-            if (corridorIndex + 1U >= context.search.polygonCount)
-                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
-            const std::uint32_t fromIndex = context.slot.polygonPathIndices[corridorIndex];
-            const std::uint32_t toIndex = context.slot.polygonPathIndices[corridorIndex + 1U];
-            if (fromIndex >= context.polygons.size() || toIndex >= context.polygons.size())
-                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+        /** @brief Builds the existing clearance-adjusted shared polygon portal. */
+        [[nodiscard]] Result<NavigationPathPortal> MakeSharedPortal(const PathBuildContext &context, const std::uint32_t corridorIndex,
+                                                                    const std::uint32_t fromIndex, const std::uint32_t toIndex) {
             const GroundedNavigationPolygon &from = context.polygons[fromIndex];
             const GroundedNavigationPolygon &to = context.polygons[toIndex];
             const auto shared = FindSharedEdge(from, to);
@@ -224,6 +184,25 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                           .right = right,
                                                           .widthMeters = static_cast<float>(width),
                                                           .clearanceMeters = clearance});
+        }
+
+        /** @brief Resolves ordered provenance and chooses the canonical transition shape. */
+        [[nodiscard]] Result<NavigationPathPortal> MakePortal(const PathBuildContext &context, const std::uint32_t corridorIndex) {
+            if (corridorIndex + 1U >= context.search.polygonCount)
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+            const std::uint32_t fromIndex = context.slot.polygonPathIndices[corridorIndex];
+            const std::uint32_t toIndex = context.slot.polygonPathIndices[corridorIndex + 1U];
+            if (fromIndex >= context.polygons.size() || toIndex >= context.polygons.size())
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+            if (const auto *link = FindRecastDetourLinkArc(context.links, fromIndex, toIndex))
+                return Result<NavigationPathPortal>::Success({.kind = NavigationPathPortalKind::OffMeshLink,
+                                                              .fromPolygonIndex = corridorIndex,
+                                                              .toPolygonIndex = corridorIndex + 1U,
+                                                              .left = link->entrance,
+                                                              .right = link->exit,
+                                                              .link = link->link,
+                                                              .linkRadiusMeters = link->radiusMeters});
+            return MakeSharedPortal(context, corridorIndex, fromIndex, toIndex);
         }
 
         [[nodiscard]] Result<void> BuildCorridorAndPortals(PathBuildContext &context, NavigationPath &path) {
@@ -310,12 +289,19 @@ namespace Horo::Navigation::RecastDetourQueries {
             BudgetExceeded
         };
 
+        /** @brief Traversal boundaries retain their semantic identity even at coincident positions. */
+        [[nodiscard]] bool IsTraversalWaypoint(const NavigationPathWaypoint &waypoint) noexcept {
+            return waypoint.provenance.kind == NavigationPathWaypointKind::TraversalEntrance ||
+                   waypoint.provenance.kind == NavigationPathWaypointKind::TraversalExit;
+        }
+
         [[nodiscard]] WaypointAppendResult AppendWaypoint(std::vector<NavigationPathWaypoint> &waypoints,
                                                           const NavigationPathWaypoint &waypoint, const std::uint32_t maximumWaypoints) {
             using enum WaypointAppendResult;
             if (!Math::IsFinite(waypoint.position))
                 return BudgetExceeded;
-            if (!waypoints.empty() && SamePoint(waypoints.back().position, waypoint.position))
+            if (!waypoints.empty() && !IsTraversalWaypoint(waypoint) && !IsTraversalWaypoint(waypoints.back()) &&
+                SamePoint(waypoints.back().position, waypoint.position))
                 return Duplicate;
             if (waypoints.size() >= maximumWaypoints)
                 return BudgetExceeded;
@@ -403,13 +389,49 @@ namespace Horo::Navigation::RecastDetourQueries {
 
         [[nodiscard]] FunnelProgress ProcessFunnelPortal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
                                                          const Math::Vec3 target, const std::uint32_t portalIndex,
-                                                         const std::uint32_t maximumWaypoints) {
-            const bool isTargetPortal = portalIndex == path.portals.size();
+                                                         const bool isTargetPortal, const std::uint32_t maximumWaypoints) {
             if (const FunnelProgress right =
                     ProcessRightPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
                 right.pointBudgetExceeded || right.restart)
                 return right;
             return ProcessLeftPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
+        }
+
+        /** @brief Appends both link boundaries as one bounded unit and starts a fresh grounded funnel at the exit. */
+        [[nodiscard]] bool AppendTraversal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
+                                           const std::uint32_t portalIndex, const std::uint32_t maximumWaypoints) {
+            auto &waypoints = context.slot.waypoints;
+            if (maximumWaypoints - waypoints.size() < 2)
+                return false;
+            const auto &portal = path.portals[portalIndex];
+            waypoints.push_back(MakeWaypoint(path, portal.left, NavigationPathWaypointKind::TraversalEntrance, portal.fromPolygonIndex,
+                                             portalIndex, NavigationPathNoVertex));
+            waypoints.push_back(MakeWaypoint(path, portal.right, NavigationPathWaypointKind::TraversalExit, portal.toPolygonIndex,
+                                             portalIndex, NavigationPathNoVertex));
+            funnel = {.apex = portal.right, .left = portal.right, .right = portal.right};
+            return true;
+        }
+
+        /** @brief Runs ordinary grounded funnel spans, flushing to each ordered off-mesh entrance. */
+        [[nodiscard]] bool RunFunnel(PathBuildContext &context, const NavigationPath &path, const Math::Vec3 target,
+                                     const std::uint32_t maximumWaypoints) {
+            FunnelState funnel{.apex = context.start.projected, .left = context.start.projected, .right = context.start.projected};
+            for (std::uint32_t portalIndex = 0; portalIndex <= path.portals.size(); ++portalIndex) {
+                const bool atDestination = portalIndex == path.portals.size();
+                const bool atTraversal = !atDestination && path.portals[portalIndex].kind == NavigationPathPortalKind::OffMeshLink;
+                const auto segmentTarget = atTraversal ? path.portals[portalIndex].left : target;
+                const auto progress =
+                    ProcessFunnelPortal(context, path, funnel, segmentTarget, portalIndex, atDestination || atTraversal, maximumWaypoints);
+                if (progress.pointBudgetExceeded)
+                    return false;
+                if (progress.restart && progress.restartPortal != portalIndex) {
+                    portalIndex = progress.restartPortal;
+                    continue;
+                }
+                if (atTraversal && !AppendTraversal(context, path, funnel, portalIndex, maximumWaypoints))
+                    return false;
+            }
+            return true;
         }
 
         [[nodiscard]] Result<void> PublishWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target,
@@ -451,19 +473,7 @@ namespace Horo::Navigation::RecastDetourQueries {
                 AppendWaypoint(context.slot.waypoints, start, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
                 return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
 
-            FunnelState funnel{.apex = context.start.projected, .left = context.start.projected, .right = context.start.projected};
-            bool pointBudgetExceeded{};
-            for (std::uint32_t portalIndex = 0; portalIndex <= path.portals.size(); ++portalIndex) {
-                const FunnelProgress progress = ProcessFunnelPortal(context, path, funnel, target, portalIndex, maximumWaypoints);
-                if (progress.pointBudgetExceeded) {
-                    pointBudgetExceeded = true;
-                    break;
-                }
-                if (progress.restart) {
-                    portalIndex = progress.restartPortal;
-                    continue;
-                }
-            }
+            bool pointBudgetExceeded = !RunFunnel(context, path, target, maximumWaypoints);
 
             if (const auto publication = PublishWaypoints(context, path, target, maximumWaypoints, pointBudgetExceeded);
                 publication.HasError())
@@ -483,9 +493,7 @@ namespace Horo::Navigation::RecastDetourQueries {
             if (length.HasError())
                 return Result<void>::Failure(length.ErrorValue());
             path.lengthMeters = length.Value();
-            auto cost = CalculatePathCost(context.slot.polygonPathIndices, geometry.costPolygonCount, context.start.projected,
-                                          geometry.effectiveTarget, context.areaRegistry, context.request.filter, context.polygons,
-                                          context.centers);
+            auto cost = CalculatePathCost(context, geometry.costPolygonCount, geometry.effectiveTarget);
             if (cost.HasError())
                 return Result<void>::Failure(cost.ErrorValue());
             path.cost = cost.Value();
@@ -498,6 +506,7 @@ namespace Horo::Navigation::RecastDetourQueries {
                 return Failure<void>(NavigationErrors::ProviderFailed);
             return Result<void>::Success();
         }
+
     }  // namespace
 
     /** @copydoc BuildPath */
@@ -523,6 +532,7 @@ namespace Horo::Navigation::RecastDetourQueries {
             path.stopReason = NavigationPathStopReason::ResultPointBudgetExceeded;
             path.stopPosition = geometry.Value().effectiveTarget;
             path.stopPolygonIndex = path.waypoints.back().provenance.polygon.polygonIndex;
+            TrimUnpairedTraversal(path, geometry.Value().costPolygonCount);
         } else if (context.search.status == NavigationPathStatus::Reachable) {
             path.status = NavigationPathStatus::Reachable;
             path.stopReason = NavigationPathStopReason::None;

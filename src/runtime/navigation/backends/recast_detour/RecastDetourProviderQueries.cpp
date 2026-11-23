@@ -64,7 +64,9 @@ namespace Horo::Navigation {
             const NavigationAreaRegistry &areaRegistry;
             const std::vector<GroundedNavigationPolygon> &polygons;
             const std::vector<NavigationPolygonAdjacency> &adjacency;
+            std::span<const RecastDetourLinkArc> links;
             const std::vector<Math::Vec3> &centers;
+            float defaultClearanceMeters;
             const CancellationToken &cancellation;
         };
 
@@ -156,7 +158,10 @@ namespace Horo::Navigation {
             for (std::uint32_t index = 0; index < state.nodeLimit; ++index)
                 context.slot.searchNodes[index] = {};
 
-            const auto minimumCost = MinimumTraversalCost(context.areaRegistry, context.request.filter, context.polygons);
+            // A link's area may allow cheaper travel than the grounded distance lower bound.
+            const auto minimumCost = context.links.empty()
+                                         ? MinimumTraversalCost(context.areaRegistry, context.request.filter, context.polygons)
+                                         : Result<float>::Success(0.0F);
             if (minimumCost.HasError())
                 return Result<float>::Failure(minimumCost.ErrorValue());
             const auto startHeuristic =
@@ -218,11 +223,12 @@ namespace Horo::Navigation {
         }
 
         [[nodiscard]] Result<void> ConsiderNeighbor(CorridorSearchContext &context, CorridorSearchState &state,
-                                                    const std::uint32_t currentIndex, const std::uint32_t neighbor,
-                                                    const float minimumCost) {
+                                                    const std::uint32_t currentIndex, const std::uint32_t neighbor, const float minimumCost,
+                                                    const RecastDetourLinkArc *arc = nullptr) {
             if (context.cancellation.IsCancellationRequested())
                 return Failure<void>(NavigationErrors::QueryCancelled);
-            const auto traversal = context.areaRegistry.ResolveTraversal(context.request.filter, context.polygons[neighbor].area);
+            const auto traversal = ResolveTraversalEdge(context.areaRegistry, context.request.filter, context.polygons[neighbor].area, arc,
+                                                        context.request.clearanceMeters, context.defaultClearanceMeters);
             if (traversal.HasError())
                 return Result<void>::Failure(traversal.ErrorValue());
             if (!traversal.Value().traversable)
@@ -268,6 +274,12 @@ namespace Horo::Navigation {
                 if (considered.HasError())
                     return considered;
             }
+            const auto firstLink = std::ranges::lower_bound(context.links, current.polygon, std::less<>{}, &RecastDetourLinkArc::from);
+            for (auto arc = firstLink; arc != context.links.end() && arc->from == current.polygon; ++arc) {
+                const auto considered = ConsiderNeighbor(context, state, currentIndex, arc->to, minimumCost, std::to_address(arc));
+                if (considered.HasError())
+                    return considered;
+            }
             return Result<void>::Success();
         }
 
@@ -310,7 +322,10 @@ namespace Horo::Navigation {
                 result.stopReason = NavigationPathStopReason::NodeBudgetExceeded;
             }
             if (result.status != NavigationPathStatus::Reachable)
-                state.bestNode = SelectBestKnownNode(context.slot, state.nodeCount);
+                state.bestNode = context.links.empty()
+                                     ? SelectBestKnownNode(context.slot, state.nodeCount)
+                                     : SelectAuthoredTraversalFrontier(std::span{context.slot.searchNodes}.first(state.nodeCount),
+                                                                       context.centers, context.centers[context.destination.polygon]);
             result.terminalNode = state.bestNode;
             std::uint32_t cursor = result.terminalNode;
             while (cursor != InvalidNavigationPolygonIndex && result.polygonCount < context.slot.polygonPathIndices.size()) {
@@ -350,6 +365,7 @@ namespace Horo::Navigation {
             const NavigationAreaRegistry &areaRegistry;
             const std::vector<GroundedNavigationPolygon> &polygons;
             const std::vector<NavigationPolygonAdjacency> &adjacency;
+            std::span<const RecastDetourLinkArc> links;
             const std::vector<Math::Vec3> &vertices;
             const std::vector<Math::Vec3> &centers;
             const std::vector<dtPolyRef> &references;
@@ -364,7 +380,9 @@ namespace Horo::Navigation {
                                                   .areaRegistry = context.areaRegistry,
                                                   .polygons = context.polygons,
                                                   .adjacency = context.adjacency,
+                                                  .links = context.links,
                                                   .centers = context.centers,
+                                                  .defaultClearanceMeters = context.defaultClearanceMeters,
                                                   .cancellation = cancellation};
             auto corridor = FindCorridor(corridorContext);
             if (corridor.HasError())
@@ -380,6 +398,7 @@ namespace Horo::Navigation {
                                          .vertices = context.vertices,
                                          .centers = context.centers,
                                          .references = context.references,
+                                         .links = context.links,
                                          .defaultClearanceMeters = context.defaultClearanceMeters};
             auto path = BuildPath(pathContext);
             if (path.HasError())
@@ -400,7 +419,7 @@ namespace Horo::Navigation {
                                                                         .maximumSearchDistanceMeters = info.maximumSearchDistanceMeters},
                                                                        info.maximumConcurrentQueries)),
                   mesh_(std::move(data.mesh)), slots_(std::move(data.slots)), vertices_(std::move(data.vertices)),
-                  polygons_(std::move(data.polygons)), adjacency_(std::move(data.adjacency)),
+                  polygons_(std::move(data.polygons)), adjacency_(std::move(data.adjacency)), links_(std::move(data.links)),
                   polygonCenters_(std::move(data.polygonCenters)), polygonReferences_(std::move(data.polygonReferences)),
                   areaRegistry_(std::move(data.areaRegistry)) {}
 
@@ -440,6 +459,7 @@ namespace Horo::Navigation {
                                          .areaRegistry = areaRegistry_,
                                          .polygons = polygons_,
                                          .adjacency = adjacency_,
+                                         .links = links_,
                                          .vertices = vertices_,
                                          .centers = polygonCenters_,
                                          .references = polygonReferences_,
@@ -495,6 +515,7 @@ namespace Horo::Navigation {
             std::vector<Math::Vec3> vertices_;
             std::vector<GroundedNavigationPolygon> polygons_;
             std::vector<NavigationPolygonAdjacency> adjacency_;
+            std::vector<RecastDetourLinkArc> links_;
             std::vector<Math::Vec3> polygonCenters_;
             std::vector<dtPolyRef> polygonReferences_;
             NavigationAreaRegistry areaRegistry_;

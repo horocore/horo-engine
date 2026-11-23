@@ -18,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <tuple>
 #include <utility>
@@ -440,25 +441,44 @@ namespace Horo::Navigation {
             }
         }
 
+        /** @brief Reserves all Horo-owned query storage before allocating Detour's native tile. */
+        [[nodiscard]] std::optional<std::size_t> QueryStorageReservation(const RecastDetourProviderCreateInfo &info,
+                                                                         const NavigationTileBuildResult *cooked) {
+            const auto reserved = Detail::OwnedStorageReservation(info);
+            const std::size_t linkBytes = cooked ? cooked->offMeshLinks.size() * 2 * sizeof(RecastDetourLinkArc) : 0;
+            if (!reserved || *reserved >= info.maximumOwnedBytes || linkBytes >= info.maximumOwnedBytes - *reserved ||
+                info.maximumOwnedBytes > RecastDetourProviderHardLimits::OwnedBytes)
+                return std::nullopt;
+            return *reserved + linkBytes;
+        }
+
+        /** @brief Pins the traversal catalog and rejects polygons whose area is unavailable in it. */
+        [[nodiscard]] Result<NavigationAreaRegistry> PrepareQueryAreas(const RecastDetourProviderCreateInfo &info) {
+            auto registry = NavigationAreaRegistry::Create(info.areas, info.filters);
+            if (registry.HasError())
+                return registry;
+            for (const auto &polygon : info.polygons) {
+                if (const auto area = registry.Value().ResolveArea(polygon.area); area.HasError())
+                    return Result<NavigationAreaRegistry>::Failure(area.ErrorValue());
+            }
+            return registry;
+        }
+
         /** @brief Shares native admission for raw callers and the exact cooked adapter. */
         PreparedBackend CreateQueryBackend(const RecastDetourProviderCreateInfo &info, const NavigationTileBuildResult *cooked) {
             if (const auto validated = ValidateCreateInfo(info); validated.HasError())
                 return PreparedBackend::Failure(validated.ErrorValue());
-            const auto reserved = Detail::OwnedStorageReservation(info);
-            if (!reserved || *reserved >= info.maximumOwnedBytes || info.maximumOwnedBytes > RecastDetourProviderHardLimits::OwnedBytes)
+            const auto storageReservation = QueryStorageReservation(info, cooked);
+            if (!storageReservation.has_value())
                 return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
             try {
-                auto areaRegistry = NavigationAreaRegistry::Create(info.areas, info.filters);
+                auto areaRegistry = PrepareQueryAreas(info);
                 if (areaRegistry.HasError())
                     return PreparedBackend::Failure(areaRegistry.ErrorValue());
-                for (const GroundedNavigationPolygon &polygon : info.polygons) {
-                    if (const auto resolved = areaRegistry.Value().ResolveArea(polygon.area); resolved.HasError())
-                        return PreparedBackend::Failure(resolved.ErrorValue());
-                }
                 auto translated = TranslateTopology(info, cooked);
                 if (translated.HasError())
                     return PreparedBackend::Failure(translated.ErrorValue());
-                auto mesh = BuildNavMesh(info, translated.Value(), info.maximumOwnedBytes - *reserved);
+                auto mesh = BuildNavMesh(info, translated.Value(), info.maximumOwnedBytes - *storageReservation);
                 if (mesh.HasError())
                     return PreparedBackend::Failure(mesh.ErrorValue());
                 auto native = std::move(mesh).Value();
@@ -471,6 +491,10 @@ namespace Horo::Navigation {
                 auto slots = BuildQuerySlots(info, *native.mesh);
                 if (slots.HasError())
                     return PreparedBackend::Failure(slots.ErrorValue());
+                auto links = BuildLinkArcs(cooked, translated.Value().adjacency, *slots.Value().front().query, references.Value(),
+                                           areaRegistry.Value());
+                if (links.HasError())
+                    return PreparedBackend::Failure(links.ErrorValue());
                 std::vector<Math::Vec3> vertices{info.vertices.begin(), info.vertices.end()};
                 std::vector<GroundedNavigationPolygon> polygons{info.polygons.begin(), info.polygons.end()};
                 RecastDetourQueryBackendData data{.mesh = std::move(native.mesh),
@@ -478,13 +502,14 @@ namespace Horo::Navigation {
                                                   .vertices = std::move(vertices),
                                                   .polygons = std::move(polygons),
                                                   .adjacency = std::move(translated).Value().adjacency,
+                                                  .links = std::move(links).Value(),
                                                   .polygonCenters = std::move(centers).Value(),
                                                   .polygonReferences = std::move(references).Value(),
                                                   .areaRegistry = std::move(areaRegistry).Value()};
                 auto backend = MakeRecastDetourNavigationQueryBackend(info, std::move(data));
                 if (backend.HasError())
                     return PreparedBackend::Failure(backend.ErrorValue());
-                return PreparedBackend::Success({std::move(backend).Value(), *reserved + native.tileBytes});
+                return PreparedBackend::Success({std::move(backend).Value(), *storageReservation + native.tileBytes});
             } catch (const std::bad_alloc &) {
                 return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
             }
@@ -530,7 +555,8 @@ namespace Horo::Navigation {
 
         /** @brief Validates materializable neutral tile shape against the admitted build geometry. */
         [[nodiscard]] Result<NavigationCookedTileDescriptor> AdmitCookedTile(const NavigationAgentBuildGeometry &authored,
-                                                                             const NavigationCookedTile &tile) {
+                                                                             const NavigationCookedTile &tile,
+                                                                             const RecastDetourCookedProviderCreateInfo &info) {
             using Descriptor = Result<NavigationCookedTileDescriptor>;
             auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
             if (descriptor.HasError())
@@ -538,11 +564,17 @@ namespace Horo::Navigation {
             if (BuildGeometryFields(descriptor.Value().geometry) != BuildGeometryFields(authored))
                 return Failure<NavigationCookedTileDescriptor>(NavigationErrors::StaleSnapshot);
             const auto &cooked = tile.Topology();
-            if (!cooked.offMeshLinks.empty() || std::ranges::any_of(cooked.polygons, [](const auto &polygon) {
+            if (std::ranges::any_of(cooked.polygons, [](const auto &polygon) {
                 return polygon.vertexIndices.count > MaximumVerticesPerPolygon || polygon.adjacencies.count != polygon.vertexIndices.count;
             }))
+                return Descriptor::Failure(
+                    MakeError(NavigationErrors::OperationUnsupported, "Cooked polygons require one adjacency per supported edge."));
+            if (!cooked.offMeshLinks.empty() &&
+                (!info.allowAuthoredTraversal || info.tiles.size() != 1 || !std::ranges::all_of(cooked.offMeshLinks, [](const auto &link) {
+                return link.authoredLink.IsValid();
+            })))
                 return Descriptor::Failure(MakeError(NavigationErrors::OperationUnsupported,
-                                                     "Cooked polygons require one adjacency per supported edge and no off-mesh links."));
+                                                     "Off-mesh links require an authored identity and a traversal-aware consumer."));
             return descriptor;
         }
 
@@ -608,7 +640,7 @@ namespace Horo::Navigation {
                 return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::NavMeshArtifactInvalid);
             if (tile->Key().profile != key.profile || tile->Key().surface != key.surface || tile->Key().scope != key.scope)
                 return UnsupportedCookedShape("Multiple authored partitions cannot share one Detour provider.");
-            const auto descriptor = AdmitCookedTile(authored->buildGeometry, *tile);
+            const auto descriptor = AdmitCookedTile(authored->buildGeometry, *tile, info);
             if (descriptor.HasError())
                 return PreparedBackend::Failure(descriptor.ErrorValue());
             if (previous && (tile->Key() <= previous->Key() || descriptor.Value().tileSizeMeters != tileSize))

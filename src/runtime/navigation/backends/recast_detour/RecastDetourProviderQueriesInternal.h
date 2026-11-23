@@ -26,6 +26,7 @@ namespace Horo::Navigation::RecastDetourQueries {
         const std::vector<Math::Vec3> &vertices;
         const std::vector<Math::Vec3> &centers;
         const std::vector<dtPolyRef> &references;
+        std::span<const RecastDetourLinkArc> links;
         float defaultClearanceMeters{};
     };
 
@@ -33,6 +34,12 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                         const NavigationPathRequest &request, const NavigationAreaRegistry &areaRegistry,
                                                         const std::vector<GroundedNavigationPolygon> &polygons,
                                                         const std::vector<dtPolyRef> &polygonReferences);
+
+    /** @brief Calculates the weighted cost of rooted, bounded corridor legs. */
+    [[nodiscard]] Result<float> CalculatePathCost(const PathBuildContext &context, std::uint32_t count, Math::Vec3 destination);
+
+    /** @brief Drops trailing traversal portals whose boundary pair did not fit. */
+    void TrimUnpairedTraversal(NavigationPath &path, std::uint32_t coveredPolygons);
 
     [[nodiscard]] Result<NavigationPath> BuildPath(PathBuildContext &context);
 }  // namespace Horo::Navigation::RecastDetourQueries

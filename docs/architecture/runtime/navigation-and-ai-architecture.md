@@ -81,6 +81,22 @@ only on an exact compatibility match; mismatch is a typed cooked-version failure
 absence is distinct from corruption. Provider payloads can always be discarded without
 changing portable topology meaning.
 
+Validated authored links retain their stable `NavigationLinkId` in the neutral
+tile record. HNT3 encodes that identity with an explicit scope flag and keeps
+the current HNT1 and HNT2 byte layout for tiles without authored link identities.
+The decoder accepts all three formats and leaves legacy and generated link
+identities invalid. The validated link fingerprint uses a new domain for this
+record shape. A bake path that attaches validated links must include that
+fingerprint in the affected tile dependency closure before reading its cache.
+
+An explicitly traversal-aware Recast consumer can query authored links within
+one admitted tile. The corridor carries the exact link identity and ordered
+endpoints. Entrance and exit waypoints name the same portal and remain distinct
+even if they coincide with another waypoint. Shared polygon edges and ordinary
+funnel output keep their existing representations. Consumers rebuild for the
+additive request/result fields. Scene hosts can enable this query mode once
+their topology-scoped link and action authority is composed.
+
 Separate provider capabilities use narrow Horo-owned contracts (`NavigationBackend.h`
 and `NavigationMeshBuilder.h`):
 
@@ -374,6 +390,13 @@ ceiling bound retries; exclusive operation deadlines bound admission pressure.
 Multi-waypoint results must begin with the exact admitted Start, end with a finite
 Destination inside the target acceptance radius, and retain matching world/topology
 provenance. Only then is the initial Start skipped for corridor following.
+
+An authored off-mesh portal identifies its exact consecutive corridor polygons
+and contributes an ordered entrance/exit waypoint pair. Held-path admission
+rejects missing or mismatched pairs. Ground following can approach the entrance,
+with arrival bounded by the smaller of the movement waypoint radius and the link
+radius. Without a composed traversal owner, reaching that boundary ends the
+operation with a typed capability failure and withdraws desired velocity.
 
 Returned intents contain desired velocity, operation/path identities and a fixed
 tick. Character/Physics remains the only movement writer; the host's Character

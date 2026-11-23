@@ -1,3 +1,4 @@
+#include "Horo/Navigation/NavigationTileDescriptor.h"
 #include "NavigationTileArtifactInternal.h"
 
 #include <array>
@@ -6,8 +7,14 @@
 namespace Horo::Navigation {
     namespace {
         using namespace TileArtifactInternal;
-        constexpr std::uint32_t TileMagic = 0x31544e48;        // HNT1
-        constexpr std::uint32_t ScopedTileMagic = 0x32544e48;  // HNT2
+        constexpr std::uint32_t TileMagic = 0x31544e48;               // HNT1
+        constexpr std::uint32_t ScopedTileMagic = 0x32544e48;         // HNT2
+        constexpr std::uint32_t AuthoredLinksTileMagic = 0x33544e48;  // HNT3
+
+        struct DecodedTileDescriptor final {
+            NavigationPreparedTile input;
+            bool hasAuthoredLinks{};
+        };
 
         /** @brief Rejects reserved identities before they enter an owned artifact. */
         template <typename T> [[nodiscard]] T ReadIdentity(Reader &reader) {
@@ -18,9 +25,13 @@ namespace Horo::Navigation {
         }
 
         /** @brief Emits the exact tile/profile grid and resolved profile geometry. */
-        void EncodeDescriptor(Writer &writer, const NavigationPreparedTile &input) {
-            writer.Integer(input.tile.key.scope.IsSceneScoped() ? ScopedTileMagic : TileMagic);
-            if (input.tile.key.scope.IsSceneScoped())
+        void EncodeDescriptor(Writer &writer, const NavigationPreparedTile &input, const bool hasAuthoredLinks) {
+            const bool scoped = input.tile.key.scope.IsSceneScoped();
+            const auto legacyMagic = scoped ? ScopedTileMagic : TileMagic;
+            writer.Integer(hasAuthoredLinks ? AuthoredLinksTileMagic : legacyMagic);
+            if (hasAuthoredLinks)
+                writer.Integer(scoped ? 1 : 0, 1);
+            if (scoped)
                 writer.Raw(input.tile.key.scope.SceneBytes());
             writer.Integer(input.tile.key.profile.Value(), 8);
             writer.Integer(input.tile.key.surface.Value(), 8);
@@ -39,12 +50,20 @@ namespace Horo::Navigation {
         }
 
         /** @brief Parses fixed metadata before reading any table count. */
-        [[nodiscard]] NavigationPreparedTile DecodeDescriptor(Reader &reader) {
+        [[nodiscard]] DecodedTileDescriptor DecodeDescriptor(Reader &reader) {
             const auto magic = reader.Integer();
-            if (magic != TileMagic && magic != ScopedTileMagic)
+            const bool hasAuthoredLinks = magic == AuthoredLinksTileMagic;
+            if (magic != TileMagic && magic != ScopedTileMagic && !hasAuthoredLinks)
                 throw std::invalid_argument("Unsupported navigation tile format");
+            bool scoped = magic == ScopedTileMagic;
+            if (hasAuthoredLinks) {
+                const auto flag = reader.Integer(1);
+                if (flag > 1)
+                    throw std::invalid_argument("Invalid navigation tile scope flag");
+                scoped = flag != 0;
+            }
             NavigationPreparedTile input;
-            if (magic == ScopedTileMagic)
+            if (scoped)
                 input.tile.key.scope = ReadSceneScope(reader);
             input.tile.key.profile = ReadIdentity<NavigationAgentProfileId>(reader);
             input.tile.key.surface = ReadIdentity<SurfaceId>(reader);
@@ -64,7 +83,7 @@ namespace Horo::Navigation {
             g.minimumRegionSizeMeters = reader.Float();
             input.borderSizeCells = static_cast<std::uint32_t>(reader.Integer());
             input.dependencyKey = reader.Digest();
-            return input;
+            return {std::move(input), hasAuthoredLinks};
         }
 
         /** @brief Checks exact descriptor placement and resolved build geometry for both fresh and decoded tiles. */
@@ -87,9 +106,24 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
+        /** @brief Stable link identity must resolve to a single record within a tile's exact profile. */
+        [[nodiscard]] bool HasUniqueAuthoredLinks(const std::span<const NavMeshOffMeshLink> links) {
+            if (links.size() < 2)
+                return true;
+            std::vector<NavigationLinkId> ids;
+            ids.reserve(links.size());
+            for (const auto &link : links)
+                if (link.authoredLink.IsValid())
+                    ids.push_back(link.authoredLink);
+            std::ranges::sort(ids);
+            return std::ranges::adjacent_find(ids) == ids.end();
+        }
+
         /** @brief Applies the neutral topology validator after portable encoding established exact byte size. */
         [[nodiscard]] Result<void> ValidateBuiltTopology(const NavigationPreparedTile &input, const NavigationTileBuildResult &result,
                                                          const std::size_t bytes) {
+            if (!HasUniqueAuthoredLinks(result.offMeshLinks))
+                return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
             const Sha256Digest digest = input.dependencyKey;
             const NavMeshTileDescriptor tile{.key = result.key,
                                              .bounds = result.bounds,
@@ -143,7 +177,7 @@ namespace Horo::Navigation {
         }
 
         /** @brief Encodes portable topology; no statistics, allocator capacity or provider memory layout is persisted. */
-        void EncodeTopology(Writer &writer, const NavigationTileBuildResult &result) {
+        void EncodeTopology(Writer &writer, const NavigationTileBuildResult &result, const bool hasAuthoredLinks) {
             writer.Integer(static_cast<std::uint8_t>(result.state), 1);
             writer.Integer(result.vertices.size());
             for (const auto vertex : result.vertices)
@@ -170,6 +204,8 @@ namespace Horo::Navigation {
                 writer.Integer(link.endPolygon);
                 writer.Integer(link.area.Value(), 8);
                 writer.Integer(link.bidirectional ? 1 : 0, 1);
+                if (hasAuthoredLinks)
+                    writer.Integer(link.authoredLink.Value(), 8);
             }
             writer.Integer(result.provenance.size());
             for (const auto &source : result.provenance) {
@@ -183,8 +219,31 @@ namespace Horo::Navigation {
             }
         }
 
+        /** @brief Decodes the bounded link table using the record layout selected by the tile header. */
+        [[nodiscard]] std::vector<NavMeshOffMeshLink> DecodeOffMeshLinks(Reader &reader, const bool hasAuthoredLinks) {
+            constexpr std::size_t LinkBytes = 45;
+            const auto bytesPerLink = LinkBytes + (hasAuthoredLinks ? sizeof(std::uint64_t) : 0);
+            std::vector<NavMeshOffMeshLink> links(reader.Count(NavigationTileBuildLimits::MaximumOffMeshLinks, bytesPerLink));
+            for (auto &link : links) {
+                link.start = reader.Vector();
+                link.end = reader.Vector();
+                link.radiusMeters = reader.Float();
+                link.startPolygon = static_cast<std::uint32_t>(reader.Integer());
+                link.endPolygon = static_cast<std::uint32_t>(reader.Integer());
+                link.area = ReadIdentity<NavigationAreaId>(reader);
+                const auto bidirectional = reader.Integer(1);
+                if (bidirectional > 1)
+                    throw std::invalid_argument("Invalid navigation link direction");
+                link.bidirectional = bidirectional == 1;
+                if (const auto identity = hasAuthoredLinks ? reader.Integer(8) : 0; identity != 0)
+                    link.authoredLink = NavigationLinkId::Create(identity).Value();
+            }
+            return links;
+        }
+
         /** @brief Parses tables only after each count fits both hard limits and remaining bytes. */
-        [[nodiscard]] NavigationTileBuildResult DecodeTopology(Reader &reader, const NavigationPreparedTile &input) {
+        [[nodiscard]] NavigationTileBuildResult DecodeTopology(Reader &reader, const NavigationPreparedTile &input,
+                                                               const bool hasAuthoredLinks) {
             NavigationTileBuildResult result{.state = static_cast<NavigationTileBuildState>(reader.Integer(1)),
                                              .key = input.tile.key.tile,
                                              .bounds = input.tile.bounds};
@@ -202,19 +261,7 @@ namespace Horo::Navigation {
                 for (auto &index : *table)
                     index = static_cast<std::uint32_t>(reader.Integer());
             }
-            result.offMeshLinks.resize(reader.Count(NavigationTileBuildLimits::MaximumOffMeshLinks, 45));
-            for (auto &link : result.offMeshLinks) {
-                link.start = reader.Vector();
-                link.end = reader.Vector();
-                link.radiusMeters = reader.Float();
-                link.startPolygon = static_cast<std::uint32_t>(reader.Integer());
-                link.endPolygon = static_cast<std::uint32_t>(reader.Integer());
-                link.area = ReadIdentity<NavigationAreaId>(reader);
-                const auto bidirectional = reader.Integer(1);
-                if (bidirectional > 1)
-                    throw std::invalid_argument("Invalid navigation link direction");
-                link.bidirectional = bidirectional == 1;
-            }
+            result.offMeshLinks = DecodeOffMeshLinks(reader, hasAuthoredLinks);
             result.provenance.resize(reader.Count(NavigationTileBuildLimits::MaximumPolygons, 65));
             for (auto &source : result.provenance) {
                 source.kind = static_cast<NavigationSourceProducerKind>(reader.Integer(1));
@@ -227,6 +274,18 @@ namespace Horo::Navigation {
             return result;
         }
     }  // namespace
+
+    /** @copydoc ProjectNavigationCookedTileDescriptor */
+    Result<NavigationCookedTileDescriptor> ProjectNavigationCookedTileDescriptor(const NavigationCookedTile &tile) {
+        try {
+            TileArtifactInternal::Reader reader(tile.Bytes());
+            const auto descriptor = DecodeDescriptor(reader);
+            return Result<NavigationCookedTileDescriptor>::Success(
+                {descriptor.input.geometry, descriptor.input.tile.tileSizeMeters, descriptor.input.borderSizeCells});
+        } catch (const std::invalid_argument &) {
+            return TileArtifactInternal::Failure<NavigationCookedTileDescriptor>(NavigationErrors::NavMeshArtifactCorrupt);
+        }
+    }
 
     /** @copydoc NavigationCookedTile::Create */
     Result<std::shared_ptr<const NavigationCookedTile>> NavigationCookedTile::Create(const NavigationPreparedTile &input,
@@ -244,8 +303,11 @@ namespace Horo::Navigation {
                 result.polygonAdjacencies.size() > NavigationTileBuildLimits::MaximumPolygons * 6ULL ||
                 result.provenance.size() > NavigationTileBuildLimits::MaximumPolygons)
                 return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
-            EncodeDescriptor(writer, input);
-            EncodeTopology(writer, result);
+            const bool hasAuthoredLinks = std::ranges::any_of(result.offMeshLinks, [](const NavMeshOffMeshLink &link) {
+                return link.authoredLink.IsValid();
+            });
+            EncodeDescriptor(writer, input, hasAuthoredLinks);
+            EncodeTopology(writer, result, hasAuthoredLinks);
             if (const auto valid = Validate(input, result, writer.Bytes().size()); valid.HasError())
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(valid.ErrorValue());
             return Result<std::shared_ptr<const NavigationCookedTile>>::Success(
@@ -268,8 +330,8 @@ namespace Horo::Navigation {
             return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
         try {
             Reader reader(bytes);
-            const auto input = DecodeDescriptor(reader);
-            auto result = DecodeTopology(reader, input);
+            const auto [input, hasAuthoredLinks] = DecodeDescriptor(reader);
+            auto result = DecodeTopology(reader, input, hasAuthoredLinks);
             if (!reader.Empty())
                 return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::NavMeshArtifactCorrupt);
             auto artifact = Create(input, std::move(result), maximumBytes);

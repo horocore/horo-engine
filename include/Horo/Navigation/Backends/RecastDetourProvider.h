@@ -84,6 +84,7 @@ namespace Horo::Navigation {
         std::uint32_t maximumConcurrentQueries{};
         std::size_t maximumOwnedBytes{};
         std::uint64_t capabilityRevision{};
+        bool allowAuthoredTraversal{}; /**< Enables authored single-tile link corridors for traversal-aware consumers. */
     };
 
     /** @brief Prepared native query owner and the bounded storage reservation used to admit it. */
@@ -103,7 +104,8 @@ namespace Horo::Navigation {
     /** @brief Creates a Detour query owner from an exact supported portable NavMesh closure.
      * @param info Exact already-admitted closure and native resource limits, borrowed during this call only.
      * @return Owned provider, or a typed error before publication. Cross-tile links require exact opposed grid edges.
-     * Empty coverage, off-mesh links, incompatible geometry and unrepresentable connectivity return typed failures. */
+     * @details Off-mesh corridors require explicit traversal-aware opt-in and stable authored link identities.
+     * Empty coverage, incompatible geometry and unrepresentable connectivity return typed failures. */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourCookedNavigationQueryBackend(
         const RecastDetourCookedProviderCreateInfo &info);
 

@@ -169,6 +169,7 @@ namespace Horo::Navigation {
         std::uint32_t endPolygon{};   /**< Global destination polygon index. */
         NavigationAreaId area;        /**< Stable traversal-area semantics. */
         bool bidirectional{};         /**< Whether traversal is admitted in both directions. */
+        NavigationLinkId authoredLink; /**< Stable authored authority. Generated and legacy records have an invalid ID. */
 
         [[nodiscard]] constexpr auto operator<=>(const NavMeshOffMeshLink &) const noexcept = default;
     };

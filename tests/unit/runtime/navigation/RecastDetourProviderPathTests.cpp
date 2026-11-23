@@ -1,5 +1,8 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "Horo/Navigation/NavigationDefinition.h"
 #include "Horo/Navigation/NavigationErrors.h"
+#include "Horo/Navigation/NavigationTileArtifact.h"
+#include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationTestAssertions.h"
 
 #include <algorithm>
@@ -9,9 +12,11 @@
 #include <cstdint>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace Horo::Navigation {
     namespace {
+        using TestSupport::Id;
         using TestSupport::RequireError;
 
         struct ZigZagTopology final {
@@ -64,6 +69,100 @@ namespace Horo::Navigation {
                  .excludedFlags = {},
                  .costOverrides = {}},
             }};
+        };
+
+        /** @brief Exact cooked geometry used to exercise an authored transition between disconnected polygons. */
+        [[nodiscard]] NavigationTileBuildResult LinkTopology(const NavigationPreparedTile &input) {
+            const auto area = Id<NavigationAreaId>(1);
+            return {.state = NavigationTileBuildState::Built,
+                    .key = input.tile.key.tile,
+                    .bounds = input.tile.bounds,
+                    .vertices = {{0, 0, 0}, {2, 0, 0}, {0, 0, 2}, {4, 0, 0}, {6, 0, 0}, {4, 0, 2}},
+                    .polygons = {{{0, 3}, {0, 3}, area}, {{3, 3}, {3, 3}, area}},
+                    .polygonVertexIndices = {0, 1, 2, 3, 4, 5},
+                    .polygonAdjacencies = std::vector<std::uint32_t>(6, NavMeshBoundaryAdjacency),
+                    .offMeshLinks = {{.start = {0.75F, 0, 0.75F},
+                                      .end = {4.75F, 0, 0.75F},
+                                      .radiusMeters = 1.0F,
+                                      .startPolygon = 0,
+                                      .endPolygon = 1,
+                                      .area = area,
+                                      .authoredLink = Id<NavigationLinkId>(23)}},
+                    .provenance = {{.producer = Id<NavigationSourceProducerId>(1),
+                                    .contribution = Id<NavigationSourceContributionId>(1),
+                                    .revision = Id<NavigationSourceRevision>(1),
+                                    .sourceDigest = TestSupport::Digest(10),
+                                    .polygons = {0, 2}}}};
+        }
+
+        /** @brief Drives cooked Recast admission with one exact authored tile and profile. */
+        struct CookedLinkFixture final {
+            const NavigationPreparedTile input = PrepareInput();
+            const NavigationDefinition definition = PrepareDefinition();
+            const std::array<std::shared_ptr<const NavigationCookedTile>, 1> tiles{RoundTrip(input)};
+
+            static NavigationPreparedTile PrepareInput() {
+                const TestSupport::IncrementalBakeFixture bake;
+                auto prepared = PrepareNavigationBakeTile(*bake.Input(), bake.Tiles().front(), bake.compatibility);
+                REQUIRE(prepared.HasValue());
+                return std::move(prepared).Value();
+            }
+
+            static NavigationDefinition PrepareDefinition() {
+                const TestSupport::IncrementalBakeFixture bake;
+                const auto areas = TestSupport::IncrementalBakeFixture::Areas();
+                const auto filters = TestSupport::IncrementalBakeFixture::Filters();
+                auto definition = NavigationDefinition::Create({.profiles = {bake.profile},
+                                                                .areas = {areas.begin(), areas.end()},
+                                                                .filters = {filters.begin(), filters.end()},
+                                                                .tiles = {.tileSizeCells = 16, .maximumTiles = 8}});
+                REQUIRE(definition.HasValue());
+                return std::move(definition).Value();
+            }
+
+            static std::shared_ptr<const NavigationCookedTile> RoundTrip(const NavigationPreparedTile &input) {
+                const auto encoded = NavigationCookedTile::Create(input, LinkTopology(input));
+                REQUIRE(encoded.HasValue());
+                const auto decoded = NavigationCookedTile::Decode(encoded.Value()->Bytes());
+                REQUIRE(decoded.HasValue());
+                REQUIRE(decoded.Value()->Topology().offMeshLinks == encoded.Value()->Topology().offMeshLinks);
+                return decoded.Value();
+            }
+
+            RecastDetourCookedProviderCreateInfo Info() const {
+                const auto &key = tiles.front()->Key();
+                return {.world = Id<NavigationWorldId>(8),
+                        .topology = Id<NavigationGeneration>(9),
+                        .surface = {.surface = key.surface, .scope = key.scope},
+                        .profile = key.profile,
+                        .definition = definition,
+                        .tiles = tiles,
+                        .nearestPointHalfExtents = {0.25F, 1.0F, 0.25F},
+                        .queryLimits = {64, 16, 80},
+                        .maximumConcurrentQueries = 1,
+                        .maximumOwnedBytes = 1024U * 1024U,
+                        .capabilityRevision = 1};
+            }
+
+            std::unique_ptr<INavigationQueryBackend> Open() const {
+                auto info = Info();
+                info.allowAuthoredTraversal = true;
+                auto backend = CreateRecastDetourCookedNavigationQueryBackend(info);
+                CAPTURE((backend.HasError() ? backend.ErrorValue().message : "admitted"));
+                REQUIRE(backend.HasValue());
+                return std::move(backend).Value();
+            }
+
+            NavigationPathRequest Request() const {
+                const auto info = Info();
+                const auto &link = tiles.front()->Topology().offMeshLinks.front();
+                return {.world = info.world,
+                        .topology = info.topology,
+                        .start = link.start,
+                        .destination = link.end,
+                        .filter = definition.Registry().Filters().front().id,
+                        .requirement = {NavigationQueryKind::Path, NavigationQualityLevel::Balanced, info.queryLimits}};
+            }
         };
 
         [[nodiscard]] RecastDetourProviderCreateInfo CreateInfo(const ZigZagTopology &topology) {
@@ -193,4 +292,93 @@ namespace Horo::Navigation {
         boundedPortals.outputLimits.maximumPortals = 1;
         RequireError(provider->FindPath(boundedPortals, {}), NavigationErrors::CapacityExceeded);
     }
+
+    TEST_CASE("Authored single-tile links round-trip into exact native corridor boundaries",
+              "[unit][navigation][provider][path][traversal]") {
+        const CookedLinkFixture fixture;
+        const auto &link = fixture.tiles.front()->Topology().offMeshLinks.front();
+        const auto backend = fixture.Open();
+        const auto route = backend->FindPath(fixture.Request(), {});
+        REQUIRE(route.HasValue());
+        REQUIRE(route.Value().status == NavigationPathStatus::Reachable);
+        REQUIRE(route.Value().portals.size() == 1);
+        const auto &portal = route.Value().portals.front();
+        CHECK(portal.kind == NavigationPathPortalKind::OffMeshLink);
+        CHECK(portal.link == Id<NavigationLinkId>(23));
+        CHECK(portal.linkRadiusMeters == link.radiusMeters);
+        CHECK(portal.left == link.start);
+        CHECK(portal.right == link.end);
+        const auto &waypoints = route.Value().waypoints;
+        REQUIRE(waypoints.size() == 4);
+        CHECK(waypoints[1].provenance.kind == NavigationPathWaypointKind::TraversalEntrance);
+        CHECK(waypoints[1].provenance.portalIndex == 0);
+        CHECK(waypoints[1].provenance.corridorPolygonIndex == portal.fromPolygonIndex);
+        CHECK(waypoints[2].provenance.kind == NavigationPathWaypointKind::TraversalExit);
+        CHECK(waypoints[2].provenance.portalIndex == 0);
+        CHECK(waypoints[2].provenance.corridorPolygonIndex == portal.toPolygonIndex);
+    }
+
+    TEST_CASE("Cooked traversals obey output limits direction and clearance", "[unit][navigation][provider][path][traversal]") {
+        const CookedLinkFixture fixture;
+        const auto backend = fixture.Open();
+        auto request = fixture.Request();
+        SECTION("outer output bounds cannot produce half of a traversal") {
+            request.outputLimits.maximumWaypoints = 2;
+            RequireError(backend->FindPath(request, {}), NavigationErrors::CapacityExceeded);
+            request.coveragePolicy = NavigationPathCoveragePolicy::AllowPartial;
+            const auto partial = backend->FindPath(request, {});
+            REQUIRE(partial.HasValue());
+            CHECK(partial.Value().status == NavigationPathStatus::Partial);
+            CHECK(partial.Value().stopReason == NavigationPathStopReason::ResultPointBudgetExceeded);
+            CHECK(partial.Value().portals.empty());
+            CHECK(partial.Value().corridor.size() == 1);
+            CHECK(partial.Value().waypoints.size() == 1);
+        }
+        SECTION("reverse travel cannot use a one-way authored link") {
+            std::swap(request.start, request.destination);
+            const auto reverse = backend->FindPath(request, {});
+            REQUIRE(reverse.HasValue());
+            CHECK(reverse.Value().status == NavigationPathStatus::Unreachable);
+        }
+        SECTION("the entrance radius fences oversized agents") {
+            request.clearanceMeters = 2.0F;
+            const auto wide = backend->FindPath(request, {});
+            REQUIRE(wide.HasValue());
+            CHECK(wide.Value().status == NavigationPathStatus::Unreachable);
+        }
+    }
+
+    TEST_CASE("Cooked traversal admission requires opt-in and unambiguous identity", "[unit][navigation][provider][path][traversal]") {
+        const CookedLinkFixture fixture;
+        auto info = fixture.Info();
+        RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        info.allowAuthoredTraversal = true;
+        const auto &tile = fixture.tiles.front();
+        SECTION("authored arcs cannot mask ordinary shared polygon edges") {
+            auto shared = tile->Topology();
+            shared.vertices = {{0, 0, 0}, {2, 0, 0}, {0, 0, 2}, {2, 0, 2}};
+            shared.polygonVertexIndices = {0, 1, 2, 1, 3, 2};
+            shared.polygonAdjacencies[1] = 1;
+            shared.polygonAdjacencies[5] = 0;
+            shared.offMeshLinks.front().end = {1.25F, 0, 1.25F};
+            const auto overlap = NavigationCookedTile::Create(fixture.input, std::move(shared));
+            REQUIRE(overlap.HasValue());
+            const std::array tiles{overlap.Value()};
+            info.tiles = tiles;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        }
+        SECTION("legacy rows cannot issue traversal authority") {
+            auto legacyTopology = tile->Topology();
+            legacyTopology.offMeshLinks.front().authoredLink = {};
+            const auto legacy = NavigationCookedTile::Create(fixture.input, std::move(legacyTopology));
+            REQUIRE(legacy.HasValue());
+            const auto restored = NavigationCookedTile::Decode(legacy.Value()->Bytes());
+            REQUIRE(restored.HasValue());
+            CHECK_FALSE(restored.Value()->Topology().offMeshLinks.front().authoredLink.IsValid());
+            const std::array tiles{restored.Value()};
+            info.tiles = tiles;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        }
+    }
+
 }  // namespace Horo::Navigation

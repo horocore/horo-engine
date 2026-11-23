@@ -16,8 +16,32 @@ namespace Horo::Navigation {
             MissingStart,
             WrongStart,
             ForeignWaypoint,
+            OffMesh,
+            MissingTraversalExit,
             Unavailable
         };
+
+        /** @brief Inserts a typed traversal crossing between otherwise disconnected corridor polygons. */
+        void AddTraversalBoundary(NavigationPath &path, const NavigationPathRequest &request, const bool complete) {
+            using enum NavigationPathWaypointKind;
+            const NavigationQueryProvenance first{.world = request.world, .topology = request.topology, .polygonIndex = 0};
+            const NavigationQueryProvenance second{.world = request.world, .topology = request.topology, .polygonIndex = 1};
+            path.corridor = {{first, {}}, {second, {}}};
+            const Math::Vec3 entrance{2, 0, 0};
+            const Math::Vec3 exit{8, 0, 0};
+            path.portals = {{.kind = NavigationPathPortalKind::OffMeshLink,
+                             .fromPolygonIndex = 0,
+                             .toPolygonIndex = 1,
+                             .left = entrance,
+                             .right = exit,
+                             .link = NavigationLinkId::Create(1).Value(),
+                             .linkRadiusMeters = 0.5F}};
+            path.waypoints.insert(path.waypoints.begin() + 1,
+                                  {{entrance, {.kind = TraversalEntrance, .polygon = first, .corridorPolygonIndex = 0, .portalIndex = 0}},
+                                   {exit, {.kind = TraversalExit, .polygon = second, .corridorPolygonIndex = 1, .portalIndex = 0}}});
+            if (!complete)
+                path.waypoints.erase(path.waypoints.begin() + 2);
+        }
 
         class MovementBackend final : public INavigationQueryBackend {
         public:
@@ -49,6 +73,8 @@ namespace Horo::Navigation {
                     path.waypoints.front().position.x += 1;
                 if (answer_ == Answer::ForeignWaypoint)
                     path.waypoints.front().provenance.polygon.world = World(99);
+                if (answer_ == Answer::OffMesh || answer_ == Answer::MissingTraversalExit)
+                    AddTraversalBoundary(path, request, answer_ == Answer::OffMesh);
                 return Result<NavigationPath>::Success(std::move(path));
             }
 
@@ -395,7 +421,7 @@ namespace Horo::Navigation {
 
     TEST_CASE("Partial no-path malformed and Null-like results cannot report arrival", "[unit][navigation][movement]") {
         for (const auto answer : {Answer::Partial, Answer::Unreachable, Answer::Malformed, Answer::MissingStart, Answer::WrongStart,
-                                  Answer::ForeignWaypoint, Answer::Unavailable}) {
+                                  Answer::ForeignWaypoint, Answer::MissingTraversalExit, Answer::Unavailable}) {
             Fixture fixture{answer};
             fixture.Start(fixture.Move(), fixture.Now());
             fixture.Update(fixture.Now());
@@ -410,6 +436,31 @@ namespace Horo::Navigation {
             }
             REQUIRE(fixture.movement->IsDrained());
         }
+    }
+
+    TEST_CASE("Ordinary movement approaches an off-mesh link but never drives across it", "[unit][navigation][movement][traversal]") {
+        Fixture fixture{Answer::OffMesh};
+        auto request = fixture.Move();
+        request.speedMetersPerSecond = 100;
+        request.waypointRadiusMeters = 1.0F;
+        fixture.Start(request, fixture.Now());
+        fixture.Update(fixture.Now());
+        const auto approach = fixture.Publish();
+        REQUIRE(approach.state == NavigationMovementState::Following);
+        CHECK(approach.desiredVelocity.x == Catch::Approx(20));
+        auto now = fixture.Now(2);
+        now.position = {1.25F, 0, 0};
+        const auto insideGroundRadius = fixture.Update(now);
+        CHECK(insideGroundRadius.state == NavigationMovementState::Following);
+        CHECK(insideGroundRadius.desiredVelocity.x == Catch::Approx(7.5));
+        now.path.tick = 3;
+        now.position = {2, 0, 0};
+        const auto stopped = fixture.Update(now);
+        CHECK(stopped.state == NavigationMovementState::Failed);
+        CHECK_FALSE(stopped.path.IsValid());
+        CHECK(stopped.desiredVelocity == Math::Vec3{});
+        REQUIRE(fixture.movement->Status().error);
+        CHECK(fixture.movement->Status().error->code.Value() == MakeError(NavigationErrors::CapabilityUnavailable).code.Value());
     }
 
     TEST_CASE("Changed world revisions stop held corridors and finite query budgets end retries", "[unit][navigation][movement]") {

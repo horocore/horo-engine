@@ -74,6 +74,7 @@ namespace Horo::Navigation {
     /** @brief Semantic kind of one portal retained in a path corridor. */
     enum class NavigationPathPortalKind : std::uint8_t {
         SharedPolygonEdge,
+        OffMeshLink,
         Count
     };
 
@@ -83,6 +84,8 @@ namespace Horo::Navigation {
         PortalCorner,
         Destination,
         PartialStop,
+        TraversalEntrance,
+        TraversalExit,
         Count
     };
 
@@ -98,9 +101,10 @@ namespace Horo::Navigation {
     };
 
     /**
-     * @brief One finite, clearance-adjusted shared edge between consecutive corridor polygons.
-     * @details `left` and `right` are ordered from the corridor travel direction in canonical XZ space. The endpoint
-     * vertex identities retain source evidence even when clearance moves the actual funnel endpoint inward.
+     * @brief One ordered transition between consecutive corridor polygons.
+     * @details Shared edges carry clearance-adjusted endpoints and their canonical vertex identities. An off-mesh
+     * transition uses left for its entrance and right for its exit. Its edge vertex identities are unavailable and
+     * edge width and clearance remain zero. Link identity and radius are used only for off-mesh transitions.
      */
     struct NavigationPathPortal final {
         NavigationPathPortalKind kind{NavigationPathPortalKind::SharedPolygonEdge};
@@ -112,14 +116,17 @@ namespace Horo::Navigation {
         Math::Vec3 right{};                                      /**< Clearance-adjusted right endpoint. */
         float widthMeters{};                                     /**< Positive traversable width after clearance. */
         float clearanceMeters{};                                 /**< Distance removed from each raw portal endpoint. */
+        NavigationLinkId link;                                   /**< Exact authored identity for an off-mesh transition. */
+        float linkRadiusMeters{};                                /**< Positive entrance/exit radius for an off-mesh transition. */
 
         [[nodiscard]] constexpr auto operator<=>(const NavigationPathPortal &) const noexcept = default;
     };
 
     /**
      * @brief Provenance identifying why one compact waypoint exists.
-     * @details `portalIndex` and `vertexIndex` are populated only for portal-corner waypoints. The polygon evidence
-     * remains valid with the exact path source generation and is never a native provider reference.
+     * @details `portalIndex` identifies the exact contributing portal for corner and traversal waypoints.
+     * Only corners carry a vertex index. Traversal entrance and exit use the from and to corridor polygons
+     * respectively. The polygon evidence is scoped to the path source generation.
      */
     struct NavigationPathWaypointProvenance final {
         NavigationPathWaypointKind kind{NavigationPathWaypointKind::Start};

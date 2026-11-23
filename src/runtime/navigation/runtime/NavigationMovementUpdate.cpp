@@ -23,6 +23,40 @@ namespace Horo::Navigation {
         double Distance(const Math::Vec3 from, const Math::Vec3 to) noexcept {
             return std::hypot(static_cast<double>(to.x) - from.x, static_cast<double>(to.y) - from.y, static_cast<double>(to.z) - from.z);
         }
+
+        /** @brief Traversal boundaries must never be skipped by ordinary waypoint following. */
+        bool IsTraversalBoundary(const NavigationPathWaypoint &waypoint) noexcept {
+            using enum NavigationPathWaypointKind;
+            return waypoint.provenance.kind == TraversalEntrance || waypoint.provenance.kind == TraversalExit;
+        }
+
+        /** @brief Skips reached ground waypoints without exposing the target beyond a traversal entrance. */
+        std::size_t NextGroundWaypoint(const std::span<const NavigationPathWaypoint> points, std::size_t waypoint,
+                                       const Math::Vec3 position, const float radius) noexcept {
+            while (waypoint + 1 < points.size() && !IsTraversalBoundary(points[waypoint]) &&
+                   Distance(position, points[waypoint].position) <= radius)
+                ++waypoint;
+            return waypoint;
+        }
+
+        /** @brief Matches achieved motion to the exact previous publication before admitting arrival. */
+        bool AcknowledgedArrival(const NavigationMovementObservation &current, const NavigationMovementIntent &intent,
+                                 const std::optional<std::uint64_t> previousTick, const float arrivalSpeed) noexcept {
+            return current.feedback && previousTick && current.feedback->operation == intent.operation &&
+                   current.feedback->path == intent.path && current.feedback->tick == *previousTick && *previousTick < intent.tick &&
+                   current.feedback->achievedSpeedMetersPerSecond <= arrivalSpeed;
+        }
+
+        /** @brief Produces a finite desired velocity that reaches the waypoint without overshooting the step. */
+        Math::Vec3 VelocityToward(const Math::Vec3 position, const Math::Vec3 target, const float step, const float maximumSpeed) noexcept {
+            const auto distance = Distance(position, target);
+            if (distance == 0.0)
+                return {};
+            const auto speed = std::min(static_cast<double>(maximumSpeed), distance / step);
+            return {static_cast<float>((static_cast<double>(target.x) - position.x) / distance * speed),
+                    static_cast<float>((static_cast<double>(target.y) - position.y) / distance * speed),
+                    static_cast<float>((static_cast<double>(target.z) - position.z) / distance * speed)};
+        }
     }  // namespace
 
     /** @copydoc NavigationMovementController::CheckAuthority */
@@ -192,14 +226,17 @@ namespace Horo::Navigation {
             return intent;
         intent.path = policy_.Id();
         const auto &points = corridor->waypoints;
-        while (waypoint_ + 1 < points.size() && Distance(current.position, points[waypoint_].position) <= request_.waypointRadiusMeters)
-            ++waypoint_;
+        waypoint_ = NextGroundWaypoint(points, waypoint_, current.position, request_.waypointRadiusMeters);
+        const auto &target = points[waypoint_];
+        if (IsTraversalBoundary(target) &&
+            Distance(current.position, target.position) <=
+                std::min(request_.waypointRadiusMeters, corridor->portals[target.provenance.portalIndex].linkRadiusMeters)) {
+            Finish(NavigationMovementState::Failed,
+                   MakeError(NavigationErrors::CapabilityUnavailable, "Off-mesh traversal requires a composed traversal owner."));
+            return {status_.id, {}, path.tick, {}, status_.state};
+        }
         const bool atEnd = waypoint_ + 1 == points.size() && Distance(current.position, goal_) <= request_.acceptanceRadiusMeters;
-        if (const bool acknowledged = current.feedback && lastIntent_.has_value() && current.feedback->operation == status_.id &&
-                                      current.feedback->path == intent.path && current.feedback->tick == *lastIntent_ &&
-                                      *lastIntent_ < path.tick &&
-                                      current.feedback->achievedSpeedMetersPerSecond <= request_.arrivalSpeedMetersPerSecond;
-            atEnd && acknowledged) {
+        if (atEnd && AcknowledgedArrival(current, intent, lastIntent_, request_.arrivalSpeedMetersPerSecond)) {
             if (request_.mode == NavigationMovementMode::MoveTo) {
                 Finish(NavigationMovementState::Arrived);
                 intent.path = {};
@@ -210,16 +247,8 @@ namespace Horo::Navigation {
         } else {
             status_.state = NavigationMovementState::Following;
         }
-        if (!atEnd) {
-            const auto target = points[waypoint_].position;
-            const auto distance = Distance(current.position, target);
-            if (distance > 0.0) {
-                const auto speed = std::min(static_cast<double>(request_.speedMetersPerSecond), distance / current.stepSeconds);
-                intent.desiredVelocity = {static_cast<float>((static_cast<double>(target.x) - current.position.x) / distance * speed),
-                                          static_cast<float>((static_cast<double>(target.y) - current.position.y) / distance * speed),
-                                          static_cast<float>((static_cast<double>(target.z) - current.position.z) / distance * speed)};
-            }
-        }
+        if (!atEnd)
+            intent.desiredVelocity = VelocityToward(current.position, target.position, current.stepSeconds, request_.speedMetersPerSecond);
         lastIntent_ = path.tick;
         intent.state = status_.state;
         return intent;
