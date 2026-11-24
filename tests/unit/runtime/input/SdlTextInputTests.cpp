@@ -1,9 +1,18 @@
 #include "SdlInputTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <optional>
 
 namespace {
     using namespace Horo::Input;
+
+    /** @brief Records cancellation delivered by the central router. */
+    struct PointerOwner final : IInputCaptureOwner {
+        void OnInputCaptureCancelled(const CaptureCancellationReason value) noexcept override {
+            reason = value;
+        }
+        std::optional<CaptureCancellationReason> reason;
+    };
 
     TEST_CASE("SDL committed text and editing events share the bounded snapshot pipeline", "[unit][runtime][input][sdl][text]") {
         SdlInputBackend backend;
@@ -79,6 +88,45 @@ namespace {
         CHECK(focused.window.focused);
         CHECK(focused.State(Key::B).pressed);
         CHECK(focused.text == "after focus");
+    }
+
+    TEST_CASE("SDL focus recovery publishes a neutral frame before accepting input", "[unit][runtime][input][sdl][focus-cutoff]") {
+        SdlInputBackend backend;
+        constexpr SDL_WindowID Window = 7;
+        Horo::Tests::BindFocusedSdlTestWindow(backend, Window);
+        backend.BeginFrame(1);
+        const SDL_Event key{.key = {.type = SDL_EVENT_KEY_DOWN, .windowID = Window, .scancode = SDL_SCANCODE_A, .down = true}};
+        backend.ProcessEvent(key);
+        PointerOwner owner;
+        InputRouter router;
+        const auto context = router.PushContext(InputContextId{"workspace"}, InputContextKind::EditorWorkspace);
+        router.BeginFrame(backend.Commit());
+        const auto capture = router.CapturePointer(context, PointerButton::Primary, owner);
+        REQUIRE(capture.HasValue());
+
+        backend.BeginFrame(2);
+        Horo::Tests::SendSdlWindowEvent(backend, Window, SDL_EVENT_WINDOW_FOCUS_LOST);
+        Horo::Tests::SendSdlWindowEvent(backend, Window, SDL_EVENT_WINDOW_FOCUS_GAINED);
+        SDL_Event text{.text = {.type = SDL_EVENT_TEXT_INPUT, .windowID = Window, .text = "queued text"}};
+        backend.ProcessEvent(key);
+        backend.ProcessEvent(text);
+        const auto &neutral = backend.Commit();
+        router.BeginFrame(neutral);
+        CHECK_FALSE(neutral.window.focused);
+        CHECK_FALSE(neutral.State(Key::A).down);
+        CHECK(neutral.State(Key::A).released);
+        CHECK(neutral.text.empty());
+        CHECK(owner.reason == CaptureCancellationReason::FocusLost);
+        CHECK_FALSE(router.HasCapture());
+
+        backend.BeginFrame(3);
+        backend.ProcessEvent(key);
+        text.text.text = "fresh text";
+        backend.ProcessEvent(text);
+        const auto &recovered = backend.Commit();
+        CHECK(recovered.window.focused);
+        CHECK(recovered.State(Key::A).pressed);
+        CHECK(recovered.text == "fresh text");
     }
 
     TEST_CASE("SDL candidate area hook rejects missing windows and invalid geometry", "[unit][runtime][input][sdl][text]") {

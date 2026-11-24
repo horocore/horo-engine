@@ -277,6 +277,8 @@ namespace Horo::Input {
         WindowInputState windowState{};
         SDL_WindowID windowId{0};
         bool neutralizeOnBeginFrame{false};
+        bool focusLossPending{}; /**< Keeps the neutral snapshot visible until commit. */
+        bool deferredFocusGain{}; /**< A gain observed before the neutral snapshot committed. */
         std::array<TouchSlot, MaximumTouchContacts> touches{};
         std::uint64_t nextTouchGeneration{1};
         std::uint64_t lastTouchTimestamp{};
@@ -290,6 +292,7 @@ namespace Horo::Input {
         void HandleKeyboardEvent(const SDL_Event &event);
         void HandlePointerEvent(const SDL_Event &event);
         void HandleWindowEvent(const SDL_Event &event);
+        void AdmitWindowFocus() noexcept;
         void HandleGamepadEvent(const SDL_Event &event);
         void OpenAttachedDevices();
         void OpenGamepad(SDL_JoystickID native);
@@ -488,15 +491,26 @@ namespace Horo::Input {
         }
     }
 
+    /** @brief Resumes collection for the current window after its focus cutoff. */
+    void SdlInputBackend::Impl::AdmitWindowFocus() noexcept {
+        deferredFocusGain = false;
+        windowState.focused = true;
+        collector.SetWindowState(windowState);
+        SyncGyroscopes();
+    }
+
     /** @brief Applies window focus and hover events to the collector. */
     void SdlInputBackend::Impl::HandleWindowEvent(const SDL_Event &event) {
         switch (event.type) {
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
-                windowState.focused = true;
-                collector.SetWindowState(windowState);
-                SyncGyroscopes();
+                if (focusLossPending)
+                    deferredFocusGain = true;
+                else
+                    AdmitWindowFocus();
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
+                focusLossPending = true;
+                deferredFocusGain = false;
                 StopRumble();
                 collector.Neutralize();
                 CancelTouches(TouchCancellationReason::SurfaceLost);
@@ -694,6 +708,8 @@ namespace Horo::Input {
             impl_->collector.SetWindowState(impl_->windowState);
             impl_->neutralizeOnBeginFrame = false;
         }
+        if (impl_->deferredFocusGain && !impl_->focusLossPending)
+            impl_->AdmitWindowFocus();
         if (impl_->gyroSyncPending)
             impl_->SyncGyroscopes();
         if (impl_->initialDiscoveryPending)
@@ -716,6 +732,8 @@ namespace Horo::Input {
         impl_->collector.Neutralize();
         impl_->CancelTouches(TouchCancellationReason::SurfaceLost);
         impl_->windowId = windowId;
+        impl_->focusLossPending = false;
+        impl_->deferredFocusGain = false;
         impl_->pointerWidth = 0;
         impl_->pointerHeight = 0;
         impl_->windowState.focused = false;
@@ -793,6 +811,7 @@ namespace Horo::Input {
     }
 
     const RawInputSnapshot &SdlInputBackend::Commit() {
+        impl_->focusLossPending = false;
         return impl_->collector.Commit();
     }
 

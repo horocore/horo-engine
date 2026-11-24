@@ -751,6 +751,9 @@ owners; aggregate reads retain editor/global delivery. Gamepad bindings without
 keyboard chords remain eligible while another player holds keyboard modifiers.
 Pointer-device loss retires pointing controls while keyboard/gamepad ownership
 continues. Focus loss retires every control and rejects later unfocused events.
+When SDL reports loss and regain in one collection frame, the adapter commits
+the neutral frame before resuming controls in the next frame. The router can
+then retire pointer capture, text focus, and queued gameplay input at that cutoff.
 On its first collection frame, the SDL adapter admits currently attached devices
 with fresh generations and neutral controls, including when an earlier collector
 consumed their initial add events. Disconnect
