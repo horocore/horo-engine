@@ -23,6 +23,7 @@ namespace Horo::Input {
     using SimulationTick = std::uint64_t;
     using PlayerId = std::uint8_t;
     inline constexpr std::size_t MaximumConsumedGamepadTransitions = 4'096;
+    inline constexpr std::size_t MaximumCollectedInputSources = 4;
     /** @brief Maximum effective binding count for an action opting into semantic accessibility mapping. */
     inline constexpr std::size_t MaximumAccessibilityBindingsPerAction = 64;
     /** @brief Maximum typed action-name byte count for an action opting into semantic accessibility mapping. */
@@ -834,6 +835,7 @@ namespace Horo::Input {
 
     private:
         friend class InputRouter;
+        friend class GameplayInputFrameBuilder;
 
         InputContextToken(InputRouter *router, std::uint64_t token) noexcept : router_(router), token_(token) {}
 
@@ -1049,6 +1051,7 @@ namespace Horo::Input {
         friend class InputBindingCapture;
         friend class InputCollectionFrame;
         friend class InputActionSourceToken;
+        friend class GameplayInputFrameBuilder;
         friend struct InputCollectionLifetime;
         void CommitRawFrame(const RawInputSnapshot &snapshot);
         /** @brief Neutralizes terminal rebinding delivery before the capture owner releases its context. */
@@ -1174,6 +1177,9 @@ namespace Horo::Input {
          * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
          *          Jump and interact accept activation and configured semantic repeat edges. Multiple
          *          pending edges coalesce into one command; catch-up ticks do not repeat that command.
+         *          A new context, binding configuration or player scope clears pending edges before
+         *          sampling the new snapshot. Changes to that scope's keyboard or gamepad assignment,
+         *          and a committed withdrawal of a collected source, also clear pending edges.
          *          A missing timed sample clock or mapping capacity failure clears the complete pending
          *          projection. LastCaptureStatus preserves that failure until a new snapshot is captured.
          *          Call once per committed snapshot after all higher-priority input consumers have run.
@@ -1196,12 +1202,30 @@ namespace Horo::Input {
     private:
         /** @brief Clears held and pending values without reopening capture of an already observed snapshot. */
         void ClearCapturedInput() noexcept;
+        /** @brief Reconciles the exact routing scope and published input source generations. */
+        void RefreshSourceOwnership(const InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player) noexcept;
+        /** @brief Latches the four routed actions, or clears the capture if their evidence was refused. */
+        void LatchActions(const ActionEvidence &move, const ActionEvidence &look, const ActionEvidence &jump,
+                          const ActionEvidence &interact) noexcept;
+
+        /** @brief Routing authority shared by the actions in one capture. */
+        struct RoutingOwnership final {
+            std::uint64_t context{};
+            std::uint64_t configuration{};
+            std::optional<PlayerId> player;
+            std::optional<GamepadDeviceId> gamepad;
+            bool ownsKeyboardMouse{};
+            [[nodiscard]] friend bool operator==(const RoutingOwnership &, const RoutingOwnership &) noexcept = default;
+        };
+
         ActionId move_;
         ActionId look_;
         ActionId jump_;
         ActionId interact_;
         FrameNumber capturedFrame_{0};
         bool hasCapturedFrame_{false};
+        RoutingOwnership capturedRouting_;
+        std::array<std::uint64_t, MaximumCollectedInputSources> capturedSources_{};
         ActionReadStatus lastCaptureStatus_{ActionReadStatus::Unavailable};
         float moveX_{0.0F};
         float moveY_{0.0F};
@@ -1237,6 +1261,11 @@ namespace Horo::Input {
         void Unassign(GamepadDeviceId gamepad) noexcept;
         void RetainConnected(std::span<const GamepadState> gamepads) noexcept;
         [[nodiscard]] std::optional<PlayerId> PlayerFor(GamepadDeviceId gamepad) const noexcept;
+        /** @brief Finds the exact assigned gamepad generation.
+         * @param player Player whose assignment is being inspected.
+         * @return The assigned device ID, or an empty value for an unassigned player.
+         */
+        [[nodiscard]] std::optional<GamepadDeviceId> GamepadFor(PlayerId player) const noexcept;
 
     private:
         std::vector<std::pair<GamepadDeviceId, PlayerId>> assignments_;

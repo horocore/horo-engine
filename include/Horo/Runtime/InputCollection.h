@@ -6,7 +6,6 @@
 #include "Horo/Runtime/Input.h"
 
 namespace Horo::Input {
-    inline constexpr std::size_t MaximumCollectedInputSources = 4;
     inline constexpr std::size_t MaximumCollectedInputActions = 256;
     struct InputCollectionLifetime;
 

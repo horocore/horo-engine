@@ -296,6 +296,32 @@ namespace Horo::Input {
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
     }
 
+    TEST_CASE("Retired collected input cannot supply a pending fixed-tick command", "[unit][input][collection]") {
+        Fixture fixture;
+        auto port = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+
+        auto first = fixture.Frame(port, 1);
+        REQUIRE(first.Append(source, pressed).HasValue());
+        REQUIRE(first.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+
+        REQUIRE(source.Reset().HasValue());
+        auto neutral = fixture.Frame(port, 2);
+        REQUIRE(neutral.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+        CHECK(builder.Consume(41) == GameplayInputFrame{.tick = 41});
+
+        auto replacement = fixture.Source(port);
+        auto fresh = fixture.Frame(port, 3);
+        REQUIRE(fresh.Append(replacement, pressed).HasValue());
+        REQUIRE(fresh.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+        CHECK(builder.Consume(42).jumpPressed);
+        CHECK(builder.Consume(43) == GameplayInputFrame{.tick = 43});
+    }
+
     TEST_CASE("Input collection map replacement invalidates borrows and cannot publish an old action index", "[unit][input][collection]") {
         Fixture fixture;
         auto port = fixture.Port();

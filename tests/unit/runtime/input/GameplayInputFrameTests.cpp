@@ -115,6 +115,95 @@ namespace {
             REQUIRE((recording.Next() == command));
     }
 
+    TEST_CASE("Replacing a player's gamepad retires its unconsumed tick commands", "[unit][runtime][input]") {
+        InputService input;
+        auto &router = input.Router();
+        const InputContextId play{"play"};
+        const InputBinding jump{.kind = BindingControlKind::GamepadButton, .gamepadButton = GamepadButton::South};
+        REQUIRE(router.SetActionMap({{ActionId{"jump"}, ActionValueType::Digital, play, true, {jump}}}).HasValue());
+        auto gameplay = router.PushContext(play, InputContextKind::Gameplay);
+        GameplayInputFrameBuilder builder{{}, {}, ActionId{"jump"}, {}};
+        GameplayInputFrameBuilder peerBuilder{{}, {}, ActionId{"jump"}, {}};
+        VirtualGamepad gamepad{input.Collector()};
+        VirtualGamepad peerGamepad{input.Collector()};
+
+        input.BeginFrame(1);
+        const auto retired = gamepad.Connect();
+        const auto peer = peerGamepad.Connect();
+        static_cast<void>(input.CommitFrame());
+        REQUIRE(router.AssignGamepad(0, retired));
+        REQUIRE(router.AssignGamepad(1, peer));
+        builder.Capture(router, gameplay, 0);
+        peerBuilder.Capture(router, gameplay, 1);
+
+        input.BeginFrame(2);
+        REQUIRE(gamepad.Press(GamepadButton::South));
+        REQUIRE(peerGamepad.Press(GamepadButton::South));
+        static_cast<void>(input.CommitFrame());
+        builder.Capture(router, gameplay, 0);
+        peerBuilder.Capture(router, gameplay, 1);
+
+        input.BeginFrame(3);
+        gamepad.Disconnect();
+        const auto replacement = gamepad.Connect();
+        REQUIRE(replacement != retired);
+        static_cast<void>(input.CommitFrame());
+        REQUIRE(router.AssignGamepad(0, replacement));
+        builder.Capture(router, gameplay, 0);
+        peerBuilder.Capture(router, gameplay, 1);
+        CHECK(builder.Consume(41) == GameplayInputFrame{.tick = 41});
+        CHECK(peerBuilder.Consume(41).jumpPressed);
+
+        input.BeginFrame(4);
+        REQUIRE(gamepad.Press(GamepadButton::South));
+        static_cast<void>(input.CommitFrame());
+        builder.Capture(router, gameplay, 0);
+        peerBuilder.Capture(router, gameplay, 1);
+        CHECK(builder.Consume(42).jumpPressed);
+        CHECK(builder.Consume(43) == GameplayInputFrame{.tick = 43});
+        CHECK(peerBuilder.Consume(42) == GameplayInputFrame{.tick = 42});
+    }
+
+    TEST_CASE("Retired gameplay routing cannot emit a queued keyboard command", "[unit][runtime][input]") {
+        InputService input;
+        auto &router = input.Router();
+        const InputContextId play{"play"};
+        const ActionId jump{"jump"};
+        REQUIRE(router.SetActionMap({{jump, ActionValueType::Digital, play, true, {KeyBinding(Key::Space)}}}).HasValue());
+        auto context = router.PushContext(play, InputContextKind::Gameplay);
+        GameplayInputFrameBuilder builder{{}, {}, jump, {}};
+        input.BeginFrame(1);
+        input.Collector().SetKey(Key::Space, true);
+        static_cast<void>(input.CommitFrame());
+        builder.Capture(router, context, 0);
+
+        Key currentBinding = Key::Space;
+        SECTION("another context incarnation replaces the previous one") {
+            context = {};
+            context = router.PushContext(play, InputContextKind::Gameplay);
+        }
+        SECTION("the action map replaces the binding") {
+            currentBinding = Key::K;
+            REQUIRE(router.SetActionMap({{jump, ActionValueType::Digital, play, true, {KeyBinding(currentBinding)}}}).HasValue());
+        }
+        SECTION("keyboard and mouse move to another player") {
+            router.AssignKeyboardMouse(1);
+        }
+        input.BeginFrame(2);
+        input.Collector().SetKey(Key::Space, false);
+        static_cast<void>(input.CommitFrame());
+        builder.Capture(router, context, 0);
+        CHECK(builder.Consume(9) == GameplayInputFrame{.tick = 9});
+
+        router.AssignKeyboardMouse(0);
+        input.BeginFrame(3);
+        input.Collector().SetKey(currentBinding, true);
+        static_cast<void>(input.CommitFrame());
+        builder.Capture(router, context, 0);
+        CHECK(builder.Consume(10).jumpPressed);
+        CHECK(builder.Consume(11) == GameplayInputFrame{.tick = 11});
+    }
+
     TEST_CASE("Gameplay Repeat Commands Survive Zero Tick Frames And Fire Once", "[unit][runtime][input][accessibility]") {
         InputService input;
         const InputContextId gameplayId{"gameplay"};

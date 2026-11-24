@@ -94,18 +94,23 @@ namespace Horo::Input {
         routingAllowed = false;
     }
 
+    /** @copydoc InputCollectionLifetime::SourceCurrent */
+    bool InputCollectionLifetime::SourceCurrent(const Source &source, const std::uint64_t generation) const noexcept {
+        const auto &snapshot = candidate ? *candidate : router->Snapshot();
+        return !source.retiring && source.generation == generation && source.configuration == router->impl_->configurationRevision &&
+               AssignmentCurrent(source.assignment) && router->TokenActive(source.context) &&
+               (!source.device || (snapshot.FindGamepad(*source.device) && router->PlayerForGamepad(*source.device) == source.player));
+    }
+
     void InputCollectionLifetime::CommitValues(const bool focused) noexcept {
         for (auto &entry : entries) {
             if (entry.generation == 0)
                 continue;
             auto &source = sources[entry.source];
-            const bool current = !source.retiring && source.generation == entry.generation &&
-                                 source.configuration == router->impl_->configurationRevision && AssignmentCurrent(source.assignment) &&
-                                 router->TokenActive(source.context) &&
-                                 (!source.device || ((candidate ? *candidate : router->Snapshot()).FindGamepad(*source.device) &&
-                                                     router->PlayerForGamepad(*source.device) == source.player));
+            const bool current = SourceCurrent(source, entry.generation);
             entry.previous = entry.current;
             entry.current = focused && current ? entry.pending : Value{};
+            source.committed = current;
             entry.pending = {};
             entry.appended = false;
             entry.consumed = false;
@@ -144,6 +149,19 @@ namespace Horo::Input {
         for (auto &entry : entries)
             entry.pending = {};
         CommitValues(true);
+    }
+
+    /** @copydoc InputCollectionLifetime::CommittedGenerations */
+    std::array<std::uint64_t, MaximumCollectedInputSources> InputCollectionLifetime::CommittedGenerations(
+        const std::uint64_t context, const std::optional<PlayerId> player) const noexcept {
+        std::array<std::uint64_t, MaximumCollectedInputSources> generations{};
+        for (std::size_t slot = 0; slot < sources.size(); ++slot) {
+            const auto &source = sources[slot];
+            if (source.committed && source.context == context && (!player.has_value() || source.player == player) &&
+                source.configuration == router->impl_->configurationRevision && AssignmentCurrent(source.assignment))
+                generations[slot] = source.generation;
+        }
+        return generations;
     }
 
     void InputCollectionLifetime::Accumulate(const std::uint64_t context, const std::size_t action, const std::optional<PlayerId> player,

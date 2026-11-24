@@ -316,8 +316,13 @@ Held axes use the latest admitted capture for every catch-up tick. Press edges
 are latched across presentation frames with no fixed tick, then assigned to the
 next tick exactly once. A second capture of the same committed snapshot is
 ignored. Losing focus or gameplay context ownership clears both held values and
-pending edges so input cannot leak through a modal or resume later. `Reset()`
-clears a builder at player/session ownership changes. Recording stores the
+pending edges so input cannot leak through a modal or resume later. A replacement
+context or binding revision, an assignment change in the captured player scope,
+or a committed withdrawal of a collected source also clears the previous
+capture before sampling the new frame. An unrelated player's reassignment
+preserves pending edges when the captured scope and its sources stay valid.
+`Reset()` clears a builder when the host replaces the player or session.
+Recording stores the
 already assigned value frames; replay feeds those frames directly to simulation,
 without repeating action routing or OS events.
 

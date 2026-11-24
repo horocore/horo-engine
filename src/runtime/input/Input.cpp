@@ -1826,10 +1826,36 @@ namespace Horo::Input {
             lastCaptureStatus_ = ActionReadStatus::Unavailable;
             return;
         }
+        RefreshSourceOwnership(router, context, player);
         const ActionEvidence move = router.ReadActionEvidence(context, move_, player);
         const ActionEvidence look = router.ReadActionEvidence(context, look_, player);
         const ActionEvidence jump = router.ReadActionEvidence(context, jump_, player);
         const ActionEvidence interact = router.ReadActionEvidence(context, interact_, player);
+        LatchActions(move, look, jump, interact);
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::RefreshSourceOwnership */
+    void GameplayInputFrameBuilder::RefreshSourceOwnership(const InputRouter &router, const InputContextToken &context,
+                                                           const std::optional<PlayerId> player) noexcept {
+        const RoutingOwnership routing{.context = context.token_,
+                                       .configuration = router.impl_->configurationRevision,
+                                       .player = player,
+                                       .gamepad = player.has_value() ? router.impl_->assignments.GamepadFor(*player) : std::nullopt,
+                                       .ownsKeyboardMouse = !player.has_value() || router.PlayerForKeyboardMouse() == player};
+        const auto sources = router.impl_->collection->CommittedGenerations(context.token_, player);
+        if (const auto retained = std::ranges::equal(capturedSources_, sources,
+                                                     [](const auto previous, const auto current) {
+            return previous == 0 || previous == current;
+        });
+            capturedRouting_ != routing || !retained)
+            ClearCapturedInput();
+        capturedRouting_ = routing;
+        capturedSources_ = sources;
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::LatchActions */
+    void GameplayInputFrameBuilder::LatchActions(const ActionEvidence &move, const ActionEvidence &look, const ActionEvidence &jump,
+                                                 const ActionEvidence &interact) noexcept {
         for (const auto status : {move.status, look.status, jump.status, interact.status}) {
             if (status == ActionReadStatus::ClockUnavailable || status == ActionReadStatus::CapacityExceeded) {
                 ClearCapturedInput();
@@ -1871,6 +1897,8 @@ namespace Horo::Input {
     /** @copydoc GameplayInputFrameBuilder::Reset */
     void GameplayInputFrameBuilder::Reset() noexcept {
         hasCapturedFrame_ = false;
+        capturedRouting_ = {};
+        capturedSources_.fill(0);
         lastCaptureStatus_ = ActionReadStatus::Unavailable;
         ClearCapturedInput();
     }
@@ -1928,6 +1956,12 @@ namespace Horo::Input {
     std::optional<PlayerId> InputDeviceAssignments::PlayerFor(const GamepadDeviceId gamepad) const noexcept {
         const auto found = std::ranges::find(assignments_, gamepad, &std::pair<GamepadDeviceId, PlayerId>::first);
         return found == assignments_.end() ? std::nullopt : std::optional{found->second};
+    }
+
+    /** @copydoc InputDeviceAssignments::GamepadFor */
+    std::optional<GamepadDeviceId> InputDeviceAssignments::GamepadFor(const PlayerId player) const noexcept {
+        const auto found = std::ranges::find(assignments_, player, &std::pair<GamepadDeviceId, PlayerId>::second);
+        return found == assignments_.end() ? std::nullopt : std::optional{found->first};
     }
 
     VirtualGamepad::~VirtualGamepad() {

@@ -55,6 +55,16 @@ namespace Horo::XR {
                 REQUIRE(value.HasValue());
                 return std::make_unique<XRTrackingSnapshot>(std::move(value).Value());
             }
+
+            void CommitProjection(const Input::FrameNumber number, const Input::InputActionCollection &collection,
+                                  const XRInputProjection &projection) {
+                collector.BeginFrame(number);
+                auto opened = collection.Begin(collector.Commit());
+                REQUIRE(opened.HasValue());
+                auto frame = std::move(opened).Value();
+                REQUIRE(projection.Append(*Snapshot(), session, revision, origin, 4, frame).HasValue());
+                REQUIRE(frame.Commit().HasValue());
+            }
         };
     }  // namespace
 
@@ -98,6 +108,8 @@ namespace Horo::XR {
         ProjectionFixture fixture;
         constexpr Input::PlayerId headsetPlayer = 7;
         constexpr Input::PlayerId otherPlayer = 2;
+        Input::GameplayInputFrameBuilder headsetCommands{{}, {}, fixture.action.id, {}};
+        Input::GameplayInputFrameBuilder replacementCommands{{}, {}, fixture.action.id, {}};
         fixture.router.AssignKeyboardMouse(otherPlayer);
         auto assigned = fixture.router.ActionCollectionForPlayer(fixture.context, headsetPlayer);
         REQUIRE(assigned.HasValue());
@@ -105,26 +117,18 @@ namespace Horo::XR {
         auto created = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
         REQUIRE(created.HasValue());
         auto projection = std::move(created).Value();
-        const auto sample = [&](const Input::InputActionCollection &collection, const XRInputProjection &source) {
-            auto opened = collection.Begin(fixture.collector.Commit());
-            REQUIRE(opened.HasValue());
-            auto frame = std::move(opened).Value();
-            REQUIRE(source.Append(*fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
-            REQUIRE(frame.Commit().HasValue());
-        };
-        fixture.collector.BeginFrame(1);
-        sample(port, projection);
+        fixture.CommitProjection(1, port, projection);
         {
             // Same authored category does not grant a different context incarnation this player's live press.
             auto foreign = fixture.router.PushContext(fixture.action.context, Input::InputContextKind::Gameplay);
             CHECK_FALSE(fixture.router.ReadAction(foreign, fixture.action.id, headsetPlayer).down);
         }
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).down);
-        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).pressed);
+        headsetCommands.Capture(fixture.router, fixture.context, headsetPlayer);
         CHECK(fixture.router.PlayerForKeyboardMouse() == otherPlayer);
         fixture.router.AssignKeyboardMouse(Input::PlayerId{4});
-        fixture.collector.BeginFrame(2);
-        sample(port, projection);
+        fixture.CommitProjection(2, port, projection);
+        headsetCommands.Capture(fixture.router, fixture.context, headsetPlayer);
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).down);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, Input::PlayerId{4}).down);
 
@@ -136,13 +140,16 @@ namespace Horo::XR {
         fixture.router.BeginFrame(fixture.collector.Commit());
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).released);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).released);
+        headsetCommands.Capture(fixture.router, fixture.context, headsetPlayer);
+        CHECK(headsetCommands.Consume(41) == Input::GameplayInputFrame{.tick = 41});
 
         auto replacement = XRInputProjection::Create(replacementPort.Value(), fixture.session, fixture.bindings, 4);
         REQUIRE(replacement.HasValue());
-        fixture.collector.BeginFrame(4);
-        sample(replacementPort.Value(), replacement.Value());
+        fixture.CommitProjection(4, replacementPort.Value(), replacement.Value());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).down);
-        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).pressed);
+        replacementCommands.Capture(fixture.router, fixture.context, otherPlayer);
+        CHECK(replacementCommands.Consume(42).jumpPressed);
+        CHECK(replacementCommands.Consume(43) == Input::GameplayInputFrame{.tick = 43});
     }
 
     TEST_CASE("XR input preparation binds its same reservation only after canonical session issuance", "[unit][xr][input]") {

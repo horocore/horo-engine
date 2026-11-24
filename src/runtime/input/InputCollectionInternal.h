@@ -28,6 +28,7 @@ namespace Horo::Input {
             std::size_t count{};
             bool retiring{};
             bool neutralCommitted{};
+            bool committed{}; /**< Still represented in the last committed action projection. */
         };
 
         struct Entry final {
@@ -58,7 +59,12 @@ namespace Horo::Input {
         void Reconfigure() noexcept;
         void ReclaimNeutral() noexcept;
         void CommitEmpty() noexcept;
+        /** @brief Checks whether one registered action still belongs to the current routing authority. */
+        [[nodiscard]] bool SourceCurrent(const Source &source, std::uint64_t generation) const noexcept;
         void CommitValues(bool focused) noexcept;
+        /** @brief Copies the covered generations in stable registration slot order. */
+        [[nodiscard]] std::array<std::uint64_t, MaximumCollectedInputSources> CommittedGenerations(
+            std::uint64_t context, std::optional<PlayerId> player) const noexcept;
         void Accumulate(std::uint64_t context, std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
         InputRouter *router;
         const std::thread::id thread{std::this_thread::get_id()};
