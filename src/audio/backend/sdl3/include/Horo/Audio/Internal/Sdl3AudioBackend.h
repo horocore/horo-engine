@@ -54,6 +54,7 @@ namespace Horo::Audio::Backend {
     struct Sdl3CaptureReadout final {
         AudioCaptureRead status{};
         std::uint64_t droppedFrames{};
+        std::optional<AudioCapturedBlock> latestDrop; /**< Timing only. May be empty while a callback reports overflow. */
     };
 
     /** @brief Callback evidence for the current capture generation. */

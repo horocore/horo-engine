@@ -100,6 +100,9 @@ consumers. The callback never blocks, allocates, logs, waits for output/network/
 Speech/Editor, or calls consumers. Overrun policy is explicit: drop oldest or
 newest complete block, insert a discontinuity marker, increment bounded counters,
 and notify control. It never overwrites a leased block or claims continuity.
+Consumers can read the latest discarded block's sample position and timestamp
+even if no later block reaches the queue. This metadata read does not copy PCM
+or wait for the producer.
 
 Consumers obtain leases or bounded copied reads with independent cursors and
 backpressure. A slow NET/Speech/recording consumer cannot block capture or output;

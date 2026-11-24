@@ -305,7 +305,9 @@ namespace Horo::Audio::Backend {
             return Output::Failure(MakeError(*failure));
         }
         auto &buffer = capture.stream->Buffer();
-        return Output::Success({buffer.TryRead(block, pcm), buffer.DroppedFrames()});
+        const auto status = buffer.TryRead(block, pcm);
+        const auto latestDrop = buffer.LatestDroppedBlock();
+        return Output::Success({status, buffer.DroppedFrames(), latestDrop});
     }
 
     /** @copydoc Sdl3AudioBackend::StopCapture */

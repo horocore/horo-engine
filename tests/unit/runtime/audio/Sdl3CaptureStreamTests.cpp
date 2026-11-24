@@ -38,7 +38,7 @@ namespace Horo::Audio::Backend {
             while (std::chrono::steady_clock::now() < deadline) {
                 const auto read = backend.ReadCapture(generation, ignored, {});
                 REQUIRE(read.HasValue());
-                if (read.Value().droppedFrames != 0)
+                if (read.Value().latestDrop)
                     return read.Value();
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
@@ -67,6 +67,9 @@ namespace Horo::Audio::Backend {
             const auto full = WaitForOverflow(backend, descriptor.generation);
             CHECK(full.status == AudioCaptureRead::InsufficientSpace);
             CHECK(full.droppedFrames > 0);
+            REQUIRE(full.latestDrop);
+            CHECK(full.latestDrop->start.clockDomain == descriptor.clockDomain);
+            CHECK(full.latestDrop->droppedFramesBefore + full.latestDrop->frames <= full.droppedFrames);
             const auto activity = backend.CaptureActivity();
             CHECK(activity.state == Sdl3CaptureActivityState::Capturing);
             CHECK(activity.generation == descriptor.generation);
@@ -92,6 +95,9 @@ namespace Horo::Audio::Backend {
             CHECK(second.sequence == 2);
             CHECK(second.start.nanoseconds - first.start.nanoseconds ==
                   std::uint64_t{first.frames} * 1'000'000'000 / descriptor.format.sampleRate);
+            CHECK(full.latestDrop->sequence > second.sequence);
+            CHECK(full.latestDrop->start.nanoseconds - first.start.nanoseconds ==
+                  full.latestDrop->firstFrame * 1'000'000'000 / descriptor.format.sampleRate);
             const auto afterGap = WaitForBlock(backend, descriptor.generation, pcm);
             CHECK(afterGap.sequence > second.sequence + 1);
             CHECK(afterGap.firstFrame == second.firstFrame + second.frames + afterGap.droppedFramesBefore);

@@ -39,6 +39,45 @@ namespace Horo::Audio::Backend {
         alignas(64) std::atomic<std::uint32_t> read{};
         std::atomic<bool> cancelled{};
         std::atomic<std::uint64_t> dropped{};
+
+        // Only the producer writes overflow metadata. Readers attempt one coherent snapshot and never wait.
+        struct OverflowPublication final {
+            std::atomic<bool> updating{};
+            std::atomic<std::uint64_t> sequence{};
+            std::atomic<std::uint64_t> nanoseconds{};
+            std::atomic<std::uint64_t> firstFrame{};
+            std::atomic<std::uint64_t> droppedBefore{};
+            std::atomic<std::uint32_t> frames{};
+
+            /** @brief Publishes the latest discarded block without retaining its PCM. */
+            void Publish(const AudioCapturedBlock &block) noexcept {
+                updating.store(true);
+                nanoseconds.store(block.start.nanoseconds);
+                firstFrame.store(block.firstFrame);
+                droppedBefore.store(block.droppedFramesBefore);
+                frames.store(block.frames);
+                sequence.store(block.sequence);
+                updating.store(false);
+            }
+
+            /** @brief Observes all fields from one nonrepeating callback sequence, or discards a racing read. */
+            [[nodiscard]] std::optional<AudioCapturedBlock> Observe(const std::uint64_t clockDomain) const noexcept {
+                const auto observed = sequence.load();
+                if (observed == 0 || updating.load())
+                    return std::nullopt;
+                const AudioCapturedBlock snapshot{{clockDomain, nanoseconds.load()},
+                                                  firstFrame.load(),
+                                                  observed,
+                                                  droppedBefore.load(),
+                                                  frames.load()};
+                if (updating.load() || sequence.load() != observed)
+                    return std::nullopt;
+                return snapshot;
+            }
+        };
+
+        OverflowPublication overflow;
+
         // Only the producer reads or writes source chronology.
         std::uint64_t sequence{};
         std::uint64_t nextFrame{};
@@ -64,9 +103,10 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief One producer serializes overflow; the observer only reads the resulting cumulative value. */
-        void CountDrop(const std::uint32_t frames) noexcept {
-            const auto total = dropped.load();
-            dropped.store(total + std::min<std::uint64_t>(frames, MaximumFrameIndex - total));
+        void CountDrop(const AudioCapturedBlock &block) noexcept {
+            const auto previous = block.droppedFramesBefore;
+            dropped.store(previous + std::min<std::uint64_t>(block.frames, MaximumFrameIndex - previous));
+            overflow.Publish(block);
         }
     };
 
@@ -111,13 +151,14 @@ namespace Horo::Audio::Backend {
         state.nextFrame = firstFrame + frames;
         state.previousStart = start.nanoseconds;
         const auto write = state.write.load();
+        const AudioCapturedBlock block{start, firstFrame, state.sequence, state.dropped.load(), frames};
         if (write - state.read.load() >= state.descriptor.slots) {
-            state.CountDrop(frames);
+            state.CountDrop(block);
             return Full;
         }
         const auto slot = write & (state.descriptor.slots - 1);
         std::ranges::copy(pcm, state.samples.data() + slot * state.samplesPerSlot);
-        state.blocks[slot] = {start, firstFrame, state.sequence, state.dropped.load(), frames};
+        state.blocks[slot] = block;
         state.write.store(write + 1);
         return Accepted;
     }
@@ -152,6 +193,11 @@ namespace Horo::Audio::Backend {
     /** @copydoc AudioCaptureBuffer::DroppedFrames */
     std::uint64_t AudioCaptureBuffer::DroppedFrames() const noexcept {
         return state_ ? state_->dropped.load() : 0;
+    }
+
+    /** @copydoc AudioCaptureBuffer::LatestDroppedBlock */
+    std::optional<AudioCapturedBlock> AudioCaptureBuffer::LatestDroppedBlock() const noexcept {
+        return state_ ? state_->overflow.Observe(state_->descriptor.clockDomain) : std::nullopt;
     }
 
     /** @copydoc AudioCaptureBuffer::Cancel */

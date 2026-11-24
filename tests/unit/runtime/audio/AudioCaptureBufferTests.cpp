@@ -30,6 +30,22 @@ namespace Horo::Audio::Backend {
             return std::move(result).Value();
         }
 
+        /** @brief Checks the exact timeline emitted by the concurrent producer fixture. */
+        bool MatchesTestTimeline(const AudioCapturedBlock &block) {
+            return block.sequence == block.firstFrame + 1 && block.start.nanoseconds == block.firstFrame * 20'833;
+        }
+
+        /** @brief Checks that accepted PCM is still paired with the same sequence and timestamp. */
+        bool MatchesTestSamples(const AudioCapturedBlock &block, const std::array<AudioSample, 2> &pcm, const std::uint64_t previous) {
+            const auto expected = static_cast<float>(block.firstFrame);
+            return block.sequence > previous && MatchesTestTimeline(block) && pcm[0] == expected && pcm[1] == -expected;
+        }
+
+        /** @brief Checks coherent timing and cumulative counts for one observed overflow. */
+        bool MatchesTestOverflow(const AudioCapturedBlock &block, const std::uint64_t total) {
+            return MatchesTestTimeline(block) && block.frames == 1 && block.droppedFramesBefore < total;
+        }
+
         TEST_CASE("Capture overflow drops the newest whole block and preserves the next source timestamp", "[audio][capture]") {
             auto buffer = MakeBuffer();
             const std::array<AudioSample, 4> stereo{0.5F, -0.25F, 0.25F, -0.5F};
@@ -83,6 +99,27 @@ namespace Horo::Audio::Backend {
             CHECK(buffer.DroppedFrames() == 0);
         }
 
+        TEST_CASE("Capture terminal overflow retains timestamp and frame position without PCM", "[audio][capture]") {
+            auto buffer = MakeBuffer();
+            const std::array<AudioSample, 2> stereo{0.5F, -0.5F};
+            CHECK_FALSE(buffer.LatestDroppedBlock());
+            REQUIRE(buffer.TryWrite({5, 10}, 2, 1, stereo) == AudioCaptureWrite::Accepted);
+            REQUIRE(buffer.TryWrite({5, 20}, 3, 1, stereo) == AudioCaptureWrite::Accepted);
+            REQUIRE(buffer.TryWrite({5, 30}, 4, 1, stereo) == AudioCaptureWrite::Full);
+            REQUIRE(buffer.TryWrite({5, 50}, 8, 1, stereo) == AudioCaptureWrite::Full);
+            buffer.Cancel();
+
+            const auto lost = buffer.LatestDroppedBlock();
+            REQUIRE(lost);
+            CHECK(lost->start.clockDomain == 5);
+            CHECK(lost->start.nanoseconds == 50);
+            CHECK(lost->firstFrame == 8);
+            CHECK(lost->sequence == 4);
+            CHECK(lost->frames == 1);
+            CHECK(lost->droppedFramesBefore == 1);
+            CHECK(buffer.DroppedFrames() == 2);
+        }
+
         TEST_CASE("Capture preparation rejects over-budget or invalid fixed storage", "[audio][capture]") {
             auto spec = Descriptor();
             spec.budgetBytes = 1;
@@ -102,6 +139,7 @@ namespace Horo::Audio::Backend {
             AudioCapturedBlock block;
             std::array<AudioCaptureWrite, 3> writes;
             AudioCaptureRead read{};
+            std::optional<AudioCapturedBlock> lost;
             Tests::AllocationProbe::Measurement measured;
             {
                 Tests::AllocationProbe::ScopedMeasurement probe;
@@ -109,12 +147,15 @@ namespace Horo::Audio::Backend {
                 writes[1] = buffer.TryWrite({5, 20'833}, 1, 1, stereo);
                 writes[2] = buffer.TryWrite({5, 41'666}, 2, 1, stereo);
                 read = buffer.TryRead(block, output);
+                lost = buffer.LatestDroppedBlock();
                 measured = probe.Snapshot();
             }
             CHECK(writes[0] == AudioCaptureWrite::Accepted);
             CHECK(writes[1] == AudioCaptureWrite::Accepted);
             CHECK(writes[2] == AudioCaptureWrite::Full);
             CHECK(read == AudioCaptureRead::Copied);
+            REQUIRE(lost);
+            CHECK(lost->firstFrame == 2);
             CHECK(measured.requests == 0);
         }
 
@@ -135,12 +176,13 @@ namespace Horo::Audio::Backend {
             bool exact = true;
             while (std::chrono::steady_clock::now() < deadline) {
                 const bool done = finished.load();
+                if (const auto lost = buffer.LatestDroppedBlock()) {
+                    exact = exact && MatchesTestOverflow(*lost, buffer.DroppedFrames());
+                }
                 AudioCapturedBlock block;
                 std::array<AudioSample, 2> pcm{};
                 if (buffer.TryRead(block, pcm) == AudioCaptureRead::Copied) {
-                    exact = exact && block.sequence > previous && block.sequence == block.firstFrame + 1 &&
-                            block.start.nanoseconds == block.firstFrame * 20'833 && pcm[0] == static_cast<float>(block.firstFrame) &&
-                            pcm[1] == -static_cast<float>(block.firstFrame);
+                    exact = exact && MatchesTestSamples(block, pcm, previous);
                     previous = block.sequence;
                     ++consumed;
                 } else if (done) {

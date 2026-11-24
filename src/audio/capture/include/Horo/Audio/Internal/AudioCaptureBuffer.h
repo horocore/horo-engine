@@ -5,6 +5,7 @@
 #include "Horo/Audio/AudioFormat.h"
 
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace Horo::Audio::Backend {
@@ -84,6 +85,11 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] const AudioCaptureBufferDescriptor *Descriptor() const noexcept;
         /** @brief Returns the cumulative saturating overflow frame count, including drops after the last queued block. */
         [[nodiscard]] std::uint64_t DroppedFrames() const noexcept;
+        /** @brief Reads the last discarded block's timing without copying PCM or waiting for the producer.
+         * @return Coherent timing from the latest observed overflow, or empty before overflow or during a concurrent update.
+         * @details The metadata remains readable after Cancel while the control owner retains the buffer.
+         */
+        [[nodiscard]] std::optional<AudioCapturedBlock> LatestDroppedBlock() const noexcept;
         /** @brief Permanently closes reads and writes to this generation. Storage retires after owners detach. */
         void Cancel() noexcept;
 
