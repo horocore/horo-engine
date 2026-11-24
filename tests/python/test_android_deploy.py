@@ -1023,7 +1023,7 @@ class AndroidDeployTests(unittest.TestCase):
             deadline = time.monotonic() + 1
             self.assertEqual(project.deploy_process(argv, deadline, retain_adb_server=True), (0, "inventory"))
             start.assert_called_once_with(argv, env=environment, capture_output=True, retain_children_on_success=True)
-            read.assert_called_once_with(child, deadline)
+            read.assert_called_once_with(child, deadline, retain_adb_server=True)
             start.side_effect = CleanupError("fixture retirement denied")
             with self.assertRaisesRegex(project.AndroidDeployError, "host_process_stop_unconfirmed"):
                 project.deploy_process(argv, deadline)
@@ -1043,9 +1043,9 @@ class AndroidDeployTests(unittest.TestCase):
         read = project.read_deploy_process
         child_handle = None
 
-        def observe(process, deadline):
+        def observe(process, deadline, **options):
             nonlocal child_handle
-            status, output = read(process, deadline)
+            status, output = read(process, deadline, **options)
             child_handle = kernel.OpenProcess(0x00100000, False, int(output.strip()))  # SYNCHRONIZE
             self.assertTrue(child_handle)
             self.assertEqual(kernel.WaitForSingleObject(child_handle, 0), 258)  # WAIT_TIMEOUT
@@ -1081,7 +1081,7 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(exit_statuses, [7])
 
     @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
-    def test_failed_host_command_retires_descendant_without_output_pipe(self):
+    def test_ordinary_host_command_retires_descendant_without_output_pipe(self):
         signal_group = os.killpg
         signals = []
 
@@ -1089,13 +1089,24 @@ class AndroidDeployTests(unittest.TestCase):
             signal_group(pid, signal_number)
             signals.append(signal_number)
 
-        script = ("import os, time\n"
+        script = ("import os, sys, time\n"
                   "if os.fork() == 0:\n"
                   "    os.close(1); os.close(2); time.sleep(5); os._exit(0)\n"
-                  "raise SystemExit(7)\n")
-        with patch.object(os, "killpg", side_effect=record_and_stop):
-            self.assertEqual(project.deploy_process([sys.executable, "-c", script], time.monotonic() + 5), (7, ""))
-        self.assertEqual(signals, [project.signal.SIGKILL])
+                  "raise SystemExit(int(sys.argv[1]))\n")
+        for status in (0, 7):
+            with self.subTest(status=status), patch.object(os, "killpg", side_effect=record_and_stop):
+                signals.clear()
+                command = [sys.executable, "-c", script, str(status)]
+                self.assertEqual(project.deploy_process(command, time.monotonic() + 5), (status, ""))
+                self.assertEqual(signals, [project.signal.SIGKILL])
+
+    @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
+    def test_only_successful_inventory_may_retain_its_server(self):
+        for status in (0, 7):
+            with self.subTest(status=status), patch.object(os, "killpg", wraps=os.killpg) as stop:
+                command = [sys.executable, "-c", "import sys; sys.exit(int(sys.argv[1]))", str(status)]
+                self.assertEqual(project.deploy_process(command, time.monotonic() + 5, retain_adb_server=True), (status, ""))
+                self.assertEqual(stop.call_count, int(status != 0))
 
     @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
     def test_deadline_retires_output_owner_after_group_leader_exits(self):

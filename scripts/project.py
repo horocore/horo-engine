@@ -1025,13 +1025,14 @@ def stop_deploy_process(process: subprocess.Popen, *, leader_exited: bool = Fals
         raise AndroidDeployError("host_process_stop_unconfirmed") from None
 
 
-def wait_deploy_status(process: subprocess.Popen, deadline: float) -> int:
-    """Retire the group of a failed POSIX command before releasing its leader PID."""
+def wait_deploy_status(process: subprocess.Popen, deadline: float, *, retain_adb_server: bool = False) -> int:
+    """Retire the POSIX group before reaping its leader unless successful inventory owns a daemon."""
     if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
         while True:
             exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
             if exited is not None:
-                if exited.si_code != os.CLD_EXITED or exited.si_status != 0:
+                successful_inventory = retain_adb_server and exited.si_code == os.CLD_EXITED and exited.si_status == 0
+                if not successful_inventory:
                     stop_deploy_process(process, leader_exited=True)
                 break
             remaining = deadline - time.monotonic()
@@ -1070,10 +1071,10 @@ def deploy_process(command: list[str], deadline: float, *, retain_adb_server: bo
     if deadline <= time.monotonic():
         raise AndroidDeployError("deadline_exceeded")
     with owned_deploy_process(command, retain_adb_server) as process:
-        return read_deploy_process(process, deadline)
+        return read_deploy_process(process, deadline, retain_adb_server=retain_adb_server)
 
 
-def read_deploy_process(process: subprocess.Popen, deadline: float) -> tuple[int, str]:
+def read_deploy_process(process: subprocess.Popen, deadline: float, *, retain_adb_server: bool = False) -> tuple[int, str]:
     """Read only the owned command's bounded output and terminal status."""
     output: Queue[bytes | OSError] = Queue(maxsize=1)
 
@@ -1092,7 +1093,7 @@ def read_deploy_process(process: subprocess.Popen, deadline: float) -> tuple[int
             raise AndroidDeployError("host_output_unavailable") from None
         if len(captured) > DEPLOY_CAPTURE_BYTES:
             raise AndroidDeployError("host_output_limit")
-        status = wait_deploy_status(process, deadline)
+        status = wait_deploy_status(process, deadline, retain_adb_server=retain_adb_server)
         return status, captured.decode("utf-8", errors="replace")
     except (Empty, subprocess.TimeoutExpired):
         raise AndroidDeployError("deadline_exceeded") from None

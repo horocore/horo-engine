@@ -340,12 +340,13 @@ termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.
 On POSIX, an output timeout stops the admitted host command's process group
 even if its leader exited while a descendant still held the output pipe.
-With non-reaping child status observation, a failed exit also stops that group
-before the leader PID can be reused, including when descendants closed stdout.
+With non-reaping child status observation, the host stops the command's group
+before releasing its leader PID on both successful and failed exits, including
+when descendants closed stdout.
 On Windows, the host assigns each suspended command to a Job Object before
-resuming it. Timeout, output failure, cancellation, and a failed command retire
-its process tree. A successful initial ADB inventory may retain the daemon it
-started so subsequent commands can use the same admitted device transport.
+resuming it and retires the process tree when the command ends. On both hosts,
+only a successful initial ADB inventory may retain the daemon it started so
+subsequent commands can use the same admitted device transport.
 
 For the qualification packages, `python scripts/project.py android-deploy`
 takes the existing signed package output directory, declared profile, Android
