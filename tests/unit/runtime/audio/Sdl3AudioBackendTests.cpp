@@ -243,14 +243,16 @@ namespace Horo::Audio::Backend {
             REQUIRE(catalog.devices.front().preferredFormat);
             REQUIRE(first.Value().changes.size() == catalog.devices.size());
             CHECK(catalog.owner == Owner());
-            CHECK(catalog.permission == AudioCapturePermission::Unknown);
+            CHECK(catalog.permission == AudioCapturePermission::NotRequired);
             const auto system = ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Multimedia);
             REQUIRE(system.status == AudioDeviceResolutionStatus::Resolved);
             REQUIRE(first.Value().defaultChanges[1]);
             CHECK(first.Value().defaultChanges[1]->role == AudioDefaultDeviceRole::Multimedia);
             CHECK_FALSE(first.Value().defaultChanges[1]->previous);
             CHECK(first.Value().defaultChanges[1]->current == system.device);
-            CHECK_FALSE(first.Value().permissionChange);
+            REQUIRE(first.Value().permissionChange);
+            CHECK(first.Value().permissionChange->previous == AudioCapturePermission::Unknown);
+            CHECK(first.Value().permissionChange->current == AudioCapturePermission::NotRequired);
             const auto endpoint = std::ranges::find(catalog.devices, system.device, &AudioDiscoveredCaptureDevice::id);
             REQUIRE(endpoint != catalog.devices.end());
             CHECK(endpoint->deviceClass == AudioDeviceClass::Virtual);

@@ -23,24 +23,16 @@ namespace Horo::Audio::Backend {
             return std::string{name.substr(0, length)};
         }
 
-        /** @brief Observes permission only for a driver that uses the native microphone. */
-        AudioCapturePermission CapturePermission() noexcept {
-#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
-            if (const char *driver = SDL_GetCurrentAudioDriver(); driver && std::string_view{driver} == "coreaudio")
-                return Sdl3Detail::ReadMacCapturePermission();
-#endif
-            return AudioCapturePermission::Unknown;
-        }
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::Impl::BindCaptureEndpoint */
     AudioCaptureDeviceId Sdl3AudioBackend::Impl::BindCaptureEndpoint(const SDL_AudioDeviceID native,
                                                                      std::vector<CaptureDeviceBinding> &bindings,
                                                                      std::uint32_t &nextSlot) const {
-        const auto existing = std::ranges::find(captureDevices, native, &CaptureDeviceBinding::native);
-        if (existing == captureDevices.end() && nextSlot == 0)
+        const auto existing = std::ranges::find(capture.devices, native, &CaptureDeviceBinding::native);
+        if (existing == capture.devices.end() && nextSlot == 0)
             return {};
-        const auto id = existing != captureDevices.end() ? existing->horo : AudioCaptureDeviceId{config.owner, nextSlot++, 1};
+        const auto id = existing != capture.devices.end() ? existing->horo : AudioCaptureDeviceId{config.owner, nextSlot++, 1};
         bindings.emplace_back(id, native);
         return id;
     }
@@ -102,9 +94,9 @@ namespace Horo::Audio::Backend {
 
         AudioCaptureDeviceSnapshot candidate{.owner = config.owner,
                                              .backend = AudioBackendKind::SDL3Audio,
-                                             .revision = captureSnapshot.revision,
-                                             .permission = CapturePermission()};
-        auto nextSlot = nextCaptureSlot;
+                                             .revision = capture.snapshot.revision,
+                                             .permission = Sdl3Detail::CapturePermission()};
+        auto nextSlot = capture.nextSlot;
         std::vector<CaptureDeviceBinding> bindings;
         if (const auto read = ReadCaptureEndpoints(ids, bindings, nextSlot, candidate); read.HasError())
             return Output::Failure(read.ErrorValue());
@@ -116,19 +108,19 @@ namespace Horo::Audio::Backend {
                                                                                   std::vector<CaptureDeviceBinding> bindings,
                                                                                   const std::uint32_t nextSlot) {
         using Output = Result<AudioCaptureDiscovery>;
-        if (candidate.devices == captureSnapshot.devices && candidate.permission == captureSnapshot.permission &&
-            candidate.defaults.multimedia == captureSnapshot.defaults.multimedia)
+        if (candidate.devices == capture.snapshot.devices && candidate.permission == capture.snapshot.permission &&
+            candidate.defaults.multimedia == capture.snapshot.defaults.multimedia)
             return Output::Success({std::move(candidate), {}});
         if (candidate.revision == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
 
         ++candidate.revision;
-        auto result = AudioCaptureDiscovery::Between(captureSnapshot, candidate);
+        auto result = AudioCaptureDiscovery::Between(capture.snapshot, candidate);
         if (result.HasError())
             return result;
-        captureSnapshot = std::move(candidate);
-        captureDevices = std::move(bindings);
-        nextCaptureSlot = nextSlot;
+        capture.snapshot = std::move(candidate);
+        capture.devices = std::move(bindings);
+        capture.nextSlot = nextSlot;
         return result;
     }
 

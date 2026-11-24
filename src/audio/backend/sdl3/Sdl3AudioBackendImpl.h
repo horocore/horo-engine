@@ -2,6 +2,7 @@
 
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Sdl3CaptureStream.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -92,10 +93,7 @@ namespace Horo::Audio::Backend {
             bool operator==(const DeviceBinding &) const noexcept = default;
         };
 
-        struct CaptureDeviceBinding final {
-            AudioCaptureDeviceId horo;
-            SDL_AudioDeviceID native{};
-        };
+        using CaptureDeviceBinding = Sdl3Detail::CaptureDeviceBinding;
 
         struct NativeOpenFacts final {
             SDL_AudioSpec actual{};
@@ -160,9 +158,10 @@ namespace Horo::Audio::Backend {
 
         explicit Impl(const Sdl3AudioBackendConfig &value) noexcept
             : config(value), defaultDevice{value.owner, 1, 1},
-              captureSnapshot{.owner = value.owner, .backend = AudioBackendKind::SDL3Audio, .revision = 1} {}
+              capture{.snapshot = {.owner = value.owner, .backend = AudioBackendKind::SDL3Audio, .revision = 1}} {}
 
         ~Impl() {
+            capture.stream.reset();
             if (stream) {
                 if (logicalDevice)
                     SDL_PauseAudioDevice(logicalDevice);
@@ -179,9 +178,7 @@ namespace Horo::Audio::Backend {
         AudioDeviceId defaultDevice;
         std::vector<DeviceBinding> devices;
         AudioDeviceSnapshot snapshot;
-        AudioCaptureDeviceSnapshot captureSnapshot;
-        std::vector<CaptureDeviceBinding> captureDevices;
-        std::uint32_t nextCaptureSlot{1};
+        Sdl3Detail::CaptureControl capture;
         OperationState operations;
         std::uint64_t discoveryRevision{1};
         std::uint32_t nextDeviceSlot{2};
@@ -592,7 +589,7 @@ namespace Horo::Audio::Backend {
             epoch = {};
             format = {};
             callbackFrames = 0;
-            if (initialized) {
+            if (initialized && !capture.stream) {
                 SDL_QuitSubSystem(SDL_INIT_AUDIO);
                 initialized = false;
             }

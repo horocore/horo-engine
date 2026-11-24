@@ -1509,13 +1509,14 @@ target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::
 if(HORO_BUILD_AUDIO_SDL3)
     add_library(HoroAudioSdl3 STATIC
             audio/backend/sdl3/Sdl3AudioBackend.cpp
+            audio/backend/sdl3/Sdl3CaptureStream.cpp
     )
     add_library(HoroEngine::AudioSdl3 ALIAS HoroAudioSdl3)
     target_compile_features(HoroAudioSdl3 PUBLIC cxx_std_20)
     target_include_directories(HoroAudioSdl3 PUBLIC
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
     target_link_libraries(HoroAudioSdl3
-            PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
+            PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands HoroAudioCaptureBuffer
             PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         set(_HORO_SDL3_MAC_CAPTURE_SOURCE audio/backend/sdl3/Sdl3MacCapturePermission.mm)

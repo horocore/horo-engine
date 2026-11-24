@@ -2366,6 +2366,17 @@ sample-frame gaps, and the counter exposes trailing drops with no later block.
 A short destination leaves the block queued. Cancellation closes admission
 while the host retains storage until both participants detach.
 
+SDL3 can attach the buffer to an explicitly selected recording endpoint. It
+requires a matching host grant and current platform permission before open.
+The recording postmix callback copies the selected mono or stereo float PCM
+without a bound SDL stream queue. SDL supplies no hardware timestamp here.
+The callback estimates the start on the SDL monotonic clock from the first
+buffer arrival, then timestamps later blocks by source sample position.
+Audio control checks permission and endpoint health before delivering blocks
+and detaches the callback on cancellation. A virtual system default is
+available for discovery but capture requires an explicit endpoint to prevent
+silent hardware changes.
+
 Audio does not own speech recognition, language inference, model providers,
 agent intent, or network voice transport. A provider-neutral speech service may
 consume an admitted capture stream and publish partial/final transcript results.

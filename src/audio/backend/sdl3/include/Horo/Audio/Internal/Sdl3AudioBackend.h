@@ -6,6 +6,7 @@
 
 #include "Horo/Audio/Internal/AudioBackend.h"
 #include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
+#include "Horo/Audio/Internal/AudioCaptureBuffer.h"
 
 #include <cstdint>
 #include <memory>
@@ -17,6 +18,23 @@ namespace Horo::Audio::Backend {
     struct Sdl3AudioBackendConfig final {
         AudioRuntimeId owner;
         std::uint64_t clockDomain{};
+    };
+
+    /** @brief Current host admission for a single explicit device and capture generation.
+     * @details The host owns purpose, consent and revocation. Backend verifies the exact request
+     * and current observed platform permission. Zero authority revision is ungranted.
+     */
+    struct Sdl3CaptureGrant final {
+        AudioCaptureDeviceId device;
+        std::uint64_t discoveryRevision{};
+        std::uint64_t generation{};
+        std::uint64_t authorityRevision{};
+    };
+
+    /** @brief One bounded consumer copy and the latest observed ring overflow count. */
+    struct Sdl3CaptureReadout final {
+        AudioCaptureRead status{};
+        std::uint64_t droppedFrames{};
     };
 
     /** @brief Backend-local facts; parent AudioRuntime state remains control-owned. */
@@ -71,6 +89,28 @@ namespace Horo::Audio::Backend {
          * refresh. This call does not consume SDL's shared event queue or start capture.
          */
         [[nodiscard]] Result<AudioCaptureDiscovery> DiscoverCapture() override;
+
+        /** @brief Opens one explicitly selected recording endpoint on Audio control.
+         * @param descriptor Immutable format, owner, clock and queue bounds.
+         * @param grant Exact host permission decision for this request.
+         * @return Success once callback admission opens, or a typed error. No prompt is requested.
+         */
+        [[nodiscard]] Result<void> StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant);
+
+        /** @brief Copies one captured block after checking native health and permission on Audio control.
+         * @param generation Exact active capture generation.
+         * @param block Destination written only on a successful copy. Timestamps use an SDL host-clock estimate.
+         * @param pcm Consumer-owned destination for interleaved float PCM.
+         * @return Copy status and loss count, or typed stale session, permission loss, device loss or callback fault.
+         */
+        [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, AudioCapturedBlock &block,
+                                                             std::span<AudioSample> pcm);
+
+        /** @brief Closes one generation, including host-driven revocation. Repeated stop for that generation succeeds.
+         * @param generation Previously started capture generation.
+         * @return Success after native detachment or a typed stale-generation error.
+         */
+        [[nodiscard]] Result<void> StopCapture(std::uint64_t generation);
 
         /** @copydoc AudioBackend::AcknowledgeCompletion */
         [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;

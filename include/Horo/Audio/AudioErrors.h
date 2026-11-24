@@ -58,6 +58,8 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor VoiceInvalidTransition;
     extern const ErrorCodeDescriptor VoiceAdmissionClosed;
     extern const ErrorCodeDescriptor CapabilityUnavailable;
+    extern const ErrorCodeDescriptor CapturePermissionDenied; /**< Capture admission is absent or no longer current. */
+    extern const ErrorCodeDescriptor CaptureDeviceLost;       /**< Active recording endpoint disappeared. */
     extern const ErrorCodeDescriptor OperationUnsupported;
     extern const ErrorCodeDescriptor OperationCancelled;
     extern const ErrorCodeDescriptor RuntimeInactive;

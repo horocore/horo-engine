@@ -893,6 +893,7 @@ horo_register_catch_test(HoroAudioNullTests LABELS "unit;audio;headless")
 if(HORO_BUILD_AUDIO_SDL3)
     add_executable(HoroAudioSdl3Tests
             unit/runtime/audio/Sdl3AudioBackendTests.cpp
+            unit/runtime/audio/Sdl3CaptureStreamTests.cpp
     )
     target_compile_features(HoroAudioSdl3Tests PRIVATE cxx_std_20)
     target_link_libraries(HoroAudioSdl3Tests PRIVATE HoroEngine::AudioSdl3)
