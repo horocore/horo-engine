@@ -260,9 +260,9 @@ namespace Horo::Editor {
             recovery_.reset();
     }
 
-    bool EditorLocalAgentHistory::Button(const ILocalizationService &locale, const char *key, bool enabled) const {
-        const auto label = LocalizedText(locale, key) + "##" + key;
-        return Ui::Button({.label = label.c_str(), .enabled = enabled});
+    bool EditorLocalAgentHistory::Button(const ILocalizationService &locale, const char *key, bool enabled) {
+        buttonLabel_.assign(LocalizedText(locale, key)).append("##").append(key);
+        return Ui::Button({.label = buttonLabel_.c_str(), .enabled = enabled});
     }
 
     bool EditorLocalAgentHistory::Queue(const Result<AgentHistoryOperationId> &operation, Action action,

@@ -3,6 +3,7 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPanel.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatchCheckpoint.h"
+#include "../../support/AllocationProbe.h"
 #include "../../support/OwnedTestDirectory.h"
 #include "../../support/SourceDocumentTestProject.h"
 #include "EditorWorkspaceViewModel.h"
@@ -329,6 +330,33 @@ namespace {
         }
     };
 #endif
+
+    TEST_CASE("Idle local chat keeps frame allocations bounded", "[editor][agent][gui][performance]") {
+        const auto *locale = GENERATE("en-US", "tr-TR");
+        LocalAgentFixture local{locale};
+        for (int warmup = 0; warmup < 8; ++warmup)
+            local.Draw(420);
+
+        constexpr std::size_t frames = 120;
+        Horo::Tests::AllocationProbe::Measurement idle;
+        {
+            const Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+            for (std::size_t frame = 0; frame < frames; ++frame)
+                local.agent.poll();
+            idle = measurement.Snapshot();
+        }
+        CHECK(idle.requests == 0);
+        Horo::Tests::AllocationProbe::Measurement visible;
+        {
+            const Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+            for (std::size_t frame = 0; frame < frames; ++frame)
+                local.Draw(420);
+            visible = measurement.Snapshot();
+        }
+        CAPTURE(locale, visible.requests, visible.requestedBytes);
+        CHECK(visible.requests <= 4 * frames);
+        CHECK(visible.requestedBytes <= 256 * frames);
+    }
 
     TEST_CASE("Local chat owns keyboard input only while its text field is presented", "[editor][agent][gui]") {
         LocalAgentFixture fixture{"en-US"};

@@ -4266,6 +4266,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorLocalAgentPanelRenderTests
         unit/editor/EditorLocalAgentPanelRenderTests.cpp
         unit/editor/SourceReviewConcurrencyTests.cpp
+        support/AllocationProbe.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPanel.cpp
         ../apps/HoroEditor/app/EditorCloudModelProfile.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPatch.cpp

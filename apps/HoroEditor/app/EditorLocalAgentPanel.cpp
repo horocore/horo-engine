@@ -467,11 +467,11 @@ namespace Horo::Editor {
                 contextProject_.clear();
             }
 
-            [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled) const {
+            [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled) {
                 const auto &visible = LocalizedText(locale, key);
-                const auto label = visible + "###" + key;
+                buttonLabel_.assign(visible).append("###").append(key);
                 const bool clicked =
-                    Ui::Button({.label = label.c_str(), .enabled = enabled, .style = {.width = Ui::StyleWidth::FillAvailable}});
+                    Ui::Button({.label = buttonLabel_.c_str(), .enabled = enabled, .style = {.width = Ui::StyleWidth::FillAvailable}});
                 if ((ImGui::IsItemFocused() || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) &&
                     ImGui::CalcTextSize(visible.c_str()).x + 2.0F * ImGui::GetStyle().FramePadding.x > ImGui::GetItemRectSize().x)
                     Ui::ShowTooltip(visible.c_str());
@@ -496,7 +496,7 @@ namespace Horo::Editor {
 
             /** @brief Presents the actual admitted scene query's phase in the current response. */
             void DrawSceneQueryActivity(const ILocalizationService &locale, const Theme::Fonts &fonts,
-                                        EditorWorkspaceViewCommandData &command) const {
+                                        EditorWorkspaceViewCommandData &command) {
                 if (!sceneQuery_)
                     return;
                 if (const auto *key = ScenePhaseKey(sceneQuery_->phase.load(std::memory_order_relaxed)))
@@ -1851,6 +1851,7 @@ namespace Horo::Editor {
             std::string model_;
             std::string prompt_;
             std::string response_;
+            std::string buttonLabel_; /**< Scratch for immediate-mode localized text and stable widget IDs. */
             std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles_;
             bool cloudMode_{};
             bool cloudProfileBusy_{};

@@ -80,7 +80,7 @@ namespace Horo::Editor {
             std::optional<Agent::AgentHistoryMessageState> pendingSettlement;
         };
 
-        [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled = true) const;
+        [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled = true);
         [[nodiscard]] bool Queue(const Result<Agent::AgentHistoryOperationId> &operation, Action action, std::uint64_t checkpointTime = 0);
         /** @brief Releases draft publication and advances a terminal outcome that arrived during the write. */
         void AdoptDraftReceipt(bool saved, std::uint64_t checkpointTime);
@@ -108,6 +108,7 @@ namespace Horo::Editor {
         std::optional<Deletion> deletion_;
         Agent::AgentConversationId selected_;
         std::string title_;
+        std::string buttonLabel_; /**< Scratch for localized history controls. */
         std::optional<std::string> export_;
         const char *status_{};
         bool managing_{};
