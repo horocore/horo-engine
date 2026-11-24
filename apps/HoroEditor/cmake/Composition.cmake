@@ -236,9 +236,17 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Applica
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
-foreach(preview_header IN ITEMS EnvironmentQueryPreviewPhysics.h EnvironmentQueryPreviewNavigation.h EditorInspectionPhysics.h)
-    file(GENERATE OUTPUT "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/${preview_header}"
-        CONTENT "#pragma once\n#include \"${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/${preview_header}\"\n")
+foreach(preview_header IN ITEMS
+        ai/queries/preview/EnvironmentQueryPreviewPhysics.h
+        ai/queries/preview/EnvironmentQueryPreviewNavigation.h
+        inspection/EditorInspectionPhysics.h)
+    set(preview_source "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/${preview_header}")
+    if(NOT EXISTS "${preview_source}")
+        message(FATAL_ERROR "Missing editor workspace preview header: ${preview_source}")
+    endif()
+    get_filename_component(preview_name "${preview_header}" NAME)
+    file(GENERATE OUTPUT "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/${preview_name}"
+        CONTENT "#pragma once\n#include \"${preview_source}\"\n")
 endforeach()
 configure_file(HoroEditor/composition/scene/EditorMountedWorldViewport.h
     "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorMountedWorldViewport.h" COPYONLY)

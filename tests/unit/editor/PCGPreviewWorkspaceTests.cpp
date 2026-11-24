@@ -1,5 +1,5 @@
 #include "PCGCanvasTestSupport.h"
-#include "editor/screens/workspace/PCGPreviewView.h"
+#include "editor/screens/workspace/pcg/preview/PCGPreviewView.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <cmath>

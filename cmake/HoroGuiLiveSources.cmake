@@ -1,11 +1,25 @@
 # Register drawing here; common host call sites dispatch without guards in GUI bodies.
 # Headers/state layouts remain host ABI: rebuild the editor after changing them.
 get_target_property(horo_gui_owned_sources HoroGui SOURCES)
+set(horo_workspace_live_view_sources
+    editor/screens/workspace/EditorWorkspaceView.cpp
+    editor/screens/workspace/ai/blackboard/EditorWorkspaceViewBlackboard.cpp
+    editor/screens/workspace/ai/decisions/graph/EditorWorkspaceViewDecisionGraph.cpp
+    editor/screens/workspace/extensions/ExtensionRecoveryView.cpp
+    editor/screens/workspace/extensions/activity/ExtensionActivityPlot.cpp
+    editor/screens/workspace/extensions/activity/ExtensionActivityView.cpp
+    editor/screens/workspace/pcg/EditorWorkspaceViewPCG.cpp
+    editor/screens/workspace/pcg/preview/PCGPreviewView.cpp
+    editor/screens/workspace/sequence/EditorWorkspaceViewSequence.cpp
+    editor/screens/workspace/terrain/workspace/EditorWorkspaceViewTerrain.cpp
+    editor/screens/workspace/ui_canvas/EditorWorkspaceViewUiCanvas.cpp
+    editor/screens/workspace/world/WorldLayerOutliner.cpp)
 set(HORO_GUI_LIVE_SHARED_SOURCES "")
 foreach(source IN LISTS horo_gui_owned_sources)
     # Presentation families share one compiled component implementation. Screen controllers,
     # theme/font ownership and native source-widget backends remain in the host.
-    if(source MATCHES "^editor/(design_system/|status_bar/|modals/|navigation/|pcg/|screens/workspace/(panels/|(EditorWorkspaceView[^/]*|[^/]*View|ExtensionActivityPlot|WorldLayerOutliner)\\.cpp)|source_editor/SourceEditorTools\\.cpp)")
+    if(source IN_LIST horo_workspace_live_view_sources OR
+            source MATCHES "^editor/(design_system/|status_bar/|modals/|navigation/|pcg/|screens/workspace/panels/|source_editor/SourceEditorTools\\.cpp)")
         list(APPEND HORO_GUI_LIVE_SHARED_SOURCES "${PROJECT_SOURCE_DIR}/src/${source}")
     endif()
 endforeach()

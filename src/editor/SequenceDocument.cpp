@@ -1,6 +1,6 @@
 #include "Horo/Editor/SequenceDocument.h"
 
-#include "SourceDocumentInternal.h"
+#include "source_document/SourceDocumentInternal.h"
 
 #include <algorithm>
 #include <cmath>

@@ -4,7 +4,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
-#include "editor/screens/workspace/ExtensionRecoveryView.h"
+#include "editor/screens/workspace/extensions/ExtensionRecoveryView.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>

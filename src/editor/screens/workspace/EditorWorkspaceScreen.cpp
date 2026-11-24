@@ -1,6 +1,6 @@
 #include "EditorWorkspaceScreen.h"
 
-#include "EditorWorkspaceInputRouting.h"
+#include "screen/EditorWorkspaceInputRouting.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -8,7 +8,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/PlatformServices/PlatformDiagnostics.h"
-#include "WorkspacePathText.h"
+#include "docking/WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 #include "editor/source_editor/SourceReviewOverlay.h"

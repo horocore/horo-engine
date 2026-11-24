@@ -4,7 +4,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
-#include "editor/screens/workspace/WorldLayerOutliner.h"
+#include "editor/screens/workspace/world/WorldLayerOutliner.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

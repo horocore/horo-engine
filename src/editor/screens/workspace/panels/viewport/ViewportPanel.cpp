@@ -7,7 +7,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
 #include "ViewportStreamingPreview.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/terrain/TerrainViewportTool.h"
 #include "visualizers/light/LightMarkerLayer.h"
 

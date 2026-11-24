@@ -1,6 +1,6 @@
 #include "Horo/Application/ProjectCompatibility.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
-#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"

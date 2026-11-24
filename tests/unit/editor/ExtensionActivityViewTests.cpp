@@ -14,7 +14,7 @@
 #include "editor/input/EditorInputActions.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/ExtensionActivityView.h"
+#include "editor/screens/workspace/extensions/activity/ExtensionActivityView.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>

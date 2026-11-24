@@ -1,0 +1,473 @@
+#include "ContentBrowserModel.h"
+
+#include "Horo/Assets/AssetImportMetadata.h"
+#include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
+#include "../../docking/WorkspacePathText.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <system_error>
+#include <utility>
+
+namespace Horo::Editor {
+    namespace {
+        constexpr std::uintmax_t kMaximumLegacyMetadataBytes = 1024U * 1024U;
+
+        [[nodiscard]] std::filesystem::path NormalizeAbsolute(const std::filesystem::path &path) {
+            std::error_code error;
+            std::filesystem::path absolutePath = std::filesystem::absolute(path, error);
+            if (error)
+                return {};
+            absolutePath = absolutePath.lexically_normal();
+
+            std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(absolutePath, error);
+            return error ? absolutePath : canonicalPath;
+        }
+
+        [[nodiscard]] bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate) {
+            return Horo::Foundation::Paths::HasPathPrefix(root, candidate);
+        }
+
+        [[nodiscard]] std::vector<ContentBrowserBreadcrumb> BuildBreadcrumbs(const std::filesystem::path &root,
+                                                                             const std::filesystem::path &current) {
+            std::vector<ContentBrowserBreadcrumb> breadcrumbs;
+            breadcrumbs.push_back(ContentBrowserBreadcrumb{
+                .label = WorkspacePathText(root.filename()),
+                .absolutePath = WorkspacePathText(root),
+            });
+            if (current == root)
+                return breadcrumbs;
+
+            std::filesystem::path accumulated = root;
+            const std::filesystem::path descendant = current.lexically_relative(root);
+            for (const auto &segment : descendant) {
+                if (segment.empty() || segment == ".")
+                    continue;
+                accumulated /= segment;
+                breadcrumbs.push_back(ContentBrowserBreadcrumb{
+                    .label = WorkspacePathText(segment),
+                    .absolutePath = WorkspacePathText(accumulated),
+                });
+            }
+            return breadcrumbs;
+        }
+
+        [[nodiscard]] std::string LowercaseExtension(const std::filesystem::path &path) {
+            std::string extension = WorkspacePathText(path.extension());
+            std::ranges::transform(extension, extension.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            return extension;
+        }
+
+        [[nodiscard]] std::string AssetDisplayName(const std::filesystem::path &path) {
+            std::filesystem::path displayPath = path.filename();
+            if (LowercaseExtension(displayPath) == ".horoasset")
+                displayPath.replace_extension();
+            if (displayPath.has_extension())
+                displayPath.replace_extension();
+            return WorkspacePathText(displayPath.filename());
+        }
+
+        [[nodiscard]] bool IsHiddenSidecar(const std::filesystem::path &path) {
+            const std::string extension = LowercaseExtension(path);
+            if (extension == ".meta" || WorkspacePathText(path.filename()).ends_with(".horo-source.lock"))
+                return true;
+            if (extension != ".horo")
+                return false;
+
+            std::error_code error;
+            std::filesystem::path sourcePath = path;
+            sourcePath.replace_extension();
+            return std::filesystem::is_regular_file(sourcePath, error) && !error;
+        }
+
+        struct LegacyMetadata {
+            std::string assetType;
+            std::filesystem::path absoluteMetadataPath;
+            std::string sourceExtension;
+        };
+
+        [[nodiscard]] std::optional<LegacyMetadata> ReadLegacyMetadata(const std::filesystem::path &assetPath) {
+            std::filesystem::path metadataPath = assetPath;
+            metadataPath += ".meta";
+            std::error_code error;
+            const std::uintmax_t size = std::filesystem::file_size(metadataPath, error);
+            if (error || size == 0 || size > kMaximumLegacyMetadataBytes)
+                return std::nullopt;
+
+            std::ifstream input(metadataPath, std::ios::binary);
+            if (!input)
+                return std::nullopt;
+            std::string contents(size, '\0');
+            input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+            if (input.gcount() != static_cast<std::streamsize>(contents.size()))
+                return std::nullopt;
+            try {
+                const nlohmann::json metadata = nlohmann::json::parse(contents);
+                if (!metadata.is_object() || !metadata.contains("type") || !metadata["type"].is_string())
+                    return std::nullopt;
+                std::string sourceExtension;
+                if (metadata.contains("sourceFile") && metadata["sourceFile"].is_string())
+                    sourceExtension = LowercaseExtension(metadata["sourceFile"].get<std::string>());
+                if (sourceExtension.starts_with('.'))
+                    sourceExtension.erase(sourceExtension.begin());
+                return LegacyMetadata{
+                    .assetType = metadata["type"].get<std::string>(),
+                    .absoluteMetadataPath = NormalizeAbsolute(metadataPath),
+                    .sourceExtension = std::move(sourceExtension),
+                };
+            } catch (const nlohmann::json::exception &) {
+                return std::nullopt;
+            }
+        }
+
+        [[nodiscard]] std::string ReadMetadataString(const std::filesystem::path &metadataPath, const std::string_view key) {
+            std::error_code error;
+            const std::uintmax_t size = std::filesystem::file_size(metadataPath, error);
+            if (error || size == 0 || size > kMaximumLegacyMetadataBytes)
+                return {};
+            std::ifstream input(metadataPath, std::ios::binary);
+            if (!input)
+                return {};
+            std::string contents(size, '\0');
+            input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+            if (input.gcount() != static_cast<std::streamsize>(contents.size()))
+                return {};
+            try {
+                const nlohmann::json metadata = nlohmann::json::parse(contents);
+                const auto found = metadata.find(key);
+                return found != metadata.end() && found->is_string() ? found->get<std::string>() : std::string{};
+            } catch (const nlohmann::json::exception &) {
+                return {};
+            }
+        }
+
+        [[nodiscard]] Assets::AssetPreviewFallback InferFallback(const std::string_view assetType) {
+            using enum Assets::AssetPreviewFallback;
+            if (assetType.find("mesh") != std::string_view::npos)
+                return Mesh;
+            if (assetType.find("texture") != std::string_view::npos || assetType.find("image") != std::string_view::npos) {
+                return Image;
+            }
+            if (assetType.find("audio") != std::string_view::npos)
+                return Audio;
+            return Generic;
+        }
+
+        [[nodiscard]] bool ContainsCaseInsensitive(const std::string_view text, const std::string_view needle) {
+            if (needle.empty())
+                return true;
+            if (needle.size() > text.size())
+                return false;
+            return std::ranges::search(text, needle, [](const char left, const char right) {
+                return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
+            }).begin() != text.end();
+        }
+
+        [[nodiscard]] int CompareCaseInsensitive(const std::string_view left, const std::string_view right) {
+            const auto [leftMismatch, rightMismatch] = std::ranges::mismatch(left, right, [](const char lhs, const char rhs) {
+                return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
+            });
+            if (leftMismatch == left.end() || rightMismatch == right.end()) {
+                if (left.size() == right.size())
+                    return left.compare(right);
+                return left.size() < right.size() ? -1 : 1;
+            }
+            const auto lhs = std::tolower(static_cast<unsigned char>(*leftMismatch));
+            const auto rhs = std::tolower(static_cast<unsigned char>(*rightMismatch));
+            return lhs < rhs ? -1 : 1;
+        }
+
+        void PopulateAssetEntryMetadata(ContentBrowserEntry &entry, const Assets::AssetRecord &record,
+
+                                        const std::filesystem::path &projectRoot) {
+            entry.assetId = record.id.ToString();
+            entry.assetType = record.type.Value();
+            entry.registered = true;
+            entry.registeredType = record.type;
+            const auto metadataPath = NormalizeAbsolute(Foundation::Paths::Resolve(projectRoot, record.metadataPath));
+            entry.absoluteMetadataPath = WorkspacePathText(metadataPath);
+            auto metadata = Assets::ReadAssetImportMetadata(metadataPath);
+            if (!metadata.HasValue()) {
+                entry.importerContributionId = ReadMetadataString(metadataPath, "importerContributionId");
+                return;
+            }
+            const Assets::AssetImportMetadata &provenance = metadata.Value();
+            entry.importerContributionId = provenance.importerContributionId;
+            entry.importerVersion = provenance.importerVersion;
+            entry.importerModuleId = provenance.importerModuleId;
+            entry.importerModuleVersion = provenance.importerModuleVersion;
+            entry.absoluteImportSourcePath = WorkspacePathText(provenance.absoluteSourcePath);
+            entry.sourceHash = provenance.sourceHash;
+            entry.lastImportReasons = provenance.lastImportReasons;
+            entry.dependencyCount = provenance.dependencies.size();
+
+            std::error_code sourceError;
+            const auto sourceStatus = std::filesystem::symlink_status(provenance.absoluteSourcePath, sourceError);
+            if (!sourceError && !std::filesystem::is_symlink(sourceStatus) && std::filesystem::is_regular_file(sourceStatus)) {
+                const std::uintmax_t sourceSize = std::filesystem::file_size(provenance.absoluteSourcePath, sourceError);
+                const auto sourceWriteTime = std::filesystem::last_write_time(provenance.absoluteSourcePath, sourceError);
+                entry.sourceChanged =
+                    !sourceError &&
+                    ((provenance.sourceByteSize != 0 && sourceSize != provenance.sourceByteSize) ||
+                     (provenance.sourceLastWriteTime != 0 && sourceWriteTime.time_since_epoch().count() != provenance.sourceLastWriteTime));
+            }
+        }
+
+        void PopulateAssetImporterContribution(ContentBrowserEntry &entry, const Assets::AssetImporterCatalogSnapshot *importerCatalog,
+                                               const std::string &legacySourceExtension) {
+            if (importerCatalog == nullptr || entry.assetType.empty())
+                return;
+
+            const auto parsedType = Assets::AssetTypeId::Parse(entry.assetType);
+            const Assets::AssetImporterContribution *contribution = nullptr;
+            if (!entry.importerContributionId.empty()) {
+                contribution = importerCatalog->FindById(entry.importerContributionId);
+            } else if (!legacySourceExtension.empty()) {
+                contribution = importerCatalog->FindContributionByExtension(legacySourceExtension);
+            } else if (parsedType.HasValue()) {
+                contribution = importerCatalog->FindPreviewContribution(parsedType.Value());
+            }
+            if (contribution == nullptr)
+                return;
+
+            entry.importerContributionId = contribution->contributionId;
+            if (entry.importerModuleId.empty())
+                entry.importerModuleId = contribution->moduleId;
+            if (entry.importerModuleVersion.empty())
+                entry.importerModuleVersion = contribution->moduleVersion;
+            if (entry.importerVersion.empty())
+                entry.importerVersion = contribution->version;
+            entry.activeImporterVersion = contribution->version;
+            entry.activeImporterModuleId = contribution->moduleId;
+            entry.activeImporterModuleVersion = contribution->moduleVersion;
+            entry.importerChanged = entry.importerVersion != contribution->version;
+            entry.moduleChanged =
+                entry.importerModuleId != contribution->moduleId || entry.importerModuleVersion != contribution->moduleVersion;
+            std::error_code sourceError;
+            const auto sourceStatus = std::filesystem::symlink_status(entry.absoluteImportSourcePath, sourceError);
+            entry.canReimport = !entry.absoluteImportSourcePath.empty() &&
+                                std::filesystem::path{entry.absoluteImportSourcePath}.is_absolute() && !sourceError &&
+                                !std::filesystem::is_symlink(sourceStatus) && std::filesystem::is_regular_file(sourceStatus);
+            entry.previewFallback = contribution->previewFallback == Assets::AssetPreviewFallback::Automatic
+                                        ? entry.previewFallback
+                                        : contribution->previewFallback;
+        }
+
+        [[nodiscard]] ContentBrowserEntry CreateAssetFileEntry(
+            const std::filesystem::directory_entry &diskEntry, const std::filesystem::path &absoluteEntry,
+            const std::filesystem::path &projectRoot, const std::map<std::filesystem::path, const Assets::AssetRecord *> &registeredAssets,
+            const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
+            ContentBrowserEntry entry{
+                .kind = ContentBrowserEntryKind::Asset,
+                .absolutePath = WorkspacePathText(absoluteEntry),
+                .displayName = AssetDisplayName(absoluteEntry),
+            };
+            std::string legacySourceExtension;
+            std::error_code sizeError;
+            entry.byteSize = diskEntry.file_size(sizeError);
+            if (const auto registered = registeredAssets.find(absoluteEntry); registered != registeredAssets.end()) {
+                PopulateAssetEntryMetadata(entry, *registered->second, projectRoot);
+            } else if (const auto legacy = ReadLegacyMetadata(absoluteEntry)) {
+                entry.assetType = legacy->assetType;
+                entry.absoluteMetadataPath = WorkspacePathText(legacy->absoluteMetadataPath);
+                legacySourceExtension = legacy->sourceExtension;
+            }
+
+            entry.previewFallback = InferFallback(entry.assetType);
+            PopulateAssetImporterContribution(entry, importerCatalog, legacySourceExtension);
+            return entry;
+        }
+
+        [[nodiscard]] std::size_t CountVisibleDirectoryChildren(const std::filesystem::path &directory) {
+            std::size_t count = 0;
+            std::error_code error;
+            for (std::filesystem::directory_iterator iterator{directory, std::filesystem::directory_options::skip_permission_denied, error},
+                 end;
+                 !error && iterator != end; iterator.increment(error)) {
+                const std::filesystem::directory_entry &entry = *iterator;
+                const std::filesystem::file_status status = entry.symlink_status(error);
+                if (error)
+                    break;
+                if (std::filesystem::is_symlink(status))
+                    continue;
+                if (std::filesystem::is_directory(status) || (std::filesystem::is_regular_file(status) && !IsHiddenSidecar(entry.path()))) {
+                    ++count;
+                }
+            }
+            return count;
+        }
+
+        /** @brief Appends contained visible disk entries and reports whether directory enumeration completed without error. */
+        [[nodiscard]] bool PopulateContentBrowserDirectoryEntries(
+            ContentBrowserDirectory &directory, const std::filesystem::path &projectRoot, const std::filesystem::path &assetRoot,
+            const std::filesystem::path &currentDirectory,
+            const std::map<std::filesystem::path, const Assets::AssetRecord *> &registeredAssets,
+            const Assets::AssetImporterCatalogSnapshot *importerCatalog, bool browsingSource) {
+            std::error_code error;
+            std::filesystem::directory_iterator iterator{currentDirectory, std::filesystem::directory_options::skip_permission_denied,
+                                                         error};
+            const std::filesystem::directory_iterator end;
+            while (!error && iterator != end) {
+                const std::filesystem::directory_entry &diskEntry = *iterator;
+                const std::filesystem::file_status status = diskEntry.symlink_status(error);
+                if (error)
+                    break;
+
+                const std::filesystem::path absoluteEntry = NormalizeAbsolute(diskEntry.path());
+                if (absoluteEntry.empty() || !HasPathPrefix(assetRoot, absoluteEntry) || std::filesystem::is_symlink(status)) {
+                    iterator.increment(error);
+                    continue;
+                }
+
+                if (std::filesystem::is_directory(status)) {
+                    directory.entries.push_back(ContentBrowserEntry{
+                        .kind = ContentBrowserEntryKind::Directory,
+                        .absolutePath = WorkspacePathText(absoluteEntry),
+                        .displayName = WorkspacePathText(absoluteEntry.filename()),
+                        .containedItemCount = CountVisibleDirectoryChildren(absoluteEntry),
+                    });
+                } else if (std::filesystem::is_regular_file(status)) {
+                    if (IsHiddenSidecar(absoluteEntry)) {
+                        iterator.increment(error);
+                        continue;
+                    }
+
+                    auto entry = CreateAssetFileEntry(diskEntry, absoluteEntry, projectRoot, registeredAssets, importerCatalog);
+                    if (browsingSource)
+                        entry.displayName = WorkspacePathText(absoluteEntry.filename());
+                    directory.entries.push_back(std::move(entry));
+                }
+                iterator.increment(error);
+            }
+
+            return !error;
+        }
+    }  // namespace
+
+    /** @copydoc IsContentBrowserDirectoryTargetAllowed */
+    bool IsContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteRoot, const std::filesystem::path &absoluteTarget) {
+        if (!absoluteRoot.is_absolute() || !absoluteTarget.is_absolute())
+            return false;
+
+        std::error_code error;
+        const std::filesystem::path lexicalTarget = std::filesystem::absolute(absoluteTarget, error).lexically_normal();
+        if (error)
+            return false;
+        if (const std::filesystem::file_status lexicalStatus = std::filesystem::symlink_status(lexicalTarget, error);
+            error || std::filesystem::is_symlink(lexicalStatus))
+            return false;
+
+        const std::filesystem::path root = NormalizeAbsolute(absoluteRoot);
+        const std::filesystem::path target = NormalizeAbsolute(absoluteTarget);
+        if (root.empty() || target.empty() || !HasPathPrefix(root, target))
+            return false;
+
+        const std::filesystem::file_status status = std::filesystem::symlink_status(target, error);
+        return !error && std::filesystem::is_directory(status);
+    }
+
+    /** @copydoc IsProjectContentBrowserDirectoryTargetAllowed */
+    bool IsProjectContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteProjectRoot,
+                                                       const std::filesystem::path &absoluteTarget) {
+        const auto projectRoot = NormalizeAbsolute(absoluteProjectRoot);
+        if (!IsContentBrowserDirectoryTargetAllowed(projectRoot, absoluteTarget))
+            return false;
+        return IsContentBrowserDirectoryTargetAllowed(ProjectLayout::AssetRoot(projectRoot), absoluteTarget) ||
+               IsContentBrowserDirectoryTargetAllowed(projectRoot / "source", absoluteTarget);
+    }
+
+    /** @copydoc BuildContentBrowserDirectory */
+    ContentBrowserDirectory BuildContentBrowserDirectory(const std::filesystem::path &absoluteProjectRoot,
+                                                         const std::filesystem::path &requestedAbsoluteDirectory,
+                                                         const Assets::AssetRegistrySnapshot &snapshot,
+                                                         const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
+        const std::filesystem::path projectRoot = NormalizeAbsolute(absoluteProjectRoot);
+        const std::filesystem::path sourceRoot = NormalizeAbsolute(projectRoot / "source");
+        const bool browsingSource = IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, requestedAbsoluteDirectory) &&
+                                    IsContentBrowserDirectoryTargetAllowed(sourceRoot, requestedAbsoluteDirectory);
+        const std::filesystem::path assetRoot = browsingSource ? sourceRoot : NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+        std::filesystem::path currentDirectory =
+            requestedAbsoluteDirectory.empty() ? assetRoot : NormalizeAbsolute(requestedAbsoluteDirectory);
+        if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory))
+            currentDirectory = assetRoot;
+
+        ContentBrowserDirectory directory{
+            .absoluteRootPath = WorkspacePathText(assetRoot),
+            .absoluteCurrentPath = WorkspacePathText(currentDirectory),
+            .breadcrumbs = BuildBreadcrumbs(assetRoot, currentDirectory),
+            .loadState = ContentBrowserLoadState::Loading,
+            .rootKind = browsingSource ? ContentBrowserRootKind::NativeSources : ContentBrowserRootKind::Assets,
+        };
+        if (const auto projectAssets = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+            IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, projectAssets))
+            directory.roots.emplace_back(ContentBrowserRootKind::Assets, WorkspacePathText(projectAssets));
+        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, sourceRoot))
+            directory.roots.emplace_back(ContentBrowserRootKind::NativeSources, WorkspacePathText(sourceRoot));
+        if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory)) {
+            directory.loadState = ContentBrowserLoadState::Error;
+            return directory;
+        }
+
+        std::map<std::filesystem::path, const Assets::AssetRecord *> registeredAssets;
+        for (const auto &record : snapshot.Records()) {
+            const std::filesystem::path absoluteAsset = NormalizeAbsolute(Foundation::Paths::Resolve(projectRoot, record.sourcePath));
+            if (!absoluteAsset.empty() && HasPathPrefix(assetRoot, absoluteAsset))
+                registeredAssets.try_emplace(absoluteAsset, &record);
+        }
+
+        directory.readable = PopulateContentBrowserDirectoryEntries(directory, projectRoot, assetRoot, currentDirectory, registeredAssets,
+                                                                    importerCatalog, browsingSource);
+        directory.loadState = directory.readable ? ContentBrowserLoadState::Ready : ContentBrowserLoadState::Error;
+        std::ranges::sort(directory.entries, [](const ContentBrowserEntry &left, const ContentBrowserEntry &right) {
+            if (left.kind != right.kind)
+                return left.kind == ContentBrowserEntryKind::Directory;
+            return left.displayName < right.displayName;
+        });
+        return directory;
+    }
+
+    /** @copydoc ProjectContentBrowserEntries */
+    std::vector<std::size_t> ProjectContentBrowserEntries(const ContentBrowserDirectory &directory, const ContentBrowserEntryQuery &query) {
+        std::vector<std::size_t> indices;
+        indices.reserve(directory.entries.size());
+        for (std::size_t index = 0; index < directory.entries.size(); ++index) {
+            const ContentBrowserEntry &entry = directory.entries[index];
+            if (!ContainsCaseInsensitive(entry.displayName, query.name))
+                continue;
+            if (entry.kind == ContentBrowserEntryKind::Asset && !query.assetType.empty() && entry.assetType != query.assetType) {
+                continue;
+            }
+            indices.push_back(index);
+        }
+
+        std::ranges::sort(indices, [&directory, &query](const std::size_t leftIndex, const std::size_t rightIndex) {
+            const ContentBrowserEntry &left = directory.entries[leftIndex];
+            const ContentBrowserEntry &right = directory.entries[rightIndex];
+            if (left.kind != right.kind) {
+                return left.kind == ContentBrowserEntryKind::Directory;
+            }
+
+            int comparison = 0;
+            if (query.sortField == ContentBrowserSortField::Type && left.kind == ContentBrowserEntryKind::Asset) {
+                comparison = CompareCaseInsensitive(left.assetType, right.assetType);
+            }
+            if (comparison == 0) {
+                comparison = CompareCaseInsensitive(left.displayName, right.displayName);
+            }
+            if (comparison == 0) {
+                comparison = left.absolutePath.compare(right.absolutePath);
+            }
+            return query.sortDirection == ContentBrowserSortDirection::Ascending ? comparison < 0 : comparison > 0;
+        });
+        return indices;
+    }
+}  // namespace Horo::Editor

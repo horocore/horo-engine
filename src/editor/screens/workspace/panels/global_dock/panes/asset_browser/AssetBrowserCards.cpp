@@ -3,7 +3,7 @@
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "editor/renderer/EditorGuiRenderer.h"
-#include "editor/screens/workspace/AiAssetPresentation.h"
+#include "editor/screens/workspace/ai/AiAssetPresentation.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 

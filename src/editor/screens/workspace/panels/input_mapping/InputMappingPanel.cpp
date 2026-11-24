@@ -6,7 +6,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
-#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 
 #include <algorithm>
 #include <array>

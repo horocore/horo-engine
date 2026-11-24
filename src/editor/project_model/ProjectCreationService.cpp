@@ -1,7 +1,7 @@
 #include "Horo/Editor/ProjectCreationService.h"
 
-#include "../physics/CollisionIdentityGeneration.h"
-#include "../physics/ProjectCollisionTemplate.h"
+#include "../physics/project/CollisionIdentityGeneration.h"
+#include "../physics/project/ProjectCollisionTemplate.h"
 #include "Horo/Application/PlatformServicesAuthoring.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"

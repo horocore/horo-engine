@@ -1,5 +1,5 @@
 #include "editor/document/RuntimeSceneConversion.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>

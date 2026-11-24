@@ -4,7 +4,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/panels/hierarchy/HierarchyRowLayout.h"
 
 #include <algorithm>

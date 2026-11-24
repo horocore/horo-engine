@@ -1,7 +1,7 @@
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Editor/GuiScreen.h"
 #include "editor/input/EditorInputActions.h"
-#include "editor/screens/workspace/EditorWorkspaceInputRouting.h"
+#include "editor/screens/workspace/screen/EditorWorkspaceInputRouting.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"

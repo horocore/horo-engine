@@ -3923,7 +3923,7 @@ add_library(HoroEditorRenderExtraction STATIC
         editor/document/EditorViewportScenePreview.cpp
         editor/document/EditorXrSceneGeometry.cpp
         editor/document/EditorViewportPicking.cpp
-        editor/screens/workspace/AssetSceneDrop.cpp
+        editor/screens/workspace/assets/AssetSceneDrop.cpp
 )
 add_library(HoroEngine::EditorRenderExtraction ALIAS HoroEditorRenderExtraction)
 target_sources(HoroEditorRenderExtraction PRIVATE editor/xr/EditorSimulatorSceneSource.cpp)
@@ -4071,15 +4071,15 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
         editor/screens/workspace/prefab/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
-        editor/physics/ProjectCollisionTemplate.cpp
-        editor/physics/CollisionIdentityGeneration.cpp
+        editor/physics/project/ProjectCollisionTemplate.cpp
+        editor/physics/project/CollisionIdentityGeneration.cpp
         editor/physics/CollisionProjectSettingsSession.cpp
         editor/physics/CollisionProjectSettingsCommands.cpp
         editor/physics/CollisionProjectSettingsErrors.cpp
-        editor/physics/CollisionReferenceReview.cpp
-        editor/physics/CollisionReviewFreshness.cpp
-        editor/physics/CollisionSourceInventory.cpp
-        editor/physics/NativeAssetRegistrySource.cpp
+        editor/physics/review/CollisionReferenceReview.cpp
+        editor/physics/review/CollisionReviewFreshness.cpp
+        editor/physics/review/CollisionSourceInventory.cpp
+        editor/physics/review/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphAuthoring.cpp
         editor/pcg/PCGGraphDocument.cpp
@@ -4098,9 +4098,9 @@ add_library(HoroEditorServices STATIC
         editor/data_bus/EditorEngineEventBridge.cpp
         editor/data_bus/EditorSurfaceEventContext.cpp
         editor/EditorSurfaceIdentity.cpp
-        editor/SourceFileOpenService.cpp
-        editor/SourceDocumentService.cpp
-        editor/SourceLanguageSession.cpp
+        editor/source_document/services/SourceFileOpenService.cpp
+        editor/source_document/SourceDocumentService.cpp
+        editor/source_document/services/SourceLanguageSession.cpp
         editor/language/LspConnection.cpp
         editor/language/LspDocumentSync.cpp
         editor/language/LspProcess.cpp
@@ -4117,19 +4117,19 @@ add_library(HoroEditorServices STATIC
         editor/proposals/ProposedUnifiedPatch.cpp
         editor/proposals/WorkspaceEditPlan.cpp
         editor/proposals/ReviewDecisions.cpp
-        editor/SourceDocumentChanges.cpp
-        editor/SourceDocumentBatchDisk.cpp
-        editor/SourceEditingCommands.cpp
-        editor/SourceDocumentSave.cpp
-        editor/SourceDocumentSnapshot.cpp
-        editor/SourceDocumentText.cpp
+        editor/source_document/SourceDocumentChanges.cpp
+        editor/source_document/SourceDocumentBatchDisk.cpp
+        editor/source_document/services/SourceEditingCommands.cpp
+        editor/source_document/SourceDocumentSave.cpp
+        editor/source_document/SourceDocumentSnapshot.cpp
+        editor/source_document/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
         editor/ui/UiCanvasPreview.cpp
         editor/ui/UiInspectorDraft.cpp
         editor/ui/UiInspectorResources.cpp
-        editor/UiCanvasDocumentCommands.cpp
-        editor/UiCanvasDocument.cpp
-        editor/UiCanvasDocumentSerialization.cpp
+        editor/ui/canvas/UiCanvasDocumentCommands.cpp
+        editor/ui/canvas/UiCanvasDocument.cpp
+        editor/ui/canvas/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceScene.cpp
@@ -4142,9 +4142,9 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/EditorPlaySessionController.cpp
         editor/gameplay/EditorPlaySessionControllerFixed.cpp
         editor/gameplay/EditorPlaySaveRetirement.cpp
-        editor/screens/workspace/ContentBrowserModel.cpp
+        editor/screens/workspace/assets/browser/ContentBrowserModel.cpp
         editor/screens/workspace/prefab/PrefabAssetPreview.cpp
-        editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
+        editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
         editor/project_model/ProjectCreationService.cpp
@@ -4168,12 +4168,12 @@ add_library(HoroEditorServices STATIC
         editor/NotificationService.cpp
         editor/input/EditorInputActions.cpp
         editor/modals/EditorModalHost.cpp
-        editor/screens/workspace/WorkspaceLayout.cpp
-        editor/screens/workspace/WorkspacePanelHost.cpp
-        editor/screens/workspace/WorkspaceLayoutFileStore.cpp
-        editor/screens/workspace/WorkspaceLayoutPersistence.cpp
-        editor/screens/workspace/ActivityBarLayout.cpp
-        editor/screens/workspace/WorkspaceSplitterInteraction.cpp
+        editor/screens/workspace/layout/WorkspaceLayout.cpp
+        editor/screens/workspace/docking/WorkspacePanelHost.cpp
+        editor/screens/workspace/layout/WorkspaceLayoutFileStore.cpp
+        editor/screens/workspace/layout/WorkspaceLayoutPersistence.cpp
+        editor/screens/workspace/layout/ActivityBarLayout.cpp
+        editor/screens/workspace/layout/WorkspaceSplitterInteraction.cpp
 )
 
 add_library(HoroPCGSceneBake STATIC editor/pcg/PCGSceneBake.cpp)
@@ -4421,9 +4421,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_creation/ProjectCreationScreen.cpp
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrain.cpp
-            editor/screens/workspace/EditorWorkspaceViewTerrain.cpp
+            editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrain.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceViewTerrain.cpp
             editor/screens/workspace/terrain/TerrainSculptProducer.cpp
             editor/screens/workspace/terrain/TerrainViewportPicking.cpp
             editor/screens/workspace/terrain/TerrainAssetFormat.cpp
@@ -4440,14 +4440,14 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/terrain/TerrainViewportProjection.cpp
             editor/screens/workspace/terrain/TerrainViewportToolGesture.cpp
             editor/screens/workspace/terrain/TerrainViewportToolControls.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainTools.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainCook.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainAssets.cpp
-            editor/screens/workspace/EditorWorkspaceScreenTerrain.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainTools.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainCook.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainAssets.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceScreenTerrain.cpp
             editor/screens/workspace/terrain/TerrainAssetCreationModal.cpp
             editor/screens/workspace/terrain/TerrainViewportTool.cpp
             editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
+            editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
@@ -4496,10 +4496,10 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
-            editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/screens/workspace/docking/WorkspacePanelRegistry.cpp
             editor/navigation/NavigationTab.cpp
             editor/navigation/NavigationBakeCancelModal.cpp
-            editor/screens/workspace/DefaultWorkspacePanels.cpp
+            editor/screens/workspace/docking/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.cpp
@@ -4520,64 +4520,64 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
-        editor/screens/workspace/EditorWorkspaceControllerAudio.cpp
-        editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
-        editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
-        editor/screens/workspace/EditorWorkspaceControllerPrefabSettings.cpp
-            editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
-            editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
-            editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneAssets.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneRecovery.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneProjection.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCamera.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
-            editor/screens/workspace/EditorWorkspaceControllerDebugCapture.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
-            editor/screens/workspace/EditorSourcePresentation.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSourceCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSourceLanguage.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
-            editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
-        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
-        editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
-            editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
-            editor/screens/workspace/EditorWorkspaceEnvironmentQuery.cpp
-            editor/screens/workspace/EditorWorkspaceEnvironmentQueryDocument.cpp
-            editor/screens/workspace/EditorWorkspaceEnvironmentQueryExternal.cpp
-            editor/screens/workspace/EditorWorkspaceEnvironmentQueryRecovery.cpp
-            editor/screens/workspace/EditorWorkspaceDecisionGraph.cpp
-            editor/screens/workspace/EditorWorkspaceDecisionGraphRecovery.cpp
-            editor/screens/workspace/EditorWorkspaceDecisionGraphConflict.cpp
-            editor/screens/workspace/EditorWorkspaceViewDecisionGraph.cpp
-            editor/screens/workspace/DecisionGraphCanvasModel.cpp
-            editor/screens/workspace/DecisionGraphLayout.cpp
-            editor/screens/workspace/DecisionSaveJournal.cpp
-            editor/screens/workspace/DecisionTreeSubtreeCatalog.cpp
-            editor/screens/workspace/DecisionGraphCanvas.cpp
-            editor/screens/workspace/EditorWorkspaceUtilityGraph.cpp
-            editor/screens/workspace/EditorWorkspaceControllerBlackboard.cpp
-            editor/screens/workspace/EditorWorkspaceBlackboardRecovery.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerAudio.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerCollision.cpp
+        editor/screens/workspace/navigation/EditorWorkspaceControllerNavigationSettings.cpp
+        editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabSettings.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerScenePersistence.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldSources.cpp
+            editor/screens/workspace/assets/EditorWorkspaceControllerAssetInstantiation.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserCommands.cpp
+            editor/screens/workspace/docking/EditorWorkspaceControllerDockCommands.cpp
+            editor/screens/workspace/assets/EditorWorkspaceControllerSceneAssets.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerSceneRecovery.cpp
+            editor/screens/workspace/inspection/EditorWorkspaceControllerSceneProjection.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerCamera.cpp
+            editor/screens/workspace/gameplay/EditorWorkspaceControllerPlay.cpp
+            editor/screens/workspace/inspection/EditorWorkspaceControllerDebugCapture.cpp
+            editor/screens/workspace/commands/routing/EditorWorkspaceControllerCommandRouting.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourcePersistence.cpp
+            editor/screens/workspace/source/EditorSourcePresentation.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourceCommands.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourceLanguage.cpp
+            editor/screens/workspace/commands/routing/EditorWorkspaceControllerCommands.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerComponentCommands.cpp
+            editor/screens/workspace/extensions/EditorWorkspaceControllerInspectorContributions.cpp
+            editor/screens/workspace/extensions/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/navigation/EditorWorkspaceControllerNavigationInspector.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerPhysics.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerViewportCommands.cpp
+            editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowser.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserGameplay.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
+            editor/screens/workspace/sequence/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQuery.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryDocument.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryExternal.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryRecovery.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraph.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraphRecovery.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraphConflict.cpp
+            editor/screens/workspace/ai/decisions/graph/EditorWorkspaceViewDecisionGraph.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvasModel.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphLayout.cpp
+            editor/screens/workspace/ai/decisions/DecisionSaveJournal.cpp
+            editor/screens/workspace/ai/decisions/panels/DecisionTreeSubtreeCatalog.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceUtilityGraph.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceControllerBlackboard.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceBlackboardRecovery.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
             editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
             editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
-            editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
-            editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
+            editor/screens/workspace/ui_canvas/EditorWorkspaceViewUiCanvas.cpp
+            editor/screens/workspace/ui_canvas/EditorWorkspaceControllerUiCanvas.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldStreaming.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldBake.cpp
             editor/source_editor/SourceWidgetPlatform.cpp
             editor/source_editor/SourceWidgetDisplay.cpp
             editor/source_editor/SourceWidgetText.cpp
@@ -4589,30 +4589,30 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/source_editor/SourceReviewHistory.cpp
             editor/source_editor/SourceSyntaxProjection.cpp
             editor/source_editor/SourceEditorTheme.cpp
-            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
-            editor/screens/workspace/PCGPreviewSandbox.cpp
-            editor/screens/workspace/PCGPreviewView.cpp
-            editor/screens/workspace/PCGWorkspace.cpp
-            editor/screens/workspace/PCGEditorCatalog.cpp
-            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
+            editor/screens/workspace/screen/EditorWorkspaceInputRouting.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/pcg/preview/PCGPreviewSandbox.cpp
+            editor/screens/workspace/pcg/preview/PCGPreviewView.cpp
+            editor/screens/workspace/pcg/PCGWorkspace.cpp
+            editor/screens/workspace/pcg/PCGEditorCatalog.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceViewPCG.cpp
             editor/pcg/PCGAuthoringInspector.cpp
-            editor/screens/workspace/EditorWorkspaceViewSequence.cpp
-            editor/screens/workspace/EditorWorkspaceViewBlackboard.cpp
-            editor/screens/workspace/WorldLayerOutliner.cpp
+            editor/screens/workspace/sequence/EditorWorkspaceViewSequence.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceViewBlackboard.cpp
+            editor/screens/workspace/world/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
             editor/modals/xr_setup/XrSetupModal.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
-            editor/screens/workspace/ExtensionRecoveryView.cpp
-            editor/screens/workspace/ExtensionActivityView.cpp
-            editor/screens/workspace/ExtensionActivityPlot.cpp
+            editor/screens/workspace/extensions/ExtensionRecoveryView.cpp
+            editor/screens/workspace/extensions/activity/ExtensionActivityView.cpp
+            editor/screens/workspace/extensions/activity/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
-            editor/screens/workspace/EditorWorkspaceScreenXr.cpp
-            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
-            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
-            editor/screens/workspace/EditorWorkspaceScreenProjectSettings.cpp
-            editor/screens/workspace/PlatformProjectSettingsOwner.cpp
-            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenXr.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/project_settings/EditorWorkspaceScreenProjectSettings.cpp
+            editor/screens/workspace/project_settings/PlatformProjectSettingsOwner.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
             editor/screens/GuiScreenFixedDispatch.cpp
@@ -4857,18 +4857,18 @@ set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_com
 foreach(command IN ITEMS Source Build Test Inspection)
     configure_file("mcp/Editor${command}McpTools.h"
         "${_horo_mcp_editor_command_headers}/Editor${command}McpTools.h" COPYONLY)
-    configure_file("editor/screens/workspace/Editor${command}CommandEndpoint.h"
+    configure_file("editor/screens/workspace/commands/Editor${command}CommandEndpoint.h"
         "${_horo_mcp_editor_command_headers}/Editor${command}CommandEndpoint.h" COPYONLY)
 endforeach ()
 configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers}/EditorCommandMcpSession.h" COPYONLY)
 configure_file(mcp/EditorDebugCaptureMcpTools.h "${_horo_mcp_editor_command_headers}/EditorDebugCaptureMcpTools.h" COPYONLY)
-configure_file(editor/screens/workspace/EditorDebugCapture.h "${_horo_mcp_editor_command_headers}/EditorDebugCapture.h" COPYONLY)
+configure_file(editor/screens/workspace/inspection/EditorDebugCapture.h "${_horo_mcp_editor_command_headers}/EditorDebugCapture.h" COPYONLY)
 configure_file(editor/renderer/EditorViewportImageCapture.h
     "${_horo_mcp_editor_command_headers}/editor/renderer/EditorViewportImageCapture.h" COPYONLY)
 configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
-configure_file(editor/screens/workspace/EditorWorkspaceCommandAccess.h
+configure_file(editor/screens/workspace/commands/EditorWorkspaceCommandAccess.h
     "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)
-configure_file(editor/screens/workspace/EditorInspectionMath.h
+configure_file(editor/screens/workspace/commands/EditorInspectionMath.h
     "${_horo_mcp_editor_command_headers}/EditorInspectionMath.h" COPYONLY)
 target_include_directories(HoroMcpEditorCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_command_headers}>")
 target_link_libraries(HoroMcpEditorCommandsInternal
@@ -4936,7 +4936,7 @@ target_link_libraries(HoroBuiltinAssetCookerHostInternal INTERFACE HoroEngine::A
 # Deliberate build-only seam to the existing v1/v2 UI Canvas authoring codec.
 set(HORO_UI_CANVAS_SOURCE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/internal/ui-canvas-source")
 file(MAKE_DIRECTORY "${HORO_UI_CANVAS_SOURCE_HEADERS}")
-configure_file(editor/UiCanvasDocumentSerialization.h "${HORO_UI_CANVAS_SOURCE_HEADERS}/UiCanvasDocumentSerialization.h" COPYONLY)
+configure_file(editor/ui/canvas/UiCanvasDocumentSerialization.h "${HORO_UI_CANVAS_SOURCE_HEADERS}/UiCanvasDocumentSerialization.h" COPYONLY)
 add_library(HoroUiCanvasSourceHostInternal INTERFACE)
 target_include_directories(HoroUiCanvasSourceHostInternal INTERFACE "${HORO_UI_CANVAS_SOURCE_HEADERS}")
 target_link_libraries(HoroUiCanvasSourceHostInternal INTERFACE HoroEngine::EditorServices HoroEngine::RuntimeUi)
@@ -4995,7 +4995,7 @@ target_sources(HoroEditorServices PRIVATE
     editor/gameplay/EditorPlayModuleRecovery.cpp)
 target_link_libraries(HoroEditorServices PUBLIC HoroScriptModuleHostInternal)
 if(TARGET HoroGui)
-    target_sources(HoroGui PRIVATE editor/screens/workspace/EditorWorkspaceControllerModuleScripts.cpp)
+    target_sources(HoroGui PRIVATE editor/screens/workspace/gameplay/EditorWorkspaceControllerModuleScripts.cpp)
     target_link_libraries(HoroGui PRIVATE HoroScriptModuleHostInternal)
 endif()
 

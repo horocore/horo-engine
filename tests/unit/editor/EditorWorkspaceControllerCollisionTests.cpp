@@ -2,7 +2,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 
 #include <nlohmann/json.hpp>
 

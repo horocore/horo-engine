@@ -1,4 +1,4 @@
-#include "WorkspaceSplitterInteraction.h"
+#include "layout/WorkspaceSplitterInteraction.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

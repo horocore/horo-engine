@@ -6,4 +6,9 @@ Start at [`screens/`](screens/) for screen and workspace flows, [`document/`](do
 
 The [workspace guide](screens/workspace/README.md) maps document commands, panel views and viewport tools to their owners.
 
+For tool-specific document owners, see [source documents](source_document/) for
+text edits and saves, [UI Canvas documents](ui/canvas/) for canvas authoring and
+serialization, and [project collision authoring](physics/) for editing and
+reviewing layers, profiles, and query channels.
+
 [Public headers](../../include/Horo/Editor/) · [Tests](../../tests/unit/editor/) · [Architecture](../../docs/architecture/editor/editor-document-model.md)

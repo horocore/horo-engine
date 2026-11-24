@@ -8,8 +8,8 @@
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/UiCanvasDocument.h"
-#include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
-#include "editor/screens/workspace/EnvironmentQueryDocumentFence.h"
+#include "editor/screens/workspace/ai/decisions/panels/DecisionStateMachineAuthoring.h"
+#include "editor/screens/workspace/ai/queries/EnvironmentQueryDocumentFence.h"
 
 namespace Horo::Editor {
     class EditorWorkspaceController;

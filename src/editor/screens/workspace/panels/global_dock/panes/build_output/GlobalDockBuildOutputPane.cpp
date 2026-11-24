@@ -4,7 +4,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Utf8.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
-#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 

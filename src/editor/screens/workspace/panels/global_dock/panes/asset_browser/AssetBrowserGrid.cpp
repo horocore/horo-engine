@@ -7,7 +7,7 @@
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Prefab/PrefabErrors.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserActions.h"

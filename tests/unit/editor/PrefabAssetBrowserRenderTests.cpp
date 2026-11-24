@@ -1,7 +1,7 @@
 #include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "SceneDocumentTestSupport.h"
 #include "editor/renderer/EditorGuiRenderer.h"
-#include "editor/screens/workspace/ContentBrowserModel.h"
+#include "editor/screens/workspace/assets/browser/ContentBrowserModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
 #include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
 

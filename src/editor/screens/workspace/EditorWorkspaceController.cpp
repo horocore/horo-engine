@@ -9,14 +9,14 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayErrors.h"
-#include "WorkspacePathText.h"
+#include "docking/WorkspacePathText.h"
 #include "editor/document/EditorViewportPicking.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/document/SceneDocumentComparison.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/project_model/EditorModelErrors.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
 #include <array>

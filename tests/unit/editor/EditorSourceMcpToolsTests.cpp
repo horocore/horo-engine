@@ -2,7 +2,7 @@
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorSourceMcpTools.h"
 #include "Horo/Mcp/McpErrors.h"
-#include "editor/screens/workspace/EditorSourcePresentation.h"
+#include "editor/screens/workspace/source/EditorSourcePresentation.h"
 
 #include <fstream>
 

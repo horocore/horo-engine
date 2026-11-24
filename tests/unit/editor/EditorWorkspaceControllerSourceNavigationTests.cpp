@@ -7,7 +7,7 @@
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceScreen.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <algorithm>
