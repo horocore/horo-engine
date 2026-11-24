@@ -1180,6 +1180,10 @@ before the same frame's virtual premultiplied projection. The Renderer must
 produce the exact alpha-bearing projection receipt. The native session owner
 withdraws the layer on focus, origin, runtime or consent loss and retires its
 native objects before retiring the session.
+If the grant is withdrawn during the final native session validation, the
+owner rejects the layer and attempts to pause the provider before returning
+control to the application. When cleanup fails during activation rollback,
+the cleanup error includes the original activation failure as its cause.
 
 The signed Editor Play composition accepts this permission from an explicit
 installed platform authority. Its next-Play operator grant is consumed once.

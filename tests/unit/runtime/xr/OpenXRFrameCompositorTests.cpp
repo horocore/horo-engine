@@ -133,6 +133,51 @@ namespace Horo::Tests::OpenXR {
             }
         }
 
+        TEST_CASE("Passthrough revocation during the final native borrow pauses without submitting",
+                  "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            f.Bind();
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            REQUIRE(f.native.owner.StartPassthrough(scope).HasValue());
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            const std::array completed{color};
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            const NativePassthroughProjection receipt{frame, scope};
+
+            auto unrelated = scope;
+            unrelated.grant = IdentityValue<XRPassthroughGrant>(2);
+            bool withdrawn = false;
+            f.native.fence.onValidate = [&f, &scope, &unrelated, &withdrawn] {
+                // Only the final borrow holds the passthrough dispatch guard.
+                const auto probe = f.native.owner.StopPassthrough(unrelated);
+                REQUIRE(probe.HasError());
+                if (probe.ErrorValue().code.Value() != XRErrors::OperationIncompatible.code.Value())
+                    return;
+                f.native.owner.RevokePassthrough(scope);
+                withdrawn = true;
+            };
+            const auto ended = f.compositor.EndPassthroughProjection(frame, plan, targets, receipt);
+            f.native.fence.onValidate = {};
+            REQUIRE(withdrawn);
+            RequireFailureIdentity(ended, XRErrors::OperationUnavailable);
+            CHECK(f.script.ends == 0);
+            CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
+            CHECK_FALSE(f.passthrough.running);
+            CHECK(f.passthrough.pauses == 1);
+            f.Empty(frame);
+            REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+            CHECK(f.passthrough.pauses == 1);
+            CHECK_FALSE(f.passthrough.liveFeature);
+        }
+
         TEST_CASE("Passthrough withdrawal during provider startup stops the exact grant at the next boundary",
                   "[unit][xr][compositor][passthrough]") {
             if (!NativePassthroughExtensionRequest())
@@ -183,6 +228,7 @@ namespace Horo::Tests::OpenXR {
             const auto denied = f.native.owner.StartPassthrough(scope);
             f.passthrough.failLayerDestroy = false;
             RequireFailureIdentity(denied, cleanupFails ? XRErrors::OperationUnavailable : XRErrors::PermissionDenied);
+            CHECK(ErrorChainContains(denied.ErrorValue(), XRErrors::PermissionDenied.domain, XRErrors::PermissionDenied.code));
             CHECK(f.passthrough.pauses == 1);
             CHECK_FALSE(f.passthrough.running);
             CHECK(f.passthrough.liveLayer == cleanupFails);

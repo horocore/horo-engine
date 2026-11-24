@@ -208,7 +208,7 @@ namespace Horo::XR::OpenXRInternal {
         passthrough_ = candidate;
         if (prepare.HasError()) {
             if (auto retired = RetirePassthrough(); retired.HasError())
-                return retired;
+                return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), prepare.ErrorValue()));
             return prepare;
         }
         passthrough_.admitted = true;
@@ -298,8 +298,11 @@ namespace Horo::XR::OpenXRInternal {
             RevokePassthrough();
             return Outcome::Failure(native.HasError() ? native.ErrorValue() : MakeError(XRErrors::IdentityStale));
         }
-        if (!passthrough_.admitted)
+        if (!passthrough_.admitted) {
+            // The composition fence can revoke admission during Borrow. The dispatch guard deferred the native pause.
+            RevokePassthrough();
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable, "The passthrough grant has ended"));
+        }
         const XrCompositionLayerPassthroughFB underlay{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB, nullptr,
                                                        XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT, XR_NULL_HANDLE,
                                                        passthrough_.layer};
