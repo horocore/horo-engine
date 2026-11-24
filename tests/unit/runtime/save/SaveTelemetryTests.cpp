@@ -472,6 +472,37 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
     CHECK(Read(rolledLog).find("private-rolled-row-display") != std::string::npos);
 }
 
+TEST_CASE("Support bundles withhold Save wrappers with causal lists", "[save][telemetry][privacy][bundle][causal-lists]") {
+    Session session;
+    REQUIRE(session.host);
+    REQUIRE(session.Register());
+    const auto crash = session.directory / "crash.json";
+    {
+        std::ofstream output{crash, std::ios::binary};
+        output << R"({"errors":[
+            {"domain":"horo.mcp","message":"private-list-wrapper",
+             "causes":[{"domain":"horo.platform","code":"storage.failed"},{"domain":"horo.save","code":"save.restore.failed"}]},
+            {"domain":"horo.scene","message":"private-outer-list-wrapper",
+             "cause":{"domain":"horo.mcp","message":"private-inner-list-wrapper",
+                      "causes":[{"domain":"horo.save","message":"private-causal-element"}]}},
+            {"domain":"horo.scene","message":"retained-sibling",
+             "causes":[{"domain":"horo.platform","message":"retained-unrelated-cause"}]}
+        ]})";
+        REQUIRE(output.good());
+    }
+    const auto bundled = session.host->GenerateDiagnosticBundle(
+        {.outputPath = session.directory / "bundle.zip",
+         .crashMetadata = Application::HostDiagnosticFile{.sourcePath = crash, .archivePath = "crash/report.json"}});
+    REQUIRE(bundled.HasValue());
+    const auto archive = Read(bundled.Value().outputPath);
+    for (const auto text : {"private-list-wrapper", "private-outer-list-wrapper", "private-inner-list-wrapper", "private-causal-element"}) {
+        CAPTURE(text);
+        CHECK(archive.find(text) == std::string::npos);
+    }
+    CHECK(archive.find("retained-sibling") != std::string::npos);
+    CHECK(archive.find("retained-unrelated-cause") != std::string::npos);
+}
+
 TEST_CASE("Support bundle rejects ambiguous diagnostic members before classifying Save privacy", "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);

@@ -170,8 +170,23 @@ namespace Horo::Diagnostics {
             });
         }
 
+        /** @brief Recognizes nested and flattened error chains used by host and automation diagnostics. */
+        [[nodiscard]] bool IsCausalField(const std::string_view key) noexcept {
+            return key == "cause" || key == "causes";
+        }
+
+        bool RedactJson(Json &value, std::span<const std::string> namespaces, std::string_view key = {});
+
+        /** @brief Redacts every array member and reports withheld entries only for causal lists. */
+        bool RedactArray(Json &value, const std::span<const std::string> namespaces, const std::string_view key) {
+            bool withheld = false;
+            for (Json &child : value)
+                withheld = RedactJson(child, namespaces, key) || withheld;
+            return IsCausalField(key) && withheld;
+        }
+
         /** @brief Redacts a record and reports whether its enclosing causal record also needs to be dropped. */
-        bool RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
+        bool RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key) {
             if (Detail::IsSensitiveKey(key)) {
                 value = "[REDACTED]";
                 return false;
@@ -182,15 +197,14 @@ namespace Horo::Diagnostics {
             }
             if (value.is_object()) {
                 for (auto &[childKey, child] : value.items()) {
-                    if (RedactJson(child, namespaces, childKey) && childKey == "cause") {
+                    if (RedactJson(child, namespaces, childKey) && IsCausalField(childKey)) {
                         // Wrappers can quote private messages or copy their diagnostic fields.
                         value = nullptr;
                         return true;
                     }
                 }
             } else if (value.is_array()) {
-                for (Json &child : value)
-                    RedactJson(child, namespaces);
+                return RedactArray(value, namespaces, key);
             } else if (value.is_string()) {
                 value = RedactAbsolutePaths(value.get_ref<const std::string &>());
             }

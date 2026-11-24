@@ -1871,9 +1871,9 @@ included and excluded Save categories as the archive manifest. Failed or
 cancelled rows with missing or invalid category evidence contribute to the
 unclassified count.
 Editor and CLI bundles withhold both the Save telemetry namespace and the Save
-error domain from their raw JSON evidence. A Save error embedded as a cause
-suppresses each wrapping causal record, since wrappers can copy private text
-or fields. Independent sibling evidence remains available.
+error domain from their raw JSON evidence. A Save error in a nested cause or
+a flattened causal list suppresses each wrapping causal record, since wrappers
+can copy private text or fields. Independent sibling evidence remains available.
 Raw diagnostic JSON and JSONL records with duplicate object members or
 excessive nesting fail bundle preparation before any archive is published.
 
