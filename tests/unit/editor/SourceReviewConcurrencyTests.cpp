@@ -1,7 +1,10 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
 #include "../../support/NativePublicationFiles.h"
 #include "../../support/SourceDocumentTestProject.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -11,11 +14,13 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <condition_variable>
+#include <fstream>
 #include <iterator>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -1016,79 +1021,202 @@ namespace {
         CHECK_FALSE(workspace.reviews.Status().canUndo);
     }
 
-    TEST_CASE("Workspace review build runs only for approval of the exact saved source", "[editor][source][review][validation]") {
-        class FailedBuild final : public IExternalProcessRunner {
-        public:
-            Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &) override {
-                ++calls;
-                return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Exited, 1});
+    /** @brief Holds one approved native invocation until the test owner stages its source edit. */
+    class GatedFailedReviewBuild final : public IExternalProcessRunner {
+    public:
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &) override {
+            std::unique_lock lock{mutex_};
+            ++calls_;
+            changed_.notify_all();
+            changed_.wait(lock, [this] {
+                return released_;
+            });
+            return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Exited, 1});
+        }
+
+        [[nodiscard]] bool WaitForInvocation() {
+            std::unique_lock lock{mutex_};
+            return changed_.wait_for(lock, std::chrono::seconds{10}, [this] {
+                return calls_ != 0;
+            });
+        }
+
+        void Release() {
+            {
+                std::scoped_lock lock{mutex_};
+                released_ = true;
             }
+            changed_.notify_all();
+        }
 
-            std::atomic_uint calls{};
-        } process;
+        [[nodiscard]] unsigned Calls() const {
+            std::scoped_lock lock{mutex_};
+            return calls_;
+        }
 
-        TestSupport::SourceProject project;
-        project.Put("int value = 1;\n", "source.cpp");
-        NativeDurableFileSystem files;
-        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
-        Application::GameplayBuildService builds{process, jobs, files};
-        Runtime::RuntimeSceneService scene;
-        CancellationSource lifetime;
-        REQUIRE(scene.Startup(lifetime.Token()).HasValue());
-        EditorWorkspaceController workspace{project.directory,
-                                            scene,
-                                            {},
-                                            {.durableFiles = &files,
-                                             .jobs = &jobs,
-                                             .gameplay = {.builds = &builds, .environment = {.gameplaySdkPackage = project.directory}}}};
+    private:
+        mutable std::mutex mutex_;
+        std::condition_variable changed_;
+        unsigned calls_{};
+        bool released_{};
+    };
+
+    /** @brief Drives the production workspace commands with isolated application service owners. */
+    struct ReviewBuildWorkspace final {
         using Command = EditorWorkspaceViewCommand;
         using Validation = SourceReviewValidation;
-        workspace.ProcessCommand(
-            {.command = Command::OpenSourceFile,
-             .sourceOpenRequest = SourceOpenRequest{.path = project.directory / "source.cpp", .mode = SourceOpenMode::EmbeddedOnly}});
-        REQUIRE(workspace.ViewModel().sourceDocuments.size() == 1);
-        const auto source = workspace.ViewModel().sourceDocuments.front();
-        auto proposal = PrepareEditorLocalPatchReview(
-            R"({"version":1,"files":[{"kind":"edit","path":"source.cpp","hunks":[{"offset":12,"before":"1","after":"2"}]}]})",
-            {{source}, "test", 1}, "validation-workspace", 1);
-        REQUIRE(proposal.HasValue());
-        auto review = std::move(proposal).Value();
-        const auto policy =
-            ProjectPolicy::Capture("validation-workspace", review.proposal.PolicyRevision(), {{source.Identity().key.source, false}});
-        REQUIRE(policy.HasValue());
-        REQUIRE(review.decisions.Decide(*review.plan, {}, ReviewChoice::Accept).HasValue());
-        EditorWorkspaceViewCommandData apply;
-        REQUIRE(
-            QueueSourceReviewApplication("validation-workspace", review.decisions, policy.Value(), review.plan, lifetime.Token(), apply));
-        workspace.ProcessCommand(apply);
-        const auto until = [&](const Validation state) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+
+        ReviewBuildWorkspace() {
+            project.Put("int value = 1;\n", "source.cpp");
+            REQUIRE(scene.Startup(lifetime.Token()).HasValue());
+            const EditorWorkspaceDependencies dependencies{.durableFiles = &files,
+                                                           .jobs = &jobs,
+                                                           .gameplay = {.builds = &builds,
+                                                                        .environment = {.gameplaySdkPackage = project.directory},
+                                                                        .tests = &tests,
+                                                                        .testEnvironment = {.ctest = "ctest"}}};
+            workspace =
+                std::make_unique<EditorWorkspaceController>(project.directory, scene, Assets::AssetRegistrySnapshot{}, dependencies);
+        }
+
+        ~ReviewBuildWorkspace() {
+            // Release held work before owner teardown, including when an assertion fails with the gate closed.
+            process.Release();
+        }
+
+        /** @brief Apply the exact reviewed change and capture approval for its live audit. */
+        EditorWorkspaceViewCommandData ApplyReview() {
+            workspace->ProcessCommand(
+                {.command = Command::OpenSourceFile,
+                 .sourceOpenRequest = SourceOpenRequest{.path = project.directory / "source.cpp", .mode = SourceOpenMode::EmbeddedOnly}});
+            REQUIRE(workspace->ViewModel().sourceDocuments.size() == 1);
+            const auto source = workspace->ViewModel().sourceDocuments.front();
+            auto proposal = PrepareEditorLocalPatchReview(
+                R"({"version":1,"files":[{"kind":"edit","path":"source.cpp","hunks":[{"offset":12,"before":"1","after":"2"}]}]})",
+                {{source}, "test", 1}, "validation-workspace", 1);
+            REQUIRE(proposal.HasValue());
+            auto review = std::move(proposal).Value();
+            const auto policy =
+                ProjectPolicy::Capture("validation-workspace", review.proposal.PolicyRevision(), {{source.Identity().key.source, false}});
+            REQUIRE(policy.HasValue());
+            REQUIRE(review.decisions.Decide(*review.plan, {}, ReviewChoice::Accept).HasValue());
+            EditorWorkspaceViewCommandData command;
+            REQUIRE(QueueSourceReviewApplication("validation-workspace", review.decisions, policy.Value(), review.plan, lifetime.Token(),
+                                                 command));
+            workspace->ProcessCommand(command);
+            AwaitValidation(Validation::SaveRequired);
+            const auto audit = workspace->ReadSourceReviewStatus().audit;
+            REQUIRE(audit);
+            return {.command = Command::BuildSourceReview, .sourceReviewLifetime = lifetime.Token(), .sourceReviewValidationAudit = audit};
+        }
+
+        /** @brief Pumps owner work while awaiting a status; the deadline reports a stalled fixture. */
+        void AwaitValidation(const Validation expected) {
+            REQUIRE(WaitUntil([&] {
+                workspace->UpdateSourceAutosave(0, 0);
+                return workspace->ReadSourceReviewStatus().validation == expected;
+            }));
+        }
+
+        [[nodiscard]] bool HasBuildOperation() const {
+            const auto snapshot = operations.SnapshotIfChanged(0);
+            return snapshot && !snapshot->operations.empty();
+        }
+
+        /** @brief Waits for the only admitted isolated build to publish its process failure. */
+        void AwaitBuildFailure() const {
+            REQUIRE(WaitUntil([&] {
+                const auto snapshot = operations.SnapshotIfChanged(0);
+                return snapshot && snapshot->operations.size() == 1 && snapshot->operations.front().kind == OperationKind::Build &&
+                       snapshot->operations.front().state == OperationState::Failed;
+            }));
+        }
+
+        TestSupport::SourceProject project;
+        NativeDurableFileSystem files;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        OperationStore operations{8, 8};
+        BuildOutputStore output{32};
+        GatedFailedReviewBuild process;
+        Application::GameplayBuildService builds{process, jobs, files, &output, &operations};
+        Application::GameplayTestService tests{process, jobs, files, operations, output};
+        Runtime::RuntimeSceneService scene;
+        CancellationSource lifetime;
+        std::unique_ptr<EditorWorkspaceController> workspace;
+
+    private:
+        /** @brief Observes completion only; invocation ordering is controlled by the process gate. */
+        template <typename Predicate> static bool WaitUntil(const Predicate &check) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
             do {
-                workspace.UpdateSourceAutosave(0, 0);
-                if (workspace.ReadSourceReviewStatus().validation == state)
+                if (check())
                     return true;
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             } while (std::chrono::steady_clock::now() < deadline);
             return false;
-        };
-        REQUIRE(until(Validation::SaveRequired));
-        auto audit = workspace.ReadSourceReviewStatus().audit;
-        EditorWorkspaceViewCommandData approved{.command = Command::BuildSourceReview,
-                                                .sourceReviewLifetime = lifetime.Token(),
-                                                .sourceReviewValidationAudit = audit};
+        }
+    };
+
+    TEST_CASE("Workspace review build runs only for approval of the exact saved source", "[editor][source][review][validation]") {
+        using Validation = ReviewBuildWorkspace::Validation;
+        ReviewBuildWorkspace fixture;
+        auto &workspace = *fixture.workspace;
+        auto &process = fixture.process;
+        const auto approved = fixture.ApplyReview();
         workspace.ProcessCommand(approved);
-        CHECK(process.calls == 0U);
+        CHECK(process.Calls() == 0U);
+        CHECK_FALSE(fixture.HasBuildOperation());
         REQUIRE(workspace.SaveSourceDocuments().HasValue());
-        REQUIRE(until(Validation::Ready));
+        fixture.AwaitValidation(Validation::Ready);
         auto wrongReview = approved;
-        wrongReview.sourceReviewValidationAudit = std::make_shared<const SourceReviewAudit>(*audit);
+        wrongReview.sourceReviewValidationAudit = std::make_shared<const SourceReviewAudit>(*approved.sourceReviewValidationAudit);
         workspace.ProcessCommand(wrongReview);
-        CHECK(process.calls == 0U);
+        CHECK(process.Calls() == 0U);
+        CHECK_FALSE(fixture.HasBuildOperation());
         workspace.ProcessCommand(approved);
-        REQUIRE(until(Validation::BuildFailed));
-        CHECK(process.calls == 1U);
+        REQUIRE(process.WaitForInvocation());
+        process.Release();
+        fixture.AwaitValidation(Validation::BuildFailed);
+        CHECK(process.Calls() == 1U);
         CHECK_FALSE(workspace.ReadSourceReviewStatus().canRunTests);
         CHECK(workspace.ViewModel().sourceDocuments.front().Text() == "int value = 2;\n");
+    }
+
+    TEST_CASE("Failed approved workspace build preserves a newer dirty review buffer", "[editor][source][review][validation]") {
+        using Command = ReviewBuildWorkspace::Command;
+        using Validation = ReviewBuildWorkspace::Validation;
+        ReviewBuildWorkspace fixture;
+        auto &workspace = *fixture.workspace;
+        auto &process = fixture.process;
+        auto approved = fixture.ApplyReview();
+        const auto instance = workspace.ViewModel().sourceDocuments.front().Identity().instance;
+        REQUIRE(workspace.SaveSourceDocuments().HasValue());
+        fixture.AwaitValidation(Validation::Ready);
+        workspace.ProcessCommand(approved);
+        REQUIRE(process.WaitForInvocation());
+        REQUIRE(workspace.ReadSourceReviewStatus().validation == Validation::Building);
+        const auto saved = workspace.SourceDocuments().Snapshot(instance).Value();
+        REQUIRE_FALSE(saved.Dirty());
+        const auto edited = workspace.SourceDocuments().Edit(instance, {saved.Revision(), 12, 1, "3"});
+        REQUIRE(edited.HasValue());
+        CHECK(workspace.ReadSourceReviewStatus().validation == Validation::Stale);
+
+        process.Release();
+        fixture.AwaitBuildFailure();
+        const auto stale = workspace.ReadSourceReviewStatus();
+        CHECK(stale.validation == Validation::Stale);
+        CHECK_FALSE(stale.canRunTests);
+        approved.command = Command::TestSourceReview;
+        workspace.ProcessCommand(approved);
+        REQUIRE(fixture.operations.SnapshotIfChanged(0)->operations.size() == 1);
+        CHECK(process.Calls() == 1U);
+        const auto retained = workspace.SourceDocuments().Snapshot(instance).Value();
+        CHECK(retained.Dirty());
+        CHECK(retained.Revision() == edited.Value().Revision());
+        CHECK(retained.Text() == "int value = 3;\n");
+        std::ifstream disk(fixture.project.directory / "source.cpp", std::ios::binary);
+        REQUIRE(disk);
+        CHECK(std::string(std::istreambuf_iterator<char>{disk}, {}) == "int value = 2;\n");
     }
 
     TEST_CASE("Source edits and retired workspace requests preserve all live documents", "[editor][source][review][concurrency]") {
