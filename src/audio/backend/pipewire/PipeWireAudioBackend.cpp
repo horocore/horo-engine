@@ -188,10 +188,9 @@ namespace Horo::Audio::Backend {
                 if (candidate.revision == std::numeric_limits<std::uint64_t>::max())
                     return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
                 ++candidate.revision;
-                auto changes = DescribeAudioCaptureDeviceChanges(capture_, candidate);
-                if (changes.HasError())
-                    return Output::Failure(changes.ErrorValue());
-                auto result = Output::Success({candidate, std::move(changes).Value()});
+                auto result = AudioCaptureDiscovery::Between(capture_, candidate);
+                if (result.HasError())
+                    return result;
                 capture_ = std::move(candidate);
                 captureBindings_ = std::move(bindings);
                 nextCaptureSlot_ = nextSlot;

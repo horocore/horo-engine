@@ -10,16 +10,56 @@
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioPlanarBlock.h"
 
+#include <array>
+#include <utility>
 #include <vector>
 
 namespace Horo::Audio::Backend {
     struct AudioCallbackViolation;
     struct AudioCallbackViolationDrain;
 
-    /** @brief An owned recording catalog and the membership changes observed by this refresh. */
+    /** @brief Changed recording default, including withdrawal when the current endpoint is absent. */
+    struct AudioCaptureDefaultChange final {
+        AudioDefaultDeviceRole role;
+        std::optional<AudioCaptureDeviceId> previous;
+        std::optional<AudioCaptureDeviceId> current;
+    };
+
+    /** @brief Observed microphone authorization transition; it does not authorize a capture purpose. */
+    struct AudioCapturePermissionChange final {
+        AudioCapturePermission previous;
+        AudioCapturePermission current;
+    };
+
+    /** @brief One refresh's owned catalog and changes, all correlated to snapshot.revision. */
     struct AudioCaptureDiscovery final {
         AudioCaptureDeviceSnapshot snapshot;
         std::vector<AudioCaptureDeviceChange> changes;
+        std::array<std::optional<AudioCaptureDefaultChange>, 3> defaultChanges{}; /**< Console, Multimedia, Communications. */
+        std::optional<AudioCapturePermissionChange> permissionChange;
+
+        /** @brief Describes the exact difference between two validated successive recording catalogs.
+         * @param before Previous committed catalog. @param after Candidate at a newer revision.
+         * @return Owned validated discovery or typed failure. The caller commits native bindings only on success.
+         */
+        [[nodiscard]] static Result<AudioCaptureDiscovery> Between(const AudioCaptureDeviceSnapshot &before,
+                                                                   const AudioCaptureDeviceSnapshot &after) {
+            auto membership = DescribeAudioCaptureDeviceChanges(before, after);
+            if (membership.HasError())
+                return Result<AudioCaptureDiscovery>::Failure(membership.ErrorValue());
+            AudioCaptureDiscovery discovery{after, std::move(membership).Value()};
+            const std::array roles{AudioDefaultDeviceRole::Console, AudioDefaultDeviceRole::Multimedia,
+                                   AudioDefaultDeviceRole::Communications};
+            const std::array previous{before.defaults.console, before.defaults.multimedia, before.defaults.communications};
+            const std::array current{after.defaults.console, after.defaults.multimedia, after.defaults.communications};
+            for (std::size_t i = 0; i < roles.size(); ++i) {
+                if (previous[i] != current[i])
+                    discovery.defaultChanges[i] = AudioCaptureDefaultChange{roles[i], previous[i], current[i]};
+            }
+            if (before.permission != after.permission)
+                discovery.permissionChange = AudioCapturePermissionChange{before.permission, after.permission};
+            return Result<AudioCaptureDiscovery>::Success(std::move(discovery));
+        }
     };
 
     /** @brief Runtime-local, non-wrapping operation identity; sequence zero is invalid. */

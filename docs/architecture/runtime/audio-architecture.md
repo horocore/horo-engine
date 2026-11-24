@@ -2346,8 +2346,11 @@ Capture discovery uses `AudioCaptureDeviceSnapshot` and generation-scoped
 `AudioCaptureDeviceId` values. Recording roles resolve within the capture
 catalog and never fall back to playback or another role. Adapters may omit
 unavailable format evidence. Discovery reports platform permission as a
-separate fact. Opening a capture stream still requires the host's permission
-and consent decision.
+separate fact. SDL3 and PipeWire attach endpoint additions and removals, changed
+role bindings, and observed permission transitions to the same discovery revision.
+Withdrawal has an empty current binding. A default change does not retire the
+old endpoint while it remains in the catalog. Opening a capture stream still
+requires the host's permission and consent decision.
 
 Capture producers write into preallocated or policy-bounded buffers and never
 block the real-time callback. Consumers receive owner-backed timestamped spans

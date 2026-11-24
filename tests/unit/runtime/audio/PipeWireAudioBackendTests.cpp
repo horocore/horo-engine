@@ -169,6 +169,7 @@ namespace Horo::Audio::Backend {
             REQUIRE(unchanged.HasValue());
             CHECK(unchanged.Value().snapshot.revision == before.revision);
             CHECK(unchanged.Value().changes.empty());
+            CHECK_FALSE(unchanged.Value().defaultChanges[1]);
 
             std::ofstream(control / "capture-ready").put('\n');
             WaitForGraphChange(control / "capture-default-cleared");
@@ -177,6 +178,10 @@ namespace Horo::Audio::Backend {
             CHECK(cleared.Value().snapshot.revision > before.revision);
             CHECK(cleared.Value().snapshot.devices == before.devices);
             CHECK(cleared.Value().changes.empty());
+            REQUIRE(cleared.Value().defaultChanges[1]);
+            CHECK(cleared.Value().defaultChanges[1]->role == AudioDefaultDeviceRole::Multimedia);
+            CHECK(cleared.Value().defaultChanges[1]->previous == selected.device);
+            CHECK_FALSE(cleared.Value().defaultChanges[1]->current);
             REQUIRE(ResolveAudioCaptureDevice(cleared.Value().snapshot, AudioDefaultDeviceRole::Multimedia).status ==
                     AudioDeviceResolutionStatus::Unavailable);
             std::ofstream(control / "capture-default-unavailable").put('\n');
@@ -195,6 +200,9 @@ namespace Horo::Audio::Backend {
             CHECK(next.Value().changes[0].device == selected.device);
             CHECK(next.Value().changes[1].kind == AudioCaptureDeviceChangeKind::Added);
             CHECK(next.Value().changes[1].device == after.devices.front().id);
+            REQUIRE(next.Value().defaultChanges[1]);
+            CHECK_FALSE(next.Value().defaultChanges[1]->previous);
+            CHECK(next.Value().defaultChanges[1]->current == after.devices.front().id);
         }
     }  // namespace
 

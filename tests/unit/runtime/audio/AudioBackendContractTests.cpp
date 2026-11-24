@@ -47,6 +47,43 @@ namespace Horo::Audio::Backend {
             REQUIRE(MatchesAudioDeviceEpoch(copy.plannedEpoch, Epoch()));
         }
 
+        TEST_CASE("Capture discovery reports default withdrawal, replacement, and authorization independently of hotplug",
+                  "[audio][backend][capture]") {
+            const auto owner = Epoch().device.owner;
+            const AudioCaptureDeviceId desktop{owner, 1, 1};
+            const AudioCaptureDeviceId headset{owner, 2, 1};
+            const AudioCaptureDeviceSnapshot previous{.owner = owner,
+                                                      .backend = AudioBackendKind::WASAPI,
+                                                      .revision = 7,
+                                                      .devices = {{desktop, "Desktop microphone"}, {headset, "Headset"}},
+                                                      .defaults = {.multimedia = desktop, .communications = headset},
+                                                      .permission = AudioCapturePermission::Granted};
+            auto current = previous;
+            ++current.revision;
+            current.defaults.multimedia = headset;
+            current.defaults.communications.reset();
+            current.permission = AudioCapturePermission::Denied;
+
+            const auto discovery = AudioCaptureDiscovery::Between(previous, current);
+            REQUIRE(discovery.HasValue());
+            const auto &value = discovery.Value();
+            CHECK(value.snapshot.revision == current.revision);
+            CHECK(value.changes.empty());
+            CHECK_FALSE(value.defaultChanges[0]);
+            REQUIRE(value.defaultChanges[1]);
+            CHECK(value.defaultChanges[1]->role == AudioDefaultDeviceRole::Multimedia);
+            CHECK(value.defaultChanges[1]->previous == desktop);
+            CHECK(value.defaultChanges[1]->current == headset);
+            REQUIRE(value.defaultChanges[2]);
+            CHECK(value.defaultChanges[2]->role == AudioDefaultDeviceRole::Communications);
+            CHECK(value.defaultChanges[2]->previous == headset);
+            CHECK_FALSE(value.defaultChanges[2]->current);
+            REQUIRE(value.permissionChange);
+            CHECK(value.permissionChange->previous == AudioCapturePermission::Granted);
+            CHECK(value.permissionChange->current == AudioCapturePermission::Denied);
+            CHECK(AudioCaptureDiscovery::Between(current, previous).HasError());
+        }
+
         TEST_CASE("Audio backend requested and actual facts remain distinct for every peer", "[audio][backend]") {
             auto request = OpenRequest();
             request.access = AccessMode::Shared;

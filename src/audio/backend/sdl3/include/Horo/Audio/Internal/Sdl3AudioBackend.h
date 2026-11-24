@@ -66,8 +66,9 @@ namespace Horo::Audio::Backend {
 
         /** @brief Refreshes SDL's recording inventory on the backend control thread without opening a device.
          * @return Complete catalog and typed changes from the last successful refresh, or a typed error.
-         * @details SDL does not expose exact recording role bindings or host permission here. The host chooses
-         * when to refresh. This call does not consume SDL's shared event queue or start capture.
+         * @details SDL exposes the system recording route through Multimedia. Other roles remain unavailable.
+         * The Core Audio driver can observe authorization without requesting it. The host chooses when to
+         * refresh. This call does not consume SDL's shared event queue or start capture.
          */
         [[nodiscard]] Result<AudioCaptureDiscovery> DiscoverCapture() override;
 

@@ -123,10 +123,9 @@ namespace Horo::Audio::Backend {
             return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
 
         ++candidate.revision;
-        auto changes = DescribeAudioCaptureDeviceChanges(captureSnapshot, candidate);
-        if (changes.HasError())
-            return Output::Failure(changes.ErrorValue());
-        auto result = Output::Success({candidate, std::move(changes).Value()});
+        auto result = AudioCaptureDiscovery::Between(captureSnapshot, candidate);
+        if (result.HasError())
+            return result;
         captureSnapshot = std::move(candidate);
         captureDevices = std::move(bindings);
         nextCaptureSlot = nextSlot;
