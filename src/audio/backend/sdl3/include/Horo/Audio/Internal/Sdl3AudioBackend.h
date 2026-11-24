@@ -70,6 +70,7 @@ namespace Horo::Audio::Backend {
         Sdl3CaptureActivityState state{Sdl3CaptureActivityState::Inactive};
         std::uint64_t generation{};
         Sdl3CapturePurpose purpose{Sdl3CapturePurpose::Unspecified};
+        AudioSample peakLevel{}; /**< Latest normalized peak for recording or connection-test capture. */
     };
 
     /** @brief Result of an explicit request to the platform permission owner. */
@@ -179,6 +180,7 @@ namespace Horo::Audio::Backend {
          * @param block Destination written only on a successful copy. Timestamps use an SDL host-clock estimate.
          * @param pcm Consumer-owned destination for interleaved float PCM.
          * @return Copy status and loss count, or typed stale session, permission loss, device loss or callback fault.
+         * @details Connection testing reports its level through CaptureActivity and never grants PCM access.
          */
         [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, AudioCapturedBlock &block,
                                                              std::span<AudioSample> pcm);

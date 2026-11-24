@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <limits>
 #include <new>
 #include <utility>
@@ -27,6 +28,16 @@ namespace Horo::Audio::Backend {
                    ValidateAudioProcessingFormat(descriptor.format);
         }
     }  // namespace
+
+    /** @copydoc MeasureCapturePeak */
+    AudioSample MeasureCapturePeak(const std::span<const AudioSample> samples) noexcept {
+        AudioSample peak{};
+        for (const auto sample : samples) {
+            if (std::isfinite(sample))
+                peak = std::max(peak, std::abs(sample));
+        }
+        return std::min(peak, 1.0F);
+    }
 
     /** @brief Producer and consumer each advance only their own ring cursor. */
     struct AudioCaptureBuffer::State final {

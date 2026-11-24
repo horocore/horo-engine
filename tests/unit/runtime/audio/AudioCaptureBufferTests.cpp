@@ -132,6 +132,16 @@ namespace Horo::Audio::Backend {
             CHECK(shape.ErrorValue().code.Value() == AudioErrors::MemoryInvalid.code.Value());
         }
 
+        TEST_CASE("Capture peak display ignores nonfinite samples and clamps overload", "[audio][capture]") {
+            const std::array partial{0.125F, -0.75F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+            const std::array overload{0.125F, -1.5F};
+            const std::array silence{0.0F, -0.0F};
+            CHECK(MeasureCapturePeak({}) == 0.0F);
+            CHECK(MeasureCapturePeak(silence) == 0.0F);
+            CHECK(MeasureCapturePeak(partial) == 0.75F);
+            CHECK(MeasureCapturePeak(overload) == 1.0F);
+        }
+
         TEST_CASE("Capture publication overflow and consumer copy use no heap allocation after preparation", "[audio][capture]") {
             auto buffer = MakeBuffer();
             const std::array<AudioSample, 2> stereo{0.125F, -0.125F};

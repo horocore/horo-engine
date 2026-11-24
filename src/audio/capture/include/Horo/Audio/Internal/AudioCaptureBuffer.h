@@ -9,6 +9,9 @@
 #include <span>
 
 namespace Horo::Audio::Backend {
+    /** @brief Measures the largest finite magnitude in borrowed PCM, clamped to the UI's 0–1 display range. */
+    [[nodiscard]] AudioSample MeasureCapturePeak(std::span<const AudioSample> samples) noexcept;
+
     /** @brief Immutable capture generation and bounded storage selected on Audio control. */
     struct AudioCaptureBufferDescriptor final {
         AudioCaptureDeviceId device;

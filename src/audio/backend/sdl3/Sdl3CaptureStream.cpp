@@ -7,6 +7,7 @@
 namespace Horo::Audio::Backend::Sdl3Detail {
     namespace {
         static_assert(std::atomic<Sdl3CaptureActivityState>::is_always_lock_free);
+        static_assert(std::atomic<AudioSample>::is_always_lock_free);
         constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
 
         /** @brief Converts a source frame position with checked whole-second arithmetic. */
@@ -69,8 +70,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
     }
 
     /** @copydoc CaptureStream::CaptureStream */
-    CaptureStream::CaptureStream(const SDL_AudioDeviceID endpoint, AudioCaptureBuffer buffer) noexcept
-        : endpoint_(endpoint), buffer_(std::move(buffer)) {}
+    CaptureStream::CaptureStream(const SDL_AudioDeviceID endpoint, AudioCaptureBuffer buffer, const Sdl3CapturePurpose purpose) noexcept
+        : endpoint_(endpoint), buffer_(std::move(buffer)), purpose_(purpose) {}
 
     CaptureStream::~CaptureStream() {
         buffer_.Cancel();
@@ -129,6 +130,11 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         return activity_.load();
     }
 
+    /** @copydoc CaptureStream::Peak */
+    AudioSample CaptureStream::Peak() const noexcept {
+        return peak_.load();
+    }
+
     /** @copydoc CaptureStream::Buffer */
     AudioCaptureBuffer &CaptureStream::Buffer() noexcept {
         return buffer_;
@@ -147,15 +153,22 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         const auto frames = CallbackFrames(spec, *buffer_.Descriptor(), bytes);
         if (frames == 0)
             return false;
+        const std::span samples{pcm, static_cast<std::size_t>(bytes) / sizeof(AudioSample)};
+        if (purpose_ == Sdl3CapturePurpose::ConnectionTest) {
+            peak_.store(MeasureCapturePeak(samples));
+            activity_.store(Sdl3CaptureActivityState::Capturing);
+            return true;
+        }
         const auto start = Timestamp(frames);
         if (!start)
             return false;
-        const auto samples = static_cast<std::size_t>(bytes) / sizeof(AudioSample);
-        const auto status = buffer_.TryWrite(*start, firstFrame_, frames, {pcm, samples});
+        const auto status = buffer_.TryWrite(*start, firstFrame_, frames, samples);
         if (status == Cancelled)
             return true;
         if (status != Accepted && status != Full)
             return false;
+        if (purpose_ == Sdl3CapturePurpose::Recording)
+            peak_.store(MeasureCapturePeak(samples));
         if (firstFrame_ == 0)
             activity_.store(Sdl3CaptureActivityState::Capturing);
         firstFrame_ += frames;
@@ -189,12 +202,13 @@ namespace Horo::Audio::Backend::Sdl3Detail {
     }
 
     /** @copydoc CaptureControl::OpenStream */
-    Result<void> CaptureControl::OpenStream(const SDL_AudioDeviceID endpoint, const AudioCaptureBufferDescriptor &descriptor) {
+    Result<void> CaptureControl::OpenStream(const SDL_AudioDeviceID endpoint, const AudioCaptureBufferDescriptor &descriptor,
+                                            const Sdl3CapturePurpose purpose) {
         auto buffer = AudioCaptureBuffer::Create(descriptor);
         if (buffer.HasError())
             return Result<void>::Failure(buffer.ErrorValue());
         try {
-            auto candidate = std::make_unique<CaptureStream>(endpoint, std::move(buffer).Value());
+            auto candidate = std::make_unique<CaptureStream>(endpoint, std::move(buffer).Value(), purpose);
             if (const auto opened = candidate->Open(); opened.HasError())
                 return opened;
             stream = std::move(candidate);
@@ -274,7 +288,7 @@ namespace Horo::Audio::Backend {
         const auto endpoint = capture.ResolveEndpoint(descriptor);
         if (endpoint.HasError())
             return Result<void>::Failure(endpoint.ErrorValue());
-        auto opened = capture.OpenStream(endpoint.Value(), descriptor);
+        auto opened = capture.OpenStream(endpoint.Value(), descriptor, intent.purpose);
         if (opened.HasValue())
             capture.activeGrant = grant;
         return opened;
@@ -301,7 +315,7 @@ namespace Horo::Audio::Backend {
         const auto &capture = impl_->capture;
         if (!capture.stream)
             return {};
-        return {capture.stream->Activity(), capture.lastGeneration, capture.activeGrant.intent.purpose};
+        return {capture.stream->Activity(), capture.lastGeneration, capture.activeGrant.intent.purpose, capture.stream->Peak()};
     }
 
     /** @copydoc Sdl3AudioBackend::ReadCapture */
@@ -311,6 +325,8 @@ namespace Horo::Audio::Backend {
         auto &capture = impl_->capture;
         if (!capture.stream || generation != capture.lastGeneration)
             return Output::Failure(MakeError(AudioErrors::HandleStale));
+        if (capture.activeGrant.intent.purpose == Sdl3CapturePurpose::ConnectionTest)
+            return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
         if (const auto *failure = capture.stream->Failure()) {
             capture.Stop();
             return Output::Failure(MakeError(*failure));

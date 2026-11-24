@@ -81,6 +81,10 @@ Permission for one purpose does not authorize another. Editor preview consent do
 not grant packaged-game network voice, and microphone permission does not grant
 recording retention, upload, telemetry, or speech-provider network access.
 
+The editor connection test computes a live peak level in the capture callback.
+The test publishes activity and scalar level only. It does not queue PCM for a
+consumer, route microphone audio to a playback device, or authorize recording.
+
 ### 4. The reusable transport is bounded timestamped PCM
 
 The private backend reports native input format and timestamps. Audio validates and

@@ -2198,6 +2198,7 @@
     "settings.audio.microphone.stop": {"text": "Stop Test"},
     "settings.audio.microphone.starting": {"text": "Starting the microphone test…"},
     "settings.audio.microphone.capturing": {"text": "Microphone in use. The test stops automatically."},
+    "settings.audio.microphone.input_level": {"text": "Input level"},
     "settings.audio.microphone.test_failed": {"text": "The input test could not continue. Scan for inputs and check microphone access."},
     "settings.audio.output_device": {
       "text": "Audio Output Device"

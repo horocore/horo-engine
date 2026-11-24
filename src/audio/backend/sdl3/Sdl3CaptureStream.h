@@ -15,7 +15,7 @@ namespace Horo::Audio::Backend::Sdl3Detail {
     class CaptureStream final {
     public:
         /** @brief Adopts prepared storage before attaching any native callback. */
-        CaptureStream(SDL_AudioDeviceID endpoint, AudioCaptureBuffer buffer) noexcept;
+        CaptureStream(SDL_AudioDeviceID endpoint, AudioCaptureBuffer buffer, Sdl3CapturePurpose purpose) noexcept;
         ~CaptureStream();
         CaptureStream(const CaptureStream &) = delete;
         CaptureStream &operator=(const CaptureStream &) = delete;
@@ -26,6 +26,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         [[nodiscard]] const ErrorCodeDescriptor *Failure() const noexcept;
         /** @brief Reports the callback's last published evidence without querying SDL. */
         [[nodiscard]] Sdl3CaptureActivityState Activity() const noexcept;
+        /** @brief Reads the latest allowed display level without acquiring a native device lock. */
+        [[nodiscard]] AudioSample Peak() const noexcept;
         /** @brief Borrows the queue owned by this exact capture generation. */
         [[nodiscard]] AudioCaptureBuffer &Buffer() noexcept;
         /** @brief Detaches the native producer and transfers its unread PCM for a normal recording stop. */
@@ -42,8 +44,10 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         std::optional<AudioMonotonicTimestamp> Timestamp(std::uint32_t frames) noexcept;
         const SDL_AudioDeviceID endpoint_;
         AudioCaptureBuffer buffer_;
+        const Sdl3CapturePurpose purpose_;
         SDL_AudioDeviceID device_{};
         std::atomic<Sdl3CaptureActivityState> activity_{Sdl3CaptureActivityState::AwaitingFrames};
+        std::atomic<AudioSample> peak_{};
         std::uint64_t firstFrame_{};
         std::uint64_t clockOrigin_{};
     };
@@ -66,7 +70,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         /** @brief Resolves an explicit endpoint with the advertised semantic PCM format. */
         [[nodiscard]] Result<SDL_AudioDeviceID> ResolveEndpoint(const AudioCaptureBufferDescriptor &descriptor) const;
         /** @brief Prepares storage and publishes the already admitted generation after native open succeeds. */
-        [[nodiscard]] Result<void> OpenStream(SDL_AudioDeviceID endpoint, const AudioCaptureBufferDescriptor &descriptor);
+        [[nodiscard]] Result<void> OpenStream(SDL_AudioDeviceID endpoint, const AudioCaptureBufferDescriptor &descriptor,
+                                              Sdl3CapturePurpose purpose);
         /** @brief Detaches the stream and retires the active permission decision. */
         void Stop() noexcept;
     };

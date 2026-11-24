@@ -485,6 +485,16 @@ namespace Horo::Editor::SettingsModalInternal {
             return "audio.microphone.test_description";
         }
 
+        /** @brief Displays the current level with a numeric value independently of the meter fill. */
+        void DrawMicrophoneLevel(const EditorGuiContext &ctx, const float peak) {
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.input_level");
+            const auto percent = static_cast<int>(std::clamp(peak, 0.0F, 1.0F) * 100.0F + 0.5F);
+            const auto value = std::format("{} / 100", percent);
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [peak, &value] {
+                ImGui::ProgressBar(peak, {-1.0F, 0.0F}, value.c_str());
+            }, "microphone-level", SettingRowLayout::Stacked);
+        }
+
         /** @brief Keeps the live status and stop action visible until the capture owner detaches. */
         void DrawMicrophoneTest(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
             auto *microphone = ctx.microphonePermission;
@@ -508,6 +518,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 else if (Button({.label = action.c_str(), .variant = ButtonVariant::Secondary}))
                     microphone->StopTest();
             }, "microphone-test", SettingRowLayout::Stacked);
+            if (status == Capturing)
+                DrawMicrophoneLevel(ctx, microphone->TestPeakLevel());
         }
     }  // namespace
 

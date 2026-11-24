@@ -2198,6 +2198,7 @@
     "settings.audio.microphone.stop": {"text": "Testi Durdur"},
     "settings.audio.microphone.starting": {"text": "Mikrofon testi başlatılıyor…"},
     "settings.audio.microphone.capturing": {"text": "Mikrofon kullanımda. Test kendiliğinden durur."},
+    "settings.audio.microphone.input_level": {"text": "Giriş seviyesi"},
     "settings.audio.microphone.test_failed": {"text": "Giriş testi sürdürülemedi. Girişleri yeniden tarayın ve mikrofon erişimini kontrol edin."},
     "settings.audio.output_device": {
       "text": "Ses Çıkış Aygıtı"

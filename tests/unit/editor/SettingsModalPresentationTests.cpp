@@ -21,6 +21,49 @@
 namespace {
     using Horo::Editor::Tests::SettingsPresentationFixture;
 
+    /** @brief Synthetic permission host reports captured level evidence without a device or PCM. */
+    struct MicrophoneLevelFixture final : Horo::Editor::IEditorMicrophonePermission {
+        Horo::Editor::EditorMicrophoneTestStatus state{Horo::Editor::EditorMicrophoneTestStatus::Idle};
+        mutable unsigned levelReads{};
+
+        Horo::Editor::EditorMicrophonePermissionStatus Status() override {
+            return Horo::Editor::EditorMicrophonePermissionStatus::Granted;
+        }
+
+        void Request() override {
+            // Permission is already granted by the fixture.
+        }
+
+        void ScanInputs() noexcept override {
+            // The meter does not depend on an input catalog.
+        }
+
+        std::span<const std::string> Inputs() const noexcept override {
+            return {};
+        }
+
+        void StartTest(std::size_t) noexcept override {
+            state = Horo::Editor::EditorMicrophoneTestStatus::Starting;
+        }
+
+        void StopTest() noexcept override {
+            state = Horo::Editor::EditorMicrophoneTestStatus::Idle;
+        }
+
+        void AdvanceTest(bool) noexcept override {
+            // The test advances capture evidence explicitly between draws.
+        }
+
+        Horo::Editor::EditorMicrophoneTestStatus TestStatus() const noexcept override {
+            return state;
+        }
+
+        float TestPeakLevel() const noexcept override {
+            ++levelReads;
+            return 0.75F;
+        }
+    };
+
     /** @brief Restores the shared theme after each generated presentation case. */
     struct RestoreTheme {
         ~RestoreTheme() {
@@ -277,6 +320,40 @@ TEST_CASE("Shared configuration fields render long provenance and typed errors a
     REQUIRE(ImGui::GetDrawData() != nullptr);
     CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
     CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 100);
+}
+
+TEST_CASE("Audio settings show the localized microphone meter only while capturing", "[unit][editor][gui][audio]") {
+    using namespace Horo::Editor;
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    MicrophoneLevelFixture microphone;
+    Tests::EditorGuiContextFixture gui{{720.0F, 800.0F}};
+    gui.context.microphonePermission = &microphone;
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(gui.localization.ActivatePrepared(&error));
+    CHECK(gui.localization.Get("editor", "settings.audio.microphone.input_level") ==
+          (locale == "en-US" ? "Input level" : "Giriş seviyesi"));
+
+    SettingsState state{};
+    state.activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::Audio);
+    const auto draw = [&gui, &state] {
+        gui.imgui.BeginFrame();
+        ImGui::SetNextWindowSize({600.0F, 640.0F}, ImGuiCond_Always);
+        ImGui::Begin("Audio settings test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        SettingsModalInternal::DrawContent(state, gui.context);
+        ImGui::End();
+        gui.imgui.EndFrame();
+    };
+    draw();
+    CHECK(microphone.levelReads == 0);
+    microphone.state = EditorMicrophoneTestStatus::Capturing;
+    draw();
+    CHECK(microphone.levelReads == 1);
+    microphone.state = EditorMicrophoneTestStatus::Failed;
+    draw();
+    CHECK(microphone.levelReads == 1);
 }
 
 TEST_CASE("Gameplay accessibility settings share the user draft and Apply transaction", "[unit][editor][gui][accessibility]") {

@@ -28,6 +28,8 @@ namespace Horo::Editor {
         void AdvanceTest(bool foreground) noexcept override;
         /** @copydoc IEditorMicrophonePermission::TestStatus */
         [[nodiscard]] EditorMicrophoneTestStatus TestStatus() const noexcept override;
+        /** @copydoc IEditorMicrophonePermission::TestPeakLevel */
+        [[nodiscard]] float TestPeakLevel() const noexcept override;
 
     private:
         struct CaptureCheck;

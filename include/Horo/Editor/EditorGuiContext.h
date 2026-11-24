@@ -66,6 +66,11 @@ namespace Horo::Editor {
         virtual void AdvanceTest(bool foreground) noexcept = 0;
         /** @brief Reports the test state without polling native resources. */
         [[nodiscard]] virtual EditorMicrophoneTestStatus TestStatus() const noexcept = 0;
+
+        /** @brief Returns the current microphone test display level in the 0–1 range, or zero when unavailable. */
+        [[nodiscard]] virtual float TestPeakLevel() const noexcept {
+            return 0.0F;
+        }
     };
 
     /** @brief Provides theme configuration and font atlas access for the GUI. */

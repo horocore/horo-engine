@@ -48,6 +48,7 @@ namespace Horo::Editor {
         Clock::time_point deadline{};
         Clock::time_point nextHealth{};
         EditorMicrophoneTestStatus status{EditorMicrophoneTestStatus::Idle};
+        float peakLevel{};
 
         /** @brief Creates an inert capture-only backend when the user first requests discovery. */
         bool EnsureBackend() {
@@ -124,6 +125,7 @@ namespace Horo::Editor {
                 static_cast<void>(backend->StopCapture(grant->generation));
             grant.reset();
             status = EditorMicrophoneTestStatus::Idle;
+            peakLevel = 0.0F;
         }
 
         /** @brief Reconciles native health periodically and publishes callback activity without reading audio. */
@@ -136,9 +138,10 @@ namespace Horo::Editor {
                     return;
                 }
             }
-            status = backend->CaptureActivity().state == Audio::Backend::Sdl3CaptureActivityState::Capturing
-                         ? EditorMicrophoneTestStatus::Capturing
-                         : EditorMicrophoneTestStatus::Starting;
+            const auto activity = backend->CaptureActivity();
+            peakLevel = activity.peakLevel;
+            status = activity.state == Audio::Backend::Sdl3CaptureActivityState::Capturing ? EditorMicrophoneTestStatus::Capturing
+                                                                                           : EditorMicrophoneTestStatus::Starting;
         }
 
         /** @brief Drains a single queued owner operation and reconciles ongoing callback evidence. */
@@ -226,5 +229,10 @@ namespace Horo::Editor {
     /** @copydoc EditorMicrophonePermission::TestStatus */
     EditorMicrophoneTestStatus EditorMicrophonePermission::TestStatus() const noexcept {
         return check_->status;
+    }
+
+    /** @copydoc IEditorMicrophonePermission::TestPeakLevel */
+    float EditorMicrophonePermission::TestPeakLevel() const noexcept {
+        return check_->status == EditorMicrophoneTestStatus::Capturing ? check_->peakLevel : 0.0F;
     }
 }  // namespace Horo::Editor

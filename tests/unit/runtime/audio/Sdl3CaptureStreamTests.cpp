@@ -1,6 +1,7 @@
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
@@ -60,6 +61,15 @@ namespace Horo::Audio::Backend {
             }
             FAIL("The SDL recording callback did not publish another complete block.");
             return {};
+        }
+
+        /** @brief Waits for the dummy callback without opening any physical device or reading PCM. */
+        void WaitForActivity(const Sdl3AudioBackend &backend) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            while (backend.CaptureActivity().state == Sdl3CaptureActivityState::AwaitingFrames &&
+                   std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            REQUIRE(backend.CaptureActivity().state == Sdl3CaptureActivityState::Capturing);
         }
 
         /** @brief Checks that live PCM and the source timeline survive a stalled reader. */
@@ -224,11 +234,7 @@ namespace Horo::Audio::Backend {
             }
             SECTION("normal stop detaches the producer and transfers queued data") {
                 REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
-                while (backend->CaptureActivity().state == Sdl3CaptureActivityState::AwaitingFrames &&
-                       std::chrono::steady_clock::now() < deadline)
-                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                REQUIRE(backend->CaptureActivity().state == Sdl3CaptureActivityState::Capturing);
+                WaitForActivity(*backend);
                 auto stopped = backend->FinishRecording(descriptor.generation, grant);
                 REQUIRE(stopped.HasValue());
                 auto tail = std::move(stopped).Value();
@@ -240,6 +246,32 @@ namespace Horo::Audio::Backend {
                 CHECK(block.sequence == 1);
                 CHECK(block.firstFrame == 0);
             }
+        }
+
+        TEST_CASE("SDL connection tests expose a level without granting access to PCM", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant grant{.device = descriptor.device,
+                                         .discoveryRevision = catalog.revision,
+                                         .generation = descriptor.generation,
+                                         .authorityRevision = 1,
+                                         .intent = {.purpose = Sdl3CapturePurpose::ConnectionTest},
+                                         .foreground = true};
+            REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+            WaitForActivity(*backend);
+            CHECK(backend->CaptureActivity().peakLevel == 0.0F);  // Dummy recorder emits silence.
+            AudioCapturedBlock block{.sequence = 8};
+            std::array<AudioSample, 2> pcm{0.25F, -0.5F};
+            const auto denied = backend->ReadCapture(descriptor.generation, block, pcm);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            CHECK(block.sequence == 8);
+            CHECK(pcm.front() == 0.25F);
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            CHECK(backend->CaptureActivity().peakLevel == 0.0F);
         }
 
         TEST_CASE("SDL dummy permission request returns a decision without opening capture", "[audio][sdl3][capture]") {
