@@ -52,6 +52,8 @@ namespace Horo::XR::OpenXRInternal {
          * Lost-event evidence returns a terminal observation and revokes canonical session admission without
          * destroying retained native frame/image obligations or claiming successful native end. Subsequent polls
          * copy that observation without native calls. Recovery remains an explicit host boundary.
+         * An orderly native EXITING event also persists for this binding. It requires
+         * session retirement and cannot be followed by a begin on the same binding.
          */
         [[nodiscard]] Result<NativeSessionEventObservation> Poll(bool wantsPlay);
         /** @brief Borrows no state and performs no native work. @return Whether successful native begin still requires end/retirement. */
@@ -65,6 +67,12 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CheckCall(const char *operation, XrResult result);
         /** @brief Publishes the known loss once, retaining every native frame and cleanup obligation. */
         [[nodiscard]] Result<void> RecordLoss(NativeSessionEventLoss reason);
+        /** @brief Reads and applies one event after fencing the native result to the current session.
+         * @param current Borrow of the admitted native session and instance.
+         * @param observation Value-only notifications accumulated for the current poll.
+         * @return True for an applied event, false for an empty queue or terminal loss, or the original failure.
+         */
+        [[nodiscard]] Result<bool> ReadEvent(const NativeSessionBorrow &current, NativeSessionEventObservation &observation);
         /** @brief Applies one fenced native event through the same canonical lifecycle and accumulates value-only notices.
          * @param buffer Actual native event. @param session Same current opaque native session, compared only; never dereferenced or passed
          * to native dispatch. @param observation Bounded poll result.

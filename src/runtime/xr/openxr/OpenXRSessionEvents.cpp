@@ -279,6 +279,19 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRSessionEvents::ReadEvent */
+    Result<bool> OpenXRSessionEvents::ReadEvent(const NativeSessionBorrow &current, NativeSessionEventObservation &observation) {
+        XrEventDataBuffer buffer{XR_TYPE_EVENT_DATA_BUFFER};
+        const auto result = dispatch_.poll(current.instance, &buffer);
+        if (auto checked = CheckCall("xrPollEvent", result == XR_EVENT_UNAVAILABLE ? XR_SUCCESS : result); checked.HasError())
+            return Result<bool>::Failure(checked.ErrorValue());
+        if (result != XR_SUCCESS)
+            return Result<bool>::Success(false);
+        if (auto applied = ProcessEvent(buffer, current.session, observation); applied.HasError())
+            return Result<bool>::Failure(applied.ErrorValue());
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc OpenXRSessionEvents::Poll */
     Result<NativeSessionEventObservation> OpenXRSessionEvents::Poll(const bool wantsPlay) {
         using Outcome = Result<NativeSessionEventObservation>;
@@ -286,6 +299,8 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         if (loss_ != NativeSessionEventLoss::None)
             return Outcome::Success({.loss = loss_});
+        if (observed_ == XR_SESSION_STATE_EXITING)
+            return Outcome::Success({.exitRequested = true});
         DispatchScope scope{dispatching_};
         if (!wantsPlay)
             native_->RevokePassthrough();
@@ -294,14 +309,9 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(current.ErrorValue());
         NativeSessionEventObservation observation;
         for (std::uint32_t index = 0; index < MaximumEventsPerPoll; ++index) {
-            XrEventDataBuffer buffer{XR_TYPE_EVENT_DATA_BUFFER};
-            const auto result = dispatch_.poll(current.Value().instance, &buffer);
-            if (auto checked = CheckCall("xrPollEvent", result == XR_EVENT_UNAVAILABLE ? XR_SUCCESS : result); checked.HasError())
-                return Outcome::Failure(checked.ErrorValue());
-            if (result == XR_SUCCESS) {
-                if (auto applied = ProcessEvent(buffer, current.Value().session, observation); applied.HasError())
-                    return Outcome::Failure(applied.ErrorValue());
-            }
+            const auto received = ReadEvent(current.Value(), observation);
+            if (received.HasError())
+                return Outcome::Failure(received.ErrorValue());
             if (observation.referenceChange) {
                 // Return one typed notice at a time and force another poll to prove the event queue drained.
                 observation.morePending = true;
@@ -313,7 +323,7 @@ namespace Horo::XR::OpenXRInternal {
                     return Outcome::Failure(progressed.ErrorValue());
             }
             observation.loss = loss_;
-            if (result == XR_EVENT_UNAVAILABLE || loss_ != NativeSessionEventLoss::None || observation.exitRequested)
+            if (!received.Value() || loss_ != NativeSessionEventLoss::None || observation.exitRequested)
                 return Outcome::Success(observation);
         }
         observation.morePending = true;

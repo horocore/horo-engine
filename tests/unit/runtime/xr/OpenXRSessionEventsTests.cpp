@@ -163,6 +163,32 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(std::ranges::count(f.native.script.calls, "session") == 1);
         }
 
+        TEST_CASE("OpenXR terminal exit ignores queued readiness for the same session", "[xr][native][events][terminal-exit]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            REQUIRE(f.events.Poll(true).HasValue());
+            f.script.Push(XR_SESSION_STATE_STOPPING);
+            REQUIRE(f.events.Poll(false).HasValue());
+            REQUIRE_FALSE(f.events.Running());
+
+            f.script.Push(XR_SESSION_STATE_EXITING);
+            f.script.Push(XR_SESSION_STATE_READY);
+            const auto exiting = f.events.Poll(false);
+            REQUIRE(exiting.HasValue());
+            REQUIRE(exiting.Value().exitRequested);
+            const auto polls = f.script.polls;
+
+            const auto repeated = f.events.Poll(true);
+            REQUIRE(repeated.HasValue());
+            CHECK(repeated.Value().exitRequested);
+            CHECK(f.script.polls == polls);
+            CHECK(f.script.begins == 1);
+            CHECK(f.script.ends == 1);
+            CHECK_FALSE(f.events.Running());
+            CHECK_FALSE(f.sessions.Snapshot().admitsFrames);
+            CHECK_FALSE(f.sessions.Snapshot().admitsActions);
+        }
+
         TEST_CASE("OpenXR preserves action focus interruption when focus returns in the same native poll", "[xr][native][events]") {
             EventFixture f;
             f.script.Push(XR_SESSION_STATE_READY);
