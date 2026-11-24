@@ -126,7 +126,8 @@ namespace Horo::Editor {
                     return Output::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
                 if (action_ == Action::Start)
                     return Start(*endpoint, context);
-                if (!owned_->Matches(context, arguments.at(idKey_).get_ref<const std::string &>()))
+                const Json &operationIdentity = arguments.at(idKey_);
+                if (!owned_->Matches(context, operationIdentity.get_ref<const std::string &>()))
                     return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
                 if (action_ == Action::Cancel)
                     static_cast<void>(endpoint->cancel(owned_->id));
