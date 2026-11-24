@@ -26,8 +26,8 @@ namespace {
         return value;
     }
 
-    std::unique_ptr<IModelProvider> Create(bool cloud) {
-        ModelProviderConfig config{Endpoint(), cloud ? "test-key-ref" : "", std::chrono::milliseconds{2000}};
+    std::unique_ptr<IModelProvider> Create(bool cloud, std::chrono::milliseconds timeout = std::chrono::seconds{2}) {
+        ModelProviderConfig config{Endpoint(), cloud ? "test-key-ref" : "", timeout};
         config.enabledFeatures.bits |= static_cast<std::uint32_t>(ModelFeature::Tools);
         return cloud ? CreateOpenAIModelProvider(std::move(config),
                                                  [](std::string_view reference) -> std::optional<std::string> {
@@ -274,12 +274,15 @@ TEST_CASE("Local inference distinguishes a stopped service and a loading model",
     CHECK(events.empty());
 }
 
-TEST_CASE("Local cancellation interrupts a quiet stream before it can publish completion", "[agent][model][http]") {
-    auto provider = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::seconds{8}});
+TEST_CASE("Both HTTP providers interrupt a quiet stream and accept another request", "[agent][model][http]") {
+    const auto cloud = GENERATE(false, true);
+    CAPTURE(cloud);
+    auto provider = Create(cloud, std::chrono::seconds{8});
     std::stop_source source;
     std::vector<ModelEventKind> events;
     const auto started = std::chrono::steady_clock::now();
-    const auto status = provider->Stream(Request("editor-local-idle"), [&events, &source](const ModelEvent &event) {
+    const auto status =
+        provider->Stream(Request(cloud ? "editor-cloud-idle" : "editor-local-idle"), [&events, &source](const ModelEvent &event) {
         events.push_back(event.kind);
         source.request_stop();
         return true;
@@ -288,6 +291,15 @@ TEST_CASE("Local cancellation interrupts a quiet stream before it can publish co
     CHECK(status.error->code == ModelErrorCode::Cancelled);
     CHECK(events == std::vector{ModelEventKind::TextDelta});
     CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{5});
+
+    events.clear();
+    const auto recovered = provider->Stream(Request("normal"), [&events](const ModelEvent &event) {
+        events.push_back(event.kind);
+        return true;
+    }, {});
+    REQUIRE(recovered.Succeeded());
+    REQUIRE_FALSE(events.empty());
+    CHECK(events.back() == ModelEventKind::Completed);
 }
 
 TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent][model][http]") {

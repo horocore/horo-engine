@@ -194,13 +194,17 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def hold_local_response(self, begin_stream):
+        first = b'{"message":{"content":"first"}}\n' if begin_stream else b""
+        self.hold_response("application/x-ndjson", first)
+
+    def hold_response(self, content_type, first):
         self.close_connection = True
-        if begin_stream:
+        if first:
             self.send_response(200)
-            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Type", content_type)
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(b'{"message":{"content":"first"}}\n')
+            self.wfile.write(first)
             self.wfile.flush()
         self.server.release_pending.wait(timeout=10)
 
@@ -230,7 +234,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
+    def send_cloud_records(self, model, frames):
+        separator = "" if model == "nospace" else " "
+        records = [f"data:{separator}{json.dumps(frame)}\r\n\r\n" for frame in frames] + [f"data:{separator}[DONE]\r\n\r\n"]
+        self.send_records(records, content_type="text/event-stream")
+
     def send_model_stream(self, model, cloud):
+        if model == "editor-cloud-idle":
+            self.hold_response("text/event-stream", b'data: {"choices":[{"delta":{"content":"first"}}]}\r\n\r\n')
+            return
         if model == "buffer-allocation":
             text = "x" * 32768
             frames = ([{"choices": [{"delta": {"content": text}}]}] if cloud else
@@ -260,9 +272,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"done": True, "prompt_eval_count": 7, "eval_count": 2},
             ]
         if cloud:
-            separator = "" if model == "nospace" else " "
-            records = [f"data:{separator}{json.dumps(frame)}\r\n\r\n" for frame in frames] + [f"data:{separator}[DONE]\r\n\r\n"]
-            self.send_records(records, content_type="text/event-stream")
+            self.send_cloud_records(model, frames)
         else:
             self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
