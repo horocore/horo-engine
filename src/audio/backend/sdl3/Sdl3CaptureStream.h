@@ -24,6 +24,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         [[nodiscard]] Result<void> Open();
         /** @brief Checks control-side permission, device presence and callback health. */
         [[nodiscard]] const ErrorCodeDescriptor *Failure() const noexcept;
+        /** @brief Reports the callback's last published evidence without querying SDL. */
+        [[nodiscard]] Sdl3CaptureActivityState Activity() const noexcept;
         /** @brief Borrows the queue owned by this exact capture generation. */
         [[nodiscard]] AudioCaptureBuffer &Buffer() noexcept;
 
@@ -37,7 +39,7 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         const SDL_AudioDeviceID endpoint_;
         AudioCaptureBuffer buffer_;
         SDL_AudioDeviceID device_{};
-        std::atomic<bool> failed_{};
+        std::atomic<Sdl3CaptureActivityState> activity_{Sdl3CaptureActivityState::AwaitingFrames};
         std::uint64_t firstFrame_{};
         std::uint64_t clockOrigin_{};
     };

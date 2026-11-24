@@ -6,7 +6,7 @@
 
 namespace Horo::Audio::Backend::Sdl3Detail {
     namespace {
-        static_assert(std::atomic<bool>::is_always_lock_free);
+        static_assert(std::atomic<Sdl3CaptureActivityState>::is_always_lock_free);
         constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
 
         /** @brief Converts a source frame position with checked whole-second arithmetic. */
@@ -110,7 +110,12 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         if (const std::span observed{endpoints.get(), static_cast<std::size_t>(count)};
             std::ranges::find(observed, endpoint_) == observed.end())
             return &AudioErrors::CaptureDeviceLost;
-        return failed_.load() ? &AudioErrors::CallbackFault : nullptr;
+        return Activity() == Sdl3CaptureActivityState::Faulted ? &AudioErrors::CallbackFault : nullptr;
+    }
+
+    /** @copydoc CaptureStream::Activity */
+    Sdl3CaptureActivityState CaptureStream::Activity() const noexcept {
+        return activity_.load();
     }
 
     /** @copydoc CaptureStream::Buffer */
@@ -121,8 +126,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
     /** @copydoc CaptureStream::OnSamples */
     void SDLCALL CaptureStream::OnSamples(void *context, const SDL_AudioSpec *spec, float *pcm, const int bytes) noexcept {
         auto &stream = *static_cast<CaptureStream *>(context);
-        if (!stream.failed_.load() && !stream.Publish(*spec, pcm, bytes))
-            stream.failed_.store(true);
+        if (stream.Activity() != Sdl3CaptureActivityState::Faulted && !stream.Publish(*spec, pcm, bytes))
+            stream.activity_.store(Sdl3CaptureActivityState::Faulted);
     }
 
     /** @copydoc CaptureStream::Publish */
@@ -140,6 +145,8 @@ namespace Horo::Audio::Backend::Sdl3Detail {
             return true;
         if (status != Accepted && status != Full)
             return false;
+        if (firstFrame_ == 0)
+            activity_.store(Sdl3CaptureActivityState::Capturing);
         firstFrame_ += frames;
         return true;
     }
@@ -276,6 +283,14 @@ namespace Horo::Audio::Backend {
             return Sdl3Detail::Failure(*failure);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc Sdl3AudioBackend::CaptureActivity */
+    Sdl3CaptureActivity Sdl3AudioBackend::CaptureActivity() const noexcept {
+        const auto &capture = impl_->capture;
+        if (!capture.stream)
+            return {};
+        return {capture.stream->Activity(), capture.lastGeneration, capture.activeGrant.intent.purpose};
     }
 
     /** @copydoc Sdl3AudioBackend::ReadCapture */

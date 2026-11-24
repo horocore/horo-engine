@@ -67,6 +67,10 @@ namespace Horo::Audio::Backend {
             const auto full = WaitForOverflow(backend, descriptor.generation);
             CHECK(full.status == AudioCaptureRead::InsufficientSpace);
             CHECK(full.droppedFrames > 0);
+            const auto activity = backend.CaptureActivity();
+            CHECK(activity.state == Sdl3CaptureActivityState::Capturing);
+            CHECK(activity.generation == descriptor.generation);
+            CHECK(activity.purpose == Sdl3CapturePurpose::Speech);
             const auto channels = descriptor.format.layout.orderedChannels.size();
             AudioCapturedBlock first;
             const auto readFirst = backend.ReadCapture(descriptor.generation, first, pcm);
@@ -97,6 +101,7 @@ namespace Horo::Audio::Backend {
 
         TEST_CASE("SDL recording callbacks feed bounded PCM only under an exact grant", "[audio][sdl3][capture]") {
             auto backend = MakeBackend();
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
             const auto discovery = backend->DiscoverCapture();
             REQUIRE(discovery.HasValue());
             const auto &catalog = discovery.Value().snapshot;
@@ -122,6 +127,8 @@ namespace Horo::Audio::Backend {
             VerifyOverflow(*backend, descriptor, pcm);
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->CaptureActivity().generation == 0);
             AudioCapturedBlock stopped;
             CHECK(backend->ReadCapture(descriptor.generation, stopped, pcm).HasError());
             CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
@@ -135,6 +142,7 @@ namespace Horo::Audio::Backend {
             CHECK(restarted.firstFrame == 0);
             CHECK(restarted.sequence == 1);
             CHECK(restarted.droppedFramesBefore == 0);
+            CHECK(backend->CaptureActivity().generation == replacement.generation);
             REQUIRE(backend->StopCapture(replacement.generation).HasValue());
         }
 
@@ -179,6 +187,8 @@ namespace Horo::Audio::Backend {
             }
             AudioCapturedBlock block{};
             CHECK(backend->ReadCapture(descriptor.generation, block, {}).HasError());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->CaptureActivity().purpose == Sdl3CapturePurpose::Unspecified);
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
         }
 

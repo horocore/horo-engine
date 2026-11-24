@@ -55,6 +55,21 @@ namespace Horo::Audio::Backend {
         std::uint64_t droppedFrames{};
     };
 
+    /** @brief Callback evidence for the current capture generation. */
+    enum class Sdl3CaptureActivityState : std::uint8_t {
+        Inactive,
+        AwaitingFrames,
+        Capturing,
+        Faulted
+    };
+
+    /** @brief Privacy-safe recording indicator payload. Contains no PCM or native device identity. */
+    struct Sdl3CaptureActivity final {
+        Sdl3CaptureActivityState state{Sdl3CaptureActivityState::Inactive};
+        std::uint64_t generation{};
+        Sdl3CapturePurpose purpose{Sdl3CapturePurpose::Unspecified};
+    };
+
     /** @brief Result of an explicit request to the platform permission owner. */
     enum class Sdl3CapturePermissionRequest : std::uint8_t {
         Requested,
@@ -149,6 +164,13 @@ namespace Horo::Audio::Backend {
          * @return Success while admitted or typed failure. Invalidated admission detaches and retires this generation.
          */
         [[nodiscard]] Result<void> ReconcileCapture(std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant);
+
+        /** @brief Returns capture activity on Audio control without reading PCM or querying the OS.
+         * @return Inactive when no stream is owned. AwaitingFrames, Capturing and Faulted denote an open stream.
+         * @details Reconcile current consent and native health independently before presenting the status.
+         * A callback fault does not imply native detachment. Stop or reconciliation retires the generation.
+         */
+        [[nodiscard]] Sdl3CaptureActivity CaptureActivity() const noexcept;
 
         /** @brief Copies one captured block after checking native health and permission on Audio control.
          * @param generation Exact active capture generation.

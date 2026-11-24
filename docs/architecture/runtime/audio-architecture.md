@@ -2373,6 +2373,11 @@ requires a matching purpose and background policy in the host grant and
 current platform permission before open. The host reconciles current focus and
 consent on Audio control independently of consumer reads. Revocation detaches
 the recording callback and retires the current generation.
+The host can observe activity without consuming PCM or querying the OS.
+The observation carries the capture generation and purpose, distinguishes
+an open stream awaiting its first samples from an active callback, and
+reports a fault until the control owner detaches the stream. Presentation
+reconciles permission and device health independently of this observation.
 The recording postmix callback copies the selected mono or stereo float PCM
 without a bound SDL stream queue. SDL supplies no hardware timestamp here.
 The callback estimates the start on the SDL monotonic clock from the first
