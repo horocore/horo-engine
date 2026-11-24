@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cmath>
+#include <cstring>
 #include <glad/gl.h>
 #include <imgui.h>
 #include <iostream>
@@ -584,6 +585,86 @@ namespace Horo::Render::OpenGLSmokeTests {
     TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu][cinematic][resize]") {
         const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
         QualifyCameraPresentation(curve, NativeOutputChange::Resize);
+    }
+
+    /** @brief Uses the product viewport execution seam to submit or observe the native crop. */
+    void RenderCaptureFrame(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend, const StaticMeshPassDescriptor &pass,
+                            const std::uint64_t frameNumber) {
+        auto begun = frontend.BeginFrame({.frameNumber = frameNumber, .outputExtent = {640, 480}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const std::array passes{RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .staticMesh = pass}};
+        REQUIRE(viewport.ExecutePreparedFrame(frame, passes).HasValue());
+        REQUIRE(frame.Present().HasValue());
+    }
+
+    /** @brief Compares the top-left crop with the bottom-left native texture rows. */
+    void CheckOpenGLCrop(const Editor::EditorViewportImageArtifact &image, const EditorViewportTextureView view,
+                         const EditorViewportExtent extent) {
+        const auto native = ReadViewportPixels(view, extent.width, extent.height);
+        const auto &region = image.region;
+        constexpr auto channels = Editor::EditorViewportImageRegion::Channels;
+        REQUIRE(image.rgba.size() == region.Bytes());
+        const auto rowBytes = std::size_t{region.width} * channels;
+        bool hasDifferentRows = false;
+        for (std::uint32_t row = 0; row < region.height; ++row) {
+            const auto sourceRow = extent.height - 1 - region.y - row;
+            const auto offset = (std::size_t{sourceRow} * extent.width + region.x) * channels;
+            const auto *pixels = image.rgba.data() + row * rowBytes;
+            CHECK(std::memcmp(pixels, native.data() + offset, rowBytes) == 0);
+            hasDifferentRows |= std::memcmp(pixels, image.rgba.data(), rowBytes) != 0;
+        }
+        CHECK(hasDifferentRows);
+    }
+
+    TEST_CASE("OpenGL publishes an authorized top-left viewport crop and withdraws it on revocation",
+              "[integration][renderer][gpu][image-capture]") {
+        constexpr EditorViewportExtent extent{128, 128};
+        auto window = CreateNativeViewportWindow(NativeOutputChange::None);
+        HeadlessOpenGLPresentationPort port{*window};
+        auto frontend = CreateViewportFrontend(port);
+        REQUIRE(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        bool authorized = true;
+        EditorViewportRendererOpenGL viewport{*frontend};
+        Editor::EditorViewportLightingProfile lighting{.requested = LightPreparationMode::BaselineForwardCpu};
+        REQUIRE(viewport.RequestLightingProfile(lighting, {}).HasValue());
+        REQUIRE(viewport.Initialize().HasValue());
+        auto fixture = CreateViewportScene();
+        const auto scene = fixture.View();
+        REQUIRE(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
+        const auto target = PrepareViewportTarget(viewport, *frontend, scene, extent);
+        const StaticMeshPassDescriptor pass{.target = target, .extent = {extent.width, extent.height}, .scene = ToSceneView(scene)};
+        constexpr Editor::EditorViewportImageRegion region{19, 17, 80, 74};
+        viewport.RequestExtent(extent);
+        const auto request = viewport.RequestImageCapture(region, [&authorized] {
+            return authorized;
+        });
+        REQUIRE(request.HasValue());
+        RenderCaptureFrame(viewport, *frontend, pass, 1);
+        glFinish();  // Test-only wait for the async pixel buffer.
+        viewport.RequestExtent(extent);
+        RenderCaptureFrame(viewport, *frontend, pass, 2);
+
+        const auto image = viewport.ReadImageCapture(request.Value());
+        REQUIRE(image);
+        REQUIRE(image->phase == Editor::EditorViewportImagePhase::Ready);
+        REQUIRE(image->artifact);
+        REQUIRE(image->artifact->region == region);
+        CheckOpenGLCrop(*image->artifact, viewport.TextureView(), extent);
+        REQUIRE_FALSE(image->publication.expired());
+        authorized = false;
+        const auto withdrawn = viewport.ReadImageCapture(request.Value());
+        REQUIRE(withdrawn);
+        CHECK(withdrawn->phase == Editor::EditorViewportImagePhase::Cancelled);
+        CHECK_FALSE(withdrawn->artifact);
+        CHECK(image->publication.expired());
+
+        frontend->DetachStaticMeshPassExecutor(viewport);
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+        viewport.Shutdown();
+        frontend.reset();
+        window.reset();
+        SDL_Quit();
     }
 
     TEST_CASE("OpenGL cinematic camera follows the native fullscreen output", "[integration][renderer][gpu][cinematic][fullscreen]") {
