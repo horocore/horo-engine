@@ -322,6 +322,47 @@ namespace Horo::Input {
         CHECK(builder.Consume(43) == GameplayInputFrame{.tick = 43});
     }
 
+    TEST_CASE("A canceled candidate cannot preserve pre-suspension gameplay commands", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto port = fixture.Port();
+        const auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+        auto initial = fixture.Frame(port, 1);
+        REQUIRE(initial.Append(source, pressed).HasValue());
+        REQUIRE(initial.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+
+        fixture.collector.BeginFrame(2);
+        const auto &raw = fixture.collector.Commit();
+        auto opened = port.Begin(raw);
+        REQUIRE(opened.HasValue());
+        auto canceled = std::move(opened).Value();
+        REQUIRE(canceled.Append(source, pressed).HasValue());
+        REQUIRE(canceled.Cancel().HasValue());
+        fixture.router.BeginFrame(raw);
+        builder.Capture(fixture.router, fixture.context);
+        CHECK(builder.Consume(41) == GameplayInputFrame{.tick = 41});
+    }
+
+    TEST_CASE("An explicit release still preserves a tap across zero-tick collected frames", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto port = fixture.Port();
+        const auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+        auto initial = fixture.Frame(port, 1);
+        REQUIRE(initial.Append(source, pressed).HasValue());
+        REQUIRE(initial.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+
+        auto release = fixture.Frame(port, 2);
+        constexpr std::array neutral{CollectedActionValue{0, 0.0F, 0.0F, true}};
+        REQUIRE(release.Append(source, neutral).HasValue());
+        REQUIRE(release.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+        CHECK(builder.Consume(41).jumpPressed);
+        CHECK(builder.Consume(42) == GameplayInputFrame{.tick = 42});
+    }
+
     TEST_CASE("Input collection map replacement invalidates borrows and cannot publish an old action index", "[unit][input][collection]") {
         Fixture fixture;
         auto port = fixture.Port();

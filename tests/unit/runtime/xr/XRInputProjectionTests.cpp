@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <thread>
 
 namespace Horo::XR {
     namespace {
@@ -150,6 +151,46 @@ namespace Horo::XR {
         replacementCommands.Capture(fixture.router, fixture.context, otherPlayer);
         CHECK(replacementCommands.Consume(42).jumpPressed);
         CHECK(replacementCommands.Consume(43) == Input::GameplayInputFrame{.tick = 43});
+    }
+
+    TEST_CASE("XR suspension drops pending commands and recovery uses the same source", "[unit][xr][input]") {
+        ProjectionFixture fixture;
+        const auto port = fixture.Port();
+        auto created = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
+        REQUIRE(created.HasValue());
+        const auto projection = std::move(created).Value();
+        Input::GameplayInputFrameBuilder commands{{}, {}, fixture.action.id, {}};
+
+        fixture.CommitProjection(1, port, projection);
+        commands.Capture(fixture.router, fixture.context);
+        fixture.collector.BeginFrame(2);
+        fixture.router.BeginFrame(fixture.collector.Commit());  // Host suspension commits raw input without XR samples.
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).released);
+        commands.Capture(fixture.router, fixture.context);
+        CHECK(commands.Consume(41) == Input::GameplayInputFrame{.tick = 41});
+
+        fixture.CommitProjection(3, port, projection);
+        commands.Capture(fixture.router, fixture.context);
+        CHECK(commands.Consume(42).jumpPressed);
+        CHECK(commands.Consume(43) == Input::GameplayInputFrame{.tick = 43});
+    }
+
+    TEST_CASE("Rejected XR retirement leaves the bound projection usable on its owner thread", "[unit][xr][input]") {
+        ProjectionFixture fixture;
+        const auto port = fixture.Port();
+        auto created = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
+        REQUIRE(created.HasValue());
+        auto projection = std::move(created).Value();
+        bool rejected = false;
+        std::jthread worker{[&projection, &rejected] {
+            const auto result = projection.Reset();
+            rejected = result.HasError() && result.ErrorValue().code.Value() == "input.collection.wrong_thread";
+        }};
+        worker.join();
+        REQUIRE(rejected);
+        fixture.CommitProjection(1, port, projection);
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
+        REQUIRE(projection.Reset().HasValue());
     }
 
     TEST_CASE("XR input preparation binds its same reservation only after canonical session issuance", "[unit][xr][input]") {

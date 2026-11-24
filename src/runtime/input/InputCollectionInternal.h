@@ -28,7 +28,7 @@ namespace Horo::Input {
             std::size_t count{};
             bool retiring{};
             bool neutralCommitted{};
-            bool committed{}; /**< Still represented in the last committed action projection. */
+            bool committed{}; /**< Contributed an admitted sample at the last cutoff, including explicitly neutral values. */
         };
 
         struct Entry final {

@@ -103,14 +103,17 @@ namespace Horo::Input {
     }
 
     void InputCollectionLifetime::CommitValues(const bool focused) noexcept {
+        for (auto &source : sources)
+            source.committed = false;
         for (auto &entry : entries) {
             if (entry.generation == 0)
                 continue;
             auto &source = sources[entry.source];
             const bool current = SourceCurrent(source, entry.generation);
+            const bool admitted = focused && current;
             entry.previous = entry.current;
-            entry.current = focused && current ? entry.pending : Value{};
-            source.committed = current;
+            entry.current = admitted ? entry.pending : Value{};
+            source.committed |= admitted && entry.appended;
             entry.pending = {};
             entry.appended = false;
             entry.consumed = false;
@@ -146,8 +149,10 @@ namespace Horo::Input {
             routingAllowed = true;
             return;
         }
-        for (auto &entry : entries)
+        for (auto &entry : entries) {
             entry.pending = {};
+            entry.appended = false;
+        }
         CommitValues(true);
     }
 

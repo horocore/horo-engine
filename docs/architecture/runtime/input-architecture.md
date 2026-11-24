@@ -321,6 +321,10 @@ context or binding revision, an assignment change in the captured player scope,
 or a committed withdrawal of a collected source also clears the previous
 capture before sampling the new frame. An unrelated player's reassignment
 preserves pending edges when the captured scope and its sources stay valid.
+A cutoff with no samples from a previously contributing source withdraws its
+gameplay authority for that cutoff. A valid sample reporting a released control
+preserves an earlier tap until the next tick. The same registration can resume
+contributing after suspension.
 `Reset()` clears a builder when the host replaces the player or session.
 Recording stores the
 already assigned value frames; replay feeds those frames directly to simulation,
