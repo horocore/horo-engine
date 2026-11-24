@@ -1997,6 +1997,8 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
             integration/navigation/NavigationCrowdScaleQualificationTests.cpp
             integration/navigation/NavigationRuntimeQualificationTests.cpp
             integration/navigation/NavigationRuntimePressureQualificationTests.cpp)
+    set_property(SOURCE integration/navigation/NavigationCrowdScaleQualificationTests.cpp APPEND PROPERTY
+            INCLUDE_DIRECTORIES "${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Detour/Include")
 endif()
 horo_register_catch_test(HoroNavigationRuntimeQualificationTests LABELS "integration;navigation;character;headless;qualification;ci-navigation")
 

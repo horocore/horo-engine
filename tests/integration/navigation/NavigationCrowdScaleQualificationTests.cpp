@@ -1,23 +1,67 @@
 #include "AllocationProbe.h"
+#include "DetourAlloc.h"
 #include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Navigation/NavigationCrowdDiagnostics.h"
 #include "navigation/NavigationCrowdScaleFixture.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <iostream>
+#include <new>
 #include <string_view>
 
 namespace Horo::Navigation {
     namespace {
         using namespace CrowdQualification;
         using TestSupport::RequireError;
+        using namespace Tests::AllocationProbe;
+
+        /** @brief Routes native Detour heap storage through the test allocation interposer.
+         * @details This runner owns the process allocator seam. All Detour owners and workers
+         * within its scope retire before the default allocator is restored.
+         */
+        class ScopedDetourAllocationTrace final {
+        public:
+            ScopedDetourAllocationTrace() noexcept {
+                allocations_.store(0, std::memory_order_relaxed);
+                dtAllocSetCustom(&Allocate, [](void *address) {
+                    ::operator delete(address);
+                });
+            }
+
+            ~ScopedDetourAllocationTrace() {
+                dtAllocSetCustom(nullptr, nullptr);
+            }
+
+            ScopedDetourAllocationTrace(const ScopedDetourAllocationTrace &) = delete;
+            ScopedDetourAllocationTrace &operator=(const ScopedDetourAllocationTrace &) = delete;
+
+            [[nodiscard]] std::size_t Allocations() const noexcept {
+                return allocations_.load(std::memory_order_relaxed);
+            }
+
+        private:
+            static void *Allocate(const std::size_t size, dtAllocHint) noexcept {
+                try {
+                    void *const storage = ::operator new(size);
+                    allocations_.fetch_add(1, std::memory_order_relaxed);
+                    return storage;
+                } catch (const std::bad_alloc &) {
+                    return nullptr;
+                }
+            }
+
+            static inline std::atomic<std::size_t> allocations_{};
+        };
 
         constexpr std::array Layouts{std::pair{Layout::Crossings, std::string_view{"crossings"}},
                                      std::pair{Layout::Bottleneck, std::string_view{"bottleneck"}},
                                      std::pair{Layout::Formation, std::string_view{"formation"}},
                                      std::pair{Layout::MixedPriorities, std::string_view{"mixed_priorities"}}};
+        constexpr std::size_t CrowdSmallBudgetBytes = 4 * 1024 * 1024;  // ADR-109.
+        constexpr std::size_t MaximumTrackedBlocks = 4096;
 
         /** @brief Takes an ordered or deliberately shuffled sample of the scripted fixture. */
         NavigationCrowdSnapshot Capture(const CrowdScene &scene, const Layout layout, const std::uint64_t tick, const bool reverse,
@@ -168,6 +212,37 @@ namespace Horo::Navigation {
                       << " detour_worker_cpp_allocations=" << workerAllocations.requests << '\n';
         }
 
+        /** @brief Drives a real worker through the workload without mixing probe overhead into timing results. */
+        void RunMeasuredDetourWork(const Layout layout) {
+            CrowdScene scene;
+            scene.CommitOverlay(layout);
+            const std::array<std::shared_ptr<INavigationCrowdBackend>, 1> providers{
+                CreateRecastDetourCrowdBackend({FactsPerAgent, FactsPerAgent}).Value()};
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = Steps});
+            for (std::uint64_t tick = 1; tick <= Steps; ++tick) {
+                const auto capture = Capture(scene, layout, tick, false);
+                const auto batch = NavigationCrowdBatch::Submit(jobs, capture, Requests(capture, layout), providers);
+                REQUIRE(batch.HasValue());
+                std::uint64_t unusedTime{};
+                REQUIRE(Collect(*batch.Value(), capture, unusedTime).size() == CrowdAgents);
+            }
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            REQUIRE(providers.front().use_count() == 1);
+            scene.Close();
+        }
+
+        /** @brief Reports aggregate live C++ and Detour request bytes with the reference configuration. */
+        void ReportLiveMemory(const std::string_view workload, const std::string_view mode, const LiveMeasurement &result,
+                              const std::size_t nativeAllocations) {
+            REQUIRE_FALSE(result.incomplete);
+            CHECK(result.peakBytes > 0);
+            CHECK(result.peakBytes <= CrowdSmallBudgetBytes);
+            std::cout << "NAV-006.12 profile=CrowdSmall layout=" << workload << " mode=" << mode << " agents=" << CrowdAgents
+                      << " build=" << HORO_QUALIFICATION_BUILD_TYPE << " platform=" << HORO_QUALIFICATION_PLATFORM
+                      << " compiler=" << HORO_QUALIFICATION_COMPILER << " tracked_live_payload_peak_bytes=" << result.peakBytes
+                      << " detour_native_allocations=" << nativeAllocations << '\n';
+        }
+
     }  // namespace
 
     TEST_CASE("CrowdSmall layouts exercise both bounded Detour work and deterministic replay", "[integration][navigation][crowd][scale]") {
@@ -178,7 +253,58 @@ namespace Horo::Navigation {
         }
     }
 
+    TEST_CASE("Live allocation probe subtracts released blocks before the next allocation", "[integration][navigation][crowd][scale]") {
+        std::array<LiveAllocation, 2> storage{};
+        LiveMeasurement overlap;
+        LiveMeasurement retired;
+        {
+            ScopedLiveMeasurement live(storage);
+            void *first = ::operator new(32);
+            void *second = ::operator new(64, std::align_val_t{64});
+            overlap = live.Snapshot();
+            ::operator delete(first);
+            ::operator delete(second, std::align_val_t{64});
+            retired = live.Snapshot();
+        }
+        CHECK_FALSE(overlap.incomplete);
+        CHECK(overlap.liveBytes == 96);
+        CHECK(overlap.peakBytes == 96);
+        CHECK_FALSE(retired.incomplete);
+        CHECK(retired.liveBytes == 0);
+        CHECK(retired.peakBytes == 96);
+    }
+
+    TEST_CASE("CrowdSmall measures live allocation across owner and Detour worker", "[integration][navigation][crowd][scale]") {
+        for (const auto &[layout, name] : Layouts) {
+            CAPTURE(name);
+            std::array<LiveAllocation, MaximumTrackedBlocks> storage{};
+            ScopedLiveMeasurement live(storage);
+            const ScopedDetourAllocationTrace native;
+            RunMeasuredDetourWork(layout);
+            const auto count = native.Allocations();
+            REQUIRE(count > 0);
+            ReportLiveMemory(name, "best_effort", live.Snapshot(), count);
+        }
+    }
+
+    TEST_CASE("CrowdSmall measures live allocation during qualified replay", "[integration][navigation][crowd][scale]") {
+        for (const auto &[layout, name] : Layouts) {
+            CAPTURE(name);
+            std::array<LiveAllocation, MaximumTrackedBlocks> storage{};
+            ScopedLiveMeasurement live(storage);
+            const ScopedDetourAllocationTrace native;
+            const auto digest = RunQualifiedReplay(layout, false);
+            const auto count = native.Allocations();
+            CHECK(digest != Sha256Digest{});
+            CHECK(count == 0);
+            ReportLiveMemory(name, "qualified", live.Snapshot(), count);
+        }
+    }
+
     TEST_CASE("CrowdSmall overload withdraws old work across teleports and removal", "[integration][navigation][crowd][scale]") {
+        std::array<LiveAllocation, MaximumTrackedBlocks> storage{};
+        ScopedLiveMeasurement live(storage);
+        const ScopedDetourAllocationTrace native;
         Tests::AllocationProbe::ScopedMeasurement owner;
         const auto layout = Layout::Crossings;
         CrowdScene scene;
@@ -215,6 +341,9 @@ namespace Horo::Navigation {
         scene.Close();
         const auto allocation = owner.Snapshot();
         CHECK(allocation.requestedBytes > 0);
+        const auto count = native.Allocations();
+        REQUIRE(count > 0);
+        ReportLiveMemory("overlap_and_retirement", "best_effort", live.Snapshot(), count);
         std::cout << "NAV-006.12 profile=CrowdSmall layout=overlap_and_retirement agents=" << CrowdAgents
                   << " build=" << HORO_QUALIFICATION_BUILD_TYPE << " platform=" << HORO_QUALIFICATION_PLATFORM
                   << " compiler=" << HORO_QUALIFICATION_COMPILER << " cumulative_owner_cpp_requested_bytes=" << allocation.requestedBytes

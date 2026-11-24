@@ -21,18 +21,9 @@ namespace Horo::Navigation {
             return Detail::Failure<NavigationDynamicRegistrySnapshot>(NavigationErrors::NoNavigationData);
         if (!state_->cachedSnapshot) {
             try {
-                auto records = std::make_shared<Detail::NavigationDynamicRegistrySnapshotState>();
-                for (const auto &slot : state_->obstacles) {
-                    if (slot.active)
-                        records->obstacles[records->obstacleCount++] = slot.record;
-                }
-                for (const auto &slot : state_->modifiers) {
-                    if (slot.active)
-                        records->modifiers[records->modifierCount++] = slot.record;
-                }
-                Detail::SortRecords(records->obstacles, records->obstacleCount);
-                Detail::SortRecords(records->modifiers, records->modifierCount);
-                state_->cachedSnapshot = std::move(records);
+                state_->cachedSnapshot = std::make_shared<Detail::NavigationDynamicRegistrySnapshotState>(
+                    Detail::NavigationDynamicRegistrySnapshotState{.obstacles = Detail::CaptureRecords(state_->obstacles),
+                                                                   .modifiers = Detail::CaptureRecords(state_->modifiers)});
             } catch (const std::bad_alloc &) {
                 return Detail::Failure<NavigationDynamicRegistrySnapshot>(NavigationErrors::DynamicRegistryCapacityExceeded);
             }

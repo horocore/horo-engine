@@ -78,6 +78,13 @@ and checks that the old work is rejected and its provider pin released. It
 reports cumulative owner-thread C++ allocation requests across construction,
 overlapping captures and retirement.
 
+The live-memory run measures simultaneous requested heap bytes across the
+owner and worker threads. In the test process, Detour's allocation callback
+uses the same probe, so its native allocations are included. The run reports
+the peak across each layout in both modes and the overlapping-capture case
+separately from timing. The tracker uses caller-owned storage and reports an
+incomplete sample if it cannot track every block.
+
 The scripted solver workload advances authored input positions. The native
 formation run feeds 64 committed capsule roots and achieved velocities into
 the next crowd capture, requires forward displacement with bounded lateral
@@ -87,9 +94,10 @@ pending queue and closing the world prevents subsequent movement callbacks.
 The Gameplay formation retirement case separately admits 64 moves with
 Character feedback pending. It retires the group, rejects late access, and
 checks that the Character, Navigation job, and topology owners drain. The
-ADR-109 4 MiB envelope applies to the peak live footprint. The remaining
-measurement must include native storage, worker-side scheduler allocation,
-allocator overhead and simultaneously retained buffers.
+The ADR-109 4 MiB envelope applies to the peak live footprint. The test
+enforces that ceiling for tracked payload, including Detour storage and
+worker-side C++ allocations. Allocator metadata and other direct C
+allocations still require accounting.
 
 ## Reference corpus and exact outcomes
 

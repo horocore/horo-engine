@@ -45,7 +45,13 @@ namespace Horo::Navigation::CrowdQualification {
         const NavigationWorldActivationDescriptor activation{Activation()};
         const NavigationAgentSceneBinding binding{activation.world, activation.scene, activation.sceneGeneration};
         NavigationAgentRegistry agents{NavigationAgentRegistry::Create({.maximumAgents = CrowdAgents}).Value()};
-        NavigationDynamicRegistry dynamic{NavigationDynamicRegistry::Create().Value()};
+        // This authored layout has up to two obstacles and uses no modifier.
+        static constexpr std::size_t OverlayBoxes = 2;
+        NavigationDynamicRegistry dynamic{NavigationDynamicRegistry::Create({.maximumObstacles = OverlayBoxes,
+                                                                             .maximumModifiers = 1,
+                                                                             .maximumPendingCommands = OverlayBoxes,
+                                                                             .maximumMutationsPerCommit = OverlayBoxes})
+                                              .Value()};
         std::unique_ptr<NavigationAgentSceneCandidate> candidate;
         const NavigationAgentProfileId profile{Id<NavigationAgentProfileId>(1)};
         std::optional<CrowdAgentHandle> teleported;
@@ -65,7 +71,7 @@ namespace Horo::Navigation::CrowdQualification {
         /** @brief Two physical-width obstacle faces bound the entrance to the central lane. */
         void CommitOverlay(const Layout layout) {
             if (layout == Layout::Bottleneck) {
-                for (const auto id : {1U, 2U}) {
+                for (std::size_t id = 1; id <= OverlayBoxes; ++id) {
                     const float side = id == 1 ? -1.0F : 1.0F;
                     REQUIRE(dynamic
                                 .StageRegisterObstacle({

@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace Horo::Navigation::Detail {
     template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
@@ -57,10 +58,8 @@ namespace Horo::Navigation::Detail {
                                                          PendingModifierUpdate, PendingObstacleRemoval, PendingModifierRemoval>;
 
     struct NavigationDynamicRegistrySnapshotState final {
-        std::array<NavigationObstacleRecord, NavigationDynamicRegistryHardLimits::Obstacles> obstacles{};
-        std::array<NavigationModifierRecord, NavigationDynamicRegistryHardLimits::Modifiers> modifiers{};
-        std::size_t obstacleCount{};
-        std::size_t modifierCount{};
+        std::vector<NavigationObstacleRecord> obstacles;
+        std::vector<NavigationModifierRecord> modifiers;
     };
 
     struct NavigationDynamicRegistryState final {
@@ -80,16 +79,19 @@ namespace Horo::Navigation::Detail {
             NavigationModifierRecord record{};
         };
 
-        explicit NavigationDynamicRegistryState(const NavigationDynamicRegistryLimits &limitsIn) : limits(limitsIn) {}
+        explicit NavigationDynamicRegistryState(const NavigationDynamicRegistryLimits &limitsIn)
+            : limits(limitsIn), obstacles(limits.maximumObstacles), modifiers(limits.maximumModifiers),
+              pending(limits.maximumPendingCommands) {}
 
         NavigationDynamicRegistryLimits limits;
         NavigationDynamicSceneBinding binding;
         bool bound{};
         bool hasPublicationTick{};
         std::uint64_t lastPublicationTick{};
-        std::array<ObstacleSlot, NavigationDynamicRegistryHardLimits::Obstacles> obstacles{};
-        std::array<ModifierSlot, NavigationDynamicRegistryHardLimits::Modifiers> modifiers{};
-        std::array<NavigationDynamicPendingCommand, NavigationDynamicRegistryHardLimits::PendingCommands> pending{};
+        // Sized once during Create. Staging and commit keep stable indices and never grow these tables.
+        std::vector<ObstacleSlot> obstacles;
+        std::vector<ModifierSlot> modifiers;
+        std::vector<NavigationDynamicPendingCommand> pending;
         mutable std::shared_ptr<const NavigationDynamicRegistrySnapshotState> cachedSnapshot;
     };
 
@@ -446,8 +448,17 @@ namespace Horo::Navigation::Detail {
         return left.handle < right.handle;
     }
 
-    template <typename Record, std::size_t Capacity> void SortRecords(std::array<Record, Capacity> &records, const std::size_t count) {
-        std::ranges::sort(std::span{records}.first(count), RecordOrder<Record>);
+    /** @brief Copies only live records and preserves the public snapshot order. */
+    template <typename Slots> [[nodiscard]] auto CaptureRecords(const Slots &slots) {
+        using Slot = typename Slots::value_type;
+        using Record = decltype(Slot::record);
+        std::vector<Record> records;
+        records.reserve(static_cast<std::size_t>(std::ranges::count(slots, true, &Slot::active)));
+        for (const auto &slot : slots)
+            if (slot.active)
+                records.push_back(slot.record);
+        std::ranges::sort(records, RecordOrder<Record>);
+        return records;
     }
 
     template <typename Record>
@@ -456,9 +467,9 @@ namespace Horo::Navigation::Detail {
         if (!records)
             return {};
         if constexpr (std::is_same_v<Record, NavigationObstacleRecord>)
-            return std::span{records->obstacles}.first(records->obstacleCount);
+            return records->obstacles;
         else
-            return std::span{records->modifiers}.first(records->modifierCount);
+            return records->modifiers;
     }
 
     template <typename Record, typename Handle>

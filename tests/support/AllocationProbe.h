@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 
 namespace Horo::Tests::AllocationProbe {
     /** @brief Owner-thread allocation observer; must not allocate or throw. */
@@ -40,6 +41,41 @@ namespace Horo::Tests::AllocationProbe {
     private:
         Measurement measurement_{};
         Measurement *previous_{};
+    };
+
+    /** @brief Caller-reserved storage for one live allocation identity. */
+    struct LiveAllocation final {
+        const void *address{};
+        std::size_t requestedBytes{};
+    };
+
+    /** @brief Process-wide C++ payload measurements for one exclusive test scope. */
+    struct LiveMeasurement final {
+        std::size_t liveBytes{};
+        std::size_t peakBytes{};
+        bool incomplete{};
+    };
+
+    /** @brief Measures simultaneously live requested C++ bytes across allocating and freeing threads.
+     * @details Caller storage must outlive the scope. Direct C allocations and allocator overhead
+     * are outside this probe. Finish workers before taking the final snapshot.
+     */
+    class ScopedLiveMeasurement final {
+    public:
+        explicit ScopedLiveMeasurement(std::span<LiveAllocation> storage) noexcept;
+        ~ScopedLiveMeasurement();
+        ScopedLiveMeasurement(const ScopedLiveMeasurement &) = delete;
+        ScopedLiveMeasurement &operator=(const ScopedLiveMeasurement &) = delete;
+        [[nodiscard]] LiveMeasurement Snapshot() const noexcept;
+
+        /** @brief Allocation interposer hooks, called only after allocation succeeds or before storage is freed. */
+        static void Acquired(const void *address, std::size_t requestedBytes) noexcept;
+        static void Released(const void *address) noexcept;
+
+    private:
+        std::span<LiveAllocation> storage_;
+        std::size_t count_{};
+        LiveMeasurement measurement_{};
     };
 
     /** @brief Non-allocating observer called immediately before an injected failure is thrown. */

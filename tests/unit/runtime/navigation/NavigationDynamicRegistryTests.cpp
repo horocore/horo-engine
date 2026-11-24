@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "Horo/Navigation/NavigationDynamicRegistry.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
@@ -75,6 +76,12 @@ namespace Horo::Navigation {
         REQUIRE(commit.removals == 0);
         REQUIRE(commit.revision.Value() == 1);
         REQUIRE(registry.PendingCommandCount() == 0);
+
+        const auto allocationFailure = [&registry] {
+            Tests::AllocationProbe::ScopedFailure failAfterRecordCopy(1);
+            return registry.Snapshot();
+        }();
+        RequireError(allocationFailure, NavigationErrors::DynamicRegistryCapacityExceeded);
 
         const auto snapshot = std::move(registry.Snapshot()).Value();
         REQUIRE(snapshot.IsValid());

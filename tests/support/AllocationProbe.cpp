@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <new>
 #ifdef _WIN32
 #include <malloc.h>
@@ -14,6 +15,10 @@ namespace {
     thread_local Horo::Tests::AllocationProbe::Measurement *activeMeasurement{};
     thread_local Horo::Tests::AllocationProbe::AllocationObserver activeObserver{};
     thread_local void *observerContext{};
+    using LiveProbe = Horo::Tests::AllocationProbe::ScopedLiveMeasurement;
+    // The lock protects the active scope pointer and its caller-owned records across allocator threads.
+    constinit std::atomic<LiveProbe *> activeLiveProbe{};
+    std::mutex liveProbeMutex;
 
     class AllocationMeter final {
     public:
@@ -22,12 +27,15 @@ namespace {
             void *const storage = std::malloc(std::max(byteCount, std::size_t{1}));
             if (storage == nullptr)
                 throw std::bad_alloc{};
+            LiveProbe::Acquired(storage, byteCount);
             return storage;
         }
 
         static void Release(void *const storage) noexcept {
-            if (storage != nullptr)
+            if (storage != nullptr) {
+                LiveProbe::Released(storage);
                 freeCount_.fetch_add(1, std::memory_order_relaxed);
+            }
             std::free(storage);
         }
 
@@ -42,12 +50,15 @@ namespace {
 #endif
             if (storage == nullptr)
                 throw std::bad_alloc{};
+            LiveProbe::Acquired(storage, byteCount);
             return storage;
         }
 
         static void ReleaseAligned(void *const storage) noexcept {
-            if (storage != nullptr)
+            if (storage != nullptr) {
+                LiveProbe::Released(storage);
                 freeCount_.fetch_add(1, std::memory_order_relaxed);
+            }
 #ifdef _WIN32
             _aligned_free(storage);
 #else
@@ -178,6 +189,56 @@ namespace Horo::Tests::AllocationProbe {
 
     Measurement ScopedMeasurement::Snapshot() const noexcept {
         return measurement_;
+    }
+
+    ScopedLiveMeasurement::ScopedLiveMeasurement(const std::span<LiveAllocation> storage) noexcept : storage_(storage) {
+        const std::lock_guard lock(liveProbeMutex);
+        measurement_.incomplete = activeLiveProbe.load(std::memory_order_relaxed) != nullptr || storage_.empty();
+        if (!measurement_.incomplete)
+            activeLiveProbe.store(this, std::memory_order_release);
+    }
+
+    ScopedLiveMeasurement::~ScopedLiveMeasurement() {
+        const std::lock_guard lock(liveProbeMutex);
+        if (activeLiveProbe.load(std::memory_order_relaxed) == this)
+            activeLiveProbe.store(nullptr, std::memory_order_release);
+    }
+
+    LiveMeasurement ScopedLiveMeasurement::Snapshot() const noexcept {
+        const std::lock_guard lock(liveProbeMutex);
+        return measurement_;
+    }
+
+    void ScopedLiveMeasurement::Acquired(const void *address, const std::size_t requestedBytes) noexcept {
+        if (activeLiveProbe.load(std::memory_order_acquire) == nullptr)
+            return;
+        const std::lock_guard lock(liveProbeMutex);
+        auto *probe = activeLiveProbe.load(std::memory_order_relaxed);
+        if (probe == nullptr)
+            return;
+        auto &sample = probe->measurement_;
+        if (probe->count_ == probe->storage_.size() || requestedBytes > std::numeric_limits<std::size_t>::max() - sample.liveBytes) {
+            sample.incomplete = true;
+            return;
+        }
+        probe->storage_[probe->count_++] = {address, requestedBytes};
+        sample.liveBytes += requestedBytes;
+        sample.peakBytes = std::max(sample.peakBytes, sample.liveBytes);
+    }
+
+    void ScopedLiveMeasurement::Released(const void *address) noexcept {
+        if (activeLiveProbe.load(std::memory_order_acquire) == nullptr)
+            return;
+        const std::lock_guard lock(liveProbeMutex);
+        auto *probe = activeLiveProbe.load(std::memory_order_relaxed);
+        if (probe == nullptr)
+            return;
+        const auto live = probe->storage_.first(probe->count_);
+        const auto found = std::ranges::find(live, address, &LiveAllocation::address);
+        if (found == live.end())
+            return;
+        probe->measurement_.liveBytes -= found->requestedBytes;
+        *found = probe->storage_[--probe->count_];
     }
 
     /** @copydoc ScopedFailure::ScopedFailure */
