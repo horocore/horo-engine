@@ -25,6 +25,25 @@ namespace Horo::Editor {
     class UpdateExperienceSession;
     struct EditorSettingsSnapshot;
 
+    /** @brief Editor-facing microphone permission status, independent of any capture session. */
+    enum class EditorMicrophonePermissionStatus {
+        Unavailable,
+        Required,
+        Pending,
+        Granted,
+        Denied
+    };
+
+    /** @brief Host-owned permission surface. Only explicit user activation may issue a request. */
+    class IEditorMicrophonePermission {
+    public:
+        virtual ~IEditorMicrophonePermission() = default;
+        /** @brief Returns the current permission status on the UI owner. */
+        [[nodiscard]] virtual EditorMicrophonePermissionStatus Status() = 0;
+        /** @brief Requests permission without opening a recording device. */
+        virtual void Request() = 0;
+    };
+
     /** @brief Provides theme configuration and font atlas access for the GUI. */
     struct ThemeContext {
         const Theme::Fonts &fonts;
@@ -45,5 +64,6 @@ namespace Horo::Editor {
         const EditorSettingsSnapshot &settings;
         UpdateExperienceSession *updates = nullptr;      /**< Borrowed host-owned update workflow, when configured. */
         const Input::InputRouter *inputRouter = nullptr; /**< Borrowed host-owned effective binding authority, outliving GUI draws. */
+        IEditorMicrophonePermission *microphonePermission = nullptr; /**< Optional host-owned microphone permission controls. */
     };
 }  // namespace Horo::Editor

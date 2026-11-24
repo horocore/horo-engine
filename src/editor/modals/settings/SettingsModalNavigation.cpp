@@ -405,6 +405,44 @@ namespace Horo::Editor::SettingsModalInternal {
         });
     }
 
+    namespace {
+        /** @brief Resolves exactly one label for the host-reported permission state. */
+        const char *MicrophoneStatusKey(const EditorMicrophonePermissionStatus status) noexcept {
+            using enum EditorMicrophonePermissionStatus;
+            switch (status) {
+                case Required:
+                    return "audio.microphone.required";
+                case Pending:
+                    return "audio.microphone.pending";
+                case Granted:
+                    return "audio.microphone.granted";
+                case Denied:
+                    return "audio.microphone.denied";
+                case Unavailable:
+                    return "audio.microphone.unavailable";
+            }
+            return "audio.microphone.unavailable";
+        }
+
+        /** @brief Displays the optional permission control without opening an input stream. */
+        void DrawMicrophonePermission(const EditorGuiContext &ctx) {
+            auto *permission = ctx.microphonePermission;
+            if (!permission)
+                return;
+            const auto status = permission->Status();
+            const auto &title = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.title");
+            const auto &description = SettingsModal::kTextScope.Text(ctx.localization, MicrophoneStatusKey(status));
+            const auto &action = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.request");
+            SettingRow(title.c_str(), description.c_str(), ctx.theme.fonts, [&ctx, permission, status, &action] {
+                if (Ui::Button({.label = action.c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .enabled = status == EditorMicrophonePermissionStatus::Required,
+                                .font = ctx.theme.fonts.sans}))
+                    permission->Request();
+            }, "microphone-permission", SettingRowLayout::Stacked);
+        }
+    }  // namespace
+
     void DrawAudio(SettingsState &st, const EditorGuiContext &ctx) {
         const std::array<std::string, 3> deviceText = {SettingsModal::kTextScope.Text(ctx.localization, "audio.system_default"),
                                                        SettingsModal::kTextScope.Text(ctx.localization, "audio.headphones"),
@@ -429,6 +467,7 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingRow(enabledLabel.c_str(), enabledDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)ToggleControl("audio-enabled", &st.audio.audioEnabled, ctx.theme.fonts);
         });
+        DrawMicrophonePermission(ctx);
     }
 
     void DrawNetwork(SettingsState &st, const EditorGuiContext &ctx) {

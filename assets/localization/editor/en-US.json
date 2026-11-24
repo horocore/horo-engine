@@ -2183,6 +2183,13 @@
     "settings.audio.master_volume.description": {
       "text": "Global audio output level for the editor (0–100)."
     },
+    "settings.audio.microphone.title": {"text": "Microphone Permission"},
+    "settings.audio.microphone.required": {"text": "Allow microphone access for voice input."},
+    "settings.audio.microphone.pending": {"text": "Waiting for your response in macOS."},
+    "settings.audio.microphone.granted": {"text": "macOS allows microphone access."},
+    "settings.audio.microphone.denied": {"text": "Change microphone access in macOS System Settings."},
+    "settings.audio.microphone.unavailable": {"text": "Microphone permission is unavailable in this build."},
+    "settings.audio.microphone.request": {"text": "Request Access"},
     "settings.audio.output_device": {
       "text": "Audio Output Device"
     },

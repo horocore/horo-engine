@@ -2387,6 +2387,9 @@ host action on the main thread. It checks the running application's usage
 description and signed audio-input entitlement before requesting access or
 opening a recording device. The asynchronous system decision is observed
 through recording discovery. It remains separate from the host's purpose grant.
+The macOS editor exposes the request and current status in its Audio settings.
+The control does not initialize the audio device backend and does not start
+recording. It refreshes the permission display while the settings page is open.
 The macOS SDL3 editor bundle carries the usage description. Xcode uses the
 editor capture entitlements file when signing. Packaging with other generators
 must apply the equivalent entitlements when signing the executable.

@@ -2183,6 +2183,13 @@
     "settings.audio.master_volume.description": {
       "text": "Editörün genel ses çıkış seviyesi (0–100)."
     },
+    "settings.audio.microphone.title": {"text": "Mikrofon İzni"},
+    "settings.audio.microphone.required": {"text": "Sesli giriş için mikrofon erişimine izin verin."},
+    "settings.audio.microphone.pending": {"text": "macOS’ta yanıtınız bekleniyor."},
+    "settings.audio.microphone.granted": {"text": "macOS mikrofon erişimine izin veriyor."},
+    "settings.audio.microphone.denied": {"text": "Mikrofon erişimini macOS Sistem Ayarları’ndan değiştirin."},
+    "settings.audio.microphone.unavailable": {"text": "Bu derlemede mikrofon izni kullanılamıyor."},
+    "settings.audio.microphone.request": {"text": "Erişim İste"},
     "settings.audio.output_device": {
       "text": "Ses Çıkış Aygıtı"
     },

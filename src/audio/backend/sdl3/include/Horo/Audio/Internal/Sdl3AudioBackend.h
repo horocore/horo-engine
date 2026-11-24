@@ -62,6 +62,19 @@ namespace Horo::Audio::Backend {
         DecisionAvailable
     };
 
+#if defined(__APPLE__)
+    /** @brief Current macOS permission facts without opening or initializing the SDL audio subsystem. */
+    struct Sdl3MacCapturePermission final {
+        AudioCapturePermission permission{AudioCapturePermission::Unknown};
+        bool pending{};
+    };
+
+    /** @brief Returns macOS permission facts for the current package. */
+    [[nodiscard]] Sdl3MacCapturePermission ObserveSdl3MacCapturePermission() noexcept;
+    /** @brief Submits an explicit main-thread user request without constructing a device backend. */
+    [[nodiscard]] Result<Sdl3CapturePermissionRequest> RequestSdl3MacCapturePermission();
+#endif
+
     /** @brief Backend-local facts; parent AudioRuntime state remains control-owned. */
     enum class Sdl3AudioBackendState : std::uint8_t {
         Closed = 0,

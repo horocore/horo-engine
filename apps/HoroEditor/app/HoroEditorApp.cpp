@@ -38,6 +38,9 @@
 #endif
 
 #include "EditorAudioPreviewHost.h"
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+#include "EditorMicrophonePermission.h"
+#endif
 #include "EditorFrameAdmission.h"
 #include "EditorGuiLiveReload.h"
 #include "EditorGuiLiveReloadBuildConfig.h"
@@ -4264,6 +4267,10 @@ namespace Horo::Editor {
             ThemeContext themeContext{p.fonts, liveGui.Registry()};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+            EditorMicrophonePermission microphonePermission;
+            guiContext.microphonePermission = &microphonePermission;
+#endif
             guiContext.inputRouter = &p.inputRouter;
             std::optional<UpdateExperienceSession> updateSession;
             ConfigureUpdateExperience(p, guiContext, updateSession);

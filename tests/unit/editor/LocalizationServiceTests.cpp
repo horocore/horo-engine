@@ -983,6 +983,23 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Microphone permission settings resolve in each shipped editor locale", "[unit][editor][localization]") {
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        const Horo::Editor::LocaleTag tag{locale};
+        Horo::Editor::LocalizationService service{tag};
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(tag));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto suffix : {"title", "required", "pending", "granted", "denied", "unavailable", "request"}) {
+            const auto key = std::string{"settings.audio.microphone."} + suffix;
+            INFO(locale);
+            CHECK_FALSE(service.Get("editor", key).empty());
+            CHECK(service.Get("editor", key) != key);
+        }
+    }
+}
+
 TEST_CASE("Decision query authoring and preview copy resolve in both shipped locales", "[unit][editor][decision][localization]") {
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};

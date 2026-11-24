@@ -86,3 +86,17 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         return Output::Success(Requested);
     }
 }  // namespace Horo::Audio::Backend::Sdl3Detail
+
+namespace Horo::Audio::Backend {
+    /** @copydoc ObserveSdl3MacCapturePermission */
+    Sdl3MacCapturePermission ObserveSdl3MacCapturePermission() noexcept {
+        if (!Sdl3Detail::MacCapturePackageReady())
+            return {};
+        return {Sdl3Detail::ReadMacCapturePermission(), Sdl3Detail::requestPending.load()};
+    }
+
+    /** @copydoc RequestSdl3MacCapturePermission */
+    Result<Sdl3CapturePermissionRequest> RequestSdl3MacCapturePermission() {
+        return Sdl3Detail::RequestMacCapturePermission();
+    }
+}  // namespace Horo::Audio::Backend
