@@ -287,10 +287,20 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessSourceDocumentCommand */
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
+        using Feedback = Proposals::SourceTransactionFeedback;
+        const bool undo = command.command == EditorWorkspaceViewCommand::UndoSourceReview;
+        const bool validationMayRetire = undo && m_sourceValidation && m_sourceReviews.Status().feedback != Feedback::Preparing;
         if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs, ProjectRoot(), m_durableFiles,
                                     &m_sourceOpenService, m_mutations)) {
-            if (command.command == EditorWorkspaceViewCommand::UndoSourceReview)
+            if (undo) {
+                if (validationMayRetire) {
+                    const auto feedback = m_sourceReviews.Status().feedback;
+                    // A structural restore may need the same I/O lane as the retired validation.
+                    if (feedback == Feedback::Preparing || feedback == Feedback::Undone)
+                        RevokeSourceReviewValidation();
+                }
                 RefreshSourceDocumentProjection();
+            }
             return true;
         }
         NativeDurableFileSystem files;

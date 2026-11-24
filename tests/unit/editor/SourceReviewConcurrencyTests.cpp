@@ -1024,13 +1024,16 @@ namespace {
     /** @brief Holds one approved native invocation until the test owner stages its source edit. */
     class GatedFailedReviewBuild final : public IExternalProcessRunner {
     public:
-        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &) override {
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &cancellation) override {
             std::unique_lock lock{mutex_};
+            cancellation_ = cancellation;
             ++calls_;
             changed_.notify_all();
             changed_.wait(lock, [this] {
                 return released_;
             });
+            if (cancellation.IsCancellationRequested())
+                return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Cancelled, 1, ProcessStopCause::Cancellation});
             return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Exited, 1});
         }
 
@@ -1054,9 +1057,15 @@ namespace {
             return calls_;
         }
 
+        [[nodiscard]] bool CancellationRequested() const {
+            std::scoped_lock lock{mutex_};
+            return cancellation_.IsCancellationRequested();
+        }
+
     private:
         mutable std::mutex mutex_;
         std::condition_variable changed_;
+        CancellationToken cancellation_;
         unsigned calls_{};
         bool released_{};
     };
@@ -1069,7 +1078,8 @@ namespace {
         ReviewBuildWorkspace() {
             project.Put("int value = 1;\n", "source.cpp");
             REQUIRE(scene.Startup(lifetime.Token()).HasValue());
-            const EditorWorkspaceDependencies dependencies{.durableFiles = &files,
+            const EditorWorkspaceDependencies dependencies{.mutations = &mutations,
+                                                           .durableFiles = &files,
                                                            .jobs = &jobs,
                                                            .gameplay = {.builds = &builds,
                                                                         .environment = {.gameplaySdkPackage = project.directory},
@@ -1085,26 +1095,31 @@ namespace {
         }
 
         /** @brief Apply the exact reviewed change and capture approval for its live audit. */
-        EditorWorkspaceViewCommandData ApplyReview() {
+        EditorWorkspaceViewCommandData ApplyReview(
+            const std::string_view patch =
+                R"({"version":1,"files":[{"kind":"edit","path":"source.cpp","hunks":[{"offset":12,"before":"1","after":"2"}]}]})",
+            const EditorPatchDestination *destination = nullptr, const Validation expected = Validation::SaveRequired) {
             workspace->ProcessCommand(
                 {.command = Command::OpenSourceFile,
                  .sourceOpenRequest = SourceOpenRequest{.path = project.directory / "source.cpp", .mode = SourceOpenMode::EmbeddedOnly}});
             REQUIRE(workspace->ViewModel().sourceDocuments.size() == 1);
             const auto source = workspace->ViewModel().sourceDocuments.front();
-            auto proposal = PrepareEditorLocalPatchReview(
-                R"({"version":1,"files":[{"kind":"edit","path":"source.cpp","hunks":[{"offset":12,"before":"1","after":"2"}]}]})",
-                {{source}, "test", 1}, "validation-workspace", 1);
+            auto proposal = PrepareEditorLocalPatchReview(patch, {{source}, "test", 1}, "validation-workspace", 1, destination);
             REQUIRE(proposal.HasValue());
             auto review = std::move(proposal).Value();
-            const auto policy =
-                ProjectPolicy::Capture("validation-workspace", review.proposal.PolicyRevision(), {{source.Identity().key.source, false}});
+            REQUIRE(std::holds_alternative<FilePreview>(review.plan->entries.front()));
+            std::vector<PathRule> rules;
+            for (const auto &path : review.offeredPaths)
+                rules.push_back({path, false});
+            const auto policy = ProjectPolicy::Capture("validation-workspace", review.proposal.PolicyRevision(), std::move(rules));
             REQUIRE(policy.HasValue());
-            REQUIRE(review.decisions.Decide(*review.plan, {}, ReviewChoice::Accept).HasValue());
+            const auto accepted = destination ? ReviewTarget{0} : ReviewTarget{};
+            REQUIRE(review.decisions.Decide(*review.plan, accepted, ReviewChoice::Accept).HasValue());
             EditorWorkspaceViewCommandData command;
             REQUIRE(QueueSourceReviewApplication("validation-workspace", review.decisions, policy.Value(), review.plan, lifetime.Token(),
                                                  command));
             workspace->ProcessCommand(command);
-            AwaitValidation(Validation::SaveRequired);
+            AwaitValidation(expected);
             const auto audit = workspace->ReadSourceReviewStatus().audit;
             REQUIRE(audit);
             return {.command = Command::BuildSourceReview, .sourceReviewLifetime = lifetime.Token(), .sourceReviewValidationAudit = audit};
@@ -1123,17 +1138,26 @@ namespace {
             return snapshot && !snapshot->operations.empty();
         }
 
-        /** @brief Waits for the only admitted isolated build to publish its process failure. */
-        void AwaitBuildFailure() const {
+        /** @brief Waits for the only admitted isolated build to publish the expected terminal state. */
+        void AwaitBuildTerminal(const OperationState expected) const {
             REQUIRE(WaitUntil([&] {
                 const auto snapshot = operations.SnapshotIfChanged(0);
                 return snapshot && snapshot->operations.size() == 1 && snapshot->operations.front().kind == OperationKind::Build &&
-                       snapshot->operations.front().state == OperationState::Failed;
+                       snapshot->operations.front().state == expected;
+            }));
+        }
+
+        /** @brief Restores the structural transaction through the workspace's regular owner pump. */
+        void AwaitReviewUndo() {
+            REQUIRE(WaitUntil([&] {
+                workspace->UpdateSourceAutosave(0, 0);
+                return workspace->ReadSourceReviewStatus().feedback == SourceTransactionFeedback::Undone;
             }));
         }
 
         TestSupport::SourceProject project;
         NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
         OperationStore operations{8, 8};
         BuildOutputStore output{32};
@@ -1202,7 +1226,7 @@ namespace {
         CHECK(workspace.ReadSourceReviewStatus().validation == Validation::Stale);
 
         process.Release();
-        fixture.AwaitBuildFailure();
+        fixture.AwaitBuildTerminal(OperationState::Failed);
         const auto stale = workspace.ReadSourceReviewStatus();
         CHECK(stale.validation == Validation::Stale);
         CHECK_FALSE(stale.canRunTests);
@@ -1217,6 +1241,63 @@ namespace {
         std::ifstream disk(fixture.project.directory / "source.cpp", std::ios::binary);
         REQUIRE(disk);
         CHECK(std::string(std::istreambuf_iterator<char>{disk}, {}) == "int value = 2;\n");
+    }
+
+    TEST_CASE("Undoing a saved source rename cancels its approved build before restoring files",
+              "[editor][source][review][qualification]") {
+        using Command = ReviewBuildWorkspace::Command;
+        using Validation = ReviewBuildWorkspace::Validation;
+        ReviewBuildWorkspace fixture;
+        auto &workspace = *fixture.workspace;
+        auto &process = fixture.process;
+        const auto original = fixture.project.directory / "source.cpp";
+        REQUIRE(std::filesystem::create_directory(fixture.project.directory / "nested"));
+        const auto renamed = fixture.project.directory / "nested/renamed.cpp";
+        const EditorPatchDestination destination{SourceDocumentId::Parse("nested/renamed.cpp").Value(), fixture.project.directory,
+                                                 fixture.files, fixture.lifetime.Token()};
+        REQUIRE(ObserveSourceDestination(destination.path, destination.root, destination.files, destination.stop) ==
+                SourcePathState::Absent);
+        constexpr auto patch =
+            R"({"version":1,"files":[{"kind":"rename","path":"source.cpp","destination":"nested/renamed.cpp","hunks":[]}]})";
+        auto approved = fixture.ApplyReview(patch, &destination, Validation::Ready);
+        REQUIRE(workspace.ReadSourceReviewStatus().disposition == SourceReviewDisposition::Saved);
+        REQUIRE_FALSE(std::filesystem::exists(original));
+        const auto renamedSource = workspace.ViewModel().sourceDocuments.front();
+        REQUIRE(renamedSource.Identity().key.source == destination.path);
+        REQUIRE_FALSE(renamedSource.Dirty());
+        {
+            std::ifstream disk(renamed, std::ios::binary);
+            REQUIRE(disk);
+            CHECK(std::string(std::istreambuf_iterator<char>{disk}, {}) == "int value = 1;\n");
+        }
+        workspace.ProcessCommand(approved);
+        REQUIRE(process.WaitForInvocation());
+        REQUIRE(workspace.ReadSourceReviewStatus().validation == Validation::Building);
+        EditorWorkspaceViewCommandData undo;
+        REQUIRE(workspace.SourceReviews().QueueUndo(fixture.lifetime.Token(), undo));
+        workspace.ProcessCommand(undo);
+        REQUIRE(workspace.ReadSourceReviewStatus().feedback == SourceTransactionFeedback::Preparing);
+        REQUIRE(process.CancellationRequested());
+        process.Release();
+        fixture.AwaitReviewUndo();
+        fixture.AwaitBuildTerminal(OperationState::Cancelled);
+
+        const auto status = workspace.ReadSourceReviewStatus();
+        CHECK(status.disposition == SourceReviewDisposition::Reverted);
+        CHECK_FALSE(status.canRunTests);
+        workspace.ProcessCommand(approved);
+        approved.command = Command::TestSourceReview;
+        workspace.ProcessCommand(approved);
+        REQUIRE(fixture.operations.SnapshotIfChanged(0)->operations.size() == 1);
+        CHECK(process.Calls() == 1U);
+        const auto restored = workspace.SourceDocuments().Snapshot(renamedSource.Identity().instance).Value();
+        CHECK(restored.Identity().key.source.Value() == "source.cpp");
+        CHECK(restored.Text() == "int value = 1;\n");
+        CHECK_FALSE(restored.Dirty());
+        CHECK_FALSE(std::filesystem::exists(renamed));
+        std::ifstream disk(original, std::ios::binary);
+        REQUIRE(disk);
+        CHECK(std::string(std::istreambuf_iterator<char>{disk}, {}) == "int value = 1;\n");
     }
 
     TEST_CASE("Source edits and retired workspace requests preserve all live documents", "[editor][source][review][concurrency]") {
