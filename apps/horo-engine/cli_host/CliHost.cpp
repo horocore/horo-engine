@@ -198,6 +198,8 @@ namespace Horo::Application::Internal {
             adapters.push_back(MakePackageApplyUpdateCommandAdapter());
             adapters.push_back(MakePackageRollbackPreviewCommandAdapter());
             adapters.push_back(MakePackageRollbackUpdateCommandAdapter());
+            adapters.push_back(MakePackageRemovalPreviewCommandAdapter());
+            adapters.push_back(MakePackageApplyRemovalCommandAdapter());
             adapters.push_back(
                 Cli::MakeNavigationBakeCommandAdapter([&navigation](const CliCommandRequest &command, const CliExecutionContext &context) {
                 return navigation.Bind(command, context);

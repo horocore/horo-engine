@@ -25,6 +25,15 @@ namespace Horo::Application::Internal {
     /** @brief Creates the approved rollback adapter. @return Owned dispatcher registration. */
     [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRollbackUpdateCommandAdapter();
 
+    /** @brief Describes the read-only withdrawal preview. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRemovalPreviewCommand();
+    /** @brief Describes the approved asset withdrawal. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageApplyRemovalCommand();
+    /** @brief Creates the withdrawal preview adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRemovalPreviewCommandAdapter();
+    /** @brief Creates the approved withdrawal adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageApplyRemovalCommandAdapter();
+
     /** @brief Concrete services for one CLI/MCP process invocation, retained until all package callbacks are acknowledged. */
     class PackageCliHost final {
     public:

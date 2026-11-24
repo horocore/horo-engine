@@ -1,7 +1,9 @@
 #include "PackageCliHost.h"
 
+#include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Cli/CliErrors.h"
-#include "Horo/Platform/ProjectReadFiles.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "PackageBehaviorReferences.h"
 #include "PackageProjectSession.h"
 #include "ProjectProtocolIdentity.h"
 
@@ -37,14 +39,16 @@ namespace Horo::Application::Internal {
         }
 
         constexpr std::size_t UpdatePreviewPageSize = 32;
-        enum class UpdateDirection {
+        enum class PackageOperation {
             Forward,
-            Rollback
+            Rollback,
+            Removal
         };
 
         struct CandidateDocuments final {
             std::string request;
             std::string lock;
+            std::optional<Packages::HoroPackageId> removalPackage;
         };
 
         struct InspectedPackageUpdate final {
@@ -55,15 +59,18 @@ namespace Horo::Application::Internal {
             std::string lock;
             Sha256Digest requestHash;
             Packages::PackageUpdatePreview preview;
-            UpdateDirection direction;
+            PackageOperation operation;
+            std::optional<Packages::HoroPackageId> removalPackage;
 
             /** @brief Identifies the reviewed project and exact old and proposed documents. */
             std::string ApprovalFingerprint() const {
-                const auto command = direction == UpdateDirection::Rollback ? "rollback" : "update";
+                constexpr std::array commands{"update", "rollback", "remove"};
+                const auto command = commands[static_cast<std::size_t>(operation)];
                 const auto bytes = std::format("horo.package.{}.v1 {} {} {} {} {}", command, ProjectProtocolIdentity(policy.projectRoot),
                                                FormatSha256(approval.baseRequest), FormatSha256(approval.baseLock),
                                                FormatSha256(approval.candidateRequest), FormatSha256(approval.candidateLock));
-                return FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes})));
+                const auto identity = removalPackage ? std::format("{} {}", bytes, removalPackage->Value()) : bytes;
+                return FormatSha256(ComputeSha256(std::as_bytes(std::span{identity})));
             }
         };
 
@@ -140,8 +147,43 @@ namespace Horo::Application::Internal {
             return Output::Success({std::move(documents.request), std::move(documents.lock)});
         }
 
+        /** @brief Reads a single explicitly selected portable package ID. */
+        Result<Packages::HoroPackageId> RemovalPackage(const Cli::CliCommandRequest &request) {
+            const auto option = std::ranges::find(request.options, "package-id", &Cli::CliParsedOption::name);
+            if (option != request.options.end() && option->values.size() == 1) {
+                if (const auto *id = std::get_if<std::string>(&option->values.front().value))
+                    return Packages::HoroPackageId::Parse(*id);
+            }
+            return Result<Packages::HoroPackageId>::Failure(MakeError(Cli::CliErrors::ParseFailed));
+        }
+
+        /** @brief Derives the remaining graph without resolving new versions or touching saved project files. */
+        Result<CandidateDocuments> PlanRemoval(const PreparedPackageProject &base, const Packages::HoroPackageId &package) {
+            const auto &application = base.application;
+            const auto plan = Packages::PackageRemovalPlan::Prepare(*application.portableRequest, *application.lockedPlan, package);
+            if (plan.HasError())
+                return Result<CandidateDocuments>::Failure(plan.ErrorValue());
+            return Result<CandidateDocuments>::Success(
+                {plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical(), package});
+        }
+
+        /** @brief Selects the exact candidate for the requested package operation. */
+        Result<CandidateDocuments> InspectCandidate(const Cli::CliCommandRequest &request, const PackageProjectPolicy &policy,
+                                                    const PreparedPackageProject &base, const PackageOperation operation,
+                                                    const CancellationToken &cancellation, NativeDurableFileSystem &files) {
+            if (operation == PackageOperation::Removal) {
+                auto selected = RemovalPackage(request);
+                if (selected.HasError())
+                    return Result<CandidateDocuments>::Failure(selected.ErrorValue());
+                return PlanRemoval(base, selected.Value());
+            }
+            if (operation == PackageOperation::Rollback)
+                return ReadRollback(policy, base, files, cancellation);
+            return ReadCandidate(request, files, policy.limits.lockfile.documentBytes, cancellation);
+        }
+
         /** @brief Compares bounded candidate documents to the live, read-only project metadata snapshot. */
-        Result<InspectedPackageUpdate> InspectUpdate(const Cli::CliCommandRequest &request, const UpdateDirection direction,
+        Result<InspectedPackageUpdate> InspectUpdate(const Cli::CliCommandRequest &request, const PackageOperation operation,
                                                      const CancellationToken &cancellation) {
             using Output = Result<InspectedPackageUpdate>;
             const auto root = PathOption(request, "project");
@@ -155,12 +197,10 @@ namespace Horo::Application::Internal {
             auto prepared = PreparePackageProject(policy, files, cancellation, PackageProjectReadMode::ReadOnly);
             if (prepared.HasError())
                 return Output::Failure(prepared.ErrorValue());
-            auto documents = direction == UpdateDirection::Rollback
-                                 ? ReadRollback(policy, prepared.Value(), files, cancellation)
-                                 : ReadCandidate(request, files, policy.limits.lockfile.documentBytes, cancellation);
+            auto documents = InspectCandidate(request, policy, prepared.Value(), operation, cancellation, files);
             if (documents.HasError())
                 return Output::Failure(documents.ErrorValue());
-            auto [candidateRequest, candidateLock] = std::move(documents).Value();
+            auto [candidateRequest, candidateLock, removalPackage] = std::move(documents).Value();
             const auto candidate = Packages::ValidatedPackageRequest::Parse(candidateRequest);
             if (candidate.HasError())
                 return Output::Failure(candidate.ErrorValue());
@@ -180,13 +220,14 @@ namespace Horo::Application::Internal {
                                                  ComputeSha256(std::as_bytes(std::span{candidateRequest})),
                                                  ComputeSha256(std::as_bytes(std::span{candidateLock}))};
             return Output::Success({std::move(policy), std::move(prepared).Value(), approval, std::move(candidateRequest),
-                                    std::move(candidateLock), candidate.Value().Digest(), std::move(preview).Value(), direction});
+                                    std::move(candidateLock), candidate.Value().Digest(), std::move(preview).Value(), operation,
+                                    std::move(removalPackage)});
         }
 
         class PackageUpdatePreviewAdapter final : public Cli::ICliCommandAdapter {
         public:
-            PackageUpdatePreviewAdapter(Cli::CliCommandDescriptor descriptor, const UpdateDirection direction)
-                : descriptor_(std::move(descriptor)), direction_(direction) {}
+            PackageUpdatePreviewAdapter(Cli::CliCommandDescriptor descriptor, const PackageOperation operation)
+                : descriptor_(std::move(descriptor)), operation_(operation) {}
 
             const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
                 return descriptor_;
@@ -197,7 +238,7 @@ namespace Horo::Application::Internal {
                 const auto offset = PreviewOffset(request);
                 if (offset.HasError())
                     return Output::Failure(offset.ErrorValue());
-                const auto preview = InspectUpdate(request, direction_, context.Cancellation());
+                const auto preview = InspectUpdate(request, operation_, context.Cancellation());
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
                 return Output::Success(EncodePreview(preview.Value(), offset.Value()));
@@ -205,7 +246,7 @@ namespace Horo::Application::Internal {
 
         private:
             Cli::CliCommandDescriptor descriptor_;
-            UpdateDirection direction_;
+            PackageOperation operation_;
         };
 
         /** @brief Reads the explicitly supplied preview fingerprint. */
@@ -224,16 +265,16 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Waits on the CLI lane for the exact offline verification operation. */
-        Result<Packages::StagedPackageRestoreRecord> StageUpdate(const InspectedPackageUpdate &update,
-                                                                 Packages::PackageRestoreService &restore,
-                                                                 const Cli::CliExecutionContext &context) {
+        Result<Packages::StagedPackageRestoreRecord> StageWithCache(const Packages::PackageRestoreRequest &request,
+                                                                    NativeDurableFileSystem &files, Packages::PackageCacheStore &cache,
+                                                                    const Cli::CliExecutionContext &context) {
             using Output = Result<Packages::StagedPackageRestoreRecord>;
-            const auto started = restore.StartStaged({.projectRoot = update.policy.projectRoot,
-                                                      .lockfileJson = update.lock,
-                                                      .expectedRequestHash = update.requestHash,
-                                                      .platform = update.policy.platform,
-                                                      .mode = update.policy.mode,
-                                                      .cancellation = context.Cancellation()});
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto service = Packages::PackageRestoreService::Create(jobs, files, cache);
+            if (service.HasError())
+                return Output::Failure(service.ErrorValue());
+            auto restore = std::move(service).Value();
+            const auto started = restore.StartStaged(request);
             if (started.HasError())
                 return Output::Failure(started.ErrorValue());
             const auto operation = started.Value().Id();
@@ -288,6 +329,43 @@ namespace Horo::Application::Internal {
             return Error{ErrorCode{"packages.host.update_requires_migration_review"}, ErrorDomainId{"packages.host"}};
         }
 
+        /** @brief Carries the admitted command deadline into project reads and publication. */
+        Platform::ProjectReadContext ReadAuthority(const PackageProjectPolicy &policy, const Cli::CliExecutionContext &context) {
+            const auto remaining = context.RemainingTimeout();
+            return {.projectIdentity = ProjectProtocolIdentity(policy.projectRoot),
+                    .projectGeneration = 1,
+                    .cancellation = context.Cancellation(),
+                    .deadline = remaining ? std::chrono::steady_clock::now() + *remaining : std::chrono::steady_clock::time_point::max(),
+                    .authorityStopped = [&context] { return context.IsStopRequested(); }};
+        }
+
+        /** @brief Publishes an approved offline withdrawal after inspecting the real root-bound project inventory. */
+        Result<Cli::CliCommandResult> ApplyRemoval(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
+                                                   Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
+            using Output = Result<Cli::CliCommandResult>;
+            auto restore = update.base.application.restore;
+            restore.cancellation = context.Cancellation();
+            const auto verified = StageWithCache(restore, files, cache, context);
+            if (verified.HasError())
+                return Output::Failure(verified.ErrorValue());
+            const auto admission = ReadAuthority(update.policy, context);
+            const auto read =
+                Platform::CreateNativeProjectReadFiles(update.policy.projectRoot, admission.projectIdentity, admission.projectGeneration);
+            if (read.HasError())
+                return Output::Failure(read.ErrorValue());
+            const auto assets = CreateProjectAssetRegistrySource(read.Value(), admission);
+            if (assets.HasError())
+                return Output::Failure(assets.ErrorValue());
+            const PackageRemovalSources sources{.assets = *assets.Value(),
+                                                .files = *read.Value(),
+                                                .context = admission,
+                                                .offline = &verified.Value()};
+            const auto published = PublishPackageProjectRemoval(update.policy, update.base, *update.removalPackage, files, sources);
+            if (published.HasError())
+                return Output::Failure(published.ErrorValue());
+            return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
+        }
+
         /** @brief Checks the exact old and staged archives for each replaced asset package before publication. */
         Result<void> CheckAssetReplacements(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
                                             Packages::PackageCacheStore &cache) {
@@ -311,13 +389,37 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Verifies and publishes a candidate whose existing package references remain valid. */
+        Result<Cli::CliCommandResult> PublishStagedUpdate(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
+                                                          Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
+            using Output = Result<Cli::CliCommandResult>;
+            const auto staged = StageWithCache({.projectRoot = update.policy.projectRoot,
+                                                .lockfileJson = update.lock,
+                                                .expectedRequestHash = update.requestHash,
+                                                .platform = update.policy.platform,
+                                                .mode = update.policy.mode,
+                                                .cancellation = context.Cancellation()},
+                                               files, cache, context);
+            if (staged.HasError())
+                return Output::Failure(staged.ErrorValue());
+            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), cache); content.HasError())
+                return Output::Failure(content.ErrorValue());
+
+            const auto admission = ReadAuthority(update.policy, context);
+            const ApprovedPackageProjectUpdate approved{update.base, staged.Value(), update.approval, update.request, update.lock};
+            const auto published = PublishPackageProjectUpdate(update.policy, approved, files, admission);
+            if (published.HasError())
+                return Output::Failure(published.ErrorValue());
+            return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
+        }
+
         /** @brief Applies an approved update after proving its package references remain usable. */
         Result<Cli::CliCommandResult> ApplyUpdate(const Cli::CliCommandRequest &request, const InspectedPackageUpdate &update,
                                                   const Cli::CliExecutionContext &context) {
             using Output = Result<Cli::CliCommandResult>;
             if (UpdateApproval(request) != update.ApprovalFingerprint())
                 return Output::Failure(Error{ErrorCode{"packages.host.update_approval_mismatch"}, ErrorDomainId{"packages.host"}});
-            if (!std::ranges::all_of(update.preview.changes, CanPreserveAssetReferences))
+            if (!update.removalPackage && !std::ranges::all_of(update.preview.changes, CanPreserveAssetReferences))
                 return Output::Failure(UpdateNeedsMigration());
             const auto cachePath = PathOption(request, "package-cache-root");
             if (cachePath.HasError())
@@ -330,44 +432,22 @@ namespace Horo::Application::Internal {
             if (cache.HasError())
                 return Output::Failure(cache.ErrorValue());
             auto verifiedCache = std::move(cache).Value();
-            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
-            auto restore = Packages::PackageRestoreService::Create(jobs, files, verifiedCache);
-            if (restore.HasError())
-                return Output::Failure(restore.ErrorValue());
-            auto service = std::move(restore).Value();
-            const auto staged = StageUpdate(update, service, context);
-            if (staged.HasError())
-                return Output::Failure(staged.ErrorValue());
-            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), verifiedCache); content.HasError())
-                return Output::Failure(content.ErrorValue());
-
-            const auto remaining = context.RemainingTimeout();
-            const Platform::ProjectReadContext admission{.projectIdentity = ProjectProtocolIdentity(update.policy.projectRoot),
-                                                         .projectGeneration = 1,
-                                                         .cancellation = context.Cancellation(),
-                                                         .deadline = remaining ? std::chrono::steady_clock::now() + *remaining
-                                                                               : std::chrono::steady_clock::time_point::max(),
-                                                         .authorityStopped = [&context] {
-                return context.IsStopRequested();
-            }};
-            const ApprovedPackageProjectUpdate approved{update.base, staged.Value(), update.approval, update.request, update.lock};
-            const auto published = PublishPackageProjectUpdate(update.policy, approved, files, admission);
-            if (published.HasError())
-                return Output::Failure(published.ErrorValue());
-            return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
+            if (update.removalPackage)
+                return ApplyRemoval(update, files, verifiedCache, context);
+            return PublishStagedUpdate(update, files, verifiedCache, context);
         }
 
         class PackageApplyUpdateAdapter final : public Cli::ICliCommandAdapter {
         public:
-            PackageApplyUpdateAdapter(Cli::CliCommandDescriptor descriptor, const UpdateDirection direction)
-                : descriptor_(std::move(descriptor)), direction_(direction) {}
+            PackageApplyUpdateAdapter(Cli::CliCommandDescriptor descriptor, const PackageOperation operation)
+                : descriptor_(std::move(descriptor)), operation_(operation) {}
 
             const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
                 return descriptor_;
             }
 
             Result<Cli::CliCommandResult> Execute(const Cli::CliCommandRequest &request, Cli::CliExecutionContext &context) override {
-                const auto update = InspectUpdate(request, direction_, context.Cancellation());
+                const auto update = InspectUpdate(request, operation_, context.Cancellation());
                 if (update.HasError())
                     return Result<Cli::CliCommandResult>::Failure(update.ErrorValue());
                 return ApplyUpdate(request, update.Value(), context);
@@ -375,7 +455,7 @@ namespace Horo::Application::Internal {
 
         private:
             Cli::CliCommandDescriptor descriptor_;
-            UpdateDirection direction_;
+            PackageOperation operation_;
         };
     }  // namespace
 
@@ -411,7 +491,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakePackageUpdatePreviewCommandAdapter */
     Cli::CliCommandAdapterRegistration MakePackageUpdatePreviewCommandAdapter() {
-        return {.adapter = std::make_unique<PackageUpdatePreviewAdapter>(DescribePackageUpdatePreviewCommand(), UpdateDirection::Forward),
+        return {.adapter = std::make_unique<PackageUpdatePreviewAdapter>(DescribePackageUpdatePreviewCommand(), PackageOperation::Forward),
                 .capabilities = {{"horo.package.manage"}}};
     }
 
@@ -437,7 +517,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakePackageApplyUpdateCommandAdapter */
     Cli::CliCommandAdapterRegistration MakePackageApplyUpdateCommandAdapter() {
-        return {.adapter = std::make_unique<PackageApplyUpdateAdapter>(DescribePackageApplyUpdateCommand(), UpdateDirection::Forward),
+        return {.adapter = std::make_unique<PackageApplyUpdateAdapter>(DescribePackageApplyUpdateCommand(), PackageOperation::Forward),
                 .capabilities = {{"horo.package.manage"}}};
     }
 
@@ -468,13 +548,48 @@ namespace Horo::Application::Internal {
     /** @copydoc MakePackageRollbackPreviewCommandAdapter */
     Cli::CliCommandAdapterRegistration MakePackageRollbackPreviewCommandAdapter() {
         return {.adapter =
-                    std::make_unique<PackageUpdatePreviewAdapter>(DescribePackageRollbackPreviewCommand(), UpdateDirection::Rollback),
+                    std::make_unique<PackageUpdatePreviewAdapter>(DescribePackageRollbackPreviewCommand(), PackageOperation::Rollback),
                 .capabilities = {{"horo.package.manage"}}};
     }
 
     /** @copydoc MakePackageRollbackUpdateCommandAdapter */
     Cli::CliCommandAdapterRegistration MakePackageRollbackUpdateCommandAdapter() {
-        return {.adapter = std::make_unique<PackageApplyUpdateAdapter>(DescribePackageRollbackUpdateCommand(), UpdateDirection::Rollback),
+        return {.adapter = std::make_unique<PackageApplyUpdateAdapter>(DescribePackageRollbackUpdateCommand(), PackageOperation::Rollback),
+                .capabilities = {{"horo.package.manage"}}};
+    }
+
+    /** @copydoc DescribePackageRemovalPreviewCommand */
+    Cli::CliCommandDescriptor DescribePackageRemovalPreviewCommand() {
+        auto descriptor = DescribePackageRollbackPreviewCommand();
+        descriptor.path = {{"package", "preview-remove"}};
+        descriptor.summary = "Review the exact package withdrawal and its approval fingerprint.";
+        descriptor.options.insert(descriptor.options.begin(), {.name = "package-id",
+                                                               .summary = "Portable ID of a directly requested package.",
+                                                               .valueKind = Cli::CliOptionValueKind::String,
+                                                               .required = true});
+        descriptor.output.id = "horo.package.preview-remove";
+        return descriptor;
+    }
+
+    /** @copydoc DescribePackageApplyRemovalCommand */
+    Cli::CliCommandDescriptor DescribePackageApplyRemovalCommand() {
+        auto descriptor = DescribePackageRollbackUpdateCommand();
+        descriptor.path = {{"package", "remove"}};
+        descriptor.summary = "Withdraw an approved asset package from a local project.";
+        descriptor.options.push_back(DescribePackageRemovalPreviewCommand().options.front());
+        descriptor.output.id = "horo.package.remove";
+        return descriptor;
+    }
+
+    /** @copydoc MakePackageRemovalPreviewCommandAdapter */
+    Cli::CliCommandAdapterRegistration MakePackageRemovalPreviewCommandAdapter() {
+        return {.adapter = std::make_unique<PackageUpdatePreviewAdapter>(DescribePackageRemovalPreviewCommand(), PackageOperation::Removal),
+                .capabilities = {{"horo.package.manage"}}};
+    }
+
+    /** @copydoc MakePackageApplyRemovalCommandAdapter */
+    Cli::CliCommandAdapterRegistration MakePackageApplyRemovalCommandAdapter() {
+        return {.adapter = std::make_unique<PackageApplyUpdateAdapter>(DescribePackageApplyRemovalCommand(), PackageOperation::Removal),
                 .capabilities = {{"horo.package.manage"}}};
     }
 

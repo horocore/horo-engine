@@ -6,6 +6,7 @@
 #include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <set>
 
@@ -210,6 +211,37 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Allows only data files in the asset namespace along with the package manifest. */
+        bool IsOfflineAssetArchive(const Packages::PackageRestorePackage &package) {
+            if (!std::ranges::equal(package.lock.contributions, std::array<std::string_view, 1>{"assets"}))
+                return false;
+            return std::ranges::all_of(package.archive->Manifest().Entries(), [](const auto &file) {
+                const auto &path = file.id.path.Value();
+                return !file.executable && (path == "horo-package.toml" || path.starts_with("assets/"));
+            });
+        }
+
+        /** @brief Accepts only exact staged archives that contain no executable or extension contribution. */
+        Result<void> CheckOfflineRemovalCoverage(const Packages::StagedPackageRestoreRecord &staged,
+                                                 const Packages::ValidatedPackageLockfileV1 &lock,
+                                                 const Packages::PackageRemovalGraphPreview &removal) {
+            const auto graph = staged.Graph();
+            if (!graph || graph->requestHash != lock.RequestHash())
+                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+            for (const auto &reference : removal.removed) {
+                const auto package = std::ranges::find_if(graph->packages, [&reference](const auto &entry) {
+                    return entry.lock.package == reference.package;
+                });
+                if (package == graph->packages.end() || !package->archive || package->lock.version != reference.version)
+                    return Result<void>::Failure(
+                        ReferenceError("packages.host.removal_archive_evidence_unavailable", reference.package.Value()));
+                if (!IsOfflineAssetArchive(*package))
+                    return Result<void>::Failure(
+                        ReferenceError("packages.host.removal_requires_lifecycle_owner", reference.package.Value()));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc CheckRemovalRegistrationCoverage */
@@ -217,6 +249,8 @@ namespace Horo::Application::Internal {
                                                   const Packages::PackageRemovalGraphPreview &removal) {
         if (removal.removed.empty())
             return Result<void>::Success();
+        if (sources.offline)
+            return CheckOfflineRemovalCoverage(*sources.offline, lock, removal);
         const auto graph = sources.install ? sources.install->Graph() : nullptr;
         if (!graph || graph->requestHash != lock.RequestHash())
             return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));

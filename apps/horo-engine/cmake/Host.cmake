@@ -132,7 +132,7 @@ target_compile_definitions(horo-engine PRIVATE
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::PlatformProjectIo HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage
     HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
-    HoroNetworkProductHost HoroPackageProjectHost HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
+    HoroNetworkProductHost HoroPackageProjectHost HoroEngine::ProjectAssetRegistrySource HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
     HoroEngine::CliNavigationAdapters HoroEngine::McpNavigationAdapters HoroEngine::NavigationRecastDetour
     HoroEngine::Runtime
     HoroEngine::CliHost

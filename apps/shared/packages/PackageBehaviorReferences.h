@@ -21,6 +21,7 @@ namespace Horo::Application::Internal {
         Platform::ProjectReadContext context;
         std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
         std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install; /**< Sealed archive evidence for the current lock. */
+        const Packages::StagedPackageRestoreRecord *offline{}; /**< Read-only staging evidence for an asset-only withdrawal. */
     };
 
     /** @brief Requires exact observations for departing runtime roles and for retained roles that could consume a departing service. */

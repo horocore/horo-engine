@@ -435,6 +435,19 @@ namespace Horo::Application::Internal {
             return Publication::Success({});
         }
 
+        /** @brief Recovers interrupted work and reopens the exact approved pair under the caller's mutation lease. */
+        Result<MetadataDocuments> ReadApprovedDocuments(const std::filesystem::path &metadata,
+                                                        const Packages::PackageLockfileLimits &limits,
+                                                        const PreparedPackageProject &expected, DurableFileSystem &files,
+                                                        const CancellationToken &cancellation) {
+            if (auto recovered = RecoverMetadata(metadata, limits, files, cancellation); recovered.HasError())
+                return Result<MetadataDocuments>::Failure(recovered.ErrorValue());
+            auto previous = ReadDocuments(metadata, limits, cancellation);
+            if (previous.HasValue() && !previous.Value().Matches(expected))
+                return Result<MetadataDocuments>::Failure(MetadataConflict());
+            return previous;
+        }
+
         /** @brief Keeps the prior pair through a recoverable metadata publication under the caller's mutation lease. */
         Result<PackageMetadataPublication> CommitWithRollbackPoint(const std::filesystem::path &metadata, const MetadataDocuments &previous,
                                                                    const MetadataDocuments &next,
@@ -613,13 +626,9 @@ namespace Horo::Application::Internal {
         if (lease.HasError())
             return Publication::Failure(lease.ErrorValue());
         const auto &limits = policy.limits.lockfile;
-        if (auto recovered = RecoverMetadata(metadata, limits, files, context.cancellation); recovered.HasError())
-            return Publication::Failure(recovered.ErrorValue());
-        const auto previous = ReadDocuments(metadata, limits, context.cancellation);
+        const auto previous = ReadApprovedDocuments(metadata, limits, update.base, files, context.cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
-        if (!previous.Value().Matches(update.base))
-            return Publication::Failure(MetadataConflict());
         const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
         return CommitWithRollbackPoint(metadata, previous.Value(), next, limits, files, context);
     }
@@ -681,18 +690,17 @@ namespace Horo::Application::Internal {
         const auto &metadata = directory.Value();
         if (metadata.parent_path() != expected.application.restore.projectRoot)
             return Publication::Failure(MetadataConflict());
+        if (sources.offline &&
+            (sources.offline->ProjectRoot() != metadata.parent_path() || sources.offline->LockDigest() != expected.lockDigest))
+            return Publication::Failure(MetadataConflict());
         auto acquired = AcquireProjectMutation(metadata, files, "package-removal");
         if (acquired.HasError())
             return Publication::Failure(acquired.ErrorValue());
         const auto lease = std::move(acquired).Value();
         const auto &cancellation = sources.context.cancellation;
-        if (auto recovered = RecoverMetadata(metadata, policy.limits.lockfile, files, cancellation); recovered.HasError())
-            return Publication::Failure(recovered.ErrorValue());
-        const auto previous = ReadDocuments(metadata, policy.limits.lockfile, cancellation);
+        const auto previous = ReadApprovedDocuments(metadata, policy.limits.lockfile, expected, files, cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
-        if (!previous.Value().Matches(expected))
-            return Publication::Failure(MetadataConflict());
         const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, sources);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());

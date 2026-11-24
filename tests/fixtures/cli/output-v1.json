@@ -31,6 +31,8 @@
     "horo.package.apply-update": {"command": "package.apply-update", "version": 1, "fields": {"recoveryRequired": "boolean"}},
     "horo.package.preview-rollback": {"command": "package.preview-rollback", "version": 1, "fields": {"requestChanged": "boolean", "totalChanges": "integer", "nextOffset": "integer", "changes": "string", "approvalFingerprint": "string"}},
     "horo.package.rollback-update": {"command": "package.rollback-update", "version": 1, "fields": {"recoveryRequired": "boolean"}},
+    "horo.package.preview-remove": {"command": "package.preview-remove", "version": 1, "fields": {"requestChanged": "boolean", "totalChanges": "integer", "nextOffset": "integer", "changes": "string", "approvalFingerprint": "string"}},
+    "horo.package.remove": {"command": "package.remove", "version": 1, "fields": {"recoveryRequired": "boolean"}},
     "horo.platform-services.validation": {"command": "platform-services.validate", "version": 1, "fields": {"validated": "boolean", "sourceFingerprint": "string", "registryFingerprint": "string", "nullProvider": "boolean"}},
     "horo.prefab.cook": {"command": "prefab.cook", "version": 1, "fields": {"committed": "boolean", "durabilityConfirmed": "boolean", "manifestDigest": "string", "artifacts": "integer", "cacheHits": "integer"}},
     "horo.prefab.migration-plan": {"command": "prefab.migration-plan", "version": 1, "fields": {"prefabAdoptionRequired": "boolean", "sourceBaseline": "string", "targetBaseline": "string", "definitionCount": "integer", "definitionChain": "string", "verified": "boolean", "changedFileCount": "integer", "changedProjectPaths": "string", "changedPathsOmitted": "boolean"}},

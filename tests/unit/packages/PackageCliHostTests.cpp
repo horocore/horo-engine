@@ -1,8 +1,10 @@
+#include "CliOutputContractFixture.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <iterator>
 
@@ -69,7 +71,7 @@ namespace {
         Tests::Packages::TemporaryDirectory project{"cli package project ü"}, storage{"cli package storage ü"};
         Tests::PackageApplicationService::AssetGraph graph;
 
-        NativeProject() {
+        explicit NativeProject(bool native = false) : graph(native, native) {
             const nlohmann::json intent{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
                                         {"dependencies",
                                          {{"com.horo.application-fixture", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}};
@@ -84,7 +86,7 @@ namespace {
                                                    .fileManifestDigest = graph.archive.Manifest().Digest(),
                                                    .packageFormatVersion = 1,
                                                    .platforms = {},
-                                                   .contributions = {"assets"}};
+                                                   .contributions = {native ? "native" : "assets"}};
             auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1U}, request.Value().Digest(),
                                                                        std::span{&artifact, 1U});
             REQUIRE(lock.HasValue());
@@ -280,6 +282,66 @@ namespace {
         }
         CHECK(read(metadata / "packages.json") == originalRequest);
         CHECK(read(metadata / "packages.lock") == originalLock);
+    }
+
+    TEST_CASE("Headless package removal requires exact approval and checks saved references", "[packages][application][cli][remove]") {
+        const auto native = GENERATE(false, true);
+        NativeProject fixture{native};
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto assets = root / "Assets";
+        std::filesystem::create_directories(assets);
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        NativeDurableFileSystem files;
+        auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+        REQUIRE(cache.HasValue());
+        auto verifiedCache = std::move(cache).Value();
+        REQUIRE(verifiedCache.Publish(fixture.graph.archive).HasValue());
+        auto preview = MakePackageRemovalPreviewCommandAdapter();
+        auto apply = MakePackageApplyRemovalCommandAdapter();
+        Tests::CliContract::ValidateSchema("package.preview-remove", preview.adapter->GetDescriptor().output.id,
+                                           preview.adapter->GetDescriptor().output.version);
+        Tests::CliContract::ValidateSchema("package.remove", apply.adapter->GetDescriptor().output.id,
+                                           apply.adapter->GetDescriptor().output.version);
+        const auto id = fixture.graph.package.Value();
+        CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                  .options = {NativeProject::PathOption("project", root),
+                                              {"package-id", {{id, CliValueSource::Invocation, {}}}}}};
+        InInvocation([&](CliExecutionContext &context) {
+            const auto reviewed = preview.adapter->Execute(command, context);
+            REQUIRE(reviewed.HasValue());
+            CHECK(std::get<std::int64_t>(reviewed.Value().fields[1].value) == 1);
+            CHECK(std::get<std::string>(reviewed.Value().fields[3].value).ends_with("] -> [absent]"));
+            const auto approval = std::get<std::string>(reviewed.Value().fields.back().value);
+            command.command = apply.adapter->GetDescriptor().path;
+            command.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            command.options.push_back({"approve", {{std::string{"unreviewed"}, CliValueSource::Invocation, {}}}});
+            const auto wrongApproval = apply.adapter->Execute(command, context);
+            REQUIRE(wrongApproval.HasError());
+            CHECK(wrongApproval.ErrorValue().code.Value() == "packages.host.update_approval_mismatch");
+            command.options.back().values.front().value = approval;
+            if (native) {
+                const auto blocked = apply.adapter->Execute(command, context);
+                REQUIRE(blocked.HasError());
+                CHECK(blocked.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+                return;
+            }
+
+            std::ofstream{assets / "sample.horoasset"} << "{}";
+            const auto sidecar = assets / "sample.horoasset.horo";
+            std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                     {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
+                                                     {"assetType", "core.scene"},
+                                                     {"importerPackageId", id}};
+            const auto blocked = apply.adapter->Execute(command, context);
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+            REQUIRE(std::filesystem::remove(sidecar));
+            REQUIRE(std::filesystem::remove(assets / "sample.horoasset"));
+            const auto removed = apply.adapter->Execute(command, context);
+            REQUIRE(removed.HasValue());
+            CHECK_FALSE(std::get<bool>(removed.Value().fields.front().value));
+            CHECK(preview.adapter->Execute({.options = {command.options[0], command.options[1]}}, context).HasError());
+        });
     }
 
     TEST_CASE("Concrete package CLI host rejects malformed typed paths before constructing a project", "[packages][application][cli]") {

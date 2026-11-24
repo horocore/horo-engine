@@ -267,6 +267,8 @@ namespace Horo::Application::Internal {
         descriptors.push_back(DescribePackageApplyUpdateCommand());
         descriptors.push_back(DescribePackageRollbackPreviewCommand());
         descriptors.push_back(DescribePackageRollbackUpdateCommand());
+        descriptors.push_back(DescribePackageRemovalPreviewCommand());
+        descriptors.push_back(DescribePackageApplyRemovalCommand());
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());
         descriptors.push_back(DescribePlatformServicesValidationCommand());
         descriptors.push_back(DescribePlatformServicesCookCommand());

@@ -446,6 +446,15 @@ failed removal attempts to restore the prior pair before releasing the
 mutation lease. If repair cannot finish, the journal remains for the next
 project preparation.
 
+`horo-engine package preview-remove --project /path/to/project --package-id
+com.vendor.pack` lists the exact locked packages that would leave and returns
+an approval fingerprint. Pass that fingerprint as `--approve` to `package
+remove` together with the same project, package ID, and
+`--package-cache-root`. The command verifies the current locked archives from
+the local cache and rechecks the project inventory under the mutation lease.
+Offline withdrawal supports asset-only archives. Extensions and other
+executable contributions require their live lifecycle owner.
+
 Observed native package registrations include service dependencies and system
 service requirements. The uninstall transaction checks retained observations
 against the exact current lock and reports which retained registration requires
