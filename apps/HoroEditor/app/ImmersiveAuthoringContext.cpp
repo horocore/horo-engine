@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     struct ImmersiveContextEpoch final {
@@ -31,10 +32,32 @@ namespace Horo::Editor {
             }
             return true;
         }
+
+        /** @brief Rejects tool-bearing history and malformed payloads before transferring them to the queue. */
+        bool ValidTextRequest(const Agent::ModelRequest &request) {
+            using Agent::ModelFeature;
+            constexpr Agent::ModelFeatures textFeatures{static_cast<std::uint32_t>(ModelFeature::Streaming) |
+                                                        static_cast<std::uint32_t>(ModelFeature::Usage)};
+            return Agent::AdmitModelRequest(request, textFeatures).Succeeded() &&
+                   std::ranges::none_of(request.messages, [](const Agent::ModelMessage &message) {
+                return message.role == Agent::ModelRole::Tool;
+            });
+        }
     }  // namespace
 
     bool ImmersivePlanningContext::IsCurrent() const noexcept {
         return epoch_ && generation_ != 0 && epoch_->current.load(std::memory_order_acquire) == generation_;
+    }
+
+    ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request)
+        : context_(std::move(context)), request_(std::move(request)) {}
+
+    /** @copydoc ImmersiveAgentRequest::Run */
+    Agent::AgentTurnResult ImmersiveAgentRequest::Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop) {
+        Agent::AgentTurnRuntime runtime{[this] {
+            return IsCurrent();
+        }};
+        return runtime.Run(provider, nullptr, turnId, std::exchange(request_, {}), {}, stop);
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}
@@ -83,5 +106,14 @@ namespace Horo::Editor {
                 return identity.diagnosticsAllowed ? ImmersiveAdmission::Admitted : ImmersiveAdmission::PermissionDenied;
         }
         return ImmersiveAdmission::InvalidRequest;
+    }
+
+    /** @copydoc ImmersiveAuthoringContext::CaptureRequest */
+    std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CaptureRequest(const ImmersivePlanningContext &context,
+                                                                                   const ImmersiveRequestKind kind,
+                                                                                   Agent::ModelRequest &&request) const {
+        if (Admit(context, kind) != ImmersiveAdmission::Admitted || !ValidTextRequest(request))
+            return std::nullopt;
+        return ImmersiveAgentRequest{context, std::move(request)};
     }
 }  // namespace Horo::Editor

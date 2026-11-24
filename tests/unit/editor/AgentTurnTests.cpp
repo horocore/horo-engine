@@ -93,6 +93,28 @@ namespace Horo::Agent {
         CHECK(model.requests.size() == 1);
     }
 
+    TEST_CASE("Editor Agent checks turn revocation after announcing and before dispatching a tool", "[agent][turn]") {
+        Tools tools;
+        const AgentTurnMcp bridge{tools.adapter};
+        Model model;
+        model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            return Emit(sink, {Intent("inspect"), {.kind = ModelEventKind::Usage, .usage = {8, 3}}, {.kind = ModelEventKind::Completed}});
+        };
+        bool current = true;
+        AgentTurnRuntime runtime{[&current] {
+            return current;
+        }};
+        const auto result =
+            runtime.Run(model, &bridge, 1, Request(true), {.timeout = 2s}, {}, nullptr, {}, [&](const AgentToolActivity &activity) {
+            if (!activity.outcome)
+                current = false;
+        });
+        CHECK_FALSE(current);
+        CHECK(result.status == AgentTurnStatus::ContextDenied);
+        CHECK(result.messages.empty());
+        CHECK(tools.scene->calls == 0);
+    }
+
     TEST_CASE("Editor Agent discards malformed sibling intents before making any tool visible", "[agent][turn]") {
         Tools tools;
         Model model;

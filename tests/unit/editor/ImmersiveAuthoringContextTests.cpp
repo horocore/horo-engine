@@ -5,6 +5,30 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Emits a deterministic completion, with a hook for an editor transition during inference. */
+        struct PlanningModel final : Agent::IModelProvider {
+            std::function<void()> duringInference;
+            std::size_t calls{};
+
+            Agent::ProviderDiscovery Discover(std::stop_token) override {
+                return {};
+            }
+
+            Agent::ModelOutcome Stream(const Agent::ModelRequest &, const Agent::ModelEventSink &sink, std::stop_token) override {
+                ++calls;
+                if (duringInference)
+                    duringInference();
+                if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}) || !sink({.kind = Agent::ModelEventKind::Completed}))
+                    return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
+                return {};
+            }
+        };
+
+        /** @brief Creates a bounded payload with no automatic export of editor or XR state. */
+        Agent::ModelRequest Prompt() {
+            return {.model = "qualification", .messages = {{.role = Agent::ModelRole::User, .text = "Inspect my selection"}}};
+        }
+
         ImmersiveContextIdentity Opening() {
             const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
             return {1,
@@ -137,6 +161,81 @@ namespace Horo::Editor {
             owner.reset();
             teardown.set_value();
             CHECK_FALSE(worker.get());
+        }
+
+        TEST_CASE("Immersive inference requires an admitted owner context and excludes tools", "[agent][immersive][turn]") {
+            ImmersiveAuthoringContext owner;
+            ImmersiveAuthoringContext other;
+            auto identity = Opening();
+            identity.mode = ImmersiveAuthoringMode::Play;
+            identity.worldGeneration = 1;
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+            CHECK_FALSE(other.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, Prompt()));
+            CHECK_FALSE(owner.CaptureRequest(*context, ImmersiveRequestKind::Plan, Prompt()));
+            auto toolPrompt = Prompt();
+            toolPrompt.requiredFeatures.bits = static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
+            CHECK_FALSE(owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, std::move(toolPrompt)));
+            auto toolHistory = Prompt();
+            toolHistory.messages.insert(toolHistory.messages.begin(),
+                                        {.role = Agent::ModelRole::Tool, .text = "Old result", .toolCallId = "previous"});
+            CHECK_FALSE(owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, std::move(toolHistory)));
+            CHECK_FALSE(owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, {}));
+
+            auto request = owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, Prompt());
+            REQUIRE(request);
+            CHECK(request->Generation() == context->Generation());
+            PlanningModel model;
+            const auto result = request->Run(model, 1);
+            REQUIRE(result.status == Agent::AgentTurnStatus::Completed);
+            REQUIRE(result.messages.size() == 2);
+            CHECK(result.messages.back().text == "Plan");
+            CHECK(request->IsCurrent());
+            CHECK(request->Run(model, 2).status == Agent::AgentTurnStatus::InvalidRequest);
+            CHECK(model.calls == 1);
+        }
+
+        TEST_CASE("Immersive inference does not dispatch after project replacement", "[agent][immersive][turn]") {
+            ImmersiveAuthoringContext owner;
+            auto identity = Opening();
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+            auto request = owner.CaptureRequest(*context, ImmersiveRequestKind::Plan, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            ++identity.projectOpening;
+            REQUIRE(owner.Publish(identity, {}));
+            const auto result = request->Run(model, 1);
+            CHECK(result.status == Agent::AgentTurnStatus::ContextDenied);
+            CHECK(result.messages.empty());
+            CHECK(model.calls == 0);
+            CHECK_FALSE(request->IsCurrent());
+        }
+
+        TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto request = owner.CaptureRequest(*context, ImmersiveRequestKind::Plan, Prompt());
+            REQUIRE(request);
+            std::promise<void> dispatched;
+            std::promise<void> resume;
+            auto resumeSignal = resume.get_future();
+            auto worker = std::async(std::launch::async, [request = std::move(*request), &dispatched, &resumeSignal]() mutable {
+                PlanningModel model;
+                model.duringInference = [&] {
+                    dispatched.set_value();
+                    resumeSignal.wait();
+                };
+                return request.Run(model, 1);
+            });
+            const auto ready = dispatched.get_future().wait_for(std::chrono::seconds{2});
+            owner.Revoke();
+            resume.set_value();
+            const auto result = worker.get();
+            CHECK(ready == std::future_status::ready);
+            CHECK(result.status == Agent::AgentTurnStatus::ContextDenied);
+            CHECK(result.messages.empty());
         }
     }  // namespace
 }  // namespace Horo::Editor

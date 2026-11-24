@@ -84,12 +84,20 @@ namespace Horo::Agent {
     /** @brief Synchronous worker observer for transient tool presentation. Exceptions are isolated from the turn. */
     using AgentToolActivityObserver = std::function<void(AgentToolActivity)>;
 
+    /** @brief Cold caller's synchronous revocation check over an owned turn authority snapshot. */
+    using AgentTurnFreshness = std::function<bool()>;
+
     /** @brief Editor-owned admission for at most one active authoring turn.
      * @details The owner must outlive its worker. The atomic flag protects turn admission across host callers and
      * rejects reentrant entry without blocking the provider, tool adapters or editor thread.
      */
     class AgentTurnRuntime final {
     public:
+        AgentTurnRuntime() = default;
+
+        /** @brief Binds the runtime to a revocable owner snapshot for all its turns. */
+        explicit AgentTurnRuntime(AgentTurnFreshness isCurrent);
+
         /** @brief Executes a bounded authoring turn on a host worker while the existing owners pump MCP.
          * @param provider Exact host-selected provider; calls remain synchronous on this worker.
          * @param tools Host bridge to an independently authorized MCP session, or null for text-only turns.
@@ -108,6 +116,7 @@ namespace Horo::Agent {
                                           const AgentToolActivityObserver &observeTool = {});
 
     private:
+        AgentTurnFreshness isCurrent_;
         std::atomic_flag active_{};
     };
 }  // namespace Horo::Agent

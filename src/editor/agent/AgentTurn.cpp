@@ -71,10 +71,11 @@ namespace Horo::Agent {
         /** @brief Keeps an admitted context invalid once any of its authority checks fails. */
         class TurnContextGate final {
         public:
-            explicit TurnContextGate(const AgentTurnContext *context) noexcept : context_(context) {}
+            TurnContextGate(const AgentTurnContext *context, const AgentTurnFreshness &isCurrent) noexcept
+                : context_(context), isCurrent_(isCurrent) {}
 
             [[nodiscard]] bool Check() noexcept {
-                if (!valid_ || !context_)
+                if (!CheckFreshness() || !context_)
                     return valid_;
                 try {
                     valid_ = context_->preview.IsCurrent(context_->policy, context_->project, context_->isCurrent);
@@ -84,8 +85,20 @@ namespace Horo::Agent {
                 return valid_;
             }
 
+            [[nodiscard]] bool CheckFreshness() noexcept {
+                if (valid_ && isCurrent_) {
+                    try {
+                        valid_ = isCurrent_();
+                    } catch (...) {
+                        valid_ = false;
+                    }
+                }
+                return valid_;
+            }
+
         private:
             const AgentTurnContext *context_;
+            const AgentTurnFreshness &isCurrent_;
             bool valid_{true};
         };
 
@@ -152,7 +165,7 @@ namespace Horo::Agent {
                                     Detail::AgentTurnStream &stream, const AgentTurnTextObserver &observeText, TurnContextGate &context) {
             try {
                 return provider.Stream(request, [&](const ModelEvent &event) {
-                    if (stop.Token().stop_requested() || !stream.Accept(event))
+                    if (stop.Token().stop_requested() || !context.CheckFreshness() || !stream.Accept(event))
                         return false;
                     if (observeText && event.kind == ModelEventKind::TextDelta) {
                         if (!context.Check())
@@ -266,6 +279,9 @@ namespace Horo::Agent {
 
     }  // namespace
 
+    /** @copydoc AgentTurnRuntime::AgentTurnRuntime(AgentTurnFreshness) */
+    AgentTurnRuntime::AgentTurnRuntime(AgentTurnFreshness isCurrent) : isCurrent_(std::move(isCurrent)) {}
+
     /** @copydoc AgentTurnRuntime::Run */
     AgentTurnResult AgentTurnRuntime::Run(IModelProvider &provider, const IAgentTurnTools *tools, const std::uint64_t turnId,
                                           ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation,
@@ -299,7 +315,7 @@ namespace Horo::Agent {
             TurnStop stop{limits.timeout, cancellation};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
-            TurnContextGate contextGate{context};
+            TurnContextGate contextGate{context, isCurrent_};
             TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())

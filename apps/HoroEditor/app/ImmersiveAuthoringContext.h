@@ -2,6 +2,7 @@
 
 /** @file ImmersiveAuthoringContext.h @brief Editor-owned immersive planning generations. */
 
+#include "AgentTurn.h"
 #include "Horo/Scene/SceneSourceModel.h"
 #include "Horo/XR/XRIdentity.h"
 
@@ -80,6 +81,38 @@ namespace Horo::Editor {
         std::shared_ptr<const ImmersiveContextEpoch> epoch_;
     };
 
+    /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
+    class ImmersiveAgentRequest final {
+    public:
+        ImmersiveAgentRequest(ImmersiveAgentRequest &&) noexcept = default;
+        ImmersiveAgentRequest &operator=(ImmersiveAgentRequest &&) noexcept = default;
+
+        /** @brief The exact generation used to admit and dispatch the request. */
+        [[nodiscard]] std::uint64_t Generation() const noexcept {
+            return context_.Generation();
+        }
+
+        /** @brief Checks whether this request can still publish on the editor lane after worker completion. */
+        [[nodiscard]] bool IsCurrent() const noexcept {
+            return context_.IsCurrent();
+        }
+
+        /** @brief Runs bounded text inference with the existing Agent runtime and checks revocation during dispatch.
+         * @param provider Host-selected provider with separately admitted transport and payload.
+         * @param turnId Nonzero turn identity assigned by the host.
+         * @param stop Worker cancellation.
+         * @return Terminal outcome. The host must recheck IsCurrent() when adopting the result.
+         */
+        [[nodiscard]] Agent::AgentTurnResult Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop = {});
+
+    private:
+        friend class ImmersiveAuthoringContext;
+        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request);
+
+        ImmersivePlanningContext context_;
+        Agent::ModelRequest request_;
+    };
+
     /** @brief Cold owner-lane publication and admission for one Editor opening. */
     class ImmersiveAuthoringContext final {
     public:
@@ -97,6 +130,15 @@ namespace Horo::Editor {
          * Admitted planning is non-authoritative, including in Simulate. It grants no mutation or approval.
          */
         [[nodiscard]] ImmersiveAdmission Admit(const ImmersivePlanningContext &context, ImmersiveRequestKind kind) const noexcept;
+
+        /** @brief Binds a bounded text-only model request to the current admitted context before queueing.
+         * @param context Snapshot of the owner observation to use.
+         * @param kind Explicit planning or diagnostics intent from the host.
+         * @param request Provider payload without tools or tool results. Moved only on successful capture.
+         * @return Worker request, or empty for a stale, unadmitted or tool-bearing request.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureRequest(const ImmersivePlanningContext &context,
+                                                                          ImmersiveRequestKind kind, Agent::ModelRequest &&request) const;
 
     private:
         std::shared_ptr<ImmersiveContextEpoch> epoch_;
