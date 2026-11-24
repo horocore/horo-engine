@@ -24,13 +24,17 @@ namespace Horo::Application::Internal {
             return {ErrorCode{std::move(code)}, ErrorDomainId{"packages.host"}, ErrorSeverity::Error, std::string{path}};
         }
 
+        /** @brief Tests membership in the exact withdrawal plan. */
+        bool IsDeparting(const Packages::PackageRemovalGraphPreview &removal, const Packages::HoroPackageId &package) {
+            return std::ranges::find(removal.removed, package, &Packages::LockedPackageReference::package) != removal.removed.end();
+        }
+
         /** @brief Accepts only registrations attributed to the exact locked artifact being withdrawn. */
         Result<Owners> IndexOwners(std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations,
                                    const Packages::ValidatedPackageLockfileV1 &lock, const Packages::PackageRemovalGraphPreview &removal) {
             Owners owners;
             for (const auto &registration : registrations) {
-                if (std::ranges::find(removal.removed, registration.package, &Packages::LockedPackageReference::package) ==
-                    removal.removed.end())
+                if (!IsDeparting(removal, registration.package))
                     continue;
                 if (const auto entry = std::ranges::find(lock.Packages(), registration.package, &Packages::LockedPackage::package);
                     entry == lock.Packages().end() || entry->version != registration.version ||
@@ -146,11 +150,65 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Confirms that an observed role belongs to the exact locked artifact. */
+        bool MatchesLockedArtifact(const Registration &registration, const Packages::LockedPackage &locked) {
+            return registration.activationGeneration != 0 && registration.package == locked.package &&
+                   registration.version == locked.version && registration.artifact == locked.artifactDigest;
+        }
+
         /** @brief Excludes cached observations from another artifact or without an admitted generation. */
         bool MatchesCurrentLock(const LockedPackages &locked, const Registration &registration) {
             const auto entry = locked.find(registration.package);
-            return registration.activationGeneration != 0 && entry != locked.end() && entry->second->version == registration.version &&
-                   entry->second->artifactDigest == registration.artifact;
+            return entry != locked.end() && MatchesLockedArtifact(registration, *entry->second);
+        }
+
+        /** @brief A departing service needs evidence from the retained roles that could consume it. */
+        bool HasDepartingService(std::span<const Registration> registrations, const Packages::ValidatedPackageLockfileV1 &lock,
+                                 const Packages::PackageRemovalGraphPreview &removal) {
+            return std::ranges::any_of(registrations, [&](const Registration &entry) {
+                if (entry.services.empty() || !IsDeparting(removal, entry.package))
+                    return false;
+                const auto locked = std::ranges::find(lock.Packages(), entry.package, &Packages::LockedPackage::package);
+                return locked != lock.Packages().end() && MatchesLockedArtifact(entry, *locked);
+            });
+        }
+
+        /** @brief Rejects a withdrawal plan that refers to a different locked graph. */
+        Result<void> ValidateWithdrawal(const Packages::ValidatedPackageLockfileV1 &lock,
+                                        const Packages::PackageRemovalGraphPreview &removal) {
+            for (const auto &reference : removal.removed) {
+                if (const auto expected = std::ranges::find(lock.Packages(), reference.package, &Packages::LockedPackage::package);
+                    expected == lock.Packages().end() || expected->version != reference.version)
+                    return Result<void>::Failure(
+                        ReferenceError("packages.host.removal_archive_evidence_unavailable", reference.package.Value()));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
+        Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
+                                            const Packages::LockedPackage &locked, std::vector<Diagnostic> &missing) {
+            if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
+                return authority;
+            if (const auto actual = std::ranges::find_if(graph.packages,
+                                                         [&locked](const auto &entry) {
+                return entry.lock.package == locked.package;
+            });
+                actual == graph.packages.end() || actual->lock != locked)
+                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
+            const auto declared = Packages::InspectPackageRuntimeRoles(*sources.install, locked.package);
+            if (declared.HasError())
+                return Result<void>::Failure(declared.ErrorValue());
+            for (const auto &role : declared.Value()) {
+                const auto observed = std::ranges::any_of(sources.registrations, [&](const auto &entry) {
+                    return MatchesLockedArtifact(entry, locked) && entry.moduleId == role.moduleId &&
+                           entry.descriptorPath == role.descriptor.Value();
+                });
+                if (!observed)
+                    missing.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"}, DiagnosticSeverity::Error,
+                                         locked.package.Value(), SourceLocation{role.descriptor.Value()}, role.moduleId);
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -159,33 +217,18 @@ namespace Horo::Application::Internal {
                                                   const Packages::PackageRemovalGraphPreview &removal) {
         if (removal.removed.empty())
             return Result<void>::Success();
-        if (!sources.install || sources.install->Graph()->requestHash != lock.RequestHash())
+        const auto graph = sources.install ? sources.install->Graph() : nullptr;
+        if (!graph || graph->requestHash != lock.RequestHash())
             return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+        if (auto valid = ValidateWithdrawal(lock, removal); valid.HasError())
+            return valid;
         Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
-        for (const auto &reference : removal.removed) {
-            const auto expected = std::ranges::find(lock.Packages(), reference.package, &Packages::LockedPackage::package);
-            const auto &installed = sources.install->Graph()->packages;
-            const auto actual = std::ranges::find_if(installed, [&reference](const auto &entry) {
-                return entry.lock.package == reference.package;
-            });
-            if (expected == lock.Packages().end() || actual == installed.end() || actual->lock.version != expected->version ||
-                actual->lock.artifactDigest != expected->artifactDigest)
-                return Result<void>::Failure(
-                    ReferenceError("packages.host.removal_archive_evidence_unavailable", reference.package.Value()));
-            const auto declared = Packages::InspectPackageRuntimeRoles(*sources.install, reference.package);
-            if (declared.HasError())
-                return Result<void>::Failure(declared.ErrorValue());
-            for (const auto &role : declared.Value()) {
-                const auto observed = std::ranges::any_of(sources.registrations, [&](const auto &entry) {
-                    return entry.activationGeneration != 0 && entry.package == expected->package && entry.version == expected->version &&
-                           entry.artifact == expected->artifactDigest && entry.moduleId == role.moduleId &&
-                           entry.descriptorPath == role.descriptor.Value();
-                });
-                if (!observed)
-                    missing.diagnostics.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"},
-                                                     DiagnosticSeverity::Error, reference.package.Value(),
-                                                     SourceLocation{role.descriptor.Value()}, role.moduleId);
-            }
+        const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
+        for (const auto &entry : lock.Packages()) {
+            if (!inspectRetained && !IsDeparting(removal, entry.package))
+                continue;
+            if (auto checked = InspectRuntimeCoverage(sources, *graph, entry, missing.diagnostics); checked.HasError())
+                return checked;
         }
         if (!missing.diagnostics.empty())
             return Result<void>::Failure(std::move(missing));

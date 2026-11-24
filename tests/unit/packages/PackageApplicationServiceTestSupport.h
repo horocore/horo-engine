@@ -30,7 +30,7 @@ namespace Horo::Tests::PackageApplicationService {
     }
 
     /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
-    inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false) {
+    inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false, std::string_view id = "com.horo.application-fixture") {
         constexpr auto root = "extensions/native";
 #if defined(_WIN32)
         constexpr auto image = "module.dll";
@@ -39,17 +39,16 @@ namespace Horo::Tests::PackageApplicationService {
 #else
         constexpr auto image = "module.so";
 #endif
-        constexpr auto id = "com.horo.application-fixture";
-        constexpr auto module = "com.horo.application-fixture.native";
+        const auto moduleId = std::string{id} + ".native";
         const nlohmann::json descriptor{{"id", id},
                                         {"version", "1.0.0"},
                                         {"modules",
-                                         {{{"id", module},
+                                         {{{"id", moduleId},
                                            {"version", "1.0.0"},
                                            {"kind", "native"},
                                            {"roles", {runtime ? "runtime-participant" : "backend-capability"}},
                                            {"entry", image}}}},
-                                        {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", module}}}}};
+                                        {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", moduleId}}}}};
         const std::array files{std::pair{std::string{"horo-package.toml"}, std::string{"schemaVersion = 1\n"}},
                                std::pair{std::string{root} + "/extension.json", descriptor.dump()},
                                std::pair{std::string{root} + '/' + image, std::string{"unloadable fixture image"}}};

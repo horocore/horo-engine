@@ -200,17 +200,19 @@ namespace {
             return {std::istreambuf_iterator<char>{input}, {}};
         }
 
-        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource() {
+        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource(std::vector<Packages::PackageRestorePackage> installed = {}) {
             const auto root = std::filesystem::canonical(project.Path());
             const auto lock = Packages::ValidatedPackageLockfileV1::Parse(Read("packages.lock"));
             REQUIRE(lock.HasValue());
             auto install = Packages::PackageInstallService::Create(files, root);
             REQUIRE(install.HasValue());
+            const auto own = std::ranges::find(lock.Value().Packages(), graph.package, &Packages::LockedPackage::package);
+            REQUIRE(own != lock.Value().Packages().end());
+            installed.emplace_back(*own, std::make_shared<const Packages::ValidatedPackageArchive>(graph.archive));
             const auto verified = std::make_shared<const Packages::PackageRestoreGraph>(
                 Packages::PackageRestoreGraph{.requestHash = lock.Value().RequestHash(),
                                               .platform = {"linux", "x64", "horo-sdk-2"},
-                                              .packages = {{lock.Value().Packages().front(),
-                                                            std::make_shared<const Packages::ValidatedPackageArchive>(graph.archive)}}});
+                                              .packages = std::move(installed)});
             auto service = std::move(install).Value();
             REQUIRE(service.Install(verified, {}).HasValue());
             removalInstall = service.InstalledRecord();
@@ -592,6 +594,87 @@ namespace {
         CHECK(unreadable.ErrorValue().code.Value() == "packages.host.scene_reference_unreadable");
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
+    }
+
+    /** @brief Adds a second independently locked package with a declared runtime role. */
+    Packages::PackageRestorePackage AddRetainedRuntime(HostFixture &fixture) {
+        using namespace Packages;
+        const auto id = HoroPackageId::Parse("com.horo.retained").Value();
+        auto archive = std::make_shared<const ValidatedPackageArchive>(Verify(NativeAdmissionArchiveBytes(true, id.Value())));
+        auto request = nlohmann::json::parse(fixture.Read("packages.json"));
+        request["dependencies"][id.Value()] = {{"source", fixture.graph.source.Value()}, {"version", fixture.graph.version.ToString()}};
+        const auto validated = ValidatedPackageRequest::Parse(request.dump());
+        REQUIRE(validated.HasValue());
+        const std::array roots{fixture.graph.package, id};
+        PackageResolutionPlan plan;
+        std::vector<PackageLockArtifact> artifacts;
+        const auto add = [&](const auto &package, const auto &content) {
+            plan.packages.emplace_back(package, fixture.graph.version, fixture.graph.source, content.Digest(),
+                                       std::vector<HoroPackageId>{});
+            artifacts.push_back({.package = package,
+                                 .version = fixture.graph.version,
+                                 .source = fixture.graph.source,
+                                 .artifactDigest = content.Digest(),
+                                 .manifestDigest = content.PackageManifestDigest(),
+                                 .fileManifestDigest = content.Manifest().Digest(),
+                                 .contributions = {"native"}});
+        };
+        add(fixture.graph.package, fixture.graph.archive);
+        add(id, *archive);
+        const auto lock = ValidatedPackageLockfileV1::Generate(plan, roots, validated.Value().Digest(), artifacts);
+        REQUIRE(lock.HasValue());
+        fixture.Write("packages.json", request.dump());
+        fixture.Write("packages.lock", lock.Value().SerializeCanonical());
+        const auto retained = std::ranges::find(lock.Value().Packages(), id, &LockedPackage::package);
+        REQUIRE(retained != lock.Value().Packages().end());
+        return {*retained, std::move(archive)};
+    }
+
+    TEST_CASE("Package removal needs coverage of a retained runtime consumer before withdrawing a service",
+              "[packages][application][host][removal-coverage]") {
+        using namespace Packages;
+        HostFixture fixture{true};
+        const auto retained = AddRetainedRuntime(fixture);
+        const auto assets = fixture.AssetSource({retained});
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto service = Gameplay::GameplayServiceId::Parse("game.tests.required").Value();
+        using Inventory = GameplayPackageModuleHost::RegistrationInventory;
+        const std::array roles{
+            Inventory{.package = fixture.graph.package,
+                      .version = fixture.graph.version,
+                      .artifact = fixture.graph.archive.Digest(),
+                      .activationGeneration = 1,
+                      .moduleId = "com.horo.application-fixture.native",
+                      .services = {{.id = service}},
+                      .descriptorPath = "extensions/native/extension.json"},
+            Inventory{.package = retained.lock.package,
+                      .version = retained.lock.version,
+                      .artifact = retained.lock.artifactDigest,
+                      .activationGeneration = 1,
+                      .moduleId = "com.horo.retained.native",
+                      .descriptorPath = "extensions/native/extension.json"},
+        };
+        auto sources = fixture.RemovalSources(*assets);
+        sources.registrations = std::span{roles}.first(1);
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
+        REQUIRE(blocked.ErrorValue().diagnostics.size() == 1);
+        CHECK(blocked.ErrorValue().diagnostics.front().path == "com.horo.retained.native");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+
+        sources.registrations = roles;
+        REQUIRE(PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources).HasValue());
+        const auto locked = ValidatedPackageLockfileV1::Parse(fixture.Read("packages.lock"));
+        REQUIRE(locked.HasValue());
+        REQUIRE(locked.Value().Packages().size() == 1);
+        CHECK(locked.Value().Packages().front() == retained.lock);
     }
 
     TEST_CASE("Package removal reports retained service and system requirements from the current lock", "[packages][application][host]") {

@@ -443,7 +443,11 @@ approval, and durable publication belong to the uninstall transaction.
 Observed native package registrations include service dependencies and system
 service requirements. The uninstall transaction checks retained observations
 against the exact current lock and reports which retained registration requires
-a service owned by a departing package. This evidence covers the observed roles.
+a service owned by a departing package. When a departing package provides a
+gameplay service, every retained runtime role needs a registration observation
+from its exact locked archive. An unobserved consumer blocks removal and reports
+the missing role. The saved request and lock stay intact until coverage and
+reference checks pass.
 
 ## Rollback Contract
 

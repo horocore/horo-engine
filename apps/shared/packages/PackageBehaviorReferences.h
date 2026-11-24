@@ -23,7 +23,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install; /**< Sealed archive evidence for the current lock. */
     };
 
-    /** @brief Requires observed registrations for every departing declared runtime role in the exact sealed archives. */
+    /** @brief Requires exact observations for departing runtime roles and for retained roles that could consume a departing service. */
     [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,
                                                                 const Packages::ValidatedPackageLockfileV1 &lock,
                                                                 const Packages::PackageRemovalGraphPreview &removal);
