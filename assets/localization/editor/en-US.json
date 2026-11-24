@@ -2200,6 +2200,17 @@
     "settings.audio.microphone.capturing": {"text": "Microphone in use. The test stops automatically."},
     "settings.audio.microphone.input_level": {"text": "Input level"},
     "settings.audio.microphone.test_failed": {"text": "The input test could not continue. Scan for inputs and check microphone access."},
+    "settings.audio.microphone.recording.title": {"text": "Microphone Recording"},
+    "settings.audio.microphone.recording.description": {"text": "Select an input and enter a new WAV path under assets/ in the open project. Stop and save within 20 seconds."},
+    "settings.audio.microphone.recording.path": {"text": "WAV asset path"},
+    "settings.audio.microphone.recording.start": {"text": "Start Recording"},
+    "settings.audio.microphone.recording.starting": {"text": "Starting microphone recording…"},
+    "settings.audio.microphone.recording.active": {"text": "Microphone in use. Stop to save the take."},
+    "settings.audio.microphone.recording.saving": {"text": "Saving the recording to the project…"},
+    "settings.audio.microphone.recording.saved": {"text": "Saved recording to"},
+    "settings.audio.microphone.recording.failed": {"text": "The recording could not be saved. Check the microphone and choose a new WAV path under assets/."},
+    "settings.audio.microphone.recording.stop_save": {"text": "Stop and Save"},
+    "settings.audio.microphone.recording.cancel": {"text": "Cancel Recording"},
     "settings.audio.output_device": {
       "text": "Audio Output Device"
     },

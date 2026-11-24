@@ -495,15 +495,23 @@ namespace Horo::Editor::SettingsModalInternal {
             }, "microphone-level", SettingRowLayout::Stacked);
         }
 
+        /** @brief Identifies the states in which the recorder owns capture or publication. */
+        bool RecordingBusy(const EditorMicrophoneRecordingStatus status) noexcept {
+            using enum EditorMicrophoneRecordingStatus;
+            return status == Starting || status == Recording || status == Saving;
+        }
+
+        /** @brief Returns whether the shared input owner is occupied by recording. */
+        bool RecordingBusy(const IEditorMicrophoneRecorder *recorder) noexcept {
+            return recorder && RecordingBusy(recorder->RecordingStatus());
+        }
+
         /** @brief Keeps the live status and stop action visible until the capture owner detaches. */
-        void DrawMicrophoneTest(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
-            auto *microphone = ctx.microphonePermission;
-            if (!microphone)
-                return;
+        void DrawMicrophoneTest(SettingsAudioTab &audio, const EditorGuiContext &ctx, IEditorMicrophonePermission &microphone) {
             using enum EditorMicrophoneTestStatus;
-            const auto status = microphone->TestStatus();
+            const auto status = microphone.TestStatus();
             const bool active = status == Starting || status == Capturing;
-            if (!active && microphone->Status() != EditorMicrophonePermissionStatus::Granted)
+            if (!active && microphone.Status() != EditorMicrophonePermissionStatus::Granted)
                 return;
             const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.test");
             const auto &description = SettingsModal::kTextScope.Text(ctx.localization, MicrophoneTestKey(status));
@@ -511,15 +519,89 @@ namespace Horo::Editor::SettingsModalInternal {
             const auto &action =
                 SettingsModal::kTextScope.Text(ctx.localization, active ? "audio.microphone.stop" : "audio.microphone.start");
             if (!active)
-                DrawMicrophoneInput(audio, ctx, *microphone);
-            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&audio, microphone, active, &action, &scan] {
+                DrawMicrophoneInput(audio, ctx, microphone);
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&audio, &microphone, active, &action, &scan] {
                 if (!active)
-                    DrawMicrophoneStart(audio, *microphone, scan, action);
+                    DrawMicrophoneStart(audio, microphone, scan, action);
                 else if (Button({.label = action.c_str(), .variant = ButtonVariant::Secondary}))
-                    microphone->StopTest();
+                    microphone.StopTest();
             }, "microphone-test", SettingRowLayout::Stacked);
             if (status == Capturing)
-                DrawMicrophoneLevel(ctx, microphone->TestPeakLevel());
+                DrawMicrophoneLevel(ctx, microphone.TestPeakLevel());
+        }
+
+        /** @brief Uses distinct status messages for capture and publication. */
+        const char *RecordingStatusKey(const EditorMicrophoneRecordingStatus status) noexcept {
+            using enum EditorMicrophoneRecordingStatus;
+            switch (status) {
+                case Idle:
+                    return "audio.microphone.recording.description";
+                case Starting:
+                    return "audio.microphone.recording.starting";
+                case Recording:
+                    return "audio.microphone.recording.active";
+                case Saving:
+                    return "audio.microphone.recording.saving";
+                case Saved:
+                    return "audio.microphone.recording.saved";
+                case Failed:
+                    return "audio.microphone.recording.failed";
+            }
+            return "audio.microphone.recording.description";
+        }
+
+        /** @brief Offers save only while capturing and cancel until publication completes. */
+        void DrawRecordingStop(const EditorGuiContext &ctx, IEditorMicrophoneRecorder &recorder) {
+            if (recorder.RecordingStatus() == EditorMicrophoneRecordingStatus::Recording) {
+                const auto &save = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.stop_save");
+                if (Button({.label = save.c_str(), .variant = ButtonVariant::Primary}))
+                    recorder.SaveRecording();
+            }
+            const auto &cancel = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.cancel");
+            if (Button({.label = cancel.c_str(), .variant = ButtonVariant::Secondary}))
+                recorder.CancelRecording();
+        }
+
+        /** @brief Starts only from a selected input and an active writable project. */
+        void DrawRecordingStart(const SettingsAudioTab &audio, const EditorGuiContext &ctx, IEditorMicrophoneRecorder &recorder,
+                                const IEditorMicrophonePermission &permission) {
+            const auto &start = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.start");
+            const bool selected =
+                audio.microphoneInput >= 0 && static_cast<std::size_t>(audio.microphoneInput) < permission.Inputs().size();
+            if (Button({.label = start.c_str(), .variant = ButtonVariant::Primary, .enabled = selected && recorder.CanRecord()}))
+                recorder.StartRecording(static_cast<std::size_t>(audio.microphoneInput), audio.recordingPath);
+        }
+
+        /** @brief Records from the chosen endpoint into a new project asset. */
+        void DrawMicrophoneRecording(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
+            auto *recorder = ctx.microphoneRecorder;
+            auto *permission = ctx.microphonePermission;
+            if (!recorder || !permission)
+                return;
+            const auto status = recorder->RecordingStatus();
+            const bool busy = RecordingBusy(status);
+            if (!busy && permission->Status() != EditorMicrophonePermissionStatus::Granted)
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.title");
+            auto description = SettingsModal::kTextScope.Text(ctx.localization, RecordingStatusKey(status));
+            if (status == EditorMicrophoneRecordingStatus::Saved) {
+                description += ' ';
+                description += recorder->SavedRecordingPath();
+            }
+            if (!busy) {
+                const auto &path = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.path");
+                SettingRow(path.c_str(), "", ctx.theme.fonts, [&] {
+                    (void)InputTextControl("##microphone-recording-path", audio.recordingPath, 201, ctx.theme.fonts);
+                }, "microphone-recording-path", SettingRowLayout::Stacked);
+            }
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+                if (busy)
+                    DrawRecordingStop(ctx, *recorder);
+                else
+                    DrawRecordingStart(audio, ctx, *recorder, *permission);
+            }, "microphone-recording", SettingRowLayout::Stacked);
+            if (status == EditorMicrophoneRecordingStatus::Recording)
+                DrawMicrophoneLevel(ctx, recorder->RecordingPeakLevel());
         }
     }  // namespace
 
@@ -548,7 +630,9 @@ namespace Horo::Editor::SettingsModalInternal {
             (void)ToggleControl("audio-enabled", &st.audio.audioEnabled, ctx.theme.fonts);
         });
         DrawMicrophonePermission(ctx);
-        DrawMicrophoneTest(st.audio, ctx);
+        if (ctx.microphonePermission && !RecordingBusy(ctx.microphoneRecorder))
+            DrawMicrophoneTest(st.audio, ctx, *ctx.microphonePermission);
+        DrawMicrophoneRecording(st.audio, ctx);
     }
 
     void DrawNetwork(SettingsState &st, const EditorGuiContext &ctx) {

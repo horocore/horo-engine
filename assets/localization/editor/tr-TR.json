@@ -2200,6 +2200,17 @@
     "settings.audio.microphone.capturing": {"text": "Mikrofon kullanımda. Test kendiliğinden durur."},
     "settings.audio.microphone.input_level": {"text": "Giriş seviyesi"},
     "settings.audio.microphone.test_failed": {"text": "Giriş testi sürdürülemedi. Girişleri yeniden tarayın ve mikrofon erişimini kontrol edin."},
+    "settings.audio.microphone.recording.title": {"text": "Mikrofon Kaydı"},
+    "settings.audio.microphone.recording.description": {"text": "Bir giriş seçin ve açık projenin assets/ klasörü altında yeni bir WAV yolu girin. Kaydı 20 saniye içinde durdurup kaydedin."},
+    "settings.audio.microphone.recording.path": {"text": "WAV varlık yolu"},
+    "settings.audio.microphone.recording.start": {"text": "Kaydı Başlat"},
+    "settings.audio.microphone.recording.starting": {"text": "Mikrofon kaydı başlatılıyor…"},
+    "settings.audio.microphone.recording.active": {"text": "Mikrofon kullanımda. Kaydetmek için kaydı durdurun."},
+    "settings.audio.microphone.recording.saving": {"text": "Kayıt projeye kaydediliyor…"},
+    "settings.audio.microphone.recording.saved": {"text": "Kaydın konumu"},
+    "settings.audio.microphone.recording.failed": {"text": "Kayıt kaydedilemedi. Mikrofonu kontrol edin ve assets/ altında yeni bir WAV yolu seçin."},
+    "settings.audio.microphone.recording.stop_save": {"text": "Durdur ve Kaydet"},
+    "settings.audio.microphone.recording.cancel": {"text": "Kaydı İptal Et"},
     "settings.audio.output_device": {
       "text": "Ses Çıkış Aygıtı"
     },

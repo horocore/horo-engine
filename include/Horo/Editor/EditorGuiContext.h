@@ -7,8 +7,10 @@
 #include "Horo/Editor/GuiLiveReload.h"
 
 #include <cstddef>
+#include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace Horo {
     class EngineDataBus;
@@ -44,6 +46,38 @@ namespace Horo::Editor {
         Starting,
         Capturing,
         Failed
+    };
+
+    /** @brief Permission-scoped recording and background save state. */
+    enum class EditorMicrophoneRecordingStatus {
+        Idle,
+        Starting,
+        Recording,
+        Saving,
+        Saved,
+        Failed
+    };
+
+    /** @brief Optional project recording controls backed by the same owner as microphone permission. */
+    class IEditorMicrophoneRecorder {
+    public:
+        virtual ~IEditorMicrophoneRecorder() = default;
+        /** @brief Binds the active workspace project, or an empty path when no project can accept a recording. */
+        virtual void SetProject(const std::filesystem::path &root) = 0;
+        /** @brief True when a project is active and no capture or save already occupies this owner. */
+        [[nodiscard]] virtual bool CanRecord() const noexcept = 0;
+        /** @brief Requests a foreground recording to one explicit new project-relative WAVE path. */
+        virtual void StartRecording(std::size_t input, std::string_view wavePath) = 0;
+        /** @brief Requests normal stop and background publication. */
+        virtual void SaveRecording() noexcept = 0;
+        /** @brief Cancels the captured take, queued start or pending save. */
+        virtual void CancelRecording() noexcept = 0;
+        /** @brief Returns the current control-lane projection. */
+        [[nodiscard]] virtual EditorMicrophoneRecordingStatus RecordingStatus() const noexcept = 0;
+        /** @brief Returns normalized recorded peak, or zero outside active capture. */
+        [[nodiscard]] virtual float RecordingPeakLevel() const noexcept = 0;
+        /** @brief Returns the published project-relative path until the next recording action. */
+        [[nodiscard]] virtual std::string_view SavedRecordingPath() const noexcept = 0;
     };
 
     /** @brief Host-owned permission surface. Only explicit user activation may issue a request. */
@@ -94,5 +128,6 @@ namespace Horo::Editor {
         UpdateExperienceSession *updates = nullptr;      /**< Borrowed host-owned update workflow, when configured. */
         const Input::InputRouter *inputRouter = nullptr; /**< Borrowed host-owned effective binding authority, outliving GUI draws. */
         IEditorMicrophonePermission *microphonePermission = nullptr; /**< Optional host-owned microphone permission controls. */
+        IEditorMicrophoneRecorder *microphoneRecorder = nullptr;     /**< Optional host-owned project recording controls. */
     };
 }  // namespace Horo::Editor

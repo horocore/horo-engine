@@ -4267,10 +4267,6 @@ namespace Horo::Editor {
             ThemeContext themeContext{p.fonts, liveGui.Registry()};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
-#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
-            EditorMicrophonePermission microphonePermission;
-            guiContext.microphonePermission = &microphonePermission;
-#endif
             guiContext.inputRouter = &p.inputRouter;
             std::optional<UpdateExperienceSession> updateSession;
             ConfigureUpdateExperience(p, guiContext, updateSession);
@@ -4414,6 +4410,11 @@ namespace Horo::Editor {
             }};
             EditorAudioPreviewHost audioPreview{MakeSdl3AudioPreviewOutput};
             Assets::AssetRegistry assetRegistry;
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+            EditorMicrophonePermission microphonePermission{mutationCoordinator, durableFiles, assetRegistry};
+            guiContext.microphonePermission = &microphonePermission;
+            guiContext.microphoneRecorder = &microphonePermission;
+#endif
             CollisionInventoryEvidence collisionInventory;
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
             SceneScopeProjectOpenContributor sceneScopeContributor{previewProjectRoot, preview.physicsMode};

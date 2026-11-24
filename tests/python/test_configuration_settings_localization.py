@@ -36,3 +36,14 @@ def test_platform_setting_descriptor_labels_have_aligned_localized_copy() -> Non
         catalog = json.loads((root / f"assets/localization/editor/{locale}.json").read_text(encoding="utf-8"))["messages"]
         assert labels == {key for key in catalog if key.startswith("settings.platform_services.")}
         assert all(catalog[key]["text"].strip() for key in labels)
+
+
+def test_microphone_recording_controls_and_statuses_have_localized_copy() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/editor/modals/settings/SettingsModalNavigation.cpp").read_text(encoding="utf-8")
+    keys = {"settings." + key for key in re.findall(r'"(audio\.microphone\.recording\.[a-z_]+)"', source)}
+    assert "settings.audio.microphone.recording.stop_save" in keys
+    for locale in ("en-US", "tr-TR"):
+        catalog = json.loads((root / f"assets/localization/editor/{locale}.json").read_text(encoding="utf-8"))["messages"]
+        assert keys == {key for key in catalog if key.startswith("settings.audio.microphone.recording.")}
+        assert all(catalog[key]["text"].strip() for key in keys)

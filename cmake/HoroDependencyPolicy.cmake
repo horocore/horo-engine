@@ -471,7 +471,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroAISceneIntegration
         HoroEditorPlaySceneHostInternal
         HoroScenePhysicsHost
-        HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull
+        HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull HoroApplicationAudioExport
         HoroPackageProjectHost
         HoroXRApi HoroXRRuntime HoroSceneSourceModel HoroOpenXRProductHost HoroOpenXRApplicationHost HoroEditorOpenXRBootstrap
         HoroShaderBuild

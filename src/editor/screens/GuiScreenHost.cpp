@@ -434,6 +434,8 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
+        if (auto *recorder = context_.microphoneRecorder)
+            recorder->CancelRecording();
         if (auto *microphone = context_.microphonePermission)
             microphone->AdvanceTest(false);
         if (fixedScreen_) {
@@ -550,9 +552,16 @@ namespace Horo::Editor {
     void GuiScreenHost::SetCurrentProjectRoot(const std::filesystem::path &root) {
         if (currentProjectRoot_ != root)
             nativeBuildSession_.reset();
+        SetWorkspaceProject(root);
+        currentProjectRoot_ = root;
+    }
+
+    /** @copydoc GuiScreenHost::SetWorkspaceProject */
+    void GuiScreenHost::SetWorkspaceProject(const std::filesystem::path &root) {
         if (extensionPageStore_)
             extensionPageStore_->SetProject(root);
-        currentProjectRoot_ = root;
+        if (auto *recorder = context_.microphoneRecorder)
+            recorder->SetProject(root);
     }
 
     /** @copydoc GuiScreenHost::CurrentProjectRoot */
@@ -688,8 +697,8 @@ namespace Horo::Editor {
 
         const GuiRouteKind prevKind = activeRoute_.kind;
         const GuiRouteRevision prevRev = activeRevision_;
-        if (extensionPageStore_ && destination.kind != GuiRouteKind::EditorWorkspace)
-            extensionPageStore_->SetProject({});
+        if (destination.kind != GuiRouteKind::EditorWorkspace)
+            SetWorkspaceProject({});
         activeRoute_ = std::move(destination);
         activeRevision_++;
         activeScreen_ = std::move(candidate);

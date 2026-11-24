@@ -282,6 +282,9 @@ namespace Horo::Editor {
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
         void CommitRoute(GuiRoute destination);
+
+        /** @brief Binds project-scoped extension storage and recording to the same workspace root. */
+        void SetWorkspaceProject(const std::filesystem::path &root);
         [[nodiscard]] Result<void> EnterScreen(GuiScreen &screen, const GuiRoute &route);
         void PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target);
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);

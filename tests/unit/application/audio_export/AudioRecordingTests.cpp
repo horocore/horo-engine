@@ -1,9 +1,12 @@
+#include "../../../../apps/HoroEditor/app/EditorMicrophoneRecording.h"
 #include "Horo/Application/Internal/AudioRecording.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "OwnedTestDirectory.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -44,6 +47,41 @@ namespace Horo::Application::Internal {
         };
 
         constexpr std::array<AudioSample, 2> StereoFrame{0.25F, -0.5F};
+
+        TEST_CASE("The editor adopts a background recording only while its project still owns the result", "[audio][recording][editor]") {
+            RecordingFixture fixture;
+            Editor::EditorRecordingPublication publication{fixture.mutations, fixture.files, fixture.registry};
+            auto take = Editor::EditorRecordingTake::Prepare(fixture.source, fixture.destination);
+            REQUIRE(take.HasValue());
+            auto buffer = fixture.Buffer();
+            REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
+            REQUIRE(publication.Start(std::move(take).Value(), std::move(buffer)));
+
+            bool cancelled = false;
+            SECTION("the project stays open") {}
+            SECTION("the project stops owning the result") {
+                publication.Cancel();
+                cancelled = true;
+            }
+
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            auto result = publication.Poll();
+            while (!result && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                result = publication.Poll();
+            }
+            REQUIRE(result.has_value());
+            const auto snapshot = fixture.registry.Snapshot();
+            if (cancelled) {
+                CHECK(result->HasError());
+                CHECK_FALSE(snapshot.Find(fixture.destination.id));
+            } else {
+                REQUIRE(result->HasValue());
+                CHECK(result->Value() == "assets/take.wav");
+                REQUIRE(snapshot.Find(fixture.destination.id));
+                CHECK(std::filesystem::exists(fixture.root / result->Value()));
+            }
+        }
 
         TEST_CASE("A stopped recording drains its tail and publishes registered WAVE and identity files", "[audio][recording]") {
             RecordingFixture fixture;

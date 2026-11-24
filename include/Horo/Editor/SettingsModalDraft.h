@@ -64,7 +64,8 @@ namespace Horo::Editor {
         int masterVolume = 80;
         int audioOutputDevice = 0;
         bool audioEnabled = true;
-        int microphoneInput{-1}; /**< Transient input selection for the connection test. */
+        int microphoneInput{-1};                           /**< Transient input selection for the connection test. */
+        std::string recordingPath{"assets/recording.wav"}; /**< Transient project-relative destination for the next take. */
     };
 
     struct SettingsNetworkTab {

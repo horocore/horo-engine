@@ -6,11 +6,21 @@
 #include <chrono>
 #include <memory>
 
+namespace Horo {
+    class DurableFileSystem;
+}
+
+namespace Horo::Assets {
+    class AssetRegistry;
+}
+
 namespace Horo::Editor {
+    class ProjectMutationCoordinator;
+
     /** @brief Projects native permission into settings while coalescing repeated draw-time observations. */
-    class EditorMicrophonePermission final : public IEditorMicrophonePermission {
+    class EditorMicrophonePermission final : public IEditorMicrophonePermission, public IEditorMicrophoneRecorder {
     public:
-        EditorMicrophonePermission();
+        EditorMicrophonePermission(ProjectMutationCoordinator &mutations, DurableFileSystem &files, Assets::AssetRegistry &registry);
         ~EditorMicrophonePermission() override;
         /** @copydoc IEditorMicrophonePermission::Status */
         [[nodiscard]] EditorMicrophonePermissionStatus Status() override;
@@ -30,6 +40,14 @@ namespace Horo::Editor {
         [[nodiscard]] EditorMicrophoneTestStatus TestStatus() const noexcept override;
         /** @copydoc IEditorMicrophonePermission::TestPeakLevel */
         [[nodiscard]] float TestPeakLevel() const noexcept override;
+        void SetProject(const std::filesystem::path &root) override;
+        [[nodiscard]] bool CanRecord() const noexcept override;
+        void StartRecording(std::size_t input, std::string_view wavePath) override;
+        void SaveRecording() noexcept override;
+        void CancelRecording() noexcept override;
+        [[nodiscard]] EditorMicrophoneRecordingStatus RecordingStatus() const noexcept override;
+        [[nodiscard]] float RecordingPeakLevel() const noexcept override;
+        [[nodiscard]] std::string_view SavedRecordingPath() const noexcept override;
 
     private:
         struct CaptureCheck;
