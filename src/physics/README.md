@@ -13,6 +13,12 @@ Owns bodies, constraints, queries, stepping and native physics state.
 - [`state/`](state/) owns state codecs, restart, and solver continuation.
 - [`world/`](world/) contains world settings, queries, lifecycle, and snapshot helpers.
 
-`PhysicsWorld.cpp` and `PhysicsSceneActivation.cpp` are the primary entry points. The [runtime Scene](../runtime/scene/) owns Scene publication. See the [runtime Physics tests](../../tests/unit/runtime/physics/) for lifecycle, cooking, and query examples.
+Start with [PhysicsWorld.cpp](PhysicsWorld.cpp) for world ownership and stepping, or
+[PhysicsSceneActivation.cpp](PhysicsSceneActivation.cpp) for the transition from authored scene data into a
+runtime world. The [runtime Scene](../runtime/scene/) owns publication of the active scene. For save and
+restore, follow [scene state](scene_state/) into the [physics state formats](state/).
+[PhysicsStateBuildFacts.cpp](PhysicsStateBuildFacts.cpp) records build identity used by native state compatibility checks.
+
+The [runtime Physics tests](../../tests/unit/runtime/physics/) cover lifecycle, cooking, queries, and restore.
 
 [Public headers](../../include/Horo/Physics/) · [Architecture](../../docs/architecture/runtime/physics-architecture.md)

@@ -1,6 +1,9 @@
 # Character controller
 
-Character movement, queries, commands, and their world-facing adapters.
+Owns controller state, movement commands, and character queries. Start with
+[CharacterWorld.cpp](runtime/CharacterWorld.cpp) for world ownership and
+[CharacterWorldCommandPipeline.cpp](runtime/CharacterWorldCommandPipeline.cpp) for command execution.
+Clearance queries use the physics query interface, and platform attachment tracks movement with a supporting body.
 
 - [`controller/`](controller/) · Controller contracts
 - [`diagnostics/`](diagnostics/) · Character diagnostics

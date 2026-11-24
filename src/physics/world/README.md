@@ -1,6 +1,9 @@
 # Physics world
 
-World-level settings, query, lifecycle, and snapshot implementation. The main world entry point and owner remain in the Physics root.
+Implements the public world operations. [PhysicsWorld.cpp](../PhysicsWorld.cpp) owns the world and is
+the entry point for callers. [settings/](settings/) validates descriptors and policy at admission.
+[query/](query/) handles live query requests, while [snapshot/](snapshot/) and [state/](state/) handle
+capture, decoding, and restore for an existing world.
 
 - [`lifecycle/`](lifecycle/) · Physics world lifecycle
 - [`query/`](query/) · Physics world queries
