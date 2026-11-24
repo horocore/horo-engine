@@ -76,6 +76,8 @@ namespace Horo::Editor {
 
         /** @brief Returns the modal-owned draft used by the settings presentation. */
         [[nodiscard]] SettingsState &Draft() noexcept;
+        /** @brief Reports whether the modal currently presents its audio settings. */
+        [[nodiscard]] bool ShowsAudioSettings() const noexcept;
         /** @brief Applies the current draft through the authoritative settings service. */
         [[nodiscard]] bool ApplyDraft();
 

@@ -205,7 +205,7 @@ namespace Horo::Audio::Backend {
     namespace {
         /** @brief Admits only a known purpose with matching grant policy and current focus. */
         bool AuthorizedIntent(const Sdl3CaptureIntent intent, const Sdl3CaptureGrant &grant) noexcept {
-            return intent.purpose > Sdl3CapturePurpose::Unspecified && intent.purpose <= Sdl3CapturePurpose::Speech &&
+            return intent.purpose > Sdl3CapturePurpose::Unspecified && intent.purpose <= Sdl3CapturePurpose::ConnectionTest &&
                    grant.authorityRevision != 0 && grant.intent == intent && (grant.foreground || intent.allowBackground);
         }
 

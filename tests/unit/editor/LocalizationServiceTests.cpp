@@ -991,7 +991,8 @@ TEST_CASE("Microphone permission settings resolve in each shipped editor locale"
         REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
         REQUIRE(service.Prepare(tag));
         REQUIRE(service.ActivatePrepared());
-        for (const auto suffix : {"title", "required", "pending", "granted", "denied", "unavailable", "request"}) {
+        for (const auto suffix : {"title", "required", "pending", "granted", "denied", "unavailable", "request", "input", "scan", "test",
+                                  "test_description", "start", "stop", "starting", "capturing", "test_failed"}) {
             const auto key = std::string{"settings.audio.microphone."} + suffix;
             INFO(locale);
             CHECK_FALSE(service.Get("editor", key).empty());

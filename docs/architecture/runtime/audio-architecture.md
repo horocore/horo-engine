@@ -2395,6 +2395,12 @@ through recording discovery. It remains separate from the host's purpose grant.
 The macOS editor exposes the request and current status in its Audio settings.
 The control does not initialize the audio device backend and does not start
 recording. It refreshes the permission display while the settings page is open.
+The same page offers an explicitly selected five-second connection test.
+The input owner processes start and stop before GUI drawing and requires the
+Settings modal to have foreground focus. Leaving the audio page cancels the
+test. The live indicator reflects actual callback activity. Test PCM stays in
+the bounded capture buffer and is scrubbed on teardown without creating assets
+or writing recording data to disk.
 The macOS SDL3 editor bundle carries the usage description. Xcode uses the
 editor capture entitlements file when signing. Packaging with other generators
 must apply the equivalent entitlements when signing the executable.

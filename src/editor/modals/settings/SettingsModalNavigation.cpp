@@ -441,6 +441,74 @@ namespace Horo::Editor::SettingsModalInternal {
                     permission->Request();
             }, "microphone-permission", SettingRowLayout::Stacked);
         }
+
+        /** @brief Selects an explicit endpoint using the existing keyboard-accessible combo. */
+        void DrawMicrophoneInput(SettingsAudioTab &audio, const EditorGuiContext &ctx, const IEditorMicrophonePermission &microphone) {
+            const auto inputs = microphone.Inputs();
+            if (inputs.empty())
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.input");
+            const ComboItemSource source{.label = [inputs](const int index) {
+                return inputs[static_cast<std::size_t>(index)].c_str();
+            }};
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [&audio, &ctx, inputs, &source] {
+                (void)ComboControl("##microphone-input", &audio.microphoneInput, static_cast<int>(inputs.size()), source, ctx.theme.fonts);
+            }, "microphone-input", SettingRowLayout::Stacked);
+        }
+
+        /** @brief Keeps the chosen device explicit and disables start until selection resolves. */
+        void DrawMicrophoneStart(SettingsAudioTab &audio, IEditorMicrophonePermission &microphone, const std::string &scan,
+                                 const std::string &start) {
+            if (Button({.label = scan.c_str(), .variant = ButtonVariant::Secondary})) {
+                audio.microphoneInput = -1;
+                microphone.ScanInputs();
+            }
+            const bool selected =
+                audio.microphoneInput >= 0 && static_cast<std::size_t>(audio.microphoneInput) < microphone.Inputs().size();
+            if (Button({.label = start.c_str(), .variant = ButtonVariant::Secondary, .enabled = selected}))
+                microphone.StartTest(static_cast<std::size_t>(audio.microphoneInput));
+        }
+
+        /** @brief Returns the localized live indicator separate from OS permission. */
+        const char *MicrophoneTestKey(const EditorMicrophoneTestStatus status) noexcept {
+            using enum EditorMicrophoneTestStatus;
+            switch (status) {
+                case Starting:
+                    return "audio.microphone.starting";
+                case Capturing:
+                    return "audio.microphone.capturing";
+                case Failed:
+                    return "audio.microphone.test_failed";
+                case Idle:
+                    return "audio.microphone.test_description";
+            }
+            return "audio.microphone.test_description";
+        }
+
+        /** @brief Keeps the live status and stop action visible until the capture owner detaches. */
+        void DrawMicrophoneTest(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
+            auto *microphone = ctx.microphonePermission;
+            if (!microphone)
+                return;
+            using enum EditorMicrophoneTestStatus;
+            const auto status = microphone->TestStatus();
+            const bool active = status == Starting || status == Capturing;
+            if (!active && microphone->Status() != EditorMicrophonePermissionStatus::Granted)
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.test");
+            const auto &description = SettingsModal::kTextScope.Text(ctx.localization, MicrophoneTestKey(status));
+            const auto &scan = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.scan");
+            const auto &action =
+                SettingsModal::kTextScope.Text(ctx.localization, active ? "audio.microphone.stop" : "audio.microphone.start");
+            if (!active)
+                DrawMicrophoneInput(audio, ctx, *microphone);
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&audio, microphone, active, &action, &scan] {
+                if (!active)
+                    DrawMicrophoneStart(audio, *microphone, scan, action);
+                else if (Button({.label = action.c_str(), .variant = ButtonVariant::Secondary}))
+                    microphone->StopTest();
+            }, "microphone-test", SettingRowLayout::Stacked);
+        }
     }  // namespace
 
     void DrawAudio(SettingsState &st, const EditorGuiContext &ctx) {
@@ -468,6 +536,7 @@ namespace Horo::Editor::SettingsModalInternal {
             (void)ToggleControl("audio-enabled", &st.audio.audioEnabled, ctx.theme.fonts);
         });
         DrawMicrophonePermission(ctx);
+        DrawMicrophoneTest(st.audio, ctx);
     }
 
     void DrawNetwork(SettingsState &st, const EditorGuiContext &ctx) {

@@ -2190,6 +2190,15 @@
     "settings.audio.microphone.denied": {"text": "Change microphone access in macOS System Settings."},
     "settings.audio.microphone.unavailable": {"text": "Microphone permission is unavailable in this build."},
     "settings.audio.microphone.request": {"text": "Request Access"},
+    "settings.audio.microphone.input": {"text": "Microphone Input"},
+    "settings.audio.microphone.scan": {"text": "Scan Inputs"},
+    "settings.audio.microphone.test": {"text": "Microphone Connection Test"},
+    "settings.audio.microphone.test_description": {"text": "Select an input to check its connection for five seconds. No recording is saved."},
+    "settings.audio.microphone.start": {"text": "Start Test"},
+    "settings.audio.microphone.stop": {"text": "Stop Test"},
+    "settings.audio.microphone.starting": {"text": "Starting the microphone test…"},
+    "settings.audio.microphone.capturing": {"text": "Microphone in use. The test stops automatically."},
+    "settings.audio.microphone.test_failed": {"text": "The input test could not continue. Scan for inputs and check microphone access."},
     "settings.audio.output_device": {
       "text": "Audio Output Device"
     },

@@ -90,4 +90,9 @@ namespace Horo::Editor {
         return DrawSettingsModalPresentation(m_draft, m_settings, m_context, m_logo);
     }
 
+    /** @copydoc SettingsModal::ShowsAudioSettings */
+    bool SettingsModal::ShowsAudioSettings() const noexcept {
+        return m_draft.activeTab == static_cast<int>(SettingsModalInternal::SettingsTab::Audio);
+    }
+
 }  // namespace Horo::Editor

@@ -6,6 +6,10 @@
 
 #include "Horo/Editor/GuiLiveReload.h"
 
+#include <cstddef>
+#include <span>
+#include <string>
+
 namespace Horo {
     class EngineDataBus;
 }
@@ -34,6 +38,14 @@ namespace Horo::Editor {
         Denied
     };
 
+    /** @brief State of the temporary editor microphone connection test. */
+    enum class EditorMicrophoneTestStatus {
+        Idle,
+        Starting,
+        Capturing,
+        Failed
+    };
+
     /** @brief Host-owned permission surface. Only explicit user activation may issue a request. */
     class IEditorMicrophonePermission {
     public:
@@ -42,6 +54,18 @@ namespace Horo::Editor {
         [[nodiscard]] virtual EditorMicrophonePermissionStatus Status() = 0;
         /** @brief Requests permission without opening a recording device. */
         virtual void Request() = 0;
+        /** @brief Queues an input device refresh without opening a recording device. */
+        virtual void ScanInputs() noexcept = 0;
+        /** @brief Borrows available explicit input labels until the next input refresh. */
+        [[nodiscard]] virtual std::span<const std::string> Inputs() const noexcept = 0;
+        /** @brief Queues an explicit microphone connection test for the selected input. */
+        virtual void StartTest(std::size_t input) noexcept = 0;
+        /** @brief Cancels queued work and requests detachment of any live test at the next control update. */
+        virtual void StopTest() noexcept = 0;
+        /** @brief Reconciles queued work, focus, timeout and capture health outside GUI drawing. */
+        virtual void AdvanceTest(bool foreground) noexcept = 0;
+        /** @brief Reports the test state without polling native resources. */
+        [[nodiscard]] virtual EditorMicrophoneTestStatus TestStatus() const noexcept = 0;
     };
 
     /** @brief Provides theme configuration and font atlas access for the GUI. */

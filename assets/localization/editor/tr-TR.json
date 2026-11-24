@@ -2190,6 +2190,15 @@
     "settings.audio.microphone.denied": {"text": "Mikrofon erişimini macOS Sistem Ayarları’ndan değiştirin."},
     "settings.audio.microphone.unavailable": {"text": "Bu derlemede mikrofon izni kullanılamıyor."},
     "settings.audio.microphone.request": {"text": "Erişim İste"},
+    "settings.audio.microphone.input": {"text": "Mikrofon Girişi"},
+    "settings.audio.microphone.scan": {"text": "Girişleri Tara"},
+    "settings.audio.microphone.test": {"text": "Mikrofon Bağlantı Testi"},
+    "settings.audio.microphone.test_description": {"text": "Bağlantısını beş saniye boyunca denemek için bir giriş seçin. Kayıt dosyası oluşturulmaz."},
+    "settings.audio.microphone.start": {"text": "Testi Başlat"},
+    "settings.audio.microphone.stop": {"text": "Testi Durdur"},
+    "settings.audio.microphone.starting": {"text": "Mikrofon testi başlatılıyor…"},
+    "settings.audio.microphone.capturing": {"text": "Mikrofon kullanımda. Test kendiliğinden durur."},
+    "settings.audio.microphone.test_failed": {"text": "Giriş testi sürdürülemedi. Girişleri yeniden tarayın ve mikrofon erişimini kontrol edin."},
     "settings.audio.output_device": {
       "text": "Ses Çıkış Aygıtı"
     },

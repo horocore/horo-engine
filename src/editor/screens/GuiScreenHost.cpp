@@ -434,6 +434,8 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
+        if (auto *microphone = context_.microphonePermission)
+            microphone->AdvanceTest(false);
         if (fixedScreen_) {
             shutdownPending_ = true;
             return;
@@ -808,6 +810,12 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnInputSnapshot */
     void GuiScreenHost::OnInputSnapshot() {
+        if (auto *microphone = context_.microphonePermission) {
+            const auto *settings = modalHost_ ? dynamic_cast<const SettingsModal *>(modalHost_->TopModal()) : nullptr;
+            const bool settingsFocused =
+                settings && settings->ShowsAudioSettings() && context_.inputRouter && context_.inputRouter->Snapshot().window.focused;
+            microphone->AdvanceTest(settingsFocused);
+        }
         if (fixedScreen_)
             return;
         if (activeScreen_) {

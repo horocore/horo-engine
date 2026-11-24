@@ -26,7 +26,8 @@ namespace Horo::Audio::Backend {
         Recording,
         Monitoring,
         NetworkVoice,
-        Speech
+        Speech,
+        ConnectionTest
     };
 
     /** @brief Host decision about whether this capture may continue after focus loss. */
