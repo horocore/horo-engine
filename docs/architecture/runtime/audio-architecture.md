@@ -2352,6 +2352,12 @@ Withdrawal has an empty current binding. A default change does not retire the
 old endpoint while it remains in the catalog. Opening a capture stream still
 requires the host's permission and consent decision.
 
+SDL3 binds the multimedia default to an enumerated physical input only when
+the complete native name and supported preferred PCM uniquely match. If that
+evidence is missing, ambiguous or changes during discovery, the role stays
+unresolved and callers can still choose an explicit input. A resolved name
+can be used to present a device, while capture opens the pinned physical ID.
+
 Capture producers write into preallocated or policy-bounded buffers and never
 block the real-time callback. Consumers receive owner-backed timestamped spans
 or bounded stream reads without retaining native device handles. The control

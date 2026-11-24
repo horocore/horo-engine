@@ -344,10 +344,10 @@ namespace Horo::Audio::Backend {
             CHECK(first.Value().permissionChange->current == AudioCapturePermission::NotRequired);
             const auto endpoint = std::ranges::find(catalog.devices, system.device, &AudioDiscoveredCaptureDevice::id);
             REQUIRE(endpoint != catalog.devices.end());
-            CHECK(endpoint->deviceClass == AudioDeviceClass::Virtual);
+            CHECK(endpoint->deviceClass == AudioDeviceClass::Unknown);
             CHECK(endpoint->preferredFormat.has_value());
-            CHECK(std::ranges::any_of(catalog.devices, [system](const AudioDiscoveredCaptureDevice &device) {
-                return device.id != system.device && device.deviceClass == AudioDeviceClass::Unknown;
+            CHECK(std::ranges::none_of(catalog.devices, [](const AudioDiscoveredCaptureDevice &device) {
+                return device.deviceClass == AudioDeviceClass::Virtual;
             }));
             CHECK(ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Communications).status ==
                   AudioDeviceResolutionStatus::Unavailable);
@@ -395,7 +395,8 @@ namespace Horo::Audio::Backend {
             REQUIRE(selected.status == AudioDeviceResolutionStatus::Resolved);
             const auto endpoint = std::ranges::find(snapshot.devices, selected.device, &AudioDiscoveredCaptureDevice::id);
             REQUIRE(endpoint != snapshot.devices.end());
-            CHECK(endpoint->deviceClass == AudioDeviceClass::Virtual);
+            CHECK(endpoint->deviceClass == AudioDeviceClass::Unknown);
+            CHECK(endpoint->preferredFormat.has_value());
             CHECK(backend->State() == Sdl3AudioBackendState::Closed);
         }
 #endif

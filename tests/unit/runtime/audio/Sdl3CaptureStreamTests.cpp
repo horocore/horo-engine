@@ -123,6 +123,9 @@ namespace Horo::Audio::Backend {
             const auto &catalog = discovery.Value().snapshot;
             REQUIRE(catalog.permission == AudioCapturePermission::NotRequired);
             const auto descriptor = SelectEndpoint(catalog);
+            const auto defaultInput = ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Multimedia);
+            REQUIRE(defaultInput.status == AudioDeviceResolutionStatus::Resolved);
+            CHECK(defaultInput.device == descriptor.device);
             const Sdl3CaptureIntent intent{.purpose = Sdl3CapturePurpose::Speech};
             Sdl3CaptureGrant grant{.device = descriptor.device,
                                    .discoveryRevision = catalog.revision,

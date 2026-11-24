@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string_view>
+#include <utility>
 
 namespace Horo::Audio::Backend {
     namespace {
@@ -23,6 +24,41 @@ namespace Horo::Audio::Backend {
             return std::string{name.substr(0, length)};
         }
 
+        /** @brief Copies the exact bounded SDL default name and its current preferred PCM. */
+        std::optional<std::pair<std::string, AudioProcessingFormat>> ObserveDefaultCapture() {
+            constexpr auto Route = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
+            const auto *name = SDL_GetAudioDeviceName(Route);
+            SDL_AudioSpec preferred{};
+            if (!name || !SDL_GetAudioDeviceFormat(Route, &preferred, nullptr))
+                return std::nullopt;
+            auto format = CaptureFormat(preferred);
+            const std::string_view label{name};
+            if (!format || label.empty() || label.size() > 256)
+                return std::nullopt;
+            return std::pair{std::string{label}, std::move(*format)};
+        }
+
+        /** @brief Matches the observed default to exactly one physical endpoint without opening the SDL default alias. */
+        std::optional<AudioCaptureDeviceId> ResolveDefaultCapture(const std::span<const Sdl3Detail::CaptureDeviceBinding> bindings,
+                                                                  const AudioCaptureDeviceSnapshot &candidate) {
+            const auto route = ObserveDefaultCapture();
+            if (!route)
+                return std::nullopt;
+            const auto matches = [&route](const Sdl3Detail::CaptureDeviceBinding &binding, const AudioDiscoveredCaptureDevice &device) {
+                const auto *nativeName = SDL_GetAudioDeviceName(binding.native);
+                return nativeName && route->first == nativeName && device.preferredFormat == route->second;
+            };
+            std::optional<AudioCaptureDeviceId> selected;
+            for (std::size_t i = 0; i < bindings.size(); ++i) {
+                if (!matches(bindings[i], candidate.devices[i]))
+                    continue;
+                if (selected)
+                    return std::nullopt;
+                selected = bindings[i].horo;
+            }
+            return selected && ObserveDefaultCapture() == route ? selected : std::nullopt;
+        }
+
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::Impl::BindCaptureEndpoint */
@@ -37,31 +73,12 @@ namespace Horo::Audio::Backend {
         return id;
     }
 
-    /** @copydoc Sdl3AudioBackend::Impl::ReadDefaultCaptureEndpoint */
-    Result<void> Sdl3AudioBackend::Impl::ReadDefaultCaptureEndpoint(AudioCaptureDeviceSnapshot &candidate,
-                                                                    std::vector<CaptureDeviceBinding> &bindings,
-                                                                    std::uint32_t &nextSlot) const {
-        SDL_AudioSpec preferred{};
-        constexpr auto native = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
-        if (!SDL_GetAudioDeviceFormat(native, &preferred, nullptr))
-            return Result<void>::Success();
-        if (candidate.devices.size() == MaximumAudioDiscoveredDevices)
-            return Sdl3Detail::Failure(AudioErrors::HandleCapacityExhausted);
-        const auto id = BindCaptureEndpoint(native, bindings, nextSlot);
-        if (!id.IsValid())
-            return Sdl3Detail::Failure(AudioErrors::HandleGenerationExhausted);
-        candidate.defaults.multimedia = id;
-        candidate.devices.emplace_back(id, "System default recording device", AudioDeviceClass::Virtual, CaptureFormat(preferred));
-        return Result<void>::Success();
-    }
-
     /** @copydoc Sdl3AudioBackend::Impl::ReadCaptureEndpoints */
     Result<void> Sdl3AudioBackend::Impl::ReadCaptureEndpoints(const std::span<const SDL_AudioDeviceID> ids,
                                                               std::vector<CaptureDeviceBinding> &bindings, std::uint32_t &nextSlot,
                                                               AudioCaptureDeviceSnapshot &candidate) const {
-        const auto capacity = std::min(ids.size() + 1, MaximumAudioDiscoveredDevices);
-        bindings.reserve(capacity);
-        candidate.devices.reserve(capacity);
+        bindings.reserve(ids.size());
+        candidate.devices.reserve(ids.size());
         for (const auto native : ids) {
             const auto *name = SDL_GetAudioDeviceName(native);
             if (!name)
@@ -73,7 +90,8 @@ namespace Horo::Audio::Backend {
             const auto preferredFormat = SDL_GetAudioDeviceFormat(native, &preferred, nullptr) ? CaptureFormat(preferred) : std::nullopt;
             candidate.devices.emplace_back(id, CaptureLabel(name), AudioDeviceClass::Unknown, preferredFormat);
         }
-        return ReadDefaultCaptureEndpoint(candidate, bindings, nextSlot);
+        candidate.defaults.multimedia = ResolveDefaultCapture(bindings, candidate);
+        return Result<void>::Success();
     }
 
     /** @copydoc Sdl3AudioBackend::Impl::DiscoverCapture */
