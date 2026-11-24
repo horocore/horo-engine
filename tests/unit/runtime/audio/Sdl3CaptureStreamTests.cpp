@@ -198,6 +198,50 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
         }
 
+        TEST_CASE("SDL normal recording stop transfers unread PCM only under the current recording grant", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                   .foreground = true};
+            SECTION("revoked consent discards the unread tail") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                grant.foreground = false;
+                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            }
+            SECTION("speech admission cannot authorize recording") {
+                grant.intent.purpose = Sdl3CapturePurpose::Speech;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            }
+            SECTION("normal stop detaches the producer and transfers queued data") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+                while (backend->CaptureActivity().state == Sdl3CaptureActivityState::AwaitingFrames &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                REQUIRE(backend->CaptureActivity().state == Sdl3CaptureActivityState::Capturing);
+                auto stopped = backend->FinishRecording(descriptor.generation, grant);
+                REQUIRE(stopped.HasValue());
+                auto tail = std::move(stopped).Value();
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size());
+                REQUIRE(tail.TryRead(block, pcm) == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+                CHECK(block.firstFrame == 0);
+            }
+        }
+
         TEST_CASE("SDL dummy permission request returns a decision without opening capture", "[audio][sdl3][capture]") {
             auto backend = MakeBackend();
             const auto decision = backend->RequestCapturePermission();

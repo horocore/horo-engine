@@ -1605,11 +1605,16 @@ target_include_directories(HoroAudioOffline PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/offline/include>")
 target_link_libraries(HoroAudioOffline PUBLIC HoroAudioBackendContract HoroEngine::AudioVoiceRender)
 
-add_library(HoroApplicationAudioExport STATIC application/audio_export/OfflineAudioExport.cpp)
+add_library(HoroApplicationAudioExport STATIC
+        application/audio_export/OfflineAudioExport.cpp
+        application/audio_export/WaveEncoding.cpp
+        application/audio_export/AudioRecording.cpp)
 target_compile_features(HoroApplicationAudioExport PUBLIC cxx_std_20)
 target_include_directories(HoroApplicationAudioExport PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/audio_export/include>")
-target_link_libraries(HoroApplicationAudioExport PUBLIC HoroAudioOffline HoroEngine::Foundation)
+target_link_libraries(HoroApplicationAudioExport
+        PUBLIC HoroAudioOffline HoroAudioCaptureBuffer HoroEngine::Foundation HoroEngine::ProjectAssetImportApplication
+        PRIVATE HoroEngine::AudioImport HoroEngine::Security)
 
 add_library(HoroAudioFrontend STATIC
         audio/frontend/AudioFrontend.cpp

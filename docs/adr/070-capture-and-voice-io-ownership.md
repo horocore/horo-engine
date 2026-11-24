@@ -134,6 +134,12 @@ rolls back. Cancellation, permission revocation, device loss, disk/budget failur
 or malformed/gapped policy failure preserves the last good project state. Raw
 temporary data follows explicit retention and secure cleanup policy.
 
+The baseline recording path accumulates finite PCM in bounded private memory.
+The Audio owner detaches capture before transferring the unread tail on a
+normal stop. The application discards an incomplete or revoked take, validates
+the complete WAVE through the built-in source importer, and publishes it through
+the normal authored asset transaction.
+
 ### 7. NET owns voice packets and remote policy
 
 Network voice consumes captured leases/copies through a narrow application adapter

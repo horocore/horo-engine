@@ -183,6 +183,14 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, AudioCapturedBlock &block,
                                                              std::span<AudioSample> pcm);
 
+        /** @brief Stops an explicitly approved recording, transferring its private unread tail to the caller.
+         * @param generation Exact active capture generation.
+         * @param grant Current owner admission for the same recording. Revocation discards PCM.
+         * @return Detached buffer, or typed stale, health or permission failure.
+         * @pre Audio control lane. The caller owns the buffer through finalization or discards it.
+         */
+        [[nodiscard]] Result<AudioCaptureBuffer> FinishRecording(std::uint64_t generation, const Sdl3CaptureGrant &grant);
+
         /** @brief Closes one generation, including host-driven revocation. Repeated stop for that generation succeeds.
          * @param generation Previously started capture generation.
          * @return Success after native detachment or a typed stale-generation error.

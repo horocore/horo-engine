@@ -1004,7 +1004,8 @@ add_executable(HoroAudioOfflineTests
     support/AllocationProbe.cpp
     unit/runtime/audio/OfflineAudioRenderTests.cpp
     unit/runtime/audio/OfflineMixerRenderTests.cpp
-    unit/application/audio_export/OfflineAudioExportTests.cpp)
+    unit/application/audio_export/OfflineAudioExportTests.cpp
+    unit/application/audio_export/AudioRecordingTests.cpp)
 target_include_directories(HoroAudioOfflineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioOfflineTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioOfflineTests PRIVATE HoroApplicationAudioExport HoroEngine::Platform)

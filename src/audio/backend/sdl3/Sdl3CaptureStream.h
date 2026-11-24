@@ -28,8 +28,12 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         [[nodiscard]] Sdl3CaptureActivityState Activity() const noexcept;
         /** @brief Borrows the queue owned by this exact capture generation. */
         [[nodiscard]] AudioCaptureBuffer &Buffer() noexcept;
+        /** @brief Detaches the native producer and transfers its unread PCM for a normal recording stop. */
+        [[nodiscard]] AudioCaptureBuffer Finish() noexcept;
 
     private:
+        /** @brief Closes the native endpoint and returns only after its callback is detached. */
+        void Detach() noexcept;
         /** @brief Copies one borrowed SDL float buffer into prepared storage on the capture callback. */
         static void SDLCALL OnSamples(void *context, const SDL_AudioSpec *spec, float *pcm, int bytes) noexcept;
         /** @brief Checks the fixed format and publishes frame-indexed PCM without allocating. */

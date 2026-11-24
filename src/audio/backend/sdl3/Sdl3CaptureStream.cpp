@@ -74,10 +74,21 @@ namespace Horo::Audio::Backend::Sdl3Detail {
 
     CaptureStream::~CaptureStream() {
         buffer_.Cancel();
-        if (device_) {
-            SDL_SetAudioPostmixCallback(device_, nullptr, nullptr);
-            SDL_CloseAudioDevice(device_);
+        Detach();
+    }
+
+    /** @copydoc CaptureStream::Detach */
+    void CaptureStream::Detach() noexcept {
+        if (const auto device = std::exchange(device_, 0)) {
+            SDL_SetAudioPostmixCallback(device, nullptr, nullptr);
+            SDL_CloseAudioDevice(device);
         }
+    }
+
+    /** @copydoc CaptureStream::Finish */
+    AudioCaptureBuffer CaptureStream::Finish() noexcept {
+        Detach();
+        return std::move(buffer_);
     }
 
     /** @copydoc CaptureStream::Open */
@@ -316,5 +327,18 @@ namespace Horo::Audio::Backend {
             return Sdl3Detail::Failure(AudioErrors::HandleStale);
         impl_->capture.Stop();
         return Result<void>::Success();
+    }
+
+    /** @copydoc Sdl3AudioBackend::FinishRecording */
+    Result<AudioCaptureBuffer> Sdl3AudioBackend::FinishRecording(const std::uint64_t generation, const Sdl3CaptureGrant &grant) {
+        using Output = Result<AudioCaptureBuffer>;
+        if (auto current = ReconcileCapture(generation, grant); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        auto &capture = impl_->capture;
+        if (capture.activeGrant.intent.purpose != Sdl3CapturePurpose::Recording)
+            return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+        auto tail = capture.stream->Finish();
+        capture.Stop();
+        return Output::Success(std::move(tail));
     }
 }  // namespace Horo::Audio::Backend
