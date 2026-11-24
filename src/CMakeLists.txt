@@ -1456,6 +1456,12 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
+add_library(HoroAudioCaptureBuffer STATIC audio/capture/AudioCaptureBuffer.cpp)
+target_compile_features(HoroAudioCaptureBuffer PUBLIC cxx_std_20)
+target_include_directories(HoroAudioCaptureBuffer PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/capture/include>")
+target_link_libraries(HoroAudioCaptureBuffer PUBLIC HoroEngine::AudioApi)
+
 # Build-tree-only hook boundary shared by backend callback scopes and Horo-owned audio operations.
 add_library(HoroAudioSafetyHooks STATIC
         audio/safety/AudioCallbackSafetyHooks.cpp

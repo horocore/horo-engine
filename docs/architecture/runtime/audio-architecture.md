@@ -2354,9 +2354,17 @@ requires the host's permission and consent decision.
 
 Capture producers write into preallocated or policy-bounded buffers and never
 block the real-time callback. Consumers receive owner-backed timestamped spans
-or bounded stream reads; they do not retain native device handles. Device change,
-permission revocation, focus loss, overrun, and shutdown terminate or replace a
-capture generation explicitly.
+or bounded stream reads without retaining native device handles. The control
+owner explicitly ends or replaces the capture generation on device change,
+permission revocation, focus loss or shutdown.
+
+The internal capture buffer reserves one callback-to-consumer queue for an exact
+device, capture generation, clock domain and semantic PCM layout. It drops the
+newest whole block on overflow. The producer still advances source chronology
+and records cumulative dropped frames. Subsequent reads expose sequence and
+sample-frame gaps, and the counter exposes trailing drops with no later block.
+A short destination leaves the block queued. Cancellation closes admission
+while the host retains storage until both participants detach.
 
 Audio does not own speech recognition, language inference, model providers,
 agent intent, or network voice transport. A provider-neutral speech service may

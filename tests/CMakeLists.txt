@@ -861,10 +861,13 @@ if(HORO_ENABLE_PIPEWIRE_DAEMON_TESTS)
 endif()
 
 add_executable(HoroAudioBackendContractTests
+        support/AllocationProbe.cpp
         unit/runtime/audio/AudioBackendContractTests.cpp
+        unit/runtime/audio/AudioCaptureBufferTests.cpp
 )
 target_compile_features(HoroAudioBackendContractTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAudioBackendContractTests PRIVATE HoroAudioBackendContract)
+target_include_directories(HoroAudioBackendContractTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroAudioBackendContractTests PRIVATE HoroAudioBackendContract HoroAudioCaptureBuffer Threads::Threads)
 horo_register_catch_test(HoroAudioBackendContractTests LABELS "unit;audio;headless")
 add_executable(HoroAudioWatchdogTests
         unit/runtime/audio/AudioCallbackWatchdogTests.cpp
