@@ -40,12 +40,8 @@ namespace Horo::Navigation {
 
     TEST_CASE("Dynamic registry stages provider-neutral records and publishes immutable snapshots",
               "[unit][navigation][headless][dynamic-registry]") {
-        NavigationDynamicRegistryLimits invalidLimits;
-        invalidLimits.maximumObstacles = 0;
-        RequireError(NavigationDynamicRegistry::Create(invalidLimits), NavigationErrors::DynamicRegistryInvalid);
-        invalidLimits = {};
-        invalidLimits.minimumUpdateIntervalTicks = 0;
-        RequireError(NavigationDynamicRegistry::Create(invalidLimits), NavigationErrors::DynamicRegistryInvalid);
+        RequireError(NavigationDynamicRegistry::Create({.maximumObstacles = 0}), NavigationErrors::DynamicRegistryInvalid);
+        RequireError(NavigationDynamicRegistry::Create({.minimumUpdateIntervalTicks = 0}), NavigationErrors::DynamicRegistryInvalid);
 
         auto registry = MakeRegistry();
         RequireError(registry.Snapshot(), NavigationErrors::NoNavigationData);

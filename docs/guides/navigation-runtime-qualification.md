@@ -84,6 +84,8 @@ uses the same probe, so its native allocations are included. The run reports
 the peak across each layout in both modes and the overlapping-capture case
 separately from timing. The tracker uses caller-owned storage and reports an
 incomplete sample if it cannot track every block.
+The scene's dynamic registry sizes slot and staging tables from the validated
+configuration and snapshots only active records.
 
 The scripted solver workload advances authored input positions. The native
 formation run feeds 64 committed capsule roots and achieved velocities into

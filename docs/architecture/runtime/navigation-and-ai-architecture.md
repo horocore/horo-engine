@@ -147,8 +147,7 @@ commands; `CommitAtSafePoint` is the only normal publication path, while
 `ReplaceSceneAtSafePoint` clears the old Scene publication and advances slot generations.
 Duplicate identities, stale owner/source revisions, old handles, excessive update rates,
 and profile-bound counts fail deterministically without changing the active publication.
-The owner sizes its slot and staging tables at creation from the validated profile limits.
-Snapshots reserve only active records in immutable storage that query and avoidance
+Snapshots copy the bounded active records into immutable storage that query and avoidance
 jobs may retain without a Scene or provider lifetime lease; their exact Scene binding and
 registry revision remain the currentness fence for later result publication.
 
