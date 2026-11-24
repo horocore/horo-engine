@@ -340,6 +340,8 @@ termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.
 On POSIX, an output timeout stops the admitted host command's process group
 even if its leader exited while a descendant still held the output pipe.
+With non-reaping child status observation, a failed exit also stops that group
+before the leader PID can be reused, including when descendants closed stdout.
 
 For the qualification packages, `python scripts/project.py android-deploy`
 takes the existing signed package output directory, declared profile, Android

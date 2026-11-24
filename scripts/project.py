@@ -1003,7 +1003,7 @@ class AndroidDeployError(AndroidError):
         self.code = code
 
 
-def stop_deploy_process(process: subprocess.Popen) -> None:
+def stop_deploy_process(process: subprocess.Popen, *, leader_exited: bool = False) -> None:
     """Stop only the admitted host child and its isolated POSIX process group."""
     # Keep the leader PID reserved until the group has been signalled. Polling
     # would reap an exited leader even if its descendants still hold stdout.
@@ -1016,10 +1016,31 @@ def stop_deploy_process(process: subprocess.Popen) -> None:
             os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # Darwin excludes zombie leaders and can report EPERM once the isolated
+        # group has no remaining members signalable by this invocation.
+        if sys.platform != "darwin" or not leader_exited:
+            raise
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         raise AndroidDeployError("host_process_stop_unconfirmed") from None
+
+
+def wait_deploy_status(process: subprocess.Popen, deadline: float) -> int:
+    """Retire the group of a failed POSIX command before releasing its leader PID."""
+    if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+        while True:
+            exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if exited is not None:
+                if exited.si_code != os.CLD_EXITED or exited.si_status != 0:
+                    stop_deploy_process(process, leader_exited=True)
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AndroidDeployError("deadline_exceeded")
+            time.sleep(min(0.01, remaining))
+    return process.wait(timeout=max(0, deadline - time.monotonic()))
 
 
 def deploy_process(command: list[str], deadline: float) -> tuple[int, str]:
@@ -1047,7 +1068,7 @@ def deploy_process(command: list[str], deadline: float) -> tuple[int, str]:
             raise AndroidDeployError("host_output_unavailable") from None
         if len(captured) > DEPLOY_CAPTURE_BYTES:
             raise AndroidDeployError("host_output_limit")
-        status = process.wait(timeout=max(0, deadline - time.monotonic()))
+        status = wait_deploy_status(process, deadline)
         return status, captured.decode("utf-8", errors="replace")
     except (Empty, subprocess.TimeoutExpired):
         raise AndroidDeployError("deadline_exceeded") from None

@@ -1008,6 +1008,39 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 4)
 
     @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
+    def test_failed_host_command_retires_its_group_before_reaping(self):
+        signal_group = os.killpg
+        exit_statuses = []
+
+        def record_and_stop(pid, signal_number):
+            exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            exit_statuses.append(exited.si_status)
+            signal_group(pid, signal_number)
+
+        with patch.object(os, "killpg", side_effect=record_and_stop):
+            status, output = project.deploy_process(
+                [sys.executable, "-c", "print('failed'); raise SystemExit(7)"], time.monotonic() + 5)
+        self.assertEqual((status, output), (7, "failed\n"))
+        self.assertEqual(exit_statuses, [7])
+
+    @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
+    def test_failed_host_command_retires_descendant_without_output_pipe(self):
+        signal_group = os.killpg
+        signals = []
+
+        def record_and_stop(pid, signal_number):
+            signal_group(pid, signal_number)
+            signals.append(signal_number)
+
+        script = ("import os, time\n"
+                  "if os.fork() == 0:\n"
+                  "    os.close(1); os.close(2); time.sleep(5); os._exit(0)\n"
+                  "raise SystemExit(7)\n")
+        with patch.object(os, "killpg", side_effect=record_and_stop):
+            self.assertEqual(project.deploy_process([sys.executable, "-c", script], time.monotonic() + 5), (7, ""))
+        self.assertEqual(signals, [project.signal.SIGKILL])
+
+    @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
     def test_deadline_retires_output_owner_after_group_leader_exits(self):
         spawn = project.subprocess.Popen
         make_thread = project.Thread
