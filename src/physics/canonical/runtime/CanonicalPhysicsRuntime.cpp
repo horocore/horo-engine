@@ -1,9 +1,9 @@
-#include "CanonicalPhysicsRuntimeInternal.h"
+#include "../../world/settings/PhysicsWorldBindingValidation.h"
 #include "../solver/CanonicalSolver.h"
 #include "../solver/CanonicalWorldSettings.h"
+#include "CanonicalPhysicsRuntimeInternal.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
-#include "../../world/settings/PhysicsWorldBindingValidation.h"
 
 #include <Jolt/Jolt.h>
 

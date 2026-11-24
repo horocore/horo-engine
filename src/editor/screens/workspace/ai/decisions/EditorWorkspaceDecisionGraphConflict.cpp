@@ -1,8 +1,8 @@
-#include "graph/DecisionGraphCanvasModel.h"
 #include "DecisionSaveJournal.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "graph/DecisionGraphCanvasModel.h"
 
 #include <algorithm>
 #include <array>

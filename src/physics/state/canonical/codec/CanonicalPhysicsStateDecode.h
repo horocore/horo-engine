@@ -1,8 +1,8 @@
 #pragma once
 
+#include "../../solver/PhysicsStateSolverStorage.h"
 #include "../binding/CanonicalPhysicsStateBinding.h"
 #include "CanonicalPhysicsStateFields.h"
-#include "../../solver/PhysicsStateSolverStorage.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Decodes ONLY actual native SaveState output into the complete typed

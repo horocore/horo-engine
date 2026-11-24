@@ -1,10 +1,10 @@
 #pragma once
 
 /** @file DecisionGraphDocumentHistory.h @brief Prepared in-memory publication for one authored Decision document. */
-#include "graph/DecisionGraphLayout.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
+#include "graph/DecisionGraphLayout.h"
 
 #include <cstddef>
 #include <cstdint>

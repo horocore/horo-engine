@@ -1,8 +1,8 @@
 #pragma once
 
+#include "../../../PhysicsWorldInternal.h"
 #include "../../../state/snapshot/PhysicsStateSnapshotInternal.h"
 #include "../../../state/snapshot/PhysicsStateSnapshotSlot.h"
-#include "../../../PhysicsWorldInternal.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Same-world owner state. Closing severs every borrowed world pointer

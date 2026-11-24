@@ -1,9 +1,9 @@
 #pragma once
 
-#include "character/controller/CharacterControllerRegistry.h"
 #include "Horo/Physics/CharacterMetrics.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "PhysicsTestUtils.h"
+#include "character/controller/CharacterControllerRegistry.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

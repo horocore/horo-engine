@@ -1,9 +1,9 @@
 #include "../../EditorWorkspaceController.h"
 #include "../../EditorWorkspaceScreen.h"
-#include "Horo/Foundation/Logging/Logger.h"
 #include "../../docking/WorkspacePathText.h"
 #include "../TerrainAssetCreationModal.h"
 #include "../TerrainDocumentHost.h"
+#include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>
 

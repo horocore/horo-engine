@@ -1,9 +1,9 @@
-#include "graph/DecisionGraphCanvasModel.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "graph/DecisionGraphCanvasModel.h"
 
 #include <algorithm>
 #include <bit>

@@ -1,5 +1,5 @@
-#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "../docking/WorkspacePathText.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 namespace Horo::Editor {

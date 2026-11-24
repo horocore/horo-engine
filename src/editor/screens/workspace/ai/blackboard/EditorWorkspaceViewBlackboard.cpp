@@ -2,9 +2,9 @@
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
+#include "editor/screens/workspace/EditorWorkspaceView.h"
 #include "editor/screens/workspace/ai/blackboard/BlackboardKeyWidgets.h"
 #include "editor/screens/workspace/ai/blackboard/BlackboardScalarInput.h"
-#include "editor/screens/workspace/EditorWorkspaceView.h"
 
 #include <algorithm>
 #include <array>

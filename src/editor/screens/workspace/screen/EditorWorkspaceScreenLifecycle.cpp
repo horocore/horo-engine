@@ -1,7 +1,7 @@
 #include "../EditorWorkspaceScreen.h"
+#include "../project_settings/PlatformProjectSettingsOwner.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Foundation/Logging/Logger.h"
-#include "../project_settings/PlatformProjectSettingsOwner.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/screens/NavigationErrors.h"
 

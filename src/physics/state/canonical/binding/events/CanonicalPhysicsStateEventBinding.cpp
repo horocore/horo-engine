@@ -1,5 +1,5 @@
-#include "CanonicalPhysicsStateEventBindingInternal.h"
 #include "../../../validation/PhysicsStateSurfaceBinding.h"
+#include "CanonicalPhysicsStateEventBindingInternal.h"
 
 namespace Horo::Physics::Detail {
     /** @copydoc SameStateMaterial */

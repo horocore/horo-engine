@@ -1,11 +1,11 @@
 #pragma once
 
+#include "../../docking/WorkspacePathText.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Gameplay/GameplayErrors.h"
-#include "../../docking/WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>

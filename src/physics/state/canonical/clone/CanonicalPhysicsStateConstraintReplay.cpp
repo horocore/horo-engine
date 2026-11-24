@@ -1,7 +1,7 @@
 #include "CanonicalPhysicsStateConstraintReplay.h"
 
-#include "../codec/CanonicalPhysicsStateFields.h"
 #include "../abi/CanonicalPhysicsStateFpControl.h"
+#include "../codec/CanonicalPhysicsStateFields.h"
 
 namespace Horo::Physics::Detail {
     namespace {

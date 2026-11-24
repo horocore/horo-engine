@@ -1,12 +1,12 @@
 #include "../blackboard/BlackboardScalarInput.h"
-#include "panels/DecisionTaskPalette.h"
-#include "panels/DecisionTaskPropertiesView.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "panels/UtilityGraphAuthoring.h"
-#include "editor/screens/workspace/ai/AuthoredAiSourceInventory.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "editor/screens/workspace/ai/AuthoredAiSourceInventory.h"
+#include "panels/DecisionTaskPalette.h"
+#include "panels/DecisionTaskPropertiesView.h"
+#include "panels/UtilityGraphAuthoring.h"
 
 #include <algorithm>
 #include <array>

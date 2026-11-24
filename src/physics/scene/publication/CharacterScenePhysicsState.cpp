@@ -1,5 +1,5 @@
-#include "../../character/runtime/CharacterWorldInternal.h"
 #include "../../PhysicsWorldInternal.h"
+#include "../../character/runtime/CharacterWorldInternal.h"
 #include "../../internal/CharacterScenePlacement.h"
 
 #include <algorithm>

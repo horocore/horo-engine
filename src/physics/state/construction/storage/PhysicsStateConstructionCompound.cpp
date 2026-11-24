@@ -1,6 +1,6 @@
+#include "../../validation/PhysicsStateShapeRecipeHash.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "PhysicsStateConstructionStorage.h"
-#include "../../validation/PhysicsStateShapeRecipeHash.h"
 
 #include <algorithm>
 

@@ -1,6 +1,6 @@
+#include "../internal/CharacterScenePlacement.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "PhysicsSceneStateTarget.h"
-#include "../internal/CharacterScenePlacement.h"
 
 namespace Horo::Physics::Detail {
     /** @copydoc PhysicsSceneStateTarget::InstallBindings */

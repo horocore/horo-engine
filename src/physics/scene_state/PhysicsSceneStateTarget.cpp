@@ -1,7 +1,7 @@
 #include "PhysicsSceneStateTarget.h"
 
-#include "Horo/Physics/CharacterWorld.h"
 #include "../internal/PhysicsSceneHostAccess.h"
+#include "Horo/Physics/CharacterWorld.h"
 
 namespace Horo::Physics::Detail {
     /** @copydoc PhysicsSceneHostAccess::StateTarget */

@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
-#include "Horo/Foundation/CancellationToken.h"
 #include "../../../construction/storage/PhysicsStateConstructionStorage.h"
+#include "Horo/Foundation/CancellationToken.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Cold detached shape construction; no Horo/native publication until exact roles are admitted by the receiving owner.

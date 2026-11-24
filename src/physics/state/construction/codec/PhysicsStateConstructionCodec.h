@@ -1,6 +1,6 @@
 #pragma once
-#include "Horo/Physics/PhysicsStateConstruction.h"
 #include "../../envelope/PhysicsStateWireInternal.h"
+#include "Horo/Physics/PhysicsStateConstruction.h"
 
 namespace Horo::Physics::StateDetail {
     /** @brief Private staging spans; failed decode may write these scratch values but issues no live view/publication. */

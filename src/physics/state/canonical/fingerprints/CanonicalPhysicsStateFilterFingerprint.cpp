@@ -1,6 +1,6 @@
+#include "../../envelope/PhysicsStateHashInternal.h"
 #include "../backend/CanonicalPhysicsStateBackendInternal.h"
 #include "Horo/Physics/PhysicsErrors.h"
-#include "../../envelope/PhysicsStateHashInternal.h"
 
 namespace Horo::Physics::Detail {
     /** @copydoc ReadCanonicalReplaySimulation */

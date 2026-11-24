@@ -1,8 +1,8 @@
 #pragma once
-#include "../query/CharacterSurfaceInternal.h"
 #include "../movement/CharacterWorldMovementInternal.h"
-#include "../platform/CharacterWorldPlatformInternal.h"
 #include "../movement/CharacterWorldShapeInternal.h"
+#include "../platform/CharacterWorldPlatformInternal.h"
+#include "../query/CharacterSurfaceInternal.h"
 
 namespace Horo::Character::Detail {
     /** @brief Includes a Scene frame that is closed to producers pending the scheduler decision. */

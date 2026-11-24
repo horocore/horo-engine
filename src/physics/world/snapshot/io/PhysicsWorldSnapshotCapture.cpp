@@ -1,6 +1,6 @@
+#include "../../../events/PhysicsWorldStateEvents.h"
 #include "../../../state/envelope/PhysicsStateEnvelope.h"
 #include "../storage/PhysicsWorldSnapshotState.h"
-#include "../../../events/PhysicsWorldStateEvents.h"
 
 namespace Horo::Physics::Detail {
     namespace {

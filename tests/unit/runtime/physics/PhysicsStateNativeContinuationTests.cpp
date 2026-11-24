@@ -1,5 +1,5 @@
-#include "state/canonical/clone/CanonicalPhysicsStateCloneInternal.h"
 #include "PhysicsStateNativeTestSupport.h"
+#include "state/canonical/clone/CanonicalPhysicsStateCloneInternal.h"
 
 namespace Horo::Physics::Detail {
     using namespace StateTest;

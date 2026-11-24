@@ -1,7 +1,7 @@
+#include "../../../docking/WorkspacePathText.h"
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
-#include "../../../docking/WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowserInternal.h"
 #include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"

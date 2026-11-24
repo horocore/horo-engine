@@ -1,8 +1,7 @@
+#include "../../docking/WorkspacePathText.h"
 #include "../AuthoredAiSourceInventory.h"
-#include "graph/DecisionGraphCanvasModel.h"
-#include "DecisionSaveJournal.h"
-#include "panels/DecisionTreeSubtreeCatalog.h"
 #include "../queries/EnvironmentQueryWorkspaceSource.h"
+#include "DecisionSaveJournal.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
@@ -10,10 +9,11 @@
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
-#include "panels/UtilityGraphAuthoring.h"
-#include "../../docking/WorkspacePathText.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "graph/DecisionGraphCanvasModel.h"
+#include "panels/DecisionTreeSubtreeCatalog.h"
+#include "panels/UtilityGraphAuthoring.h"
 
 #include <algorithm>
 #include <array>

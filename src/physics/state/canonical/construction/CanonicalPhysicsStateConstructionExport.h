@@ -1,6 +1,6 @@
 #pragma once
-#include "../topology/CanonicalPhysicsStateTopologyMap.h"
 #include "../../construction/manifest/PhysicsStateConstructionManifestOwner.h"
+#include "../topology/CanonicalPhysicsStateTopologyMap.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Caller-private row cursors. All capacity derives from actual retained topology before export. */

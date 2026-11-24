@@ -83,8 +83,9 @@ namespace Horo::Navigation {
                 return identity.world == provenance.world && identity.topology == provenance.topology;
             };
             const bool corridorMatches = std::ranges::all_of(path.corridor, matches, &NavigationPathCorridorPolygon::provenance);
-            const bool waypointsMatch = std::ranges::all_of(path.waypoints, matches, [](const NavigationPathWaypoint &waypoint)
-                                                               -> const NavigationQueryProvenance & {
+            const bool waypointsMatch =
+                std::ranges::all_of(path.waypoints, matches,
+                                    [](const NavigationPathWaypoint &waypoint) -> const NavigationQueryProvenance & {
                 return waypoint.provenance.polygon;
             });
             return corridorMatches && waypointsMatch && ValidTraversalBoundaries(path);

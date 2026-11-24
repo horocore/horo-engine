@@ -1,5 +1,5 @@
-#include "../CanonicalPhysicsStateRestartBindings.h"
 #include "../../../validation/PhysicsStateSurfaceBinding.h"
+#include "../CanonicalPhysicsStateRestartBindings.h"
 
 #include <type_traits>
 

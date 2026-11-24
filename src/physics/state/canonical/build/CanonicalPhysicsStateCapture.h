@@ -1,9 +1,9 @@
 #pragma once
 
 #include "../../../canonical/runtime/CanonicalPhysicsRuntime.h"
+#include "../../solver/PhysicsStateSolverStorage.h"
 #include "../binding/CanonicalPhysicsStateBinding.h"
 #include "../memory/CanonicalPhysicsStateBounds.h"
-#include "../../solver/PhysicsStateSolverStorage.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Optional owner observation of actual allocator routing; not

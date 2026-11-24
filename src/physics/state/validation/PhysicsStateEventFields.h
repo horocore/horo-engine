@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Horo/Physics/PhysicsStateSnapshot.h"
 #include "../envelope/PhysicsStateWireInternal.h"
+#include "Horo/Physics/PhysicsStateSnapshot.h"
 
 namespace Horo::Physics::StateDetail {
     /** @brief Stable 128-bit identifiers are explicit bytes, never C++ object

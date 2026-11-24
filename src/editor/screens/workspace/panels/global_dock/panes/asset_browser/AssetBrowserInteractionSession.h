@@ -1,7 +1,7 @@
 #pragma once
 
-#include "editor/screens/workspace/ai/decisions/panels/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/ai/decisions/panels/DecisionTaskPalette.h"
 
 #include <array>
 #include <optional>

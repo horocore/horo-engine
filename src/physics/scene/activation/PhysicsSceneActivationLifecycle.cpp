@@ -1,8 +1,8 @@
+#include "../../PhysicsSceneActivationInternal.h"
+#include "../../internal/PhysicsSceneHostAccess.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
-#include "../../PhysicsSceneActivationInternal.h"
-#include "../../internal/PhysicsSceneHostAccess.h"
 
 #include <algorithm>
 #include <cassert>

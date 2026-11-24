@@ -1,7 +1,7 @@
 #include "Horo/Physics/CharacterMetrics.h"
 
-#include "Horo/Physics/CharacterErrors.h"
 #include "../../model/diagnostics/MetricDescriptorInternal.h"
+#include "Horo/Physics/CharacterErrors.h"
 
 #include <algorithm>
 #include <cmath>

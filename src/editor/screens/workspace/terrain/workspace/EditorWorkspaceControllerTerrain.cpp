@@ -1,9 +1,9 @@
 #include "../../EditorWorkspaceController.h"
-#include "Horo/Editor/SourceDocumentService.h"
-#include "Horo/Foundation/Logging/Logger.h"
 #include "../TerrainDocumentHost.h"
 #include "../TerrainToolSelection.h"
 #include "../TerrainWorkspaceTypes.h"
+#include "Horo/Editor/SourceDocumentService.h"
+#include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>
 #include <cmath>

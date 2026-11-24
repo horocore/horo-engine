@@ -1,9 +1,9 @@
-#include "../runtime/CanonicalPhysicsRuntimeInternal.h"
 #include "../../state/canonical/binding/CanonicalPhysicsStateBodyControl.h"
 #include "../../state/canonical/clone/CanonicalPhysicsStateConstraintReplay.h"
 #include "../../state/canonical/geometry/CanonicalPhysicsStateShapeCreation.h"
 #include "../../state/canonical/geometry/CanonicalPhysicsStateShapeRecipe.h"
 #include "../../state/construction/storage/PhysicsStateConstructionNative.h"
+#include "../runtime/CanonicalPhysicsRuntimeInternal.h"
 
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>

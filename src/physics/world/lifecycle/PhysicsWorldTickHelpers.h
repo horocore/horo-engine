@@ -5,10 +5,10 @@
  */
 
 #include "../../canonical/runtime/CanonicalPhysicsRuntime.h"
-#include "Horo/Foundation/JobSystem.h"
-#include "Horo/Physics/PhysicsWorld.h"
 #include "../../events/PhysicsEventProjection.h"
 #include "../../model/diagnostics/PhysicsSaturatingAdd.h"
+#include "Horo/Foundation/JobSystem.h"
+#include "Horo/Physics/PhysicsWorld.h"
 
 #include <algorithm>
 #include <array>

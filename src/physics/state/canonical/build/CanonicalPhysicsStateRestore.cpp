@@ -1,10 +1,10 @@
 #include "CanonicalPhysicsStateRestore.h"
 
-#include "../memory/CanonicalPhysicsStateAllocator.h"
-#include "../codec/CanonicalPhysicsStateEncode.h"
 #include "../backend/CanonicalPhysicsStateIntent.h"
-#include "CanonicalPhysicsStateRestoreScratch.h"
+#include "../codec/CanonicalPhysicsStateEncode.h"
+#include "../memory/CanonicalPhysicsStateAllocator.h"
 #include "../topology/CanonicalPhysicsStateTopology.h"
+#include "CanonicalPhysicsStateRestoreScratch.h"
 
 namespace Horo::Physics::Detail {
     namespace {

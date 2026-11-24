@@ -1,8 +1,8 @@
-#include "canonical/runtime/CanonicalPhysicsRuntime.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
-#include "events/PhysicsEventProjection.h"
 #include "PhysicsTestUtils.h"
+#include "canonical/runtime/CanonicalPhysicsRuntime.h"
+#include "events/PhysicsEventProjection.h"
 
 #include <Jolt/Jolt.h>
 

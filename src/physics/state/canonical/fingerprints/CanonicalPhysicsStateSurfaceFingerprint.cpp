@@ -1,5 +1,5 @@
-#include "../backend/CanonicalPhysicsStateBackendInternal.h"
 #include "../../envelope/PhysicsStateHashInternal.h"
+#include "../backend/CanonicalPhysicsStateBackendInternal.h"
 
 namespace Horo::Physics::Detail {
     /** @brief STATE-only semantic identity. Existing live SurfaceMaterial fingerprint and Matches are deliberately unchanged. */

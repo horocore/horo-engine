@@ -1,6 +1,6 @@
 #include "../../../../canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
-#include "../CanonicalPhysicsStateConstructionExport.h"
 #include "../../../validation/PhysicsStateSurfaceBinding.h"
+#include "../CanonicalPhysicsStateConstructionExport.h"
 
 namespace Horo::Physics::Detail {
     namespace {

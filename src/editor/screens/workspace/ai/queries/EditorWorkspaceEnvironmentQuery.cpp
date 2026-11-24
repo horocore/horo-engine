@@ -1,6 +1,5 @@
+#include "../../docking/WorkspacePathText.h"
 #include "../AuthoredAiSourceInventory.h"
-#include "preview/EnvironmentQueryPreviewNavigation.h"
-#include "preview/EnvironmentQueryPreviewPhysics.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
@@ -12,9 +11,10 @@
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "../../docking/WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "preview/EnvironmentQueryPreviewNavigation.h"
+#include "preview/EnvironmentQueryPreviewPhysics.h"
 
 #include <algorithm>
 #include <array>

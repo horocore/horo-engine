@@ -1,6 +1,6 @@
+#include "../../PhysicsSceneActivationInternal.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
-#include "../../PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
 #include <array>

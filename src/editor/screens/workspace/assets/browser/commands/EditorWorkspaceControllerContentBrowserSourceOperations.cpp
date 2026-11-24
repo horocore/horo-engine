@@ -1,9 +1,9 @@
+#include "../../../docking/WorkspacePathText.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Foundation/PathUtils.h"
-#include "../../../docking/WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
-#include "editor/screens/workspace/ai/AiAssetPresentation.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/ai/AiAssetPresentation.h"
 #include "editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowserInternal.h"
 
 #include <algorithm>

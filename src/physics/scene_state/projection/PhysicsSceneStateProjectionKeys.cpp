@@ -1,5 +1,5 @@
-#include "PhysicsSceneStateProjectionInternal.h"
 #include "../../state/envelope/PhysicsStateHashInternal.h"
+#include "PhysicsSceneStateProjectionInternal.h"
 
 #include <algorithm>
 #include <limits>

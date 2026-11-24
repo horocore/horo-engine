@@ -1,8 +1,8 @@
 #include "DecisionSaveJournal.h"
 
-#include "graph/DecisionGraphLayout.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
+#include "graph/DecisionGraphLayout.h"
 
 #include <algorithm>
 #include <array>

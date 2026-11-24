@@ -1,9 +1,9 @@
 #include "CanonicalPhysicsStateCapture.h"
 
 #include "../../../canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
-#include "../memory/CanonicalPhysicsStateAllocator.h"
-#include "../codec/CanonicalPhysicsStateDecode.h"
 #include "../backend/CanonicalPhysicsStateIntent.h"
+#include "../codec/CanonicalPhysicsStateDecode.h"
+#include "../memory/CanonicalPhysicsStateAllocator.h"
 
 #include <limits>
 

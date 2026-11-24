@@ -1,6 +1,6 @@
+#include "../docking/WorkspacePathText.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Platform.h"
-#include "../docking/WorkspacePathText.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 

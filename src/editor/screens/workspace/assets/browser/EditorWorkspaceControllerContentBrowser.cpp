@@ -1,3 +1,4 @@
+#include "../../docking/WorkspacePathText.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetCook.h"
@@ -6,7 +7,6 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayErrors.h"
-#include "../../docking/WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowserInternal.h"

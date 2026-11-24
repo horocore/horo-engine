@@ -1,12 +1,12 @@
 #pragma once
 
+#include "../../internal/CharacterSceneFixedAccess.h"
 #include "../controller/CharacterCapabilityInternal.h"
 #include "../controller/CharacterControllerRegistry.h"
-#include "../diagnostics/CharacterDebugStorageInternal.h"
 #include "../controller/CharacterFastPathStorage.h"
+#include "../diagnostics/CharacterDebugStorageInternal.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
-#include "../../internal/CharacterSceneFixedAccess.h"
 
 #include <algorithm>
 #include <array>

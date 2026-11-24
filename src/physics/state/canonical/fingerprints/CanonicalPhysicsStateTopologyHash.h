@@ -1,6 +1,6 @@
 #pragma once
-#include "../topology/CanonicalPhysicsStateTopologyMap.h"
 #include "../../envelope/PhysicsStateHashInternal.h"
+#include "../topology/CanonicalPhysicsStateTopologyMap.h"
 
 namespace Horo::Physics::Detail {
     void HashStateMaterial(StateDetail::StateHash &hash, const PhysicsQueryMaterial &material) noexcept;

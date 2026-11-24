@@ -3,7 +3,6 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Editor/XRSimulatorPanel.h"
 #include "editor/navigation/NavigationTab.h"
-#include "editor/screens/workspace/pcg/PCGWorkspace.h"
 #include "editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
@@ -13,6 +12,7 @@
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
+#include "editor/screens/workspace/pcg/PCGWorkspace.h"
 #include "editor/screens/workspace/terrain/FoliagePaletteTab.h"
 
 namespace Horo::Editor {

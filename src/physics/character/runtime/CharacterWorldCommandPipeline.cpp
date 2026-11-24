@@ -1,5 +1,5 @@
-#include "CharacterWorldCommandInternal.h"
 #include "../movement/CharacterWorldPlacementInternal.h"
+#include "CharacterWorldCommandInternal.h"
 
 #include <chrono>
 #include <exception>

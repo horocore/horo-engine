@@ -1,6 +1,6 @@
 #pragma once
-#include "../manifest/codec/PhysicsStateConstructionManifestCodec.h"
 #include "../../validation/PhysicsStateEventFields.h"
+#include "../manifest/codec/PhysicsStateConstructionManifestCodec.h"
 
 namespace Horo::Physics::StateDetail::ConstructionFields {
     template <class T> void Enum(Wire &wire, T &v) noexcept {

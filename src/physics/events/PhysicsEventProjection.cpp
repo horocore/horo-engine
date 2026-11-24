@@ -1,7 +1,7 @@
 #include "PhysicsEventProjection.h"
 
-#include "Horo/Physics/PhysicsErrors.h"
 #include "../model/diagnostics/PhysicsSaturatingAdd.h"
+#include "Horo/Physics/PhysicsErrors.h"
 
 #include <algorithm>
 #include <cmath>

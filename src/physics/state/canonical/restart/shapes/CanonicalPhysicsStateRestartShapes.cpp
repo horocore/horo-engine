@@ -1,8 +1,8 @@
 #include "CanonicalPhysicsStateRestartShapes.h"
 
+#include "../../../construction/storage/PhysicsStateConstructionNative.h"
 #include "../../geometry/CanonicalPhysicsStateShapeCreation.h"
 #include "../../geometry/CanonicalPhysicsStateShapeRecipe.h"
-#include "../../../construction/storage/PhysicsStateConstructionNative.h"
 
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 

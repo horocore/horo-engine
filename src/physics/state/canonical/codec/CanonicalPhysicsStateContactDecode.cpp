@@ -1,5 +1,5 @@
-#include "CanonicalPhysicsStateDecode.h"
 #include "../../validation/PhysicsStateValidationInternal.h"
+#include "CanonicalPhysicsStateDecode.h"
 
 #include <Jolt/Physics/Body/BodyPair.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>

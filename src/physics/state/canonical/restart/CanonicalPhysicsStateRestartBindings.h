@@ -1,7 +1,7 @@
 #pragma once
-#include "shapes/CanonicalPhysicsStateRestartShapes.h"
-#include "Horo/Physics/PhysicsStateConstructionManifest.h"
 #include "../../restart/PhysicsStateRestartTypes.h"
+#include "Horo/Physics/PhysicsStateConstructionManifest.h"
+#include "shapes/CanonicalPhysicsStateRestartShapes.h"
 
 namespace Horo::Physics::Detail {
     [[nodiscard]] Result<void> RegisterCanonicalRestartSceneShapes(CanonicalWorld &, PhysicsWorldId,

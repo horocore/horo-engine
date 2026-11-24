@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../topology/CanonicalPhysicsStateTopology.h"
 #include "../../solver/PhysicsStateSolverStorage.h"
+#include "../topology/CanonicalPhysicsStateTopology.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Captures current last-applied policy intent from actual Horo body

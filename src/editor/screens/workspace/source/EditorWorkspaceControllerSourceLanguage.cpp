@@ -1,7 +1,7 @@
 #include "../EditorWorkspaceController.h"
+#include "../docking/WorkspacePathText.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ScriptModuleHostServices.h"
-#include "../docking/WorkspacePathText.h"
 #include "editor/source_editor/HoroScriptModuleLanguage.h"
 
 namespace Horo::Editor {

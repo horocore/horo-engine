@@ -1,8 +1,8 @@
-#include "../memory/CanonicalPhysicsStateAccounting.h"
 #include "../backend/CanonicalPhysicsStateBackendInternal.h"
 #include "../clone/CanonicalPhysicsStateCloneInternal.h"
-#include "../memory/CanonicalPhysicsStateColdCost.h"
 #include "../construction/CanonicalPhysicsStateConstructionExport.h"
+#include "../memory/CanonicalPhysicsStateAccounting.h"
+#include "../memory/CanonicalPhysicsStateColdCost.h"
 
 #include <algorithm>
 #include <array>

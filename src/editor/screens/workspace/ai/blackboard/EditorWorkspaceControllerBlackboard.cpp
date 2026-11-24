@@ -1,3 +1,4 @@
+#include "../../docking/WorkspacePathText.h"
 #include "../AuthoredAiSourceInventory.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
@@ -6,7 +7,6 @@
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Foundation/Logging/Logger.h"
-#include "../../docking/WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>

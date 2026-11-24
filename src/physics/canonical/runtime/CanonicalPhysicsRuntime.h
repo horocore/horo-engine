@@ -4,6 +4,7 @@
  * @brief Native-free declarations for private canonical process and world ownership.
  */
 
+#include "../../state/construction/storage/PhysicsStateConstructionStorage.h"
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
 #include "Horo/Physics/PhysicsEvents.h"
@@ -11,7 +12,6 @@
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
-#include "../../state/construction/storage/PhysicsStateConstructionStorage.h"
 
 #include <cstddef>
 #include <cstdint>

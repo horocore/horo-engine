@@ -1,5 +1,5 @@
-#include "../backend/CanonicalPhysicsStateBackendInternal.h"
 #include "../../solver/PhysicsStateSolverCodecInternal.h"
+#include "../backend/CanonicalPhysicsStateBackendInternal.h"
 
 namespace Horo::Physics::Detail {
     /** @copydoc CanonicalPhysicsStateWorkspace::Impl::PrepareBuffers */

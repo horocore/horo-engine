@@ -1,11 +1,11 @@
 #pragma once
 
-#include "CanonicalPhysicsStateBackend.h"
+#include "../../construction/manifest/PhysicsStateConstructionManifestOwner.h"
 #include "../binding/CanonicalPhysicsStateBindingInternal.h"
 #include "../build/CanonicalPhysicsStateCapture.h"
 #include "../build/CanonicalPhysicsStateRestore.h"
 #include "../topology/CanonicalPhysicsStateTopologyMap.h"
-#include "../../construction/manifest/PhysicsStateConstructionManifestOwner.h"
+#include "CanonicalPhysicsStateBackend.h"
 
 namespace Horo::Physics::Detail {
     /** @brief Real retained native resources. Outer Physics runtime lease keeps

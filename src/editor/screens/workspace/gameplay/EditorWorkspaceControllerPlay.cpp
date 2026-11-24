@@ -1,9 +1,9 @@
+#include "../docking/WorkspacePathText.h"
 #include "EditorPlayXrHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/Logging/Logger.h"
-#include "../docking/WorkspacePathText.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 

@@ -1,5 +1,5 @@
-#include "Horo/Physics/PhysicsErrors.h"
 #include "../state/validation/PhysicsStateSurfaceBinding.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "PhysicsWorldStateEvents.h"
 
 #include <algorithm>

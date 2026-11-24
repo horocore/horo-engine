@@ -1,9 +1,9 @@
 #pragma once
 
+#include "../envelope/PhysicsStateHashInternal.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsStateConstructionTypes.h"
-#include "../envelope/PhysicsStateHashInternal.h"
 
 #include <algorithm>
 #include <optional>

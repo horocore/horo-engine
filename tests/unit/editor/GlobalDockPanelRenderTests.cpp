@@ -1,4 +1,3 @@
-#include "assets/browser/ContentBrowserModel.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -11,6 +10,7 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "OwnedTestDirectory.h"
 #include "WorldCompositionSourceTestSupport.h"
+#include "assets/browser/ContentBrowserModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/docking/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"

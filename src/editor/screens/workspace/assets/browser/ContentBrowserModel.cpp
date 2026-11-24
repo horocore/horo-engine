@@ -1,9 +1,9 @@
 #include "ContentBrowserModel.h"
 
+#include "../../docking/WorkspacePathText.h"
 #include "Horo/Assets/AssetImportMetadata.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
-#include "../../docking/WorkspacePathText.h"
 
 #include <algorithm>
 #include <cctype>

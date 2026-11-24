@@ -1,16 +1,16 @@
 #pragma once
 
-#include "ai/decisions/panels/DecisionTaskPalette.h"
-#include "extensions/activity/ExtensionActivityView.h"
-#include "extensions/ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
-#include "ui_canvas/UiCanvasDocumentView.h"
-#include "layout/WorkspaceSplitterInteraction.h"
-#include "editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.h"
+#include "ai/decisions/panels/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.h"
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceEditorWidget.h"
+#include "extensions/ExtensionRecoveryView.h"
+#include "extensions/activity/ExtensionActivityView.h"
+#include "layout/WorkspaceSplitterInteraction.h"
+#include "ui_canvas/UiCanvasDocumentView.h"
 
 #include <array>
 #include <cstdint>

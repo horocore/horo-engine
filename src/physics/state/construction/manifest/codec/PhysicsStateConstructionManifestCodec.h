@@ -1,6 +1,6 @@
 #pragma once
-#include "Horo/Physics/PhysicsStateConstructionManifest.h"
 #include "../../codec/PhysicsStateConstructionCodec.h"
+#include "Horo/Physics/PhysicsStateConstructionManifest.h"
 
 namespace Horo::Physics::StateDetail {
     /** @brief Fixed scalar extents, not sizeof(native/C++ records). Each scalar is emitted by the canonical field functions. */

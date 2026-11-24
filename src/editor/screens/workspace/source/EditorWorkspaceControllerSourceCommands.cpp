@@ -1,8 +1,8 @@
+#include "../EditorWorkspaceController.h"
 #include "../commands/EditorBuildCommandEndpoint.h"
 #include "../commands/EditorInspectionCommandEndpoint.h"
-#include "EditorSourcePresentation.h"
 #include "../commands/EditorTestCommandEndpoint.h"
-#include "../EditorWorkspaceController.h"
+#include "EditorSourcePresentation.h"
 
 #include <algorithm>
 

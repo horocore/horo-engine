@@ -96,7 +96,8 @@ namespace Horo::Application {
         const auto refused = Terminal(*harness.service, harness.operations, accepted.Value());
         REQUIRE(refused.state == OperationState::Failed);
         REQUIRE(refused.error);
-        CHECK(ErrorChainContains(*refused.error, NavigationErrors::OperationUnsupported.domain, NavigationErrors::OperationUnsupported.code));
+        CHECK(
+            ErrorChainContains(*refused.error, NavigationErrors::OperationUnsupported.domain, NavigationErrors::OperationUnsupported.code));
         CHECK(harness.builder->builds.load() == builds);
         CHECK(files->loads == loads);
         CHECK(files->stores == stores);

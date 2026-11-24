@@ -1,8 +1,5 @@
 #pragma once
 
-#include "inspection/EditorDebugCapture.h"
-#include "screen/EditorWorkspaceHostServices.h"
-#include "ai/queries/preview/EnvironmentQueryPreviewNavigation.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/GameplayTestService.h"
@@ -26,6 +23,7 @@
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "Horo/Foundation/Sha256.h"
+#include "ai/queries/preview/EnvironmentQueryPreviewNavigation.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -38,14 +36,16 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
-#include "editor/screens/workspace/ai/decisions/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/ai/decisions/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/ai/queries/EnvironmentQueryWorkspaceSource.h"
 #include "editor/screens/workspace/pcg/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 #include "editor/source_editor/SourceReviewApplication.h"
+#include "inspection/EditorDebugCapture.h"
+#include "screen/EditorWorkspaceHostServices.h"
 #include "terrain/TerrainAssetCreation.h"
 
 #include <cstddef>

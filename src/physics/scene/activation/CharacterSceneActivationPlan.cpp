@@ -1,8 +1,8 @@
+#include "../../PhysicsSceneActivationInternal.h"
 #include "../../character/query/CharacterSurfaceInternal.h"
 #include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
-#include "../../PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
 #include <array>

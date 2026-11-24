@@ -1,6 +1,6 @@
 #include "AllocationProbe.h"
-#include "state/construction/manifest/codec/PhysicsStateConstructionManifestCodec.h"
 #include "state/construction/manifest/PhysicsStateConstructionManifestOwner.h"
+#include "state/construction/manifest/codec/PhysicsStateConstructionManifestCodec.h"
 
 #include <algorithm>
 #include <array>

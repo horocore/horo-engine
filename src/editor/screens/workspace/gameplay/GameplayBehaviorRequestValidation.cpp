@@ -1,7 +1,7 @@
 #include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
-#include "Horo/Foundation/Utf8.h"
 #include "../docking/WorkspacePathText.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <array>

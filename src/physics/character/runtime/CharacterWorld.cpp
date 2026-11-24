@@ -1,5 +1,5 @@
-#include "../query/CharacterSurfaceInternal.h"
 #include "../movement/CharacterWorldPlacementInternal.h"
+#include "../query/CharacterSurfaceInternal.h"
 
 #include <cmath>
 

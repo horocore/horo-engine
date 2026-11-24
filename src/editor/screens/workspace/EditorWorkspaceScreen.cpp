@@ -1,6 +1,5 @@
 #include "EditorWorkspaceScreen.h"
 
-#include "screen/EditorWorkspaceInputRouting.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -12,6 +11,7 @@
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
+#include "screen/EditorWorkspaceInputRouting.h"
 
 #include <algorithm>
 #include <imgui.h>

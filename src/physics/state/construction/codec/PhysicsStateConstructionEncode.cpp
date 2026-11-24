@@ -1,6 +1,6 @@
+#include "../../validation/PhysicsStateValidationInternal.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "PhysicsStateConstructionCodec.h"
-#include "../../validation/PhysicsStateValidationInternal.h"
 
 #include <algorithm>
 

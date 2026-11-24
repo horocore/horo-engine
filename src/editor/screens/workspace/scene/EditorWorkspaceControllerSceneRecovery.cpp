@@ -1,5 +1,5 @@
-#include "Horo/Foundation/Logging/Logger.h"
 #include "../docking/WorkspacePathText.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 

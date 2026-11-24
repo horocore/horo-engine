@@ -277,6 +277,7 @@ namespace Horo::Agent {
                 return {};
             }
         };
+
         LateModel model;
         model.revokeBeforeText = GENERATE(false, true);
         const auto project = Project();

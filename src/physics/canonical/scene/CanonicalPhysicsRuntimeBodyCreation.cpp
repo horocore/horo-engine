@@ -1,8 +1,8 @@
 #include "../../state/canonical/binding/CanonicalPhysicsStateBodyControl.h"
 #include "../../state/canonical/geometry/CanonicalPhysicsStateShapeCreation.h"
 #include "../../state/canonical/geometry/CanonicalPhysicsStateShapeRecipe.h"
-#include "CanonicalSceneBodyBatchState.h"
 #include "../../state/construction/storage/PhysicsStateConstructionNative.h"
+#include "CanonicalSceneBodyBatchState.h"
 
 namespace Horo::Physics::Detail {
     namespace {

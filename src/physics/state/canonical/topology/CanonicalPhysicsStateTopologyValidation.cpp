@@ -1,5 +1,5 @@
-#include "CanonicalPhysicsStateTopology.h"
 #include "../../validation/PhysicsStateValidationInternal.h"
+#include "CanonicalPhysicsStateTopology.h"
 
 #include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
