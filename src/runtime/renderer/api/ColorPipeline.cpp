@@ -123,6 +123,20 @@ namespace Horo::Render {
                 bytes += look->PayloadBytes();
             return bytes <= maximum;
         }
+
+        /** @brief Validates the optional desired preferences and skips an exact identity transform. */
+        Result<std::optional<Accessibility::ColorMatrix>> PrepareDisplayAccessibility(
+            const std::optional<Accessibility::ColorblindSettings> &settings) {
+            using Return = Result<std::optional<Accessibility::ColorMatrix>>;
+            if (!settings.has_value())
+                return Return::Success(std::nullopt);
+            const auto matrix = Accessibility::PrepareColorAccessibilityTransform(*settings);
+            if (matrix.HasError())
+                return Return::Failure(matrix.ErrorValue());
+            if (matrix.Value().values == Accessibility::ColorMatrix{}.values)
+                return Return::Success(std::nullopt);
+            return Return::Success(matrix.Value());
+        }
     }  // namespace
 
     /** @copydoc ColorTransformSelection::ColorTransformSelection */
@@ -161,11 +175,17 @@ namespace Horo::Render {
     }
 
     /** @copydoc ColorPipelinePlan::ColorPipelinePlan */
-    ColorPipelinePlan::ColorPipelinePlan(ColorPipelineRequest request) : request_(std::move(request)) {}
+    ColorPipelinePlan::ColorPipelinePlan(ColorPipelineRequest request, const std::optional<Accessibility::ColorMatrix> &displayTransform)
+        : request_(std::move(request)), displayTransform_(displayTransform) {}
 
     /** @copydoc ColorPipelinePlan::Inputs */
     const ColorPipelineRequest &ColorPipelinePlan::Inputs() const noexcept {
         return request_;
+    }
+
+    /** @copydoc ColorPipelinePlan::DisplayAccessibilityTransform */
+    const std::optional<Accessibility::ColorMatrix> &ColorPipelinePlan::DisplayAccessibilityTransform() const noexcept {
+        return displayTransform_;
     }
 
     /** @copydoc PrepareColorPipeline */
@@ -174,13 +194,16 @@ namespace Horo::Render {
             return Result<ColorPipelinePlan>::Failure(valid.ErrorValue());
         if (auto valid = ValidateExposure(request); valid.HasError())
             return Result<ColorPipelinePlan>::Failure(valid.ErrorValue());
+        const auto displayTransform = PrepareDisplayAccessibility(request.displayAccessibility);
+        if (displayTransform.HasError())
+            return Result<ColorPipelinePlan>::Failure(displayTransform.ErrorValue());
         if (auto selection = PrepareColorTransformSelection(request.outputTransform, request.lookMode, request.look, request.grading,
                                                             request.maximumTransformBytes);
             selection.HasError())
             return Result<ColorPipelinePlan>::Failure(selection.ErrorValue());
         if (request.cancellation.IsCancellationRequested())
             return Result<ColorPipelinePlan>::Failure(MakeError(ColorPipelineErrors::Cancelled));
-        return Result<ColorPipelinePlan>::Success(ColorPipelinePlan{request});
+        return Result<ColorPipelinePlan>::Success(ColorPipelinePlan{request, displayTransform.Value()});
     }
 
     namespace ColorPipelineErrors {

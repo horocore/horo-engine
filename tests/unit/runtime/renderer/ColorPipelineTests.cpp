@@ -1,5 +1,6 @@
 #include "ColorPipelineTestSupport.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <limits>
 
@@ -75,6 +76,85 @@ TEST_CASE("Color candidate pins immutable transforms and does not mutate source 
     request.generation = 999;
     CHECK(plan.Value().Inputs().generation == fixture.source.compatibility.colorGeneration);
     CHECK(plan.Value().Inputs().outputTransform == transform);
+}
+
+TEST_CASE("Color plans pin the final display-linear accessibility matrix", "[renderer][color][accessibility]") {
+    using Accessibility::ColorblindMode;
+
+    struct Reference final {
+        ColorblindMode mode;
+        std::array<float, 3> expected;
+    };
+
+    const auto reference = GENERATE(Reference{ColorblindMode::Protanopia, {0.43665975F, 0.36450770F, 0.13843580F}},
+                                    Reference{ColorblindMode::Deuteranopia, {0.50579020F, 0.42454255F, 0.15267815F}},
+                                    Reference{ColorblindMode::Tritanopia, {0.76241420F, 0.29695630F, 0.29063990F}});
+    ColorPipelineFixture fixture;
+    auto request = fixture.Request();
+    request.displayAccessibility = Accessibility::ColorblindSettings{.mode = reference.mode};
+    const auto plan = PrepareColorPipeline(request);
+    REQUIRE(plan.HasValue());
+    request.displayAccessibility.reset();
+
+    const auto &transform = plan.Value().DisplayAccessibilityTransform();
+    REQUIRE(transform.has_value());
+    const auto &matrix = transform->values;
+    constexpr std::array composed{0.65F, 0.35F, 0.15F};
+    for (std::size_t channel = 0; channel < composed.size(); ++channel) {
+        const auto row = channel * 3;
+        const float actual = matrix[row] * composed[0] + matrix[row + 1] * composed[1] + matrix[row + 2] * composed[2];
+        CHECK(actual == Catch::Approx(reference.expected[channel]).margin(1.0e-6));
+    }
+    CHECK(plan.Value().Inputs().sceneColor.representation == PostProcessRepresentation::UnexposedAcesCg);
+}
+
+TEST_CASE("Display accessibility bypasses exact identity only after validating settings", "[renderer][color][accessibility]") {
+    using Accessibility::ColorblindMode;
+    ColorPipelineFixture fixture;
+    auto request = fixture.Request();
+    SECTION("unset preference") {
+        CHECK_FALSE(request.displayAccessibility.has_value());
+    }
+    SECTION("none") {
+        request.displayAccessibility = Accessibility::ColorblindSettings{};
+    }
+    SECTION("zero severity") {
+        request.displayAccessibility = Accessibility::ColorblindSettings{.mode = ColorblindMode::Tritanopia, .severity = 0};
+    }
+    SECTION("custom identity") {
+        request.displayAccessibility = Accessibility::ColorblindSettings{.mode = ColorblindMode::CustomMatrix};
+    }
+    const auto plan = PrepareColorPipeline(request);
+    REQUIRE(plan.HasValue());
+    CHECK_FALSE(plan.Value().DisplayAccessibilityTransform().has_value());
+}
+
+TEST_CASE("Color plans preserve signed custom coefficients and reject malformed replacements", "[renderer][color][accessibility]") {
+    using Accessibility::ColorblindMode;
+    ColorPipelineFixture fixture;
+    auto request = fixture.Request();
+    request.displayAccessibility =
+        Accessibility::ColorblindSettings{.mode = ColorblindMode::CustomMatrix, .severity = 0.5F, .custom = {{1, -2, 0, 1, 2, 0, 0, 0, 1}}};
+    const auto accepted = PrepareColorPipeline(request);
+    REQUIRE(accepted.HasValue());
+    REQUIRE(accepted.Value().DisplayAccessibilityTransform().has_value());
+    const std::array expected{1.0F, -1.0F, 0.0F, 0.5F, 1.5F, 0.0F, 0.0F, 0.0F, 1.0F};
+    CHECK(accepted.Value().DisplayAccessibilityTransform()->values == expected);
+
+    SECTION("unknown mode") {
+        request.displayAccessibility->mode = static_cast<ColorblindMode>(255);
+    }
+    SECTION("nonfinite severity") {
+        request.displayAccessibility->severity = std::numeric_limits<float>::quiet_NaN();
+    }
+    SECTION("invalid custom coefficients are refused even in bypass") {
+        request.displayAccessibility->mode = ColorblindMode::None;
+        request.displayAccessibility->custom.values[0] = 4.01F;
+    }
+    const auto rejected = PrepareColorPipeline(request);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == Accessibility::VisualAccessibilityErrors::InvalidSettings.code.Value());
+    CHECK(accepted.Value().DisplayAccessibilityTransform()->values == expected);
 }
 
 TEST_CASE("Color admission rejects encoded low precision or foreign scene input", "[renderer][color]") {

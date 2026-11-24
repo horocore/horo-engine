@@ -467,6 +467,13 @@ transfer encoding. Creative look/grading is step 3 and is not that pass.
 Encoding occurs exactly once. Scene-linear captures and display screenshots are
 separate typed products with their color-pipeline metadata.
 
+The SDR plan accepts desired color settings as part of its captured settings
+generation. Preparation validates the settings and pins the row-major Rec.709
+matrix separately from cooked scene/output transforms. An exact identity
+matrix skips the accessibility stage. A malformed preference rejects the
+candidate with the visual accessibility error, leaving an already published
+plan unchanged.
+
 Changing exposure/color/output conventions invalidates or explicitly rescales
 dependent histories. SDR/HDR or display transitions stage a new plan and publish
 at `CommandThreadPolicy::RenderSafePoint`; scene shading remains ACEScg. Missing transforms, invalid

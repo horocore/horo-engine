@@ -3138,7 +3138,7 @@ target_include_directories(HoroRenderApi
 target_include_directories(HoroRenderApi PRIVATE
         $<TARGET_PROPERTY:HoroFoundationJsonInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 add_dependencies(HoroRenderApi HoroFoundationJsonInternal)
-target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData
+target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData HoroEngine::VisualAccessibility
         PRIVATE nlohmann_json::nlohmann_json)
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
