@@ -1711,12 +1711,13 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     SECTION("Native Perception observes a peer while the same agent completes its Navigation query") {
         enablePerception = true;
     }
+    SECTION("The project can deny query inspection without disabling Perception or Navigation") {
+        enablePerception = true;
+        allowInspection = false;
+    }
 #if HORO_TEST_PHYSICS_NATIVE
     SECTION("Real Physics visibility eliminates the first reachable candidate") {
         mixed = true;
-    }
-    SECTION("A project can deny inspection while its query still runs") {
-        allowInspection = false;
     }
     using CollisionFixture = Horo::Application::CharacterSceneProductTest::Fixture;
     std::optional<CollisionFixture> collision;
