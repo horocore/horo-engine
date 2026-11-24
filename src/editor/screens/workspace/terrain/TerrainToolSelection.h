@@ -1,7 +1,7 @@
 #pragma once
 /** @file TerrainToolSelection.h @brief Owner-lane transient terrain palette and selection, exposed read-only during Draw. */
-#include "FoliagePaletteModel.h"
-#include "FoliageSelectionModel.h"
+#include "foliage/FoliagePaletteModel.h"
+#include "foliage/FoliageSelectionModel.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 
 namespace Horo::Editor {

@@ -1,5 +1,5 @@
 #include "../../EditorWorkspaceController.h"
-#include "../TerrainDocumentHost.h"
+#include "../document/TerrainDocumentHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>

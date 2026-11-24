@@ -1,7 +1,7 @@
 #include "Horo/Assets/AssetPreviewService.h"
 #include "PrefabHierarchyTestSupport.h"
 #include "editor/screens/workspace/assets/browser/ContentBrowserModel.h"
-#include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
+#include "editor/screens/workspace/prefab/assets/PrefabAssetPreview.h"
 
 #include <algorithm>
 #include <atomic>

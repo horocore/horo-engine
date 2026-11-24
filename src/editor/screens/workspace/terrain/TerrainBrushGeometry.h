@@ -1,6 +1,6 @@
 #pragma once
 /** @file TerrainBrushGeometry.h @brief Private shared bounded source-grid stroke admission. */
-#include "TerrainSculptProducer.h"
+#include "brushes/TerrainSculptProducer.h"
 
 namespace Horo::Editor {
     /** @brief Exact detached source-grid footprint, admitted before channel/history allocation. */

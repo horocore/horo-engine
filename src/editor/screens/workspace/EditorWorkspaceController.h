@@ -40,13 +40,13 @@
 #include "editor/screens/workspace/ai/decisions/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/ai/queries/EnvironmentQueryWorkspaceSource.h"
 #include "editor/screens/workspace/pcg/PCGPreviewWorkspace.h"
-#include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
-#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "editor/screens/workspace/prefab/assets/PrefabApplyTransaction.h"
+#include "editor/screens/workspace/prefab/document/PrefabDocumentSession.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.h"
 #include "editor/source_editor/SourceReviewApplication.h"
 #include "inspection/EditorDebugCapture.h"
 #include "screen/EditorWorkspaceHostServices.h"
-#include "terrain/TerrainAssetCreation.h"
+#include "terrain/assets/TerrainAssetCreation.h"
 
 #include <cstddef>
 #include <cstdint>

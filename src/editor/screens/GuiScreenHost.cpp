@@ -47,7 +47,7 @@
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
-#include "workspace/terrain/TerrainAssetFormat.h"
+#include "workspace/terrain/assets/TerrainAssetFormat.h"
 
 #include <algorithm>
 #include <array>

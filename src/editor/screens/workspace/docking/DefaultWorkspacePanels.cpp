@@ -13,7 +13,7 @@
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 #include "editor/screens/workspace/pcg/PCGWorkspace.h"
-#include "editor/screens/workspace/terrain/FoliagePaletteTab.h"
+#include "editor/screens/workspace/terrain/foliage/FoliagePaletteTab.h"
 
 namespace Horo::Editor {
     /** @copydoc RegisterNavigationWorkspacePanel */

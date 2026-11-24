@@ -2,7 +2,7 @@
 #include "Horo/Scene/SceneSource.h"
 #include "NativePublicationFiles.h"
 #include "PrefabDocumentSessionTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
+#include "editor/screens/workspace/prefab/assets/PrefabApplyTransaction.h"
 
 #include <algorithm>
 #include <array>

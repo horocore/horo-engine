@@ -1,5 +1,5 @@
 #include "../../EditorWorkspaceView.h"
-#include "../TerrainDocumentHost.h"
+#include "../document/TerrainDocumentHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 

@@ -1,0 +1,280 @@
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserActions.h"
+
+#include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/ai/AiAssetPresentation.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <filesystem>
+#include <ranges>
+#include <string>
+
+namespace Horo::Editor {
+    namespace {
+        /** @brief Offers bounded workspace history without resolving paths or reading metadata in the UI. */
+        void DrawRecentAiAssets(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command) {
+            if (viewModel.recentAiAssets.empty() ||
+                !Ui::BeginContextSubmenu(AssetBrowserPane::kTextScope.Text(context.localization, "action.recent_ai").c_str(),
+                                         context.theme.fonts, "location.history"))
+                return;
+            for (const auto &asset : viewModel.recentAiAssets) {
+                const auto *presentation = FindAiAssetPresentation(asset.type.Value());
+                if (!presentation)
+                    continue;
+                const std::string label = asset.path + "###recent_ai_" + asset.asset.ToString();
+                if (Ui::ContextMenuItem(label.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal,
+                                        Ui::UiIconRegistry::Token(presentation->icon), asset.available))
+                    command = {.command = EditorWorkspaceViewCommand::OpenRecentAiAsset, .recentAiAsset = asset.asset};
+            }
+            Ui::EndContextSubmenu();
+        }
+
+        void DrawPasteAction(const std::filesystem::path &destination, const ContentBrowserClipboardMode clipboardMode,
+                             const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
+            const ILocalizationService &localization = context.localization;
+            ImGui::BeginDisabled(clipboardMode == ContentBrowserClipboardMode::None);
+            const bool activated =
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope
+                                        .Text(localization,
+                                              clipboardMode == ContentBrowserClipboardMode::Move ? "action.move_here" : "action.paste_here")
+                                        .c_str(),
+                                    "Ctrl+V", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.paste");
+            ImGui::EndDisabled();
+            if (activated)
+                command = AssetBrowserInteractionSession::Paste(destination.string());
+        }
+
+        void DrawAssetClipboardActions(const ContentBrowserEntry &entry, const EditorGuiContext &context,
+                                       EditorWorkspaceViewCommandData &command) {
+            using enum Ui::ContextMenuItemTone;
+            const ILocalizationService &localization = context.localization;
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.duplicate").c_str(), "Ctrl+D",
+                                    context.theme.fonts, Normal, "action.duplicate"))
+                command = AssetBrowserInteractionSession::Duplicate(entry.absolutePath);
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.copy").c_str(), "Ctrl+C", context.theme.fonts,
+                                    Normal, "action.copy"))
+                command = AssetBrowserInteractionSession::Copy(entry.absolutePath);
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.cut").c_str(), "Ctrl+X", context.theme.fonts,
+                                    Normal, "action.cut"))
+                command = AssetBrowserInteractionSession::Cut(entry.absolutePath);
+        }
+
+        void DrawDirectoryActions(const ContentBrowserEntry &entry, const EditorWorkspaceViewModel &viewModel,
+                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            DrawPasteAction(entry.absolutePath, viewModel.contentBrowserClipboard.mode, context, command);
+            if (const ILocalizationService &localization = context.localization;
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.import_here").c_str(), nullptr,
+                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.import"))
+                command = AssetBrowserInteractionSession::ImportHere(entry.absolutePath);
+            Ui::ContextMenuSeparator();
+        }
+
+        void DrawAssetEntrySpecificActions(const ContentBrowserEntry &entry, EditorWorkspaceViewCommandData &command,
+                                           const EditorGuiContext &context) {
+            if (entry.kind != ContentBrowserEntryKind::Asset)
+                return;
+            const ILocalizationService &localization = context.localization;
+            if (std::filesystem::path{entry.absolutePath}.extension() == ".horo_script" &&
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.open_external_ide").c_str(), nullptr,
+                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.open")) {
+                command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+                command.sourceOpenRequest = SourceOpenRequest{
+                    .path = entry.absolutePath,
+                    .origin = SourceOpenOrigin::AssetActivation,
+                    .mode = SourceOpenMode::AllowExternalFallback,
+                };
+            }
+            ImGui::BeginDisabled(!entry.canReimport);
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.reimport").c_str(), nullptr,
+                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.refresh"))
+                command = AssetBrowserInteractionSession::Reimport(entry.absolutePath);
+            ImGui::EndDisabled();
+        }
+    }  // namespace
+
+    /** @copydoc DrawAssetBrowserBackgroundActions */
+    void DrawAssetBrowserBackgroundActions(const EditorWorkspaceViewModel &viewModel, AssetBrowserInteractionSession &interactionSession,
+                                           EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        const ILocalizationService &localization = context.localization;
+        const auto &directory = viewModel.contentBrowser;
+        const bool canCreateQuery = viewModel.environmentQueryCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        const bool canCreateBlackboard = viewModel.blackboardCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        const bool canCreateStateMachine = canCreateBlackboard && !viewModel.decisionSchemaChoices.empty();
+        constexpr std::string_view createMachineAction = "action.create_state_machine";
+        constexpr std::string_view createBlackboardAction = "action.create_blackboard";
+        constexpr std::string_view createQueryAction = "action.create_environment_query";
+        const bool canCreateTask = canCreateStateMachine && !viewModel.decisionTaskChoices.empty();
+        constexpr std::string_view createTreeAction = "action.create_behavior_tree";
+        constexpr std::string_view createUtilityAction = "action.create_utility";
+        constexpr std::array actionKeys{"action.paste_here",
+                                        "action.move_here",
+                                        "action.create_folder",
+                                        createBlackboardAction.data(),
+                                        createQueryAction.data(),
+                                        createMachineAction.data(),
+                                        createTreeAction.data(),
+                                        createUtilityAction.data(),
+                                        "action.create_lua_behavior",
+                                        "action.create_native_behavior",
+                                        "action.import_here",
+                                        "action.refresh",
+                                        "action.recent_ai"};
+        float widestLabel = 0.0F;
+        for (const char *key : actionKeys) {
+            if (viewModel.recentAiAssets.empty() && std::string_view{key} == "action.recent_ai")
+                continue;
+            if ((!canCreateQuery && key == createQueryAction) || (!canCreateBlackboard && key == createBlackboardAction) ||
+                (!canCreateStateMachine && key == createMachineAction) ||
+                (!canCreateTask && (key == createTreeAction || key == createUtilityAction)))
+                continue;
+            const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
+            widestLabel =
+                std::max(widestLabel, context.theme.fonts.sans->CalcTextSizeA(Theme::TextPx::Label(), FLT_MAX, 0.0F, label.c_str()).x);
+        }
+        const float width =
+            std::clamp(widestLabel + Ui::ScaledLayoutValue(64.0F), Ui::ScaledLayoutValue(176.0F), Ui::ScaledLayoutValue(340.0F));
+        ImGui::SetNextWindowSize({width, 0.0F});
+        if (!Ui::BeginContextWindowMenu("##ContentBrowserBackgroundMenu"))
+            return;
+
+        DrawPasteAction(directory.absoluteCurrentPath, viewModel.contentBrowserClipboard.mode, context, command);
+        DrawRecentAiAssets(viewModel, context, command);
+        Ui::ContextMenuSeparator();
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_folder") +
+                                 "###content_browser_action_create_folder")
+                                    .c_str(),
+                                nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateFolder();
+        }
+        if (canCreateBlackboard && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createBlackboardAction) +
+                                                        "###content_browser_create_blackboard")
+                                                           .c_str(),
+                                                       nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateBlackboard(directory.absoluteCurrentPath);
+        }
+        if (canCreateStateMachine && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createMachineAction) +
+                                                          "###content_browser_create_state_machine")
+                                                             .c_str(),
+                                                         nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateStateMachine(directory.absoluteCurrentPath);
+        }
+        if (canCreateTask) {
+            const auto choice = [&](std::string_view action, AI::DecisionPlanKind kind) {
+                if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, action).c_str(), nullptr, context.theme.fonts,
+                                        Ui::ContextMenuItemTone::Normal, "action.create"))
+                    interactionSession.OpenCreateTaskDecision(directory.absoluteCurrentPath, kind, viewModel.availableBehaviorsRevision);
+            };
+            choice(createTreeAction, AI::DecisionPlanKind::BehaviorTree);
+            choice(createUtilityAction, AI::DecisionPlanKind::Utility);
+        }
+        if (canCreateQuery && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createQueryAction) +
+                                                   "###content_browser_create_environment_query")
+                                                      .c_str(),
+                                                  nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateQuery(directory.absoluteCurrentPath);
+        }
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_lua_behavior") +
+                                 "###content_browser_create_lua_behavior")
+                                    .c_str(),
+                                nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create_lua_behavior")) {
+            command.command = EditorWorkspaceViewCommand::CreateLuaBehavior;
+            command.stringPayload = directory.absoluteCurrentPath;
+        }
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_native_behavior") +
+                                 "###content_browser_create_native_behavior")
+                                    .c_str(),
+                                nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create_native_behavior")) {
+            command.command = EditorWorkspaceViewCommand::CreateNativeBehavior;
+            command.stringPayload = directory.absoluteCurrentPath;
+        }
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.import_here").c_str(), nullptr, context.theme.fonts,
+                                Ui::ContextMenuItemTone::Normal, "action.import")) {
+            command = AssetBrowserInteractionSession::ImportHere(directory.absoluteCurrentPath);
+        }
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.refresh").c_str(), nullptr, context.theme.fonts,
+                                Ui::ContextMenuItemTone::Normal, "action.refresh")) {
+            command = AssetBrowserInteractionSession::Refresh();
+        }
+        Ui::EndContextMenu();
+    }
+
+    /** @copydoc DrawAssetBrowserEntryActions */
+    void DrawAssetBrowserEntryActions(const ContentBrowserEntry &entry, const EditorWorkspaceViewModel &viewModel,
+                                      AssetBrowserInteractionSession &interactionSession, EditorWorkspaceViewCommandData &command,
+                                      const EditorGuiContext &context) {
+        if (!Ui::BeginContextMenu("##ContentBrowserCardMenu"))
+            return;
+
+        if (entry.kind == ContentBrowserEntryKind::Asset) {
+            DrawAssetClipboardActions(entry, context, command);
+            Ui::ContextMenuSeparator();
+        } else {
+            DrawDirectoryActions(entry, viewModel, command, context);
+        }
+        const ILocalizationService &localization = context.localization;
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.rename") + "###content_browser_action_rename")
+                                    .c_str(),
+                                "F2", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.rename")) {
+            interactionSession.OpenRename(entry);
+        }
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.asset_info") +
+                                 "###content_browser_action_asset_info")
+                                    .c_str(),
+                                nullptr, context.theme.fonts)) {
+            interactionSession.OpenInfo(entry);
+        }
+        DrawAssetEntrySpecificActions(entry, command, context);
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.reveal").c_str(), nullptr, context.theme.fonts)) {
+            command = AssetBrowserInteractionSession::Reveal(entry.absolutePath);
+        }
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.copy_path").c_str(), nullptr,
+                                context.theme.fonts)) {
+            ImGui::SetClipboardText(entry.absolutePath.c_str());
+        }
+        Ui::ContextMenuSeparator();
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.delete") + "###content_browser_action_delete")
+                                    .c_str(),
+                                "Delete", context.theme.fonts, Ui::ContextMenuItemTone::Danger, "action.delete")) {
+            interactionSession.OpenDelete(entry);
+        }
+        Ui::EndContextMenu();
+    }
+
+    /** @copydoc HandleAssetBrowserShortcuts */
+    void HandleAssetBrowserShortcuts(const std::vector<std::size_t> &visibleEntries, const EditorWorkspaceViewModel &viewModel,
+                                     AssetBrowserInteractionSession &interactionSession, EditorWorkspaceViewCommandData &command) {
+        const ImGuiIO &io = ImGui::GetIO();
+        if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || io.WantTextInput || ImGui::IsAnyItemActive())
+            return;
+
+        const AssetBrowserInteractionState &state = interactionSession.State();
+        const ContentBrowserDirectory &directory = viewModel.contentBrowser;
+        const auto selected = std::ranges::find(visibleEntries, state.selectedAbsolutePath, [&directory](const std::size_t entryIndex) {
+            return directory.entries[entryIndex].absolutePath;
+        });
+        const bool selectedAsset = selected != visibleEntries.end() && directory.entries[*selected].kind == ContentBrowserEntryKind::Asset;
+        const bool commandModifier = io.KeyCtrl || io.KeySuper;
+        if (selected != visibleEntries.end() && ImGui::IsKeyPressed(ImGuiKey_F2))
+            interactionSession.OpenRename(directory.entries[*selected]);
+        else if (selected != visibleEntries.end() && ImGui::IsKeyPressed(ImGuiKey_Delete))
+            interactionSession.OpenDelete(directory.entries[*selected]);
+        else if (commandModifier && selectedAsset && ImGui::IsKeyPressed(ImGuiKey_D))
+            command = AssetBrowserInteractionSession::Duplicate(state.selectedAbsolutePath);
+        else if (commandModifier && selectedAsset && ImGui::IsKeyPressed(ImGuiKey_C))
+            command = AssetBrowserInteractionSession::Copy(state.selectedAbsolutePath);
+        else if (commandModifier && selectedAsset && ImGui::IsKeyPressed(ImGuiKey_X))
+            command = AssetBrowserInteractionSession::Cut(state.selectedAbsolutePath);
+        else if (commandModifier && ImGui::IsKeyPressed(ImGuiKey_V) &&
+                 viewModel.contentBrowserClipboard.mode != ContentBrowserClipboardMode::None)
+            command = AssetBrowserInteractionSession::Paste(directory.absoluteCurrentPath);
+        else if (ImGui::IsKeyPressed(ImGuiKey_Escape) && viewModel.contentBrowserClipboard.mode != ContentBrowserClipboardMode::None)
+            command = AssetBrowserInteractionSession::CancelClipboard();
+    }
+}  // namespace Horo::Editor

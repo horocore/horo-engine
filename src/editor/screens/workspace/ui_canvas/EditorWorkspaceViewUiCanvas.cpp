@@ -1,7 +1,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "UiCanvasDocumentView.h"
-#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiCanvasInspectorPanel.h"
 
 #include <algorithm>
 #include <array>

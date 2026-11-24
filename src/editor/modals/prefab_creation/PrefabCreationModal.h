@@ -2,7 +2,7 @@
 /** @file PrefabCreationModal.h @brief Transient filename/validation presentation for one captured subtree transaction. */
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
-#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/assets/PrefabCreation.h"
 
 #include <functional>
 

@@ -12,8 +12,8 @@
 #include "editor/screens/workspace/ai/decisions/panels/DecisionProblemsView.h"
 #include "editor/screens/workspace/ai/decisions/panels/DecisionTaskPalette.h"
 #include "editor/screens/workspace/ai/decisions/panels/DecisionTaskPropertiesView.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserDialogs.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
 #include "support/OwnedTestDirectory.h"
 

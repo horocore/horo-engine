@@ -1,4 +1,4 @@
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>

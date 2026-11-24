@@ -1,5 +1,5 @@
 #include "../../EditorWorkspaceController.h"
-#include "../TerrainDocumentHost.h"
+#include "../document/TerrainDocumentHost.h"
 #include "../TerrainToolSelection.h"
 
 #include <algorithm>

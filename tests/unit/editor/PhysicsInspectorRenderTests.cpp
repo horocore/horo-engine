@@ -2,7 +2,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
-#include "editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.h"
+#include "editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorWidgets.h"
 #include "editor/screens/workspace/panels/inspector/add_component/AddComponentMenu.h"
 
 #include <catch2/catch_approx.hpp>

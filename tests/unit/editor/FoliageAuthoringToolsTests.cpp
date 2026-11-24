@@ -1,6 +1,6 @@
 #include "../runtime/terrain/FoliageAuthoringTestSupport.h"
-#include "terrain/FoliagePaintProducer.h"
-#include "terrain/FoliageSelectionModel.h"
+#include "terrain/brushes/FoliagePaintProducer.h"
+#include "terrain/foliage/FoliageSelectionModel.h"
 
 #include <algorithm>
 #include <limits>

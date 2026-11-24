@@ -3,7 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "InspectorContributionView.h"
+#include "contributions/InspectorContributionView.h"
 #include "add_component/AddComponentMenu.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 

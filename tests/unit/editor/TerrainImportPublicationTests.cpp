@@ -2,7 +2,7 @@
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "NativePublicationFiles.h"
 #include "OwnedTestDirectory.h"
-#include "terrain/TerrainAssetFormat.h"
+#include "terrain/assets/TerrainAssetFormat.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <functional>

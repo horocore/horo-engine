@@ -10,11 +10,11 @@ Editable Scene state lives in the [editor document model](../../document/).
 | --- | --- |
 | Host composition, input routing, or project lifecycle | [Screen](screen/README.md) |
 | View command dispatch or admitted automation operations | [Commands](commands/README.md) |
-| Docked panels, geometry, or layout persistence | [Docking](docking/README.md), [layout](layout/README.md), [panels](panels/) |
+| Docked panels, geometry, or layout persistence | [Docking](docking/README.md), [layout](layout/README.md), [panel guides](panels/README.md) |
 | Scene objects, viewport interactions, or agent inspection | [Scene](scene/README.md), [viewport](viewport/README.md), [inspection](inspection/README.md) |
 | Asset drops, discovery, or source file workflows | [Assets](assets/README.md), [content browser](assets/browser/README.md), [source](source/README.md) |
 | AI graphs, blackboards, or environment queries | [AI authoring](ai/README.md) |
-| Prefabs, terrain, or world composition | [Prefab workspace](prefab/workspace/README.md), [terrain workspace](terrain/workspace/README.md), [world](world/README.md) |
+| Prefabs, terrain, or world composition | [Prefab](prefab/README.md), [terrain](terrain/README.md), [world](world/README.md) |
 | Specialized authoring tools | [Navigation](navigation/README.md), [PCG](pcg/README.md), [sequence](sequence/README.md), [UI canvas](ui_canvas/README.md) |
 | Play, project settings, or extension contributions | [Gameplay](gameplay/README.md), [project settings](project_settings/README.md), [extensions](extensions/README.md) |
 

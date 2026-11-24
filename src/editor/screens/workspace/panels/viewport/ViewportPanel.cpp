@@ -8,7 +8,7 @@
 #include "ViewportOverlay.h"
 #include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/assets/AssetSceneDrop.h"
-#include "editor/screens/workspace/terrain/TerrainViewportTool.h"
+#include "editor/screens/workspace/terrain/viewport/TerrainViewportTool.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
 #include <algorithm>

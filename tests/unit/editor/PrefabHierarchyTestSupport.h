@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SceneDocumentTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.h"
 
 #include <chrono>
 #include <fstream>

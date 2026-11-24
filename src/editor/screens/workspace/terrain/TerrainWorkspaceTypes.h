@@ -1,9 +1,9 @@
 #pragma once
 /** @file TerrainWorkspaceTypes.h @brief Private copied terrain document projections and complete revision-fenced intents. */
-#include "FoliagePaintProducer.h"
+#include "brushes/FoliagePaintProducer.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
-#include "TerrainPaintProducer.h"
-#include "TerrainSculptProducer.h"
+#include "brushes/TerrainPaintProducer.h"
+#include "brushes/TerrainSculptProducer.h"
 
 #include <array>
 

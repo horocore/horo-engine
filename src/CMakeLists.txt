@@ -3744,9 +3744,12 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 # Non-installed exact-header contract shared by pure editor model, host services and GUI adapters.
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
-file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
 foreach(header IN ITEMS
-        PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h PrefabAssetPreview.h)
+        hierarchy/PrefabHierarchyProjection.h
+        hierarchy/PrefabHierarchyCommand.h
+        hierarchy/PrefabHierarchySources.h
+        assets/PrefabCreation.h
+        assets/PrefabAssetPreview.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -3766,8 +3769,8 @@ add_library(HoroEditorModel STATIC
         editor/document/WorldLayerCommands.cpp
         editor/document/PartitionedWorldResidency.cpp
         editor/document/PartitionedWorldObjectInspection.cpp
-        editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
-        editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchyProjection.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
@@ -4029,9 +4032,8 @@ target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::Runt
 
 add_library(HoroPrefabDocumentSessionInternal INTERFACE)
 set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
-file(MAKE_DIRECTORY "${_horo_prefab_document_headers}/editor/screens/workspace/prefab")
-configure_file(editor/screens/workspace/prefab/PrefabDocumentSession.h
-    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/PrefabDocumentSession.h" COPYONLY)
+configure_file(editor/screens/workspace/prefab/document/PrefabDocumentSession.h
+    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/document/PrefabDocumentSession.h" COPYONLY)
 target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_INTERFACE:${_horo_prefab_document_headers}>")
 target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
 
@@ -4063,13 +4065,13 @@ add_library(HoroEditorServices STATIC
         editor/navigation/NavigationBakeWorkspace.cpp
         editor/document/WorkspaceReadSources.cpp
         editor/navigation/NavigationViewportSnapshot.cpp
-        editor/screens/workspace/prefab/PrefabHierarchySources.cpp
-        editor/screens/workspace/prefab/PrefabCreation.cpp
-        editor/screens/workspace/prefab/PrefabCreationPublication.cpp
-        editor/screens/workspace/prefab/PrefabApplyTransaction.cpp
-        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
-        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
-        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.cpp
+        editor/screens/workspace/prefab/assets/PrefabCreation.cpp
+        editor/screens/workspace/prefab/assets/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/assets/PrefabApplyTransaction.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/project/ProjectCollisionTemplate.cpp
         editor/physics/project/CollisionIdentityGeneration.cpp
@@ -4143,7 +4145,7 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/EditorPlaySessionControllerFixed.cpp
         editor/gameplay/EditorPlaySaveRetirement.cpp
         editor/screens/workspace/assets/browser/ContentBrowserModel.cpp
-        editor/screens/workspace/prefab/PrefabAssetPreview.cpp
+        editor/screens/workspace/prefab/assets/PrefabAssetPreview.cpp
         editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
@@ -4181,7 +4183,7 @@ add_library(HoroEngine::PCGSceneBake ALIAS HoroPCGSceneBake)
 target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
-target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/PrefabDocumentLayers.cpp)
+target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/document/PrefabDocumentLayers.cpp)
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings HoroEngine::PlatformServicesAuthoring)
@@ -4424,57 +4426,57 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabs.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrain.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceViewTerrain.cpp
-            editor/screens/workspace/terrain/TerrainSculptProducer.cpp
-            editor/screens/workspace/terrain/TerrainViewportPicking.cpp
-            editor/screens/workspace/terrain/TerrainAssetFormat.cpp
-            editor/screens/workspace/terrain/TerrainDocumentHost.cpp
-            editor/screens/workspace/terrain/TerrainDocumentResources.cpp
-            editor/screens/workspace/terrain/TerrainDocumentPublication.cpp
-            editor/screens/workspace/terrain/TerrainDocumentTools.cpp
-            editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+            editor/screens/workspace/terrain/brushes/TerrainSculptProducer.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportPicking.cpp
+            editor/screens/workspace/terrain/assets/TerrainAssetFormat.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentHost.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentResources.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentPublication.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentTools.cpp
+            editor/screens/workspace/terrain/brushes/TerrainPaintProducer.cpp
             editor/screens/workspace/terrain/TerrainBrushGeometry.cpp
-            editor/screens/workspace/terrain/FoliagePaintProducer.cpp
-            editor/screens/workspace/terrain/FoliagePaletteModel.cpp
-            editor/screens/workspace/terrain/FoliageSelectionModel.cpp
-            editor/screens/workspace/terrain/FoliagePaletteTab.cpp
-            editor/screens/workspace/terrain/TerrainViewportProjection.cpp
-            editor/screens/workspace/terrain/TerrainViewportToolGesture.cpp
-            editor/screens/workspace/terrain/TerrainViewportToolControls.cpp
+            editor/screens/workspace/terrain/brushes/FoliagePaintProducer.cpp
+            editor/screens/workspace/terrain/foliage/FoliagePaletteModel.cpp
+            editor/screens/workspace/terrain/foliage/FoliageSelectionModel.cpp
+            editor/screens/workspace/terrain/foliage/FoliagePaletteTab.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportProjection.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportToolGesture.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportToolControls.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainTools.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainCook.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainAssets.cpp
             editor/screens/workspace/terrain/workspace/EditorWorkspaceScreenTerrain.cpp
-            editor/screens/workspace/terrain/TerrainAssetCreationModal.cpp
-            editor/screens/workspace/terrain/TerrainViewportTool.cpp
-            editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
+            editor/screens/workspace/terrain/assets/TerrainAssetCreationModal.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportTool.cpp
+            editor/screens/workspace/panels/viewport/sources/ViewportTerrainSource.cpp
             editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabDragDrop.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabContext.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabRows.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyEditSession.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
-            editor/screens/workspace/panels/inspector/InspectorPrefabSelection.cpp
-            editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorCharacterEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorContributionView.cpp
-            editor/screens/workspace/panels/inspector/InspectorContributionProjection.cpp
-            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorPrefabSelection.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorEditSession.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorCharacterEditSession.cpp
+            editor/screens/workspace/panels/inspector/contributions/InspectorContributionView.cpp
+            editor/screens/workspace/panels/inspector/contributions/InspectorContributionProjection.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
-            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/component_fields/InspectorPanelComponentWidgets.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/navigation/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/navigation/InspectorPanelNavigation.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/add_component/AddComponentRegistry.cpp
             editor/screens/workspace/panels/inspector/add_component/BuiltinAddComponentDefinitions.cpp
             editor/screens/workspace/panels/inspector/add_component/AddComponentMenu.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
-            editor/screens/workspace/panels/inspector/PhysicsInspectorSession.cpp
-            editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.cpp
-            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsBody.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsCollider.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsConstraint.cpp
+            editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorAudioEditSession.cpp
+            editor/screens/workspace/panels/inspector/component_fields/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingAccessibility.cpp
             editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.cpp
@@ -4483,8 +4485,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/game/GameAgentInspection.cpp
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
-            editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
-            editor/screens/workspace/panels/viewport/WorldSourceShapeControls.cpp
+            editor/screens/workspace/panels/viewport/sources/WorldSourceViewportTool.cpp
+            editor/screens/workspace/panels/viewport/sources/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
             editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
@@ -4502,11 +4504,11 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/docking/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserActions.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserGrid.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserActions.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserDialogs.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.cpp
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.cpp
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/audio/GlobalDockAudioPane.cpp
@@ -4570,9 +4572,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/ai/blackboard/EditorWorkspaceControllerBlackboard.cpp
             editor/screens/workspace/ai/blackboard/EditorWorkspaceBlackboardRecovery.cpp
             editor/screens/workspace/pcg/EditorWorkspaceControllerPCG.cpp
-            editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
-            editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
-            editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorAuthoringWidgets.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiCanvasInspectorPanel.cpp
             editor/screens/workspace/ui_canvas/EditorWorkspaceViewUiCanvas.cpp
             editor/screens/workspace/ui_canvas/EditorWorkspaceControllerUiCanvas.cpp
             editor/screens/workspace/world/EditorWorkspaceControllerWorldComposition.cpp

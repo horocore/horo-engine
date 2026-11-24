@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Horo/Editor/Localization/LocalizedGui.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 
 struct ImVec2;
 

@@ -3,7 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "Horo/Extensions/EditorViewportHost.h"
-#include "WorldSourceViewportTool.h"
+#include "sources/WorldSourceViewportTool.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"

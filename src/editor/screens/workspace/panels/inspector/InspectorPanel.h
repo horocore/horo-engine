@@ -1,10 +1,10 @@
 #pragma once
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
-#include "NavigationInspectorSession.h"
+#include "navigation/NavigationInspectorSession.h"
 #include "add_component/AddComponentRegistry.h"
-#include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
-#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
+#include "editor/screens/workspace/panels/inspector/edits/InspectorEditSession.h"
+#include "editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.h"
 
 #include <imgui.h>
 #include <memory>

@@ -4,7 +4,7 @@
 #include "NativePublicationFiles.h"
 #include "PrefabHierarchyTestSupport.h"
 #include "animation/SceneAnimationFixture.h"
-#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/assets/PrefabCreation.h"
 
 #include <catch2/generators/catch_generators.hpp>
 

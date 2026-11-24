@@ -4,7 +4,7 @@
  */
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
-#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
+#include "editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.h"
 
 #include <array>
 #include <optional>

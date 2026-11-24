@@ -11,7 +11,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowserInternal.h"
 #include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
-#include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
+#include "editor/screens/workspace/prefab/assets/PrefabAssetPreview.h"
 
 #include <algorithm>
 #include <array>

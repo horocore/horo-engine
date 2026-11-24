@@ -3,9 +3,9 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
-#include "editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.h"
-#include "editor/screens/workspace/panels/inspector/UiInspectorWidgets.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiCanvasInspectorPanel.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorAuthoringWidgets.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorWidgets.h"
 #include "support/UiStyleWorkspaceFixture.h"
 
 #include <catch2/catch_test_macros.hpp>

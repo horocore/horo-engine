@@ -1,6 +1,6 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserGrid.h"
 
 namespace Horo::Editor {
     /** @copydoc AssetBrowserPane::Attach */

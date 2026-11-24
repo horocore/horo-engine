@@ -5,7 +5,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "editor/modals/extension_pages/EditorPageThemeCapture.h"
-#include "editor/screens/workspace/panels/inspector/InspectorContributionView.h"
+#include "editor/screens/workspace/panels/inspector/contributions/InspectorContributionView.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>

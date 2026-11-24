@@ -1,4 +1,4 @@
-#include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
+#include "editor/screens/workspace/panels/inspector/edits/InspectorEditSession.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>

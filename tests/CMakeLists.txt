@@ -2450,7 +2450,7 @@ add_test(NAME HoroTerrainAuthoringSourceCodecPublicConsumer COMMAND HoroTerrainA
 set_tests_properties(HoroTerrainAuthoringSourceCodecPublicConsumer PROPERTIES LABELS "unit;terrain;public_headers;headless")
 
 add_executable(HoroTerrainPaintProducerTests unit/editor/TerrainPaintProducerTests.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/brushes/TerrainPaintProducer.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp)
 target_compile_features(HoroTerrainPaintProducerTests PRIVATE cxx_std_20)
 target_include_directories(HoroTerrainPaintProducerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
@@ -2461,9 +2461,9 @@ add_executable(HoroFoliageAuthoringTests
         unit/runtime/terrain/FoliageAuthoringSourceTests.cpp
         unit/runtime/terrain/FoliageAuthoredPlacementCookTests.cpp
         unit/editor/FoliageAuthoringToolsTests.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliagePaintProducer.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliagePaletteModel.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliageSelectionModel.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/brushes/FoliagePaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/foliage/FoliagePaletteModel.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/foliage/FoliageSelectionModel.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp)
 target_compile_features(HoroFoliageAuthoringTests PRIVATE cxx_std_20)
 target_include_directories(HoroFoliageAuthoringTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
@@ -2521,8 +2521,8 @@ target_link_libraries(HoroDecisionNodeRegistrationTests PRIVATE HoroEngine::AI H
 horo_register_catch_test(HoroDecisionNodeRegistrationTests LABELS "unit;ai;headless")
 
 add_executable(HoroTerrainSculptProducerTests unit/editor/TerrainSculptProducerTests.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainViewportPicking.cpp)
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/brushes/TerrainSculptProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/viewport/TerrainViewportPicking.cpp)
 target_compile_features(HoroTerrainSculptProducerTests PRIVATE cxx_std_20)
 target_include_directories(HoroTerrainSculptProducerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
 target_link_libraries(HoroTerrainSculptProducerTests PRIVATE HoroEngine::TerrainAuthoring HoroEngine::Foundation)
@@ -2530,14 +2530,14 @@ horo_register_catch_test(HoroTerrainSculptProducerTests LABELS "unit;editor;terr
 
 add_executable(HoroTerrainAssetHostTests unit/editor/TerrainImportPublicationTests.cpp unit/editor/TerrainDocumentHostTests.cpp
         unit/editor/TerrainLayeredDocumentHostTests.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentHost.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentResources.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentPublication.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentTools.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/document/TerrainDocumentHost.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/document/TerrainDocumentResources.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/document/TerrainDocumentPublication.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/document/TerrainDocumentTools.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/brushes/TerrainPaintProducer.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainAssetFormat.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp)
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/assets/TerrainAssetFormat.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/brushes/TerrainSculptProducer.cpp)
 target_compile_features(HoroTerrainAssetHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroTerrainAssetHostTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
         ${CMAKE_CURRENT_SOURCE_DIR}/support)

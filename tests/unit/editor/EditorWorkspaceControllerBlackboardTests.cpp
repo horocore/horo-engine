@@ -22,7 +22,7 @@
 #include "editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/docking/WorkspacePathText.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <algorithm>

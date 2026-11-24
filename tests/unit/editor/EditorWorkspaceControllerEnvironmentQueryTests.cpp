@@ -10,7 +10,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ai/queries/preview/EnvironmentQueryPreviewPhysics.h"
 #include "editor/screens/workspace/docking/WorkspacePathText.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 
 #include <algorithm>
 #include <array>
