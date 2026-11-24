@@ -1434,6 +1434,11 @@ The LLM should choose strategy; the editor tool should execute the strategy.
 
 - Inline prompt context gathering must be incremental and bounded. Do not block
   the render thread on full-scene serialization.
+- An explicit viewport context request includes at most 16 selected objects.
+  Camera-only context skips authored transform lookup. When transforms are
+  requested, the workspace resolves the bounded selection in one pass over the
+  authored objects, preserves selection order, and revokes the snapshot when
+  the selection changes.
 - Viewport raycasts and neighborhood queries run through existing editor query
   services and must respect editor frame budget.
 - Agent-driven debug captures must be bounded by explicit target, time range,

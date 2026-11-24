@@ -7,6 +7,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Scene/SceneSource.h"
 #include "OwnedTestDirectory.h"
 #include "ProjectReplicationTestSupport.h"
 #include "editor/document/SceneDocumentPersistence.h"
@@ -590,6 +591,74 @@ namespace {
             REQUIRE(rejected.HasError());
             CHECK(rejected.ErrorValue().code.Value() == "object_unavailable");
         }
+    }
+
+    /** @brief Seeds a large authored scene in one load so repeated commands do not distort the capture workload. */
+    void PrepareInspectionScene(const std::filesystem::path &root, const std::size_t count) {
+        const auto path = root / "assets/scenes/main.horo";
+        PrepareEmptyDefaultScene(root, path);
+        std::vector<SceneSource::SceneObjectSnapshot> objects;
+        objects.reserve(count);
+        for (std::size_t id = 1; id <= count; ++id) {
+            auto &object = objects.emplace_back(SceneSource::SceneObjectSnapshot{.id = {id}, .name = "Inspection object"});
+            object.localTransform.translation.x = static_cast<float>(id);
+        }
+        std::ofstream scene{path, std::ios::binary};
+        scene << SceneSource::EncodeSceneSource({objects, {}});
+        REQUIRE(scene.good());
+    }
+
+    TEST_CASE("Large viewport snapshots preserve ordered bounded transforms and revoke replaced selection",
+              "[unit][editor][inspection][viewport-context]") {
+        Tests::OwnedTestDirectory project{"viewport-inspection"};
+        constexpr std::size_t SceneSize = 4096;
+        PrepareInspectionScene(project.Path(), SceneSize);
+        TestWorkspaceController workspace{project.Path()};
+        REQUIRE(workspace.ViewModel().objects.size() == SceneSize);
+        constexpr auto Maximum = AgentSceneSelectionSnapshot::MaximumObjects;
+        std::size_t stride = 1;
+        SECTION("Clustered selection") {
+            // The default stride keeps the selected objects within one contiguous range.
+        }
+        SECTION("Sparse selection") {
+            stride = 241;
+        }
+        EditorWorkspaceViewCommandData select{.command = EditorWorkspaceViewCommand::SelectObject,
+                                              .objectSelection = ObjectSelectionRequest{}};
+        for (std::size_t i = 0; i <= Maximum; ++i)
+            select.objectSelection->objects.push_back(SceneObjectId{SceneSize - (i * 9 % (Maximum + 1)) * stride});
+        select.objectSelection->primary = select.objectSelection->objects.front();
+        workspace.ProcessCommand(select);
+
+        auto &controller = workspace.Controller();
+        const auto overview = controller.CaptureAgentViewport(AgentViewportComponents::None);
+        REQUIRE(overview);
+        CHECK(overview->transformCount == 0);
+        constexpr std::size_t Samples = 200;
+        auto capture = controller.CaptureAgentViewport(AgentViewportComponents::LocalTransforms);
+        REQUIRE(capture);
+        const auto started = std::chrono::steady_clock::now();
+        for (std::size_t i = 0; i < Samples; ++i)
+            capture = controller.CaptureAgentViewport(AgentViewportComponents::LocalTransforms);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started);
+        UNSCOPED_INFO(
+            std::format("{} scoped captures over {} objects at stride {} took {} us", Samples, SceneSize, stride, elapsed.count()));
+        REQUIRE(capture);
+        CHECK(capture->objectCount == Maximum);
+        CHECK(capture->truncated);
+        REQUIRE(capture->transformCount == Maximum);
+        for (std::size_t i = 0; i < Maximum; ++i) {
+            CHECK(capture->objects[i] == select.objectSelection->objects[i].value);
+            CHECK(capture->transforms[i].object == capture->objects[i]);
+            CHECK(capture->transforms[i].translation[0] == static_cast<float>(capture->objects[i]));
+        }
+
+        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = SceneObjectId{1}});
+        CHECK(capture->lifetime.IsCancellationRequested());
+        const auto replacement = controller.CaptureAgentViewport(AgentViewportComponents::LocalTransforms);
+        REQUIRE(replacement);
+        REQUIRE(replacement->transformCount == 1);
+        CHECK(replacement->transforms.front().object == 1);
     }
 
     TEST_CASE("Viewport image admission binds the authored source through owner and extent changes", "[unit][editor][debug-capture]") {

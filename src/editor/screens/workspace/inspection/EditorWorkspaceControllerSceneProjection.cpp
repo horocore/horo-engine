@@ -264,6 +264,11 @@ namespace Horo::Editor {
             std::size_t requestIndex;
         };
 
+        /** @brief Maps an ID to a bit used to skip definite misses before exact lookup. */
+        constexpr std::uint64_t InspectionIdBit(const std::uint64_t id) noexcept {
+            return std::uint64_t{1} << (id % std::numeric_limits<std::uint64_t>::digits);
+        }
+
         /** @brief Finds the valid prefix so earlier missing or hidden objects retain precedence over later malformed IDs. */
         std::size_t ValidInspectionPrefix(const std::span<const std::uint64_t> ids) {
             for (std::size_t index = 0; index < ids.size(); ++index) {
@@ -275,30 +280,64 @@ namespace Horo::Editor {
         }
 
         /** @brief Scans the authored objects once with a bounded, request-local lookup table. */
-        InspectionObjects FindInspectionObjects(const std::span<const SceneObject> objects, const std::span<const std::uint64_t> ids) {
+        InspectionObjects FindInspectionBatch(const std::span<const SceneObject> objects, const std::span<const std::uint64_t> ids) {
             InspectionObjects resolved{};
-            if (ids.empty())
-                return resolved;
-            if (ids.size() == 1) {
-                if (const auto object = std::ranges::find(objects, SceneObjectId{ids.front()}, &SceneObject::id); object != objects.end())
-                    resolved.front() = std::to_address(object);
-                return resolved;
-            }
             std::array<InspectionLookup, ObjectInspectionRequest::MaximumObjects> storage{};
             const auto lookup = std::span{storage}.first(ids.size());
-            for (std::size_t index = 0; index < ids.size(); ++index)
+            std::uint64_t possibleIds{};
+            for (std::size_t index = 0; index < ids.size(); ++index) {
                 lookup[index] = {ids[index], index};
+                possibleIds |= InspectionIdBit(ids[index]);
+            }
             std::ranges::sort(lookup, {}, &InspectionLookup::id);
+            const auto minimumId = lookup.front().id;
+            const auto maximumId = lookup.back().id;
+            const auto *begin = lookup.data();
+            const auto *end = begin + lookup.size();
+            const auto compareId = [](const InspectionLookup &entry, const std::uint64_t id) {
+                return entry.id < id;
+            };
             auto remaining = lookup.size();
             for (const auto &object : objects) {
-                const auto entry = std::ranges::lower_bound(lookup, object.id.value, {}, &InspectionLookup::id);
-                if (entry == lookup.end() || entry->id != object.id.value || resolved[entry->requestIndex])
+                const auto id = object.id.value;
+                if (id < minimumId || id > maximumId || (possibleIds & InspectionIdBit(id)) == 0)
+                    continue;
+                const auto *entry = std::lower_bound(begin, end, id, compareId);
+                if (entry == end || entry->id != id || resolved[entry->requestIndex])
                     continue;
                 resolved[entry->requestIndex] = &object;
                 if (--remaining == 0)
                     break;
             }
             return resolved;
+        }
+
+        /** @brief Avoids sorting or filling a lookup table for empty and single-object requests. */
+        InspectionObjects FindInspectionObjects(const std::span<const SceneObject> objects, const std::span<const std::uint64_t> ids) {
+            if (ids.size() > 1)
+                return FindInspectionBatch(objects, ids);
+            InspectionObjects resolved{};
+            if (!ids.empty()) {
+                if (const auto object = std::ranges::find(objects, SceneObjectId{ids.front()}, &SceneObject::id); object != objects.end())
+                    resolved.front() = std::to_address(object);
+            }
+            return resolved;
+        }
+
+        /** @brief Projects the bounded, unique selection in owner order from one pass over the authored objects. */
+        bool FillViewportTransforms(AgentSceneSelectionSnapshot &snapshot, const std::span<const SceneObject> objects,
+                                    const AgentViewportComponents components) {
+            if (components != AgentViewportComponents::LocalTransforms)
+                return true;
+            static_assert(AgentSceneSelectionSnapshot::MaximumObjects <= ObjectInspectionRequest::MaximumObjects);
+            const auto ids = std::span{snapshot.objects}.first(snapshot.objectCount);
+            const auto resolved = FindInspectionObjects(objects, ids);
+            for (const auto *object : std::span{resolved}.first(ids.size())) {
+                if (!object)
+                    return false;
+                snapshot.transforms[snapshot.transformCount++] = LocalTransform(*object);
+            }
+            return true;
         }
 
         /** @brief Resolves each requested visible ID once, including IDs outside the page. */
@@ -495,6 +534,21 @@ namespace Horo::Editor {
             return AgentViewportTool::Select;
         }
 
+        /** @brief Copies numeric camera and tool values into detached viewport evidence. */
+        AgentViewportOverview DescribeViewport(const EditorViewportCamera &camera, const std::uint64_t revision,
+                                               const EditorTransformTool tool) noexcept {
+            const bool orthographic = camera.projection == Runtime::CameraProjection::Orthographic;
+            return {.revision = revision,
+                    .position = {camera.position.x, camera.position.y, camera.position.z},
+                    .target = {camera.target.x, camera.target.y, camera.target.z},
+                    .up = {camera.up.x, camera.up.y, camera.up.z},
+                    .verticalExtent = orthographic ? camera.orthographicHeight : camera.verticalFovRadians,
+                    .nearPlane = camera.nearPlane,
+                    .farPlane = camera.farPlane,
+                    .orthographic = orthographic,
+                    .tool = CapturedViewportTool(tool)};
+        }
+
         /** @brief Classifies the complete typed authored component set for hierarchy presentation. */
         SceneObjectKind PresentedKind(const SceneObjectSnapshot &object) {
             int componentCount = 0;
@@ -553,24 +607,9 @@ namespace Horo::Editor {
             ++m_agentViewportRevision;
         }
         auto snapshot = CaptureAgentSelectionValues(*m_agentViewportLifetime);
-        const bool orthographic = camera.projection == Runtime::CameraProjection::Orthographic;
-        snapshot.viewport = AgentViewportOverview{.revision = m_agentViewportRevision,
-                                                  .position = {camera.position.x, camera.position.y, camera.position.z},
-                                                  .target = {camera.target.x, camera.target.y, camera.target.z},
-                                                  .up = {camera.up.x, camera.up.y, camera.up.z},
-                                                  .verticalExtent = orthographic ? camera.orthographicHeight : camera.verticalFovRadians,
-                                                  .nearPlane = camera.nearPlane,
-                                                  .farPlane = camera.farPlane,
-                                                  .orthographic = orthographic,
-                                                  .tool = CapturedViewportTool(m_viewModel.activeTransformTool)};
-        if (components == AgentViewportComponents::LocalTransforms) {
-            for (const auto id : std::span{snapshot.objects}.first(snapshot.objectCount)) {
-                const auto object = std::ranges::find(m_viewModel.objects, SceneObjectId{id}, &SceneObject::id);
-                if (object == m_viewModel.objects.end())
-                    return std::nullopt;
-                snapshot.transforms[snapshot.transformCount++] = LocalTransform(*object);
-            }
-        }
+        snapshot.viewport = DescribeViewport(camera, m_agentViewportRevision, m_viewModel.activeTransformTool);
+        if (!FillViewportTransforms(snapshot, m_viewModel.objects, components))
+            return std::nullopt;
         return snapshot;
     }
 
