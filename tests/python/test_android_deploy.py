@@ -4,6 +4,7 @@ import contextlib
 import io
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -1005,3 +1006,29 @@ class AndroidDeployTests(unittest.TestCase):
         with self.assertRaisesRegex(project.AndroidDeployError, "deadline_exceeded"):
             project.deploy_process([sys.executable, "-c", "import time; time.sleep(15)"], started + 0.3)
         self.assertLess(time.monotonic() - started, 4)
+
+    @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
+    def test_deadline_retires_output_owner_after_group_leader_exits(self):
+        spawn = project.subprocess.Popen
+        make_thread = project.Thread
+        readers = []
+
+        def spawn_exited_leader(*args, **kwargs):
+            child = spawn(*args, **kwargs)
+            os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+            return child
+
+        def record_reader(**kwargs):
+            reader = make_thread(**kwargs)
+            readers.append(reader)
+            return reader
+
+        # The descendant holds the output pipe after its parent exits.
+        command = [sys.executable, "-c", "import os, time\nif os.fork() == 0:\n    time.sleep(5)"]
+        with patch.object(project.subprocess, "Popen", side_effect=spawn_exited_leader), \
+                patch.object(project, "Thread", side_effect=record_reader):
+            with self.assertRaisesRegex(project.AndroidDeployError, "deadline_exceeded"):
+                project.deploy_process(command, time.monotonic() + 0.75)
+        self.assertEqual(len(readers), 1)
+        readers[0].join(timeout=1)
+        self.assertFalse(readers[0].is_alive())

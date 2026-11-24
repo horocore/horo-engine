@@ -1005,7 +1005,9 @@ class AndroidDeployError(AndroidError):
 
 def stop_deploy_process(process: subprocess.Popen) -> None:
     """Stop only the admitted host child and its isolated POSIX process group."""
-    if process.poll() is not None:
+    # Keep the leader PID reserved until the group has been signalled. Polling
+    # would reap an exited leader even if its descendants still hold stdout.
+    if process.returncode is not None:
         return
     try:
         if os.name == "nt":

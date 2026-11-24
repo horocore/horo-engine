@@ -338,6 +338,8 @@ the process terminates with the failed ownership still retained.
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.
+On POSIX, an output timeout stops the admitted host command's process group
+even if its leader exited while a descendant still held the output pipe.
 
 For the qualification packages, `python scripts/project.py android-deploy`
 takes the existing signed package output directory, declared profile, Android
