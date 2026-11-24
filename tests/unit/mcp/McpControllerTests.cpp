@@ -212,6 +212,17 @@ namespace {
         REQUIRE(result.HasValue());
         return std::move(result).Value();
     }
+
+    /** @brief Sends a JSON-RPC request through the local transport and returns its successful result. */
+    nlohmann::json LocalResult(McpLocalTransport &transport, const McpRequest &request) {
+        const nlohmann::json wire{{"jsonrpc", "2.0"}, {"id", request.id}, {"method", request.method}, {"params", request.params}};
+        const auto framed = transport.Feed(wire.dump() + '\n');
+        REQUIRE(framed.HasValue());
+        REQUIRE(framed.Value().size() == 1);
+        const auto response = nlohmann::json::parse(framed.Value().front());
+        REQUIRE(response.at("id") == request.id);
+        return response.at("result");
+    }
 }  // namespace
 
 TEST_CASE("MCP calls execute only when their bound owner pumps and retain correlation", "[mcp][controller]") {
@@ -588,6 +599,54 @@ TEST_CASE("MCP error data retains typed causes while redacting private details",
     CHECK(data.dump().find("private") == std::string::npos);
 }
 
+TEST_CASE("Local and in-process MCP replies redact nested Save failure details", "[mcp][controller][save-privacy]") {
+    auto adapter = std::make_shared<Adapter>();
+    adapter->action = [](const McpRequestContext &) {
+        Error save{.code = ErrorCode{"save.archive.chunk_hash_mismatch"},
+                   .domain = ErrorDomainId{"horo.save"},
+                   .message = "private-fixture-slot-title"};
+        Error provider{.code = ErrorCode{"storage.read_failed"},
+                       .domain = ErrorDomainId{"horo.platform"},
+                       .message = "private-fixture-provider-detail"};
+        auto failure = WrapError(McpErrors::ControllerFailed, WithCause(std::move(save), std::move(provider)), "private-fixture-wrapper");
+        failure.diagnostics.push_back(
+            {.code = DiagnosticCode{"storage.integrity"}, .message = "private-fixture-payload", .path = "/private-fixture/recovery"});
+        return Result<nlohmann::json>::Failure(std::move(failure));
+    };
+    auto controller = Controller(adapter);
+    auto manager = McpSessionManager::Create(controller, {}, Test::Authorization());
+    REQUIRE(manager.HasValue());
+    const auto admission = Test::Authenticate({.clientIdentity = "test-client", .registryRevision = 1});
+    const auto embedded = McpInProcessAdapter::Start(manager.Value(), admission);
+    const auto local = McpLocalTransport::Start(manager.Value(), admission);
+    REQUIRE(embedded.HasValue());
+    REQUIRE(local.HasValue());
+    const auto embeddedCall = embedded.Value()->Call(Call("embedded-save"));
+    REQUIRE(embeddedCall.HasValue());
+    const auto localCall = LocalResult(*local.Value(), Call("local-save"));
+    REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
+    const auto pumped = controller->Pump(McpOwnerContext::Editor);
+    REQUIRE(pumped.HasValue());
+    REQUIRE(pumped.Value() == 2);
+
+    const auto embeddedStatus = embedded.Value()->Call(
+        {.id = "embedded-status", .method = "operations/get", .params = {{"operationId", embeddedCall.Value().at("operationId")}}});
+    REQUIRE(embeddedStatus.HasValue());
+    const auto localStatus =
+        LocalResult(*local.Value(),
+                    {.id = "local-status", .method = "operations/get", .params = {{"operationId", localCall.at("operationId")}}});
+    CHECK(localStatus.at("status") == "failed");
+    CHECK(embeddedStatus.Value().at("status") == "failed");
+    const auto &failure = localStatus.at("error");
+    CHECK(failure == embeddedStatus.Value().at("error"));
+    const auto expectedCauses = nlohmann::json::array({{{"domain", "horo.save"}, {"code", "save.archive.chunk_hash_mismatch"}},
+                                                       {{"domain", "horo.platform"}, {"code", "storage.read_failed"}}});
+    CHECK(failure.at("causes") == expectedCauses);
+    CHECK(failure.at("diagnostics").at(0).at("code") == "storage.integrity");
+    CHECK(localStatus.dump().find("private-fixture") == std::string::npos);
+    CHECK(embeddedStatus.Value().dump().find("private-fixture") == std::string::npos);
+}
+
 TEST_CASE("local and embedded MCP adapters share queued execution and request cancellation", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();
     auto controller = Controller(adapter);
@@ -600,11 +659,7 @@ TEST_CASE("local and embedded MCP adapters share queued execution and request ca
     REQUIRE(local.HasValue());
     const auto first = embedded.Value()->Call(Call("embedded"));
     REQUIRE(first.HasValue());
-    auto framed = local.Value()->Feed(R"({"jsonrpc":"2.0","id":"local","method":"tools/call","params":{"name":"test.call","arguments":{}}})"
-                                      "\n");
-    REQUIRE(framed.HasValue());
-    REQUIRE(framed.Value().size() == 1);
-    const auto second = nlohmann::json::parse(framed.Value()[0])["result"];
+    const auto second = LocalResult(*local.Value(), Call("local"));
     CHECK(first.Value()["status"] == "queued");
     CHECK(second["status"] == "queued");
     CHECK(adapter->calls == 0);
@@ -620,10 +675,9 @@ TEST_CASE("local and embedded MCP adapters share queued execution and request ca
         embedded.Value()->Call({.id = "status", .method = "operations/get", .params = {{"operationId", first.Value()["operationId"]}}});
     REQUIRE(firstStatus.HasValue());
     CHECK(firstStatus.Value()["status"] == "cancelled");
-    framed = local.Value()->Feed("{\"jsonrpc\":\"2.0\",\"id\":\"status\",\"method\":\"operations/get\",\"params\":{\"operationId\":" +
-                                 second["operationId"].dump() + "}}\n");
-    REQUIRE(framed.HasValue());
-    CHECK(nlohmann::json::parse(framed.Value()[0])["result"]["status"] == "cancelled");
+    const auto secondStatus =
+        LocalResult(*local.Value(), {.id = "status", .method = "operations/get", .params = {{"operationId", second.at("operationId")}}});
+    CHECK(secondStatus.at("status") == "cancelled");
 }
 
 TEST_CASE("MCP cancellation racing a running completion publishes one terminal result", "[mcp][controller]") {
