@@ -1456,6 +1456,27 @@ The LLM should choose strategy; the editor tool should execute the strategy.
 - Disabled immersive/provider paths do not add work to the XR frame loop or
   audio callback.
 
+### Disabled Viewport Agent Frame Cost
+
+With the Local Agent panel disabled, the workspace leaves the viewport review
+callback empty. The viewport frame skips the review control and gathers no
+agent context.
+
+The opt-in `[viewport-agent-frame-cost]` case in `HoroViewportPanelRenderTests`
+times `ViewportPanel::DrawPanel` with an 800 × 500 logical viewport, 4,096
+viewport model entries, and a ready test renderer. It warms up 100 frames and
+reports the mean of 10,000 timed frames. Invoke the test binary with
+`'[viewport-agent-frame-cost]' -s` to see the timing and draw counts.
+
+On macOS arm64 in Debug, 11 alternating pairs compared the current disabled
+path with the same panel compiled with the offer predicate fixed to false and
+the agent button and action dispatch removed. The baseline median was 40.13 µs
+per frame (40.00–45.69 µs across runs). The disabled median was 40.25 µs
+(39.99–40.98 µs), with a median paired difference of +0.049 µs. Both produced
+1,506 vertices and 5,229 indices. The difference was below the observed
+run-to-run variation. This fixture measures panel CPU work and leaves GPU
+frame cost and native renderer parity to backend qualification.
+
 ## Failure Handling
 
 If an agent action fails:

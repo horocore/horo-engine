@@ -4390,6 +4390,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroThirdParty::ImGui
     )
     add_executable(HoroViewportPanelRenderTests
+            benchmarks/editor/ViewportAgentFrameCost.cpp
             unit/editor/ViewportPanelRenderTests.cpp
             unit/editor/NavigationOverlayRenderTests.cpp
             unit/editor/ViewportOverlayRenderTests.cpp
