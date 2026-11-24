@@ -19,6 +19,10 @@ namespace Horo::Runtime::Ui {
     class RuntimeUiClient;
 }
 
+namespace Horo::Accessibility {
+    class IColorAccessibilityQuery;
+}
+
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayCharacterContext;
@@ -157,6 +161,11 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept {
                 return {};
             }
+
+            /** @brief Returns the immutable desired visual preferences retained for this callback. */
+            [[nodiscard]] virtual const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept {
+                return nullptr;
+            }
         };
     }  // namespace Detail
 
@@ -177,6 +186,13 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] std::optional<GameplayAssistPreferences> AssistPreferences() const noexcept {
             return assists_ ? std::optional{*assists_} : std::nullopt;
+        }
+
+        /** @brief Reads desired color accessibility preferences synchronously.
+         * @return A snapshot query borrowed for this callback, or null when no view was supplied.
+         */
+        [[nodiscard]] const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept {
+            return backend_->ColorAccessibility();
         }
 
         [[nodiscard]] GameplayEntityRef Entity() const noexcept {

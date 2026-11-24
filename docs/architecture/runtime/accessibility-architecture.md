@@ -218,6 +218,18 @@ cross-thread dispatch or waits; acquisition/replacement happens at each consumer
 owned frame/tick boundary. Render independently captures the settings for its pass.
 The query reports desired preferences, not whether a GPU pass has completed.
 
+Editor Play retains the last valid color projection from the process configuration
+and passes it to native behaviors through `BehaviorContext::ColorAccessibility()`
+during fixed and presentation dispatch. The borrowed query expires with the
+callback. A Lua behavior that sets `uses_color_accessibility = true` receives a
+detached `ctx.color_accessibility` table when its host supplies a view. Its
+`mode` is the numeric `ColorblindMode` value, `severity` is normalized, and
+`high_contrast` is a boolean. Callbacks outside those dispatches and callbacks
+with no supplied view have no table.
+Reading these preferences grants no simulation or rendering authority.
+The new callback query changes the native adapter vtable. Rebuild native modules
+against gameplay SDK 34 before loading them in this host.
+
 ```cpp
 enum class ColorblindMode : uint8_t {
     None,

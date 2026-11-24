@@ -14,6 +14,7 @@
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "PrefabSceneCookHostFixture.h"
@@ -68,6 +69,40 @@ namespace {
         }
     };
 
+    struct ColorObservation final {
+        Accessibility::ColorblindMode mode;
+        float severity;
+        bool highContrast;
+        bool operator==(const ColorObservation &) const noexcept = default;
+    };
+
+    struct ColorDispatchProbe final {
+        std::optional<ColorObservation> fixed;
+        std::optional<ColorObservation> presentation;
+    };
+
+    class ColorCueBehavior final : public Gameplay::IBehaviorInstance {
+    public:
+        explicit ColorCueBehavior(ColorDispatchProbe &probe) : probe_(probe) {}
+
+        void OnFixedUpdate(Gameplay::BehaviorContext &context, Gameplay::FixedDeltaTime) override {
+            probe_.fixed = Observe(context);
+        }
+
+        void OnPresentationUpdate(Gameplay::BehaviorContext &context, Gameplay::FrameDeltaTime) override {
+            probe_.presentation = Observe(context);
+        }
+
+    private:
+        static std::optional<ColorObservation> Observe(const Gameplay::BehaviorContext &context) {
+            if (const auto *query = context.ColorAccessibility())
+                return ColorObservation{query->GetActiveColorblindMode(), query->GetColorblindSeverity(), query->IsHighContrastEnabled()};
+            return std::nullopt;
+        }
+
+        ColorDispatchProbe &probe_;
+    };
+
     Gameplay::IBehaviorInstance *CreateBehavior(void *) {
         return new MovingBehavior{};
     }
@@ -90,13 +125,14 @@ namespace {
         return std::move(parsed).Value();
     }
 
-    Gameplay::BehaviorRegistry Registry() {
+    Gameplay::BehaviorRegistry Registry(Gameplay::BehaviorFactoryBinding factory = {nullptr, &CreateBehavior, &DestroyBehavior}) {
         Gameplay::BehaviorRegistry registry;
         Gameplay::BehaviorDescriptor descriptor;
         descriptor.typeId = BehaviorType();
         descriptor.displayName = "Play Mover";
         descriptor.phases.push_back({Gameplay::BehaviorPhase::Gameplay, "game.tests.play_mover", {}, {}, {}});
-        REQUIRE(registry.Register({std::move(descriptor), {nullptr, &CreateBehavior, &DestroyBehavior}}).HasValue());
+        const auto registered = registry.Register({std::move(descriptor), factory});
+        REQUIRE(registered.HasValue());
         REQUIRE(registry.Freeze().HasValue());
         return registry;
     }
@@ -777,7 +813,8 @@ namespace {
     };
 
     struct PlayFixedFixture final {
-        explicit PlayFixedFixture(const ConfigurationService *configuration = nullptr) : play(nullptr, configuration) {
+        explicit PlayFixedFixture(const ConfigurationService *configuration = nullptr, Gameplay::BehaviorRegistry behaviors = Registry())
+            : registry(std::move(behaviors)), play(nullptr, configuration) {
             auto made = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
             REQUIRE(made.HasValue());
             scheduler = std::move(made).Value();
@@ -805,7 +842,7 @@ namespace {
         CancellationToken token{cancellation.Token()};
         std::unique_ptr<Runtime::FrameScheduler> scheduler;
         std::shared_ptr<PlayOwnerObservations> observations{std::make_shared<PlayOwnerObservations>()};
-        Gameplay::BehaviorRegistry registry{Registry()};
+        Gameplay::BehaviorRegistry registry;
         Editor::EditorPlaySessionController play;
         Runtime::RuntimeLifecycle lifecycle;
         PlayFixedParticipant *session{};
@@ -2036,6 +2073,41 @@ TEST_CASE("Play holds committed gameplay assists through the fixed dispatch", "[
     REQUIRE(fixture.Tick().HasValue());
     REQUIRE_FALSE(fixture.session->localFailure);
     CHECK(fixture.play.SceneView()->Get(*actor).Value().localTransform->translation.x == 1.25F);
+}
+
+TEST_CASE("Play exposes committed color preferences at gameplay dispatch boundaries", "[editor][play][accessibility]") {
+    using Accessibility::ColorblindMode;
+    ConfigurationSchema schema;
+    for (const auto &contribution : {Gameplay::MakeGameplayAccessibilityContribution(), Accessibility::MakeColorAccessibilityContribution(),
+                                     Runtime::Ui::MakeUiVisualAccessibilityContribution()})
+        for (const auto &setting : contribution.settings)
+            REQUIRE(schema.Register(setting).HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    ConfigurationService configuration{std::move(schema)};
+    ColorDispatchProbe probe;
+    const Gameplay::BehaviorFactoryBinding factory{&probe, [](auto *state) -> Gameplay::IBehaviorInstance * {
+        return std::make_unique<ColorCueBehavior>(*static_cast<ColorDispatchProbe *>(state)).release();
+    }, &DestroyBehavior};
+    PlayFixedFixture fixture{&configuration, Registry(factory)};
+    const auto originalRevision = configuration.Snapshot().Revision();
+    fixture.observations->beforeGameplay = [&configuration, originalRevision] {
+        REQUIRE(configuration
+                    .Commit({.baseRevision = originalRevision,
+                             .proposedValues = {{SettingKey{"accessibility.colorblind.mode"}, std::int64_t{2}},
+                                                {SettingKey{"accessibility.colorblind.severity"}, std::int64_t{500}},
+                                                {SettingKey{"accessibility.visual.ui.high_contrast"}, true}},
+                             .source = ConfigurationSource::User})
+                    .HasValue());
+    };
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(probe.fixed == ColorObservation{ColorblindMode::None, 1.0F, false});
+
+    fixture.observations->beforeGameplay = {};
+    fixture.play.PresentationUpdate(Gameplay::FrameDeltaTime{0.01});
+    CHECK(probe.presentation == ColorObservation{ColorblindMode::Deuteranopia, 0.5F, true});
+    REQUIRE(fixture.Tick().HasValue());
+    CHECK(probe.fixed == probe.presentation);
 }
 
 TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {

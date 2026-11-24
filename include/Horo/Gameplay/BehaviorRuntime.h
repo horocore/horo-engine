@@ -130,13 +130,16 @@ namespace Horo::Gameplay {
          * @param input Current tick input. @param delta Validated fixed step.
          * @param evidence Optional fresh diagnostic storage, valid only for this call. Ignore it on failure.
          * @param assists Optional desired preferences from the host's authoritative snapshot for this dispatch.
+         * @param colorAccessibility Optional immutable color preferences borrowed for the complete dispatch.
          * @return Success or a lifecycle/callback error. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta,
                                                BehaviorFixedEvidence *evidence = nullptr,
-                                               const GameplayAssistPreferences *assists = nullptr) const;
+                                               const GameplayAssistPreferences *assists = nullptr,
+                                               const Accessibility::IColorAccessibilityQuery *colorAccessibility = nullptr) const;
         /** @brief Runs presentation-only callbacks without committing simulation mutation.
-         * @param delta Current presentation frame delta. */
-        void PresentationUpdate(FrameDeltaTime delta) const;
+         * @param delta Current presentation frame delta.
+         * @param colorAccessibility Optional immutable color preferences borrowed for this presentation dispatch. */
+        void PresentationUpdate(FrameDeltaTime delta, const Accessibility::IColorAccessibilityQuery *colorAccessibility = nullptr) const;
         /** @brief Enables or disables one attachment with exact lifecycle transitions.
          * @param instance Exact attachment identity. @param enabled Desired enablement. @return Success or a typed failure. */
         [[nodiscard]] Result<void> SetEnabled(BehaviorInstanceId instance, bool enabled) const;
@@ -183,7 +186,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
         [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
                                                     Runtime::SceneCommandBuffer &, BehaviorFixedEvidence *,
-                                                    const GameplayAssistPreferences *) const;
+                                                    const GameplayAssistPreferences *,
+                                                    const Accessibility::IColorAccessibilityQuery *) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.

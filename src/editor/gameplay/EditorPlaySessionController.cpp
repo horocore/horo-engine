@@ -630,7 +630,8 @@ namespace Horo::Editor {
         if (auto admitted = sceneHost_->BeginFixedUpdate(delta); admitted.HasError())
             return admitted;
         const auto assists = assistPreferences_;
-        if (auto updated = behaviors_->FixedUpdate(input, delta, nullptr, assists ? &*assists : nullptr); updated.HasError())
+        if (auto updated = behaviors_->FixedUpdate(input, delta, nullptr, assists ? &*assists : nullptr, ColorAccessibility());
+            updated.HasError())
             return updated;
         return CommitSceneChanges();
     }
@@ -640,6 +641,7 @@ namespace Horo::Editor {
         if (!assistConfiguration_)
             return Result<void>::Success();
         auto snapshot = assistConfiguration_->Snapshot();
+        RefreshColorAccessibility(snapshot);
         if (assistPreferences_ && snapshot.Revision() == assistRevision_)
             return Result<void>::Success();
         const auto captured = Gameplay::GameplayAssistTickSnapshot::Capture(std::move(snapshot));
@@ -648,6 +650,20 @@ namespace Horo::Editor {
         assistPreferences_ = captured.Value().Preferences();
         assistRevision_ = captured.Value().Revision();
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorPlaySessionController::RefreshColorAccessibility */
+    void EditorPlaySessionController::RefreshColorAccessibility(const ConfigurationSnapshot &snapshot) {
+        if (colorAccessibilityRevision_ == snapshot.Revision())
+            return;
+        if (auto captured = Accessibility::ColorAccessibilitySnapshot::Capture(snapshot); captured.HasValue())
+            colorAccessibility_ = std::move(captured).Value();
+        colorAccessibilityRevision_ = snapshot.Revision();
+    }
+
+    /** @copydoc EditorPlaySessionController::ColorAccessibility */
+    const Accessibility::IColorAccessibilityQuery *EditorPlaySessionController::ColorAccessibility() const noexcept {
+        return colorAccessibility_ ? &*colorAccessibility_ : nullptr;
     }
 
     /** @copydoc EditorPlaySessionController::PresentationUpdate */
@@ -664,8 +680,11 @@ namespace Horo::Editor {
                 Fail(begun.ErrorValue());
                 return;
             }
-            if (!SaveLoading())
-                behaviors_->PresentationUpdate(delta);
+            if (!SaveLoading()) {
+                if (assistConfiguration_ != nullptr)
+                    RefreshColorAccessibility(assistConfiguration_->Snapshot());
+                behaviors_->PresentationUpdate(delta, ColorAccessibility());
+            }
             if (const auto committed = CommitSceneChanges(); committed.HasError())
                 Fail(committed.ErrorValue());
         }

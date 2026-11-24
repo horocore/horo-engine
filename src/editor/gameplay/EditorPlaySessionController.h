@@ -9,6 +9,7 @@
 #include "EditorPlaySaveRetirement.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
@@ -45,7 +46,7 @@ namespace Horo::Editor {
     public:
         /** @brief Borrows optional host diagnostics for the complete Play controller lifetime.
          * @param debugger Host service; must outlive this controller.
-         * @param assistConfiguration Process authority with gameplay descriptors, or null to withhold preferences. */
+         * @param assistConfiguration Process authority with gameplay and visual settings, or null to withhold preferences. */
         explicit EditorPlaySessionController(Application::NetworkDebuggerService *debugger = nullptr,
                                              const ConfigurationService *assistConfiguration = nullptr) noexcept
             : debugger_(debugger), assistConfiguration_(assistConfiguration) {}
@@ -210,6 +211,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
         /** @brief Refreshes the native gameplay preference cache from the start of this dispatch. */
         [[nodiscard]] Result<void> CaptureGameplayAssists();
+        /** @brief Captures desired color preferences once per revision without gating Play. */
+        void RefreshColorAccessibility(const ConfigurationSnapshot &snapshot);
+        /** @brief Borrows the last admitted visual snapshot for a synchronous dispatch. */
+        [[nodiscard]] const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept;
         [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
         [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
         void FlushPendingStop() noexcept;
@@ -273,6 +278,8 @@ namespace Horo::Editor {
         const ConfigurationService *assistConfiguration_{};
         std::optional<Gameplay::GameplayAssistPreferences> assistPreferences_;
         ConfigurationRevision assistRevision_{};
+        std::optional<Accessibility::ColorAccessibilitySnapshot> colorAccessibility_;
+        std::optional<ConfigurationRevision> colorAccessibilityRevision_;
         std::uint64_t diagnosticGeneration_{};
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
         Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert schema snapshot, fixed for the complete Scene epoch. */

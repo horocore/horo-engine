@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 
 #include "GameplayVfxHostAccess.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Physics/CharacterErrors.h"
@@ -32,6 +33,20 @@ namespace Horo::Gameplay {
     namespace {
         using Detail::BudgetAllocate;
         using Detail::LuaBudget;
+
+        /** @brief Copies the callback's desired visual preferences without exposing its borrowed owner. */
+        void PushColorAccessibility(lua_State *state, const Accessibility::IColorAccessibilityQuery *query) {
+            if (query == nullptr)
+                return;
+            lua_createtable(state, 0, 3);
+            lua_pushinteger(state, static_cast<lua_Integer>(query->GetActiveColorblindMode()));
+            lua_setfield(state, -2, "mode");
+            lua_pushnumber(state, query->GetColorblindSeverity());
+            lua_setfield(state, -2, "severity");
+            lua_pushboolean(state, query->IsHighContrastEnabled());
+            lua_setfield(state, -2, "high_contrast");
+            lua_setfield(state, -2, "color_accessibility");
+        }
 
         void InstructionLimitHook(lua_State *state, lua_Debug *) {
             luaL_error(state, "Lua behavior instruction budget exceeded");
@@ -412,16 +427,24 @@ namespace Horo::Gameplay {
             return 1;
         }
 
-        /** @brief Reads the opt-in from the loaded behavior table, underneath its callback on the stack. */
-        static const GameplayAssistPreferences *SelectAssistArgument(lua_State *state,
-                                                                     const std::optional<GameplayAssistPreferences> &assists) {
-            if (!assists)
-                return nullptr;
-            lua_pushliteral(state, "uses_assist_preferences");
+        /** @brief Reads an explicit preference opt-in from the behavior table below the callback on the stack. */
+        [[nodiscard]] static bool RequestsPreferenceTable(lua_State *state, const char *key) {
+            lua_pushstring(state, key);
             lua_rawget(state, -3);
             const bool requested = lua_isboolean(state, -1) && lua_toboolean(state, -1);
             lua_pop(state, 1);
-            return requested ? &*assists : nullptr;
+            return requested;
+        }
+
+        [[nodiscard]] static const GameplayAssistPreferences *SelectAssistArgument(
+            lua_State *state, const std::optional<GameplayAssistPreferences> &assists) {
+            return assists.has_value() && RequestsPreferenceTable(state, "uses_assist_preferences") ? &*assists : nullptr;
+        }
+
+        [[nodiscard]] static const Accessibility::IColorAccessibilityQuery *SelectColorArgument(lua_State *state,
+                                                                                                const BehaviorContext &context) {
+            const auto *color = context.ColorAccessibility();
+            return color != nullptr && RequestsPreferenceTable(state, "uses_color_accessibility") ? color : nullptr;
         }
 
         /** @brief Creates a detached value table with no reference to the host or its authority. */
@@ -473,7 +496,9 @@ namespace Horo::Gameplay {
                     if (lua_isnil(inner, -1))
                         return 0;
                     const auto *assistArgument = SelectAssistArgument(inner, assists);
+                    const auto *colorArgument = SelectColorArgument(inner, context);
                     PushContext(inner, context, physics, navigation, vfx, animation);
+                    PushColorAccessibility(inner, colorArgument);
                     const int argumentCount = PushCallbackArguments(inner, delta, action, event, assistArgument);
                     lua_call(inner, argumentCount, 0);
                     return 0;

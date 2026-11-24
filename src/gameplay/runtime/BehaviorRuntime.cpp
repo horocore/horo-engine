@@ -82,7 +82,8 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta,
-                                              BehaviorFixedEvidence *evidence, const GameplayAssistPreferences *assists) const {
+                                              BehaviorFixedEvidence *evidence, const GameplayAssistPreferences *assists,
+                                              const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
@@ -96,16 +97,9 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         Runtime::SceneCommandBuffer commands;
         for (std::size_t index = 0; index < impl_->instances.size(); ++index)
-            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence, assists); updated.HasError())
+            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence, assists, colorAccessibility); updated.HasError())
                 return updated;
-        if (!commands.Empty()) {
-            Result<void> committed = impl_->CommitCommands(std::move(commands));
-            if (committed.HasError())
-                return Result<void>::Failure(committed.ErrorValue());
-            if (evidence)
-                evidence->sceneCommandsQueued = true;
-        }
-        return Result<void>::Success();
+        return impl_->CommitFixedCommands(std::move(commands), evidence);
     }
 
     /** @copydoc BehaviorRuntime::VfxStructuralReceipt */
@@ -115,12 +109,14 @@ namespace Horo::Gameplay {
 
     Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,
                                                    Runtime::SceneCommandBuffer &commands, BehaviorFixedEvidence *evidence,
-                                                   const GameplayAssistPreferences *assists) const {
+                                                   const GameplayAssistPreferences *assists,
+                                                   const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         auto &instance = impl_->instances[index];
         if (!instance.component.enabled)
             return Result<void>::Success();
         Impl::ContextBackend backend{*impl_, instance, input, commands};
         backend.fixedEvidence = evidence;
+        backend.colorAccessibility = colorAccessibility;
         BehaviorContext context{backend, assists};
         if (!instance.started) {
             instance.implementation->OnStart(context);
@@ -141,7 +137,8 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::PresentationUpdate */
-    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) const {
+    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta,
+                                             const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
             return;
@@ -153,6 +150,7 @@ namespace Horo::Gameplay {
             if (!instance.component.enabled)
                 continue;
             Impl::ContextBackend backend{*impl_, instance, {}, rejectedCommands, false};
+            backend.colorAccessibility = colorAccessibility;
             BehaviorContext context{backend};
             instance.implementation->OnPresentationUpdate(context, delta);
         }

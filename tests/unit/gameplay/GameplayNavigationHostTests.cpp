@@ -1,5 +1,6 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayFormation.h"
@@ -549,6 +550,55 @@ TEST_CASE("Lua assist preferences are detached fixed-step values and remain abse
     CHECK(assists.damageMultiplier == 0.5F);
     active.runtime->PresentationUpdate(FrameDeltaTime{0.1});
     CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 2.0F);
+}
+
+TEST_CASE("Lua can read detached color accessibility values on opt-in") {
+    using Accessibility::ColorblindMode;
+
+    struct ColorQuery final : Accessibility::IColorAccessibilityQuery {
+        ColorblindMode GetActiveColorblindMode() const noexcept override {
+            return ColorblindMode::Tritanopia;
+        }
+
+        float GetColorblindSeverity() const noexcept override {
+            return 0.25F;
+        }
+
+        bool IsHighContrastEnabled() const noexcept override {
+            return true;
+        }
+    };
+
+    const bool optsIn = GENERATE(false, true);
+    std::string source = R"lua(
+        return horo.behavior { type_id = "game.tests.navigation", display_name = "Color cue",
+    )lua";
+    if (optsIn)
+        source += "uses_color_accessibility = true,";
+    source += R"lua(
+            on_fixed_update = function(ctx)
+                local color = ctx.color_accessibility
+                if not color then
+                    ctx.transform.set_position(1, 0, 0)
+                    return
+                end
+                assert(color.mode == 3 and color.severity == 0.25 and color.high_contrast == true)
+                color.severity = 0
+                ctx.transform.set_position(2, 0, 0)
+            end,
+        }
+    )lua";
+    auto program = LuaBehaviorProgram::Compile(source, Type(), "color-cue.horo_script");
+    REQUIRE(program.HasValue());
+    BehaviorRegistry registry;
+    auto active = ActivateScript(*program.Value(), registry, {});
+    const ColorQuery color;
+    const auto actor = active.scene->View().Find(Runtime::SceneObjectId{2});
+    REQUIRE(actor);
+    REQUIRE(active.runtime->FixedUpdate({}, FixedDeltaTime{0.1}, nullptr, nullptr, &color).HasValue());
+    CHECK(active.scene->View().Get(*actor).Value().localTransform->translation.x == (optsIn ? 2.0F : 1.0F));
+    CHECK(color.GetColorblindSeverity() == 0.25F);
+    CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 1.0F);
 }
 
 TEST_CASE("guard pursuit respects fixed-step reaction assists and its existing Navigation grant") {

@@ -100,10 +100,15 @@ namespace Horo::Gameplay {
             Impl &runtime;
             Instance &instance;
             BehaviorFixedEvidence *fixedEvidence{}; /**< Caller-owned opt-in diagnostic, valid only during fixed dispatch. */
+            const Accessibility::IColorAccessibilityQuery *colorAccessibility{};
             std::span<const GameplayInputAction> input;
             Runtime::SceneCommandBuffer &commands;
             bool allowSimulationMutation{true};
             bool vfxEntered{};
+
+            [[nodiscard]] const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept override {
+                return colorAccessibility;
+            }
 
             [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept override {
                 return instance.vfx;
@@ -239,6 +244,17 @@ namespace Horo::Gameplay {
             if (tracked.HasError())
                 return Result<void>::Failure(tracked.ErrorValue());
             vfxStructuralReceipt = std::move(tracked).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Reports fixed-step publication evidence only after nonempty commands are accepted. */
+        [[nodiscard]] Result<void> CommitFixedCommands(Runtime::SceneCommandBuffer &&commands, BehaviorFixedEvidence *evidence) const {
+            if (commands.Empty())
+                return Result<void>::Success();
+            if (auto committed = CommitCommands(std::move(commands)); committed.HasError())
+                return committed;
+            if (evidence != nullptr)
+                evidence->sceneCommandsQueued = true;
             return Result<void>::Success();
         }
 
