@@ -1,8 +1,7 @@
 #pragma once
 
 /** @file Sdl3CaptureStream.h @brief Private SDL input callback and its bounded PCM owner. */
-#include "Horo/Audio/AudioDeviceDiscovery.h"
-#include "Horo/Audio/Internal/AudioCaptureBuffer.h"
+#include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 
 #include <SDL3/SDL_audio.h>
 #include <atomic>
@@ -56,10 +55,13 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         std::uint32_t nextSlot{1};
         std::unique_ptr<CaptureStream> stream;
         std::uint64_t lastGeneration{};
+        Sdl3CaptureGrant activeGrant;
 
         /** @brief Resolves an explicit endpoint with the advertised semantic PCM format. */
         [[nodiscard]] Result<SDL_AudioDeviceID> ResolveEndpoint(const AudioCaptureBufferDescriptor &descriptor) const;
         /** @brief Prepares storage and publishes the already admitted generation after native open succeeds. */
         [[nodiscard]] Result<void> OpenStream(SDL_AudioDeviceID endpoint, const AudioCaptureBufferDescriptor &descriptor);
+        /** @brief Detaches the stream and retires the active permission decision. */
+        void Stop() noexcept;
     };
 }  // namespace Horo::Audio::Backend::Sdl3Detail

@@ -102,16 +102,21 @@ namespace Horo::Audio::Backend {
             const auto &catalog = discovery.Value().snapshot;
             REQUIRE(catalog.permission == AudioCapturePermission::NotRequired);
             const auto descriptor = SelectEndpoint(catalog);
-            Sdl3CaptureGrant grant{descriptor.device, catalog.revision, descriptor.generation, 0};
-            const auto denied = backend->StartCapture(descriptor, grant);
+            const Sdl3CaptureIntent intent{.purpose = Sdl3CapturePurpose::Speech};
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .intent = intent,
+                                   .foreground = true};
+            const auto denied = backend->StartCapture(descriptor, intent, grant);
             REQUIRE(denied.HasError());
             CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
             grant.authorityRevision = 1;
             --grant.discoveryRevision;
-            CHECK(backend->StartCapture(descriptor, grant).HasError());
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
             grant.discoveryRevision = catalog.revision;
-            REQUIRE(backend->StartCapture(descriptor, grant).HasValue());
-            CHECK(backend->StartCapture(descriptor, grant).HasError());
+            REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
 
             std::vector pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 1.0F);
             VerifyOverflow(*backend, descriptor, pcm);
@@ -119,18 +124,62 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
             AudioCapturedBlock stopped;
             CHECK(backend->ReadCapture(descriptor.generation, stopped, pcm).HasError());
-            CHECK(backend->StartCapture(descriptor, grant).HasError());
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
             auto replacement = descriptor;
             ++replacement.generation;
             grant.generation = replacement.generation;
             ++grant.authorityRevision;
-            REQUIRE(backend->StartCapture(replacement, grant).HasValue());
+            REQUIRE(backend->StartCapture(replacement, intent, grant).HasValue());
             CHECK(backend->StopCapture(descriptor.generation).HasError());
             const auto restarted = WaitForBlock(*backend, replacement.generation, pcm);
             CHECK(restarted.firstFrame == 0);
             CHECK(restarted.sequence == 1);
             CHECK(restarted.droppedFramesBefore == 0);
             REQUIRE(backend->StopCapture(replacement.generation).HasValue());
+        }
+
+        TEST_CASE("SDL capture rejects cross-purpose grants and retires withdrawn permission without a PCM read",
+                  "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureIntent intent{.purpose = Sdl3CapturePurpose::Speech};
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 4,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                   .foreground = true};
+            const auto mismatch = backend->StartCapture(descriptor, intent, grant);
+            REQUIRE(mismatch.HasError());
+            CHECK(mismatch.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            grant.intent = intent;
+            SECTION("foreground-only consent expires on focus loss") {
+                grant.foreground = false;
+                CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+                grant.foreground = true;
+                REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+                grant.foreground = false;
+                const auto revoked = backend->ReconcileCapture(descriptor.generation, grant);
+                REQUIRE(revoked.HasError());
+                CHECK(revoked.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            SECTION("background capture needs an explicit grant and still ends on withdrawal") {
+                intent.allowBackground = true;
+                CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+                grant.intent = intent;
+                REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+                grant.foreground = false;
+                REQUIRE(backend->ReconcileCapture(descriptor.generation, grant).HasValue());
+                const auto revoked = backend->ReconcileCapture(descriptor.generation, std::nullopt);
+                REQUIRE(revoked.HasError());
+                CHECK(revoked.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            AudioCapturedBlock block{};
+            CHECK(backend->ReadCapture(descriptor.generation, block, {}).HasError());
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
         }
     }  // namespace
 }  // namespace Horo::Audio::Backend

@@ -2364,10 +2364,15 @@ newest whole block on overflow. The producer still advances source chronology
 and records cumulative dropped frames. Subsequent reads expose sequence and
 sample-frame gaps, and the counter exposes trailing drops with no later block.
 A short destination leaves the block queued. Cancellation closes admission
-while the host retains storage until both participants detach.
+while the host retains storage until both participants detach. The reader
+scrubs consumed samples before releasing their slot. After detachment, the
+buffer scrubs all remaining PCM before releasing storage.
 
 SDL3 can attach the buffer to an explicitly selected recording endpoint. It
-requires a matching host grant and current platform permission before open.
+requires a matching purpose and background policy in the host grant and
+current platform permission before open. The host reconciles current focus and
+consent on Audio control independently of consumer reads. Revocation detaches
+the recording callback and retires the current generation.
 The recording postmix callback copies the selected mono or stereo float PCM
 without a bound SDL stream queue. SDL supplies no hardware timestamp here.
 The callback estimates the start on the SDL monotonic clock from the first

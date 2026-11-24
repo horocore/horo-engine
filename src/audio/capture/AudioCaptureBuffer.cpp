@@ -1,6 +1,7 @@
 #include "Horo/Audio/Internal/AudioCaptureBuffer.h"
 
 #include "Horo/Audio/AudioErrors.h"
+#include "Horo/Security/SecureMemory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +48,11 @@ namespace Horo::Audio::Backend {
         explicit State(const AudioCaptureBufferDescriptor &description)
             : descriptor(description), channels(description.format.layout.orderedChannels.size()),
               samplesPerSlot(channels * description.maximumFrames), blocks(description.slots), samples(description.slots * samplesPerSlot) {
+        }
+
+        /** @brief Scrubs queued or abandoned samples after both endpoints detach. */
+        ~State() {
+            Security::SecureZero(std::as_writable_bytes(std::span{samples}));
         }
 
         /** @brief Tests source chronology and exact interleaved sample shape. */
@@ -130,7 +136,9 @@ namespace Horo::Audio::Backend {
         const auto sampleCount = source.frames * state.channels;
         if (sampleCount > pcm.size())
             return InsufficientSpace;
-        std::copy_n(state.samples.data() + slot * state.samplesPerSlot, sampleCount, pcm.data());
+        const std::span sourcePcm{state.samples.data() + slot * state.samplesPerSlot, sampleCount};
+        std::ranges::copy(sourcePcm, pcm.begin());
+        Security::SecureZero(std::as_writable_bytes(sourcePcm));
         block = source;
         state.read.store(read + 1);
         return Copied;

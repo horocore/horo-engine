@@ -171,10 +171,29 @@ namespace Horo::Audio::Backend::Sdl3Detail {
             return Sdl3Detail::Failure(AudioErrors::MemoryAllocationFailed);
         }
     }
+
+    /** @copydoc CaptureControl::Stop */
+    void CaptureControl::Stop() noexcept {
+        stream.reset();
+        activeGrant = {};
+    }
 }  // namespace Horo::Audio::Backend::Sdl3Detail
 
 namespace Horo::Audio::Backend {
     namespace {
+        /** @brief Admits only a known purpose with matching grant policy and current focus. */
+        bool AuthorizedIntent(const Sdl3CaptureIntent intent, const Sdl3CaptureGrant &grant) noexcept {
+            return intent.purpose > Sdl3CapturePurpose::Unspecified && intent.purpose <= Sdl3CapturePurpose::Speech &&
+                   grant.authorityRevision != 0 && grant.intent == intent && (grant.foreground || intent.allowBackground);
+        }
+
+        /** @brief Keeps an active stream fenced to the original host permission decision. */
+        bool SameAdmission(const Sdl3CaptureGrant &expected, const Sdl3CaptureGrant &current) noexcept {
+            return current.device == expected.device && current.discoveryRevision == expected.discoveryRevision &&
+                   current.generation == expected.generation && current.authorityRevision == expected.authorityRevision &&
+                   AuthorizedIntent(expected.intent, current);
+        }
+
         /** @brief Requires an exact grant for an unused generation of the current recording catalog. */
         bool MatchesGrant(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant,
                           const Sdl3Detail::CaptureControl &capture) noexcept {
@@ -184,10 +203,11 @@ namespace Horo::Audio::Backend {
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::StartCapture */
-    Result<void> Sdl3AudioBackend::StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant) {
+    Result<void> Sdl3AudioBackend::StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureIntent intent,
+                                                const Sdl3CaptureGrant &grant) {
         auto &capture = impl_->capture;
         if (const auto permission = Sdl3Detail::CapturePermission();
-            grant.authorityRevision == 0 || permission != capture.snapshot.permission || !Sdl3Detail::CaptureAuthorized(permission))
+            !AuthorizedIntent(intent, grant) || permission != capture.snapshot.permission || !Sdl3Detail::CaptureAuthorized(permission))
             return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
         if (capture.stream)
             return Sdl3Detail::Failure(AudioErrors::HandleCapacityExhausted);
@@ -196,7 +216,26 @@ namespace Horo::Audio::Backend {
         const auto endpoint = capture.ResolveEndpoint(descriptor);
         if (endpoint.HasError())
             return Result<void>::Failure(endpoint.ErrorValue());
-        return capture.OpenStream(endpoint.Value(), descriptor);
+        auto opened = capture.OpenStream(endpoint.Value(), descriptor);
+        if (opened.HasValue())
+            capture.activeGrant = grant;
+        return opened;
+    }
+
+    /** @copydoc Sdl3AudioBackend::ReconcileCapture */
+    Result<void> Sdl3AudioBackend::ReconcileCapture(const std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant) {
+        auto &capture = impl_->capture;
+        if (!capture.stream || generation != capture.lastGeneration)
+            return Sdl3Detail::Failure(AudioErrors::HandleStale);
+        if (!grant || !SameAdmission(capture.activeGrant, *grant)) {
+            capture.Stop();
+            return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
+        }
+        if (const auto *failure = capture.stream->Failure()) {
+            capture.Stop();
+            return Sdl3Detail::Failure(*failure);
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc Sdl3AudioBackend::ReadCapture */
@@ -207,7 +246,7 @@ namespace Horo::Audio::Backend {
         if (!capture.stream || generation != capture.lastGeneration)
             return Output::Failure(MakeError(AudioErrors::HandleStale));
         if (const auto *failure = capture.stream->Failure()) {
-            capture.stream.reset();
+            capture.Stop();
             return Output::Failure(MakeError(*failure));
         }
         auto &buffer = capture.stream->Buffer();
@@ -218,7 +257,7 @@ namespace Horo::Audio::Backend {
     Result<void> Sdl3AudioBackend::StopCapture(const std::uint64_t generation) {
         if (generation == 0 || generation != impl_->capture.lastGeneration)
             return Sdl3Detail::Failure(AudioErrors::HandleStale);
-        impl_->capture.stream.reset();
+        impl_->capture.Stop();
         return Result<void>::Success();
     }
 }  // namespace Horo::Audio::Backend

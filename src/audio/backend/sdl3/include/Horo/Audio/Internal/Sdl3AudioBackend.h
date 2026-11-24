@@ -20,6 +20,22 @@ namespace Horo::Audio::Backend {
         std::uint64_t clockDomain{};
     };
 
+    /** @brief Host-declared purpose scoped to one recording admission. */
+    enum class Sdl3CapturePurpose : std::uint8_t {
+        Unspecified,
+        Recording,
+        Monitoring,
+        NetworkVoice,
+        Speech
+    };
+
+    /** @brief Host decision about whether this capture may continue after focus loss. */
+    struct Sdl3CaptureIntent final {
+        Sdl3CapturePurpose purpose{Sdl3CapturePurpose::Unspecified};
+        bool allowBackground{};
+        bool operator==(const Sdl3CaptureIntent &) const noexcept = default;
+    };
+
     /** @brief Current host admission for a single explicit device and capture generation.
      * @details The host owns purpose, consent and revocation. Backend verifies the exact request
      * and current observed platform permission. Zero authority revision is ungranted.
@@ -29,6 +45,8 @@ namespace Horo::Audio::Backend {
         std::uint64_t discoveryRevision{};
         std::uint64_t generation{};
         std::uint64_t authorityRevision{};
+        Sdl3CaptureIntent intent;
+        bool foreground{}; /**< Current host focus observation. */
     };
 
     /** @brief One bounded consumer copy and the latest observed ring overflow count. */
@@ -92,10 +110,19 @@ namespace Horo::Audio::Backend {
 
         /** @brief Opens one explicitly selected recording endpoint on Audio control.
          * @param descriptor Immutable format, owner, clock and queue bounds.
+         * @param intent Capture purpose and requested background policy.
          * @param grant Exact host permission decision for this request.
          * @return Success once callback admission opens, or a typed error. No prompt is requested.
          */
-        [[nodiscard]] Result<void> StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant);
+        [[nodiscard]] Result<void> StartCapture(const AudioCaptureBufferDescriptor &descriptor, Sdl3CaptureIntent intent,
+                                                const Sdl3CaptureGrant &grant);
+
+        /** @brief Reconciles current consent and native health without requiring the consumer to read PCM.
+         * @param generation Exact active capture generation.
+         * @param grant The current host grant with current focus evidence, or null after consent withdrawal.
+         * @return Success while admitted or typed failure. Invalidated admission detaches and retires this generation.
+         */
+        [[nodiscard]] Result<void> ReconcileCapture(std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant);
 
         /** @brief Copies one captured block after checking native health and permission on Audio control.
          * @param generation Exact active capture generation.
