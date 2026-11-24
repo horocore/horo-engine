@@ -21,7 +21,8 @@ namespace Horo::Editor::Offline::ColorCookDetail {
             auto loaded = Render::Internal::LoadColorOutputCookPackage(root, family.target.backend);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
-            if (loaded.Value().programCount != family.programCount || loaded.Value().analytic.files != family.analytic.files)
+            if (loaded.Value().programCount != family.programCount || loaded.Value().analytic.files != family.analytic.files ||
+                !loaded.Value().accessibilityEncoder)
                 return Result<void>::Failure(Invalid());
             for (std::size_t i = 0; i < family.programCount; ++i) {
                 const auto &expected = Artifact(family, i);
@@ -48,7 +49,7 @@ namespace Horo::Editor::Offline::ColorCookDetail {
                 const auto sourceCount = family.programCount == 2 ? 3u : 5u;
                 generation =
                     Take(Render::Internal::EncodeColorOutputGeneration(family.analytic, std::span{artifacts}.first(family.programCount),
-                                                                       std::span{sources}.first(sourceCount)));
+                                                                       std::span{sources}.first(sourceCount), true));
                 const auto names = ColorOutputAnalyticFilenames();
                 for (std::size_t i = 0; i < names.size(); ++i) {
                     paths[i] = "analytic/" + std::string{names[i]};

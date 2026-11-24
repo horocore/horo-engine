@@ -9,8 +9,17 @@ namespace Horo::Render {
     enum class ColorOutputShaderStage : std::uint8_t {
         SceneToDisplayLinear,
         EncodeSdr,
-        SceneToDisplayLinearWithLook
+        SceneToDisplayLinearWithLook,
+        EncodeSdrWithAccessibility
     };
+
+    /** @brief Selects the encoder for the admitted package without changing scene program slots. */
+    [[nodiscard]] constexpr ColorOutputShaderStage SelectColorOutputShaderStage(std::size_t index, bool accessibilityEncoder) noexcept {
+        if (index == 1 && accessibilityEncoder)
+            return ColorOutputShaderStage::EncodeSdrWithAccessibility;
+        return static_cast<ColorOutputShaderStage>(index);
+    }
+
     /** @brief Declares the exact Vulkan manual scene/SDR route or the existing Metal product family.
      * @param stage Product operation. @param target Explicit target descriptor.
      * @return Logical recipe or typed unsupported/invalid input. No compilation or realization is implied.

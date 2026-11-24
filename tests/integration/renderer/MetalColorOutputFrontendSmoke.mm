@@ -375,6 +375,7 @@ namespace Horo::Render::Test {
             Texture lookTexture;
             std::shared_ptr<const CookedColorTransform> look;
             ColorLookMode lookMode{ColorLookMode::Disabled};
+            Accessibility::ColorMatrix displayAccessibility;
             std::array<RenderSamplerHandle, 2> samplers;
             Texture scene, display, output;
             RenderBufferHandle vertices, indices, histogram, seed;
@@ -587,7 +588,7 @@ namespace Horo::Render::Test {
             /** @brief Prepares both real product graphics pipelines using the selected device's actual cache identity. */
             void PreparePrograms() {
                 for (std::size_t i = 0; i < programs.size(); ++i)
-                    PrepareProgram(programs[i], package.programs[i], static_cast<ColorOutputShaderStage>(i));
+                    PrepareProgram(programs[i], package.programs[i], SelectColorOutputShaderStage(i, package.accessibilityEncoder));
             }
 
             /** @brief Realizes one authentic product variant with the selected native device and exact final-artifact reflection. */
@@ -599,12 +600,12 @@ namespace Horo::Render::Test {
                 const auto &metadata = *artifact.reflection;
                 program.vertex = Module(artifact, ShaderStage::Vertex, "VSMain");
                 program.fragment = Module(artifact, ShaderStage::Fragment, "PSMain");
+                const bool encode =
+                    stage == ColorOutputShaderStage::EncodeSdr || stage == ColorOutputShaderStage::EncodeSdrWithAccessibility;
                 RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
                                                   .depthTest = false,
                                                   .depthWrite = false,
-                                                  .colorFormat = stage == ColorOutputShaderStage::EncodeSdr
-                                                                     ? RenderTextureFormat::Bgra8Unorm
-                                                                     : displayFormat,
+                                                  .colorFormat = encode ? RenderTextureFormat::Bgra8Unorm : displayFormat,
                                                   .depthFormat = std::nullopt};
                 const PipelineCacheCompatibility compatibility{1,
                                                                device.backend,
@@ -751,8 +752,13 @@ namespace Horo::Render::Test {
             Material EncodeMaterial(bool dither) {
                 const std::array<float, 4> control{static_cast<float>(extent.width), static_cast<float>(extent.height),
                                                    dither ? 1.0F : 0.0F, 255};
-                const std::array values{MaterialParameterValue{{1}, std::span<const float>{control}}};
-                return Bind(1, values, {{{2}, 0, display.view}});
+                const auto &m = displayAccessibility.values;
+                const std::array red{m[0], m[1], m[2], 0.0F}, green{m[3], m[4], m[5], 0.0F}, blue{m[6], m[7], m[8], 0.0F};
+                const std::array values{MaterialParameterValue{{1}, std::span<const float>{control}},
+                                        MaterialParameterValue{{2}, std::span<const float>{red}},
+                                        MaterialParameterValue{{3}, std::span<const float>{green}},
+                                        MaterialParameterValue{{4}, std::span<const float>{blue}}};
+                return Bind(1, std::span{values}.first(package.accessibilityEncoder ? 4 : 1), {{{2}, 0, display.view}});
             }
 
             /** @brief Produces a fresh actual output generation with host metadata distinct from native completion authority. */
@@ -1165,6 +1171,23 @@ namespace Horo::Render::Test {
         CheckColor(firstRead, fixture.Reference("gray-8", 1));
         const auto third = fixture.Step(0.5F);
         CheckColor(fixture.Read(third), fixture.Reference("gray-7", 0.5F));
+    }
+
+    TEST_CASE("Metal final SDR encoder applies the accessibility matrix before containment and sRGB transfer",
+              "[renderer][metal][color-output-frontend][accessibility]") {
+        Fixture fixture;
+        if (!fixture.package.accessibilityEncoder)
+            SKIP("Supply a color package with encoder revision 2.");
+        static_cast<void>(fixture.Step(1.0F / 128));
+        fixture.displayAccessibility = {{0, 0, 1, 0, 0, 0, 1, 0, 0}};
+        const auto read = fixture.Read(fixture.Step(Math::Vec3{.12F, .45F, .81F}));
+        const std::array expectedLinear{read.displayLinear[2], 0.0F, read.displayLinear[0]};
+        for (std::size_t channel = 0; channel < expectedLinear.size(); ++channel) {
+            const float linear = std::clamp(expectedLinear[channel], 0.0F, 1.0F);
+            const float encoded = linear <= 0.0031308F ? 12.92F * linear : 1.055F * std::pow(linear, 1.0F / 2.4F) - 0.055F;
+            CHECK(static_cast<float>(read.bgra[2 - channel]) / 255 == Catch::Approx(encoded).epsilon(0).margin(1.0 / 255));
+        }
+        CHECK(read.bgra[3] == 255);
     }
 
     TEST_CASE("Metal product color rejects stale shader identity through explicit diagnostic output",

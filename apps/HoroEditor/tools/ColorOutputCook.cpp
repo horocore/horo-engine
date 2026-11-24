@@ -28,7 +28,7 @@ namespace Horo::Editor::Offline {
             return bytes;
         }
 
-        /** @brief Reads only the selected fixed wrapper inventory; baseline source bytes remain unchanged. */
+        /** @brief Reads only the selected fixed wrapper inventory. */
         void Sources(Family &family, const std::filesystem::path &repository) {
             constexpr std::array paths{"assets/shaders/runtime/color_output.hlsl", "assets/shaders/runtime/color_encode_sdr.hlsl",
                                        "assets/shaders/runtime/color_output_look.hlsl"};
@@ -44,17 +44,18 @@ namespace Horo::Editor::Offline {
         ShaderCompilationBatch Compile(const Family &family, std::size_t index, const ShaderCompilerTargetDescriptor &target,
                                        const IShaderCompilerAdapter &adapter, const ShaderCompilerToolIdentity &reflector) {
             const bool vulkan = target.requirement.backend == ShaderTargetBackend::Vulkan;
+            const auto stage = SelectColorOutputShaderStage(index, true);
             Require(target.tools.size() == (vulkan ? 2u : 4u));
             ShaderCompilationRequest
                 request{.manifest = family.manifests[index],
                         .source = family.sources[index],
                         .targets = {target},
-                        .reflection =
-                            ShaderCompilerReflectionRequest{reflector,
-                                                            ColorOutputShaderReflectionNames(static_cast<ColorOutputShaderStage>(index),
-                                                                                             target.requirement.backend)}};
+                        .reflection = ShaderCompilerReflectionRequest{reflector,
+                                                                      ColorOutputShaderReflectionNames(stage, target.requirement.backend)}};
             if (vulkan && index == 0)
                 request.defines = {{"HORO_COLOR_OUTPUT_MANUAL_ONLY", "1"}};
+            if (stage == ColorOutputShaderStage::EncodeSdrWithAccessibility)
+                request.defines = {{"HORO_SDR_COLOR_ACCESSIBILITY", "1"}};
             ShaderCompilerLimits limits;
             limits.maximumSourceBytes = 1024U * 1024U;
             limits.maximumPayloadBytes = 16U * 1024U * 1024U;
@@ -91,7 +92,7 @@ namespace Horo::Editor::Offline {
             Sources(family, Root(repositoryRoot));
             for (std::size_t index = 0; index < family.programCount; ++index) {
                 family.manifests[index] =
-                    Take(MakeColorOutputShaderManifest(static_cast<ColorOutputShaderStage>(index), target.requirement));
+                    Take(MakeColorOutputShaderManifest(SelectColorOutputShaderStage(index, true), target.requirement));
                 family.compiled[index] = Compile(family, index, target, adapter, target.tools[2]);
             }
             return Publish(destination, family, host);
@@ -118,7 +119,7 @@ namespace Horo::Editor::Offline {
                                                         .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
                                                         .tools = {tools[0], tools[1]}};
             for (std::size_t index = 0; index < family.programCount; ++index) {
-                family.manifests[index] = Take(MakeColorOutputShaderManifest(static_cast<ColorOutputShaderStage>(index), family.target));
+                family.manifests[index] = Take(MakeColorOutputShaderManifest(SelectColorOutputShaderStage(index, true), family.target));
                 family.compiled[index] = Compile(family, index, target, compiler, tools[2]);
             }
             return PublishVulkan(destination, family);

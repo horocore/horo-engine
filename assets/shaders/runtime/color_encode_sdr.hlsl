@@ -3,6 +3,11 @@
 Texture2D<float4> DisplayLinearColor : register(t0, space0);
 cbuffer ColorEncodeParameters : register(b1, space0) {
     float4 OutputControl; // width,height, orderedDither0/1, quantizationLevels(255/1023)
+#ifdef HORO_SDR_COLOR_ACCESSIBILITY
+    float4 AccessibilityRed;
+    float4 AccessibilityGreen;
+    float4 AccessibilityBlue;
+#endif
 };
 
 float4 VSMain(uint vertex : SV_VertexID) : SV_Position {
@@ -32,7 +37,14 @@ float4 PSMain(float4 position : SV_Position) : SV_Target0 {
     const float4 composed = DisplayLinearColor.Load(int3(pixel, 0));
     if (!all(isfinite(composed)))
         return float4(1.0, 0.0, 1.0, 1.0);
-    const float3 encoded = EncodeSrgb(saturate(composed.rgb));
+#ifdef HORO_SDR_COLOR_ACCESSIBILITY
+    const float3 displayRgb = float3(dot(AccessibilityRed.xyz, composed.rgb),
+                                     dot(AccessibilityGreen.xyz, composed.rgb),
+                                     dot(AccessibilityBlue.xyz, composed.rgb));
+#else
+    const float3 displayRgb = composed.rgb;
+#endif
+    const float3 encoded = EncodeSrgb(saturate(displayRgb));
     const float noise = OutputControl.z == 1.0 ? OrderedDither(pixel) : 0.0;
     return float4(saturate(encoded + noise), saturate(composed.a));
 }

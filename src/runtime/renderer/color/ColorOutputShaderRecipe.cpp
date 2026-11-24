@@ -33,12 +33,17 @@ namespace Horo::Render {
         }
 
         /** @brief Final encoder reads the complete display-linear composition without sampling interpolation. */
-        void DescribeEncode(ShaderManifest &manifest) {
+        void DescribeEncode(ShaderManifest &manifest, bool accessibility) {
             manifest.sourceIdentity = "engine/runtime/color_encode_sdr.hlsl";
             manifest
                 .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
                              {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}};
             manifest.parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1}};
+            if (accessibility) {
+                manifest.sourceRevision = 2;
+                for (std::uint32_t id = 2; id <= 4; ++id)
+                    manifest.parameters.push_back({{id}, {1}, ShaderValueType::Float32, 1, 4, 1});
+            }
         }
     }  // namespace
 
@@ -67,7 +72,8 @@ namespace Horo::Render {
                 DescribeLook(manifest);
                 break;
             case EncodeSdr:
-                DescribeEncode(manifest);
+            case EncodeSdrWithAccessibility:
+                DescribeEncode(manifest, stage == EncodeSdrWithAccessibility);
                 break;
             default:
                 return Return::Failure(MakeError(ShaderManifestErrors::UnsupportedTarget));
@@ -109,6 +115,11 @@ namespace Horo::Render {
             }
             case EncodeSdr:
                 return {{{1}, "type.ColorEncodeParameters", {{{1}, "OutputControl"}}}, {{2}, "DisplayLinearColor", {}}};
+            case EncodeSdrWithAccessibility:
+                return {{{1},
+                         "type.ColorEncodeParameters",
+                         {{{1}, "OutputControl"}, {{2}, "AccessibilityRed"}, {{3}, "AccessibilityGreen"}, {{4}, "AccessibilityBlue"}}},
+                        {{2}, "DisplayLinearColor", {}}};
         }
         return {};
     }

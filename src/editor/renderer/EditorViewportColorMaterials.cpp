@@ -48,12 +48,29 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportColorPipeline::WriteEncodeParameters */
+    Result<void> EditorViewportColorPipeline::WriteEncodeParameters(std::span<std::byte> bytes) const {
+        const auto &layout = programs_[1].layout;
+        if (const auto control = Parameter(bytes, layout, 1, {float(extent_.width), float(extent_.height), 1, 255}); control.HasError())
+            return control;
+        if (!accessibilityEncoder_)
+            return Result<void>::Success();
+        const auto &matrix = displayAccessibility_.values;
+        for (std::uint32_t row = 0; row < 3; ++row) {
+            const auto offset = 3 * row;
+            const std::array<float, 4> values{matrix[offset], matrix[offset + 1], matrix[offset + 2], 0};
+            if (const auto packed = Parameter(bytes, layout, row + 2, values); packed.HasError())
+                return packed;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportColorPipeline::WriteParameters */
     Result<void> EditorViewportColorPipeline::WriteParameters(std::size_t role) {
         std::array<std::byte, 4096> bytes{};
         const auto size = std::span{bytes}.first(programs_[role].uniformBytes);
         if (role == 1) {
-            const auto packed = Parameter(size, programs_[role].layout, 1, {float(extent_.width), float(extent_.height), 1, 255});
+            const auto packed = WriteEncodeParameters(size);
             if (packed.HasError())
                 return packed;
         } else {

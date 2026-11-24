@@ -474,6 +474,14 @@ matrix skips the accessibility stage. A malformed preference rejects the
 candidate with the visual accessibility error, leaving an already published
 plan unchanged.
 
+New Metal and Vulkan SDR color cooks declare encoder revision 2 in the existing
+package generation. The final encoder receives three reflected RGB rows and
+applies them before gamut containment and sRGB transfer. The viewport compositor
+can supply an explicit preview matrix after its display-linear overlays, with
+identity as the default. Packages without an encoder revision use the legacy
+uniform interface. The native desktop output still needs to route its complete
+scene and HUD composition through the accessibility encoder.
+
 Changing exposure/color/output conventions invalidates or explicitly rescales
 dependent histories. SDR/HDR or display transitions stage a new plan and publish
 at `CommandThreadPolicy::RenderSafePoint`; scene shading remains ACEScg. Missing transforms, invalid

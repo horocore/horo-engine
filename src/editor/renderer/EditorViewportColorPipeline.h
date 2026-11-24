@@ -152,6 +152,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareLook();
         /** @brief Copies exact validated domain/interpolation controls into actual reflected offsets. */
         [[nodiscard]] Result<void> WriteLookParameters(std::span<std::byte> bytes);
+        /** @brief Writes final-encoder controls and the admitted display RGB rows. */
+        [[nodiscard]] Result<void> WriteEncodeParameters(std::span<std::byte> bytes) const;
         /** @brief Creates one cold immutable slot/predecessor material variant without mutating GPU data. */
         [[nodiscard]] Result<void> Bind(std::size_t role, Render::RenderTextureViewHandle scene, Render::RenderTextureViewHandle display,
                                         std::size_t slot, std::size_t previous);
@@ -245,6 +247,8 @@ namespace Horo::Editor {
         std::size_t nextSlot_{};
         std::size_t activeSlots_;
         bool manualOnly_{};
+        bool accessibilityEncoder_{};
+        Accessibility::ColorMatrix displayAccessibility_;
         bool candidate_{};
         bool encoded_{};
         bool reset_{true};

@@ -99,7 +99,8 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PreparePrograms(const EditorViewportColorInputs &inputs) {
         for (std::size_t i = 0; i < programs_.size(); ++i) {
             const bool look = i == 0 && selection_->Mode() == ColorLookMode::Enabled;
-            const auto stage = look ? ColorOutputShaderStage::SceneToDisplayLinearWithLook : static_cast<ColorOutputShaderStage>(i);
+            const auto stage =
+                look ? ColorOutputShaderStage::SceneToDisplayLinearWithLook : SelectColorOutputShaderStage(i, accessibilityEncoder_);
             const auto target = manualOnly_ ? Internal::ColorOutputVulkanManualCookTarget() : Internal::ColorOutputMetalCookTarget();
             const auto manifest = MakeColorOutputShaderManifest(stage, target);
             if (manifest.HasError())
@@ -195,6 +196,13 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PrepareSelection(const EditorViewportColorInputs &inputs) {
         if (!inputs.package || !inputs.package->analytic.program)
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        if (const auto &matrix = inputs.displayAccessibility; matrix.has_value()) {
+            if (!matrix->IsValid())
+                return Result<void>::Failure(MakeError(Accessibility::VisualAccessibilityErrors::InvalidSettings));
+            if (!inputs.package->accessibilityEncoder)
+                return Result<void>::Failure(
+                    MakeError(ColorPipelineErrors::UnsupportedOutput, "The composed viewport requires the accessibility SDR encoder."));
+        }
         const auto selected = PrepareColorTransformSelection(inputs.package->analytic.program, inputs.lookMode, inputs.look, inputs.grading,
                                                              inputs.maximumTransformBytes);
         if (selected.HasError())
@@ -228,6 +236,8 @@ namespace Horo::Editor {
             selection_.reset();
             return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
         }
+        accessibilityEncoder_ = inputs.package->accessibilityEncoder;
+        displayAccessibility_ = inputs.displayAccessibility.value_or(Accessibility::ColorMatrix{});
         status_ = EditorViewportColorStatus::Preparing;
         try {
             if (!manualOnly_) {
@@ -355,6 +365,8 @@ namespace Horo::Editor {
             return Outcome(first);
         kernel_.reset();
         manualOnly_ = false;
+        accessibilityEncoder_ = false;
+        displayAccessibility_ = {};
         selection_.reset();
         previous_ = {};
         creationCount_ = 0;

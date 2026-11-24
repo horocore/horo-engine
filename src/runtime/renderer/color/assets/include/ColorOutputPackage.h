@@ -19,6 +19,7 @@ namespace Horo::Render::Internal {
         std::array<CompiledShaderArtifact, 3> programs;
         std::size_t programCount{2};
         ShaderTargetRequirement target; /**< Exact selected scene and encode recipe for this package. */
+        bool accessibilityEncoder{};    /**< Encoder revision with reflected RGB matrix rows. */
 
         /** @brief Borrows the real optional look variant without substituting the baseline scene artifact.
          * @return Third native artifact, or null when the published package does not contain it. */
@@ -60,10 +61,12 @@ namespace Horo::Render::Internal {
     /** @brief Encodes the shared generation schema from actual artifacts/source bytes; compiler provenance remains the cooker's authority.
      * @param analytic Exact original producer generation. @param programs Actual ordered2or3 artifacts.
      * @param sources Ordered scene-combined,scene-wrapper,encode,optional-look-combined,optional-look-wrapper bytes.
+     * @param accessibilityEncoder Whether the encoder was compiled with the accessibility matrix interface.
      * @return Canonical finite generation JSON bytes or typed inconsistency. */
     [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeColorOutputGeneration(const ColorOutputAnalyticBundle &analytic,
                                                                                 std::span<const CompiledShaderArtifact> programs,
-                                                                                std::span<const std::vector<std::uint8_t>> sources);
+                                                                                std::span<const std::vector<std::uint8_t>> sources,
+                                                                                bool accessibilityEncoder = false);
     /** @brief Returns fixed clear/build/adapt Metal data metadata. @return Inert bounded target descriptor. */
     [[nodiscard]] ShaderTargetRequirement ExposureGpuMetalCookTarget();
     /** @brief Returns exact exposure package names. @return Three ordered prefixes; no discovery. */
