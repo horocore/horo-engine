@@ -6,8 +6,10 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -278,9 +280,8 @@ namespace Horo::Editor {
             if (ids.empty())
                 return resolved;
             if (ids.size() == 1) {
-                const auto object = std::ranges::find(objects, SceneObjectId{ids.front()}, &SceneObject::id);
-                if (object != objects.end())
-                    resolved.front() = &*object;
+                if (const auto object = std::ranges::find(objects, SceneObjectId{ids.front()}, &SceneObject::id); object != objects.end())
+                    resolved.front() = std::to_address(object);
                 return resolved;
             }
             std::array<InspectionLookup, ObjectInspectionRequest::MaximumObjects> storage{};
