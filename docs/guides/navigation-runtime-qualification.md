@@ -71,9 +71,12 @@ in reverse order. The best-effort run uses one native Detour job per tick and
 prints median and p95 job execution time with the build, platform and compiler.
 Queue wait and snapshot construction are outside that timing. The workload
 also reports the largest per-tick sum of owner-thread C++ allocation requests
-for capture and batch submission. A separate run
+for capture and batch submission. It checks that Detour's worker-side solve
+makes zero C++ allocation requests across all four workloads. A separate run
 saturates the one-job queue, replaces the capture after teleport and removal,
-and checks that the old work is rejected and its provider pin released.
+and checks that the old work is rejected and its provider pin released. It
+reports cumulative owner-thread C++ allocation requests across construction,
+overlapping captures and retirement.
 
 The scripted solver workload advances authored input positions. The native
 formation run feeds 64 committed capsule roots and achieved velocities into
@@ -84,8 +87,9 @@ pending queue and closing the world prevents subsequent movement callbacks.
 The Gameplay formation retirement case separately admits 64 moves with
 Character feedback pending. It retires the group, rejects late access, and
 checks that the Character, Navigation job, and topology owners drain. The
-ADR-109 4 MiB envelope still requires accounting for worker allocations,
-native allocator calls, retained and retired buffers, and allocator overhead.
+ADR-109 4 MiB envelope applies to the peak live footprint. The remaining
+measurement must include native storage, worker-side scheduler allocation,
+allocator overhead and simultaneously retained buffers.
 
 ## Reference corpus and exact outcomes
 

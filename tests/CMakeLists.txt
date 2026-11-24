@@ -1993,6 +1993,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
             HoroEngine::GameplayNavigationIntegration HoroEngine::NavigationCrowdDeterministic)
     target_sources(HoroNavigationRuntimeQualificationTests PRIVATE
             integration/navigation/AINavigationCharacterQualificationTests.cpp
+            integration/navigation/NavigationCrowdCharacterQualificationTests.cpp
             integration/navigation/NavigationCrowdScaleQualificationTests.cpp
             integration/navigation/NavigationRuntimeQualificationTests.cpp
             integration/navigation/NavigationRuntimePressureQualificationTests.cpp)
