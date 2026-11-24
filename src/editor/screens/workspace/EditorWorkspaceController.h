@@ -242,7 +242,12 @@ namespace Horo::Editor {
         /** @brief Binds numeric inspection to this exact committed editor workspace. */
         [[nodiscard]] std::weak_ptr<const EditorInspectionCommandEndpoint> BindSceneInspection(std::string project,
                                                                                                std::uint64_t authorizationRevision);
-        /** @brief Binds approved debug capture to this exact committed editor workspace. */
+        /** @brief Binds approved debug capture to this exact committed editor workspace.
+         * @param project Host-issued project identity.
+         * @param authorizationRevision Exact active trust revision.
+         * @param viewport Optional renderer borrowed until the binding is revoked, replaced or the workspace retires.
+         * @return A weak endpoint for the exact binding.
+         */
         [[nodiscard]] std::weak_ptr<const EditorDebugCaptureEndpoint> BindDebugCapture(std::string project,
                                                                                        std::uint64_t authorizationRevision,
                                                                                        IEditorViewportRenderer *viewport = nullptr);
@@ -1388,6 +1393,8 @@ namespace Horo::Editor {
         void InvalidateAgentSceneSelection() noexcept;
         /** @brief Revokes only viewport-specific reviews after camera or tool changes. */
         void InvalidateAgentViewport() noexcept;
+        /** @brief Withdraws renderer-owned capture before retiring the command binding and its telemetry. */
+        void RetireDebugCaptureBinding() noexcept;
         /** @brief Withdraws captures of the prior viewport projection before advancing its revision. */
         void AdvanceViewportSceneRevision() noexcept;
         /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */

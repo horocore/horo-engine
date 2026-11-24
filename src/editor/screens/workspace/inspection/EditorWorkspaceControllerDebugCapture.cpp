@@ -50,16 +50,24 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceController::RetireDebugCaptureBinding */
+    void EditorWorkspaceController::RetireDebugCaptureBinding() noexcept {
+        if (m_debugCaptureEndpoint && m_debugCaptureEndpoint->retireImage)
+            m_debugCaptureEndpoint->retireImage();
+        m_debugCaptureLifetime.RequestCancellation();
+        m_debugCaptureEndpoint.reset();
+        m_debugCapture.Clear();
+        m_debugCaptureAuthorized = {};
+        m_debugCaptureEntity.reset();
+    }
+
     /** @copydoc EditorWorkspaceController::BindDebugCapture */
     std::weak_ptr<const EditorDebugCaptureEndpoint> EditorWorkspaceController::BindDebugCapture(std::string project,
                                                                                                 std::uint64_t authorizationRevision,
                                                                                                 IEditorViewportRenderer *viewport) {
-        m_debugCaptureLifetime.RequestCancellation();
+        RetireDebugCaptureBinding();
         m_debugCaptureLifetime = CancellationSource{};
         const auto lifetime = m_debugCaptureLifetime.Token();
-        m_debugCapture.Clear();
-        m_debugCaptureAuthorized = {};
-        m_debugCaptureEntity.reset();
         EditorDebugCaptureEndpoint endpoint{.project = std::move(project),
                                             .authorizationRevision = authorizationRevision,
                                             .owner = std::this_thread::get_id(),

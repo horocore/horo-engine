@@ -50,6 +50,11 @@ namespace {
             return Result<std::uint64_t>::Success(requests);
         }
 
+        bool CancelImageCapture(const std::uint64_t id) noexcept override {
+            cancelledId = id;
+            return true;
+        }
+
         Result<void> ExecutePreparedFrame(Render::RenderFrameScope &, std::span<const Render::RenderPassDescriptor>) override {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         }
@@ -86,6 +91,7 @@ namespace {
         EditorViewportImageRegion submitted;
         std::function<bool()> current;
         std::uint64_t requests{};
+        std::optional<std::uint64_t> cancelledId;
     };
 
     /** @brief Reports a typed failure for a live clone entity through the workspace's normal Play host port. */
@@ -662,8 +668,8 @@ namespace {
     }
 
     TEST_CASE("Viewport image admission binds the authored source through owner and extent changes", "[unit][editor][debug-capture]") {
-        TestWorkspaceController controller;
         CaptureViewport viewport;
+        TestWorkspaceController controller;
         auto &workspace = controller.Controller();
         const auto endpoint = workspace.BindDebugCapture("test-project", 1, &viewport).lock();
         REQUIRE(endpoint);
@@ -701,11 +707,39 @@ namespace {
         }
         SECTION("workspace retirement invalidates even an endpoint retained by a caller") {
             workspace.RevokeWorkspaceCommands();
+            CHECK(viewport.cancelledId == 1);
             CHECK_FALSE(endpoint->readImageSource());
         }
         CHECK_FALSE(viewport.current());
         CHECK(endpoint->startImage(*source, region, allowed).HasError());
         CHECK(viewport.requests == 1);
+    }
+
+    TEST_CASE("Replacing capture trust withdraws the old renderer request before any new frame", "[unit][editor][debug-capture]") {
+        CaptureViewport viewport;
+        TestWorkspaceController controller;
+        auto &workspace = controller.Controller();
+        const auto first = workspace.BindDebugCapture("test-project", 1, &viewport).lock();
+        REQUIRE(first);
+        const auto source = first->readImageSource();
+        REQUIRE(source);
+        const auto allowed = [] {
+            return true;
+        };
+        constexpr EditorViewportImageRegion region{2, 3, 24, 16};
+        REQUIRE(first->startImage(*source, region, allowed).HasValue());
+        const auto originalAuthority = viewport.current;
+        REQUIRE(originalAuthority());
+
+        const auto replacement = workspace.BindDebugCapture("test-project", 2, &viewport).lock();
+        REQUIRE(replacement);
+        CHECK(viewport.cancelledId == 1);
+        CHECK_FALSE(originalAuthority());
+        CHECK_FALSE(first->readImageSource());
+        REQUIRE(replacement->startImage(*source, region, allowed).HasValue());
+        CHECK_FALSE(first->cancelImage(2));
+        CHECK(viewport.cancelledId == 1);
+        CHECK(viewport.current());
     }
 
     TEST_CASE("Viewport Navigation Updates Only The Editor Camera Authority", "[unit][editor]") {
