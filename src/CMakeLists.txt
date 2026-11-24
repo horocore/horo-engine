@@ -1524,7 +1524,7 @@ if(HORO_BUILD_AUDIO_SDL3)
                 LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
         target_sources(HoroAudioSdl3 PRIVATE ${_HORO_SDL3_MAC_CAPTURE_SOURCE})
         target_compile_definitions(HoroAudioSdl3 PRIVATE HORO_SDL3_MAC_CAPTURE_PERMISSION=1)
-        target_link_libraries(HoroAudioSdl3 PRIVATE "-framework AVFoundation")
+        target_link_libraries(HoroAudioSdl3 PRIVATE "-framework AVFoundation" "-framework Security")
     endif()
 endif()
 

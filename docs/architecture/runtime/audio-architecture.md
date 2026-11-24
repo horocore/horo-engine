@@ -2382,6 +2382,15 @@ and detaches the callback on cancellation. A virtual system default is
 available for discovery but capture requires an explicit endpoint to prevent
 silent hardware changes.
 
+The Core Audio adapter can request microphone permission after an explicit
+host action on the main thread. It checks the running application's usage
+description and signed audio-input entitlement before requesting access or
+opening a recording device. The asynchronous system decision is observed
+through recording discovery. It remains separate from the host's purpose grant.
+The macOS SDL3 editor bundle carries the usage description. Xcode uses the
+editor capture entitlements file when signing. Packaging with other generators
+must apply the equivalent entitlements when signing the executable.
+
 Audio does not own speech recognition, language inference, model providers,
 agent intent, or network voice transport. A provider-neutral speech service may
 consume an admitted capture stream and publish partial/final transcript results.

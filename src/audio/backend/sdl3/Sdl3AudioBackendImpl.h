@@ -26,6 +26,10 @@ namespace Horo::Audio::Backend {
          * @return The operating system's reported permission, or Unknown when observation is unavailable.
          */
         [[nodiscard]] AudioCapturePermission ReadMacCapturePermission() noexcept;
+        /** @brief Checks the current process bundle usage description and code-signing entitlement. */
+        [[nodiscard]] bool MacCapturePackageReady() noexcept;
+        /** @brief Requests authorization asynchronously on the application main thread. */
+        [[nodiscard]] Result<Sdl3CapturePermissionRequest> RequestMacCapturePermission();
 #endif
 
         inline Result<void> Failure(const ErrorCodeDescriptor &descriptor) {

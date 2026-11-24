@@ -38,12 +38,27 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         bool CaptureAuthorized(const AudioCapturePermission permission) noexcept {
             return permission == AudioCapturePermission::Granted || permission == AudioCapturePermission::NotRequired;
         }
+
+        /** @brief Returns the active SDL driver without exposing native identities to the host. */
+        std::string_view CaptureDriver() noexcept {
+            const char *name = SDL_GetCurrentAudioDriver();
+            return name ? name : "";
+        }
+
+        /** @brief Checks native packaging before attempting to open a real recording device. */
+        bool CapturePackageReady() noexcept {
+            const auto driver = CaptureDriver();
+#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
+            if (driver == "coreaudio")
+                return MacCapturePackageReady();
+#endif
+            return driver == "dummy";
+        }
     }  // namespace
 
     /** @copydoc CapturePermission */
     AudioCapturePermission CapturePermission() noexcept {
-        const char *current = SDL_GetCurrentAudioDriver();
-        const std::string_view driver = current ? current : "";
+        const auto driver = CaptureDriver();
         if (driver == "dummy")
             return AudioCapturePermission::NotRequired;
 #if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
@@ -194,6 +209,15 @@ namespace Horo::Audio::Backend {
                    AuthorizedIntent(expected.intent, current);
         }
 
+        /** @brief Requires both host admission and current native eligibility before opening a device. */
+        const ErrorCodeDescriptor *AdmissionFailure(const Sdl3CaptureIntent intent, const Sdl3CaptureGrant &grant,
+                                                    const AudioCapturePermission advertised) noexcept {
+            if (const auto permission = Sdl3Detail::CapturePermission();
+                !AuthorizedIntent(intent, grant) || permission != advertised || !Sdl3Detail::CaptureAuthorized(permission))
+                return &AudioErrors::CapturePermissionDenied;
+            return Sdl3Detail::CapturePackageReady() ? nullptr : &AudioErrors::CapabilityUnavailable;
+        }
+
         /** @brief Requires an exact grant for an unused generation of the current recording catalog. */
         bool MatchesGrant(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant,
                           const Sdl3Detail::CaptureControl &capture) noexcept {
@@ -202,13 +226,29 @@ namespace Horo::Audio::Backend {
         }
     }  // namespace
 
+    /** @copydoc Sdl3AudioBackend::RequestCapturePermission */
+    Result<Sdl3CapturePermissionRequest> Sdl3AudioBackend::RequestCapturePermission() {
+        using Output = Result<Sdl3CapturePermissionRequest>;
+        if (!SDL_IsMainThread())
+            return Output::Failure(MakeError(AudioErrors::RuntimeInactive));
+        if (!impl_->Initialize())
+            return Output::Failure(MakeError(AudioErrors::CapabilityUnavailable));
+        const auto driver = Sdl3Detail::CaptureDriver();
+        if (driver == "dummy")
+            return Output::Success(Sdl3CapturePermissionRequest::DecisionAvailable);
+#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
+        if (driver == "coreaudio")
+            return Sdl3Detail::RequestMacCapturePermission();
+#endif
+        return Output::Failure(MakeError(AudioErrors::OperationUnsupported));
+    }
+
     /** @copydoc Sdl3AudioBackend::StartCapture */
     Result<void> Sdl3AudioBackend::StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureIntent intent,
                                                 const Sdl3CaptureGrant &grant) {
         auto &capture = impl_->capture;
-        if (const auto permission = Sdl3Detail::CapturePermission();
-            !AuthorizedIntent(intent, grant) || permission != capture.snapshot.permission || !Sdl3Detail::CaptureAuthorized(permission))
-            return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
+        if (const auto *failure = AdmissionFailure(intent, grant, capture.snapshot.permission))
+            return Sdl3Detail::Failure(*failure);
         if (capture.stream)
             return Sdl3Detail::Failure(AudioErrors::HandleCapacityExhausted);
         if (!impl_->initialized || descriptor.clockDomain != impl_->config.clockDomain || !MatchesGrant(descriptor, grant, capture))

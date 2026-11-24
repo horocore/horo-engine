@@ -55,6 +55,13 @@ namespace Horo::Audio::Backend {
         std::uint64_t droppedFrames{};
     };
 
+    /** @brief Result of an explicit request to the platform permission owner. */
+    enum class Sdl3CapturePermissionRequest : std::uint8_t {
+        Requested,
+        AlreadyPending,
+        DecisionAvailable
+    };
+
     /** @brief Backend-local facts; parent AudioRuntime state remains control-owned. */
     enum class Sdl3AudioBackendState : std::uint8_t {
         Closed = 0,
@@ -107,6 +114,12 @@ namespace Horo::Audio::Backend {
          * refresh. This call does not consume SDL's shared event queue or start capture.
          */
         [[nodiscard]] Result<AudioCaptureDiscovery> DiscoverCapture() override;
+
+        /** @brief Asks the platform for microphone access in response to an explicit host user action.
+         * @return Request state or typed failure. A decision is subsequently read through DiscoverCapture.
+         * @pre Called on the application main thread. This does not open a device or grant a capture purpose.
+         */
+        [[nodiscard]] Result<Sdl3CapturePermissionRequest> RequestCapturePermission();
 
         /** @brief Opens one explicitly selected recording endpoint on Audio control.
          * @param descriptor Immutable format, owner, clock and queue bounds.

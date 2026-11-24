@@ -89,6 +89,15 @@ if(HORO_BUILD_EDITOR_GUI)
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         )
+        if(TARGET HoroAudioSdl3)
+            set(HORO_EDITOR_CAPTURE_TR "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/tr.lproj/InfoPlist.strings")
+            set_source_files_properties("${HORO_EDITOR_CAPTURE_TR}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/tr.lproj")
+            target_sources(HoroEditor PRIVATE "${HORO_EDITOR_CAPTURE_TR}")
+            set_target_properties(HoroEditor PROPERTIES
+                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/HoroEditorCaptureInfo.plist.in"
+                XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/HoroEditorCapture.entitlements"
+            )
+        endif()
         install(TARGETS HoroEditor
             BUNDLE DESTINATION "."
             COMPONENT Editor

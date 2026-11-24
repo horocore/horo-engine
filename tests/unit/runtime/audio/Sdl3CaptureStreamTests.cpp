@@ -181,5 +181,17 @@ namespace Horo::Audio::Backend {
             CHECK(backend->ReadCapture(descriptor.generation, block, {}).HasError());
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
         }
+
+        TEST_CASE("SDL dummy permission request returns a decision without opening capture", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto decision = backend->RequestCapturePermission();
+            REQUIRE(decision.HasValue());
+            CHECK(decision.Value() == Sdl3CapturePermissionRequest::DecisionAvailable);
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            CHECK(discovery.Value().snapshot.permission == AudioCapturePermission::NotRequired);
+            AudioCapturedBlock block{};
+            CHECK(backend->ReadCapture(1, block, {}).HasError());
+        }
     }  // namespace
 }  // namespace Horo::Audio::Backend
