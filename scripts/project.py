@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cmp_to_key
 from pathlib import Path, PurePosixPath
@@ -1010,10 +1011,7 @@ def stop_deploy_process(process: subprocess.Popen, *, leader_exited: bool = Fals
     if process.returncode is not None:
         return
     try:
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     except PermissionError:
@@ -1043,14 +1041,40 @@ def wait_deploy_status(process: subprocess.Popen, deadline: float) -> int:
     return process.wait(timeout=max(0, deadline - time.monotonic()))
 
 
-def deploy_process(command: list[str], deadline: float) -> tuple[int, str]:
-    """Collect at most one bounded output buffer before a shared absolute deadline."""
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise AndroidDeployError("deadline_exceeded")
+@contextmanager
+def owned_deploy_process(command: list[str], retain_adb_server: bool) -> Iterator[subprocess.Popen]:
+    """Admit an argv command with host-specific ownership of its subprocess tree."""
+    argv = admitted_command(command)
+    environment = execution_environment()
+    if os.name == "nt":
+        from dev import CleanupError, owned_windows_process
+
+        try:
+            with owned_windows_process(argv, env=environment, capture_output=True,
+                                       retain_children_on_success=retain_adb_server) as process:
+                yield process
+        except CleanupError:
+            raise AndroidDeployError("host_process_stop_unconfirmed") from None
+        return
     process = subprocess.Popen(
-        admitted_command(command), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        shell=False, start_new_session=True, env=execution_environment())
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        shell=False, start_new_session=True, env=environment)
+    try:
+        yield process
+    finally:
+        stop_deploy_process(process)
+
+
+def deploy_process(command: list[str], deadline: float, *, retain_adb_server: bool = False) -> tuple[int, str]:
+    """Collect at most one bounded output buffer before a shared absolute deadline."""
+    if deadline <= time.monotonic():
+        raise AndroidDeployError("deadline_exceeded")
+    with owned_deploy_process(command, retain_adb_server) as process:
+        return read_deploy_process(process, deadline)
+
+
+def read_deploy_process(process: subprocess.Popen, deadline: float) -> tuple[int, str]:
+    """Read only the owned command's bounded output and terminal status."""
     output: Queue[bytes | OSError] = Queue(maxsize=1)
 
     def capture() -> None:
@@ -1072,8 +1096,6 @@ def deploy_process(command: list[str], deadline: float) -> tuple[int, str]:
         return status, captured.decode("utf-8", errors="replace")
     except (Empty, subprocess.TimeoutExpired):
         raise AndroidDeployError("deadline_exceeded") from None
-    finally:
-        stop_deploy_process(process)
 
 
 def deploy_tool(sdk: Path, name: str) -> str:
@@ -1209,7 +1231,7 @@ def adb_connection_mode(serial: str, details: list[str]) -> str:
 
 def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedAdbDevice:
     """Resolve a serial to one current ADB transport. Reconnects require a new operation."""
-    status, output = deploy_process([executable, "devices", "-l"], deadline)
+    status, output = deploy_process([executable, "devices", "-l"], deadline, retain_adb_server=True)
     if status:
         raise AndroidDeployError("device_inventory_unavailable")
     matches = [fields for line in output.splitlines() if (fields := line.split()) and fields[0] == serial]

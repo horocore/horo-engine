@@ -330,7 +330,7 @@ class _WindowsJob:
                         ("period_user", ctypes.c_int64), ("period_kernel", ctypes.c_int64),
                         ("faults", w.DWORD), ("total", w.DWORD), ("active", w.DWORD), ("terminated", w.DWORD)]
 
-        self._thread_entry, self._accounting = ThreadEntry, Accounting
+        self._thread_entry, self._accounting, self._limits = ThreadEntry, Accounting, Limits
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         signatures = {
             "CreateJobObjectW": ([ctypes.c_void_p, w.LPCWSTR], w.HANDLE),
@@ -352,12 +352,19 @@ class _WindowsJob:
             function.argtypes, function.restype = arguments, result
         self.handle = self.check(self.kernel.CreateJobObjectW(None, None))
         try:
-            limits = Limits()
-            limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway permission.
-            self.check(self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+            self._set_limits(0x2000)  # KILL_ON_JOB_CLOSE; no breakaway permission.
         except BaseException:
             self.close()
             raise
+
+    def _set_limits(self, flags: int) -> None:
+        limits = self._limits()
+        limits.basic.flags = flags
+        self.check(self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+
+    def release_children(self) -> None:
+        """Allow a service retained after an explicitly admitted successful command to keep running."""
+        self._set_limits(0)
 
     @staticmethod
     def check(value):
@@ -414,26 +421,40 @@ class _WindowsJob:
         self.check(self.kernel.CloseHandle(self.handle))
 
 
-def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
-    """Start suspended, contain the complete tree, and return 130 only after verified cancellation."""
+def _stop_windows_process(job: _WindowsJob, process: subprocess.Popen | None, resumed: bool) -> None:
+    """Reap a suspended launch failure even if it never entered the job."""
+    if process is not None and not resumed and process.poll() is None:
+        process.terminate()
+    job.stop()
+    if process is not None:
+        process.wait(timeout=5)
+
+
+@contextlib.contextmanager
+def owned_windows_process(
+    command: Sequence[str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None,
+    capture_output: bool = False, retain_children_on_success: bool = False,
+) -> Iterator[subprocess.Popen]:
+    """Contain the suspended launch before yielding it. Verify tree retirement unless success explicitly retains a service."""
     job = _WindowsJob()
     process = None
+    resumed = False
+    retain_children = False
     try:
         # CREATE_SUSPENDED prevents child creation before containment, including during attach failures.
-        process = subprocess.Popen(command, cwd=cwd, env=env, shell=False,
+        pipes = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL} if capture_output else {}
+        process = subprocess.Popen(command, cwd=cwd, env=env, shell=False, **pipes,
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x4)
         job.attach_and_resume(process)
-        try:
-            return process.wait()
-        except KeyboardInterrupt:
-            return 130
+        resumed = True
+        yield process
+        retain_children = retain_children_on_success and process.returncode == 0
     finally:
         try:
-            job.stop()
-            if process is not None:
-                if process.poll() is None:  # Attach may have failed with the root still suspended outside the job.
-                    process.terminate()
-                process.wait(timeout=5)
+            if retain_children:
+                job.release_children()
+            else:
+                _stop_windows_process(job, process, resumed)
         except (KeyboardInterrupt, SystemExit) as cleanup_error:
             raise cleanup_error from CleanupError("Windows developer process cleanup was not confirmed")
         except Exception as cleanup_error:
@@ -444,6 +465,15 @@ def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | Non
                     process._handle.Close()
             finally:
                 job.close()
+
+
+def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
+    """Return the exit status or 130 after verified cancellation."""
+    with owned_windows_process(command, cwd=cwd, env=env) as process:
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            return 130
 
 
 def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> int:

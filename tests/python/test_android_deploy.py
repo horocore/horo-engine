@@ -12,6 +12,7 @@ import zipfile
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import project
@@ -110,8 +111,9 @@ class AndroidDeployTests(unittest.TestCase):
             nonlocal now
             now += seconds
 
-        def run(command, deadline):
+        def run(command, deadline, *, retain_adb_server=False):
             nonlocal running, awaiting_receipt
+            self.assertEqual(retain_adb_server, command[1:] == ["devices", "-l"])
             if command[1:] == ["devices", "-l"]:
                 args = tuple(command[1:])
             else:
@@ -1006,6 +1008,61 @@ class AndroidDeployTests(unittest.TestCase):
         with self.assertRaisesRegex(project.AndroidDeployError, "deadline_exceeded"):
             project.deploy_process([sys.executable, "-c", "import time; time.sleep(15)"], started + 0.3)
         self.assertLess(time.monotonic() - started, 4)
+
+    def test_windows_deployment_requests_owned_capture_and_reports_unconfirmed_retirement(self):
+        from dev import CleanupError
+
+        argv = ["adb.exe", "devices", "-l"]
+        environment = {"TEST": "owned"}
+        child = object()
+        with patch.object(project, "os", SimpleNamespace(name="nt")), \
+                patch.object(project, "admitted_command", return_value=argv), \
+                patch.object(project, "execution_environment", return_value=environment), \
+                patch("dev.owned_windows_process", return_value=contextlib.nullcontext(child)) as start, \
+                patch.object(project, "read_deploy_process", return_value=(0, "inventory")) as read:
+            deadline = time.monotonic() + 1
+            self.assertEqual(project.deploy_process(argv, deadline, retain_adb_server=True), (0, "inventory"))
+            start.assert_called_once_with(argv, env=environment, capture_output=True, retain_children_on_success=True)
+            read.assert_called_once_with(child, deadline)
+            start.side_effect = CleanupError("fixture retirement denied")
+            with self.assertRaisesRegex(project.AndroidDeployError, "host_process_stop_unconfirmed"):
+                project.deploy_process(argv, deadline)
+
+    @unittest.skipUnless(os.name == "nt", "Requires native Windows Job Object containment")
+    def test_windows_failed_deployment_retires_the_child_after_the_leader_exits(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        read = project.read_deploy_process
+        child_handle = None
+
+        def observe(process, deadline):
+            nonlocal child_handle
+            status, output = read(process, deadline)
+            child_handle = kernel.OpenProcess(0x00100000, False, int(output.strip()))  # SYNCHRONIZE
+            self.assertTrue(child_handle)
+            self.assertEqual(kernel.WaitForSingleObject(child_handle, 0), 258)  # WAIT_TIMEOUT
+            return status, output
+
+        launch = ("import subprocess,sys; "
+                  "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'], "
+                  "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                  "print(child.pid,flush=True); sys.exit(7)")
+        try:
+            with patch.object(project, "read_deploy_process", side_effect=observe):
+                status, _ = project.deploy_process([sys.executable, "-c", launch], time.monotonic() + 5)
+            self.assertEqual(status, 7)
+            self.assertEqual(kernel.WaitForSingleObject(child_handle, 0), 0)  # WAIT_OBJECT_0
+        finally:
+            if child_handle:
+                kernel.CloseHandle(child_handle)
 
     @unittest.skipUnless(hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "Requires POSIX child exit observation")
     def test_failed_host_command_retires_its_group_before_reaping(self):

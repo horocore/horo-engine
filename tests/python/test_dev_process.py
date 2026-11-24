@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -156,6 +158,68 @@ def test_windows_cleanup_cancellation_preserves_exception_and_unconfirmed_cause(
         process._windows_run(["fixture"], tmp_path, None)
     assert caught.value is cancellation
     assert isinstance(caught.value.__cause__, process.CleanupError)
+
+
+@pytest.mark.parametrize(("retain", "status", "read_failed", "retirement"), [
+    (False, 0, False, "stop"),
+    (True, 0, False, "release"),
+    (True, 7, False, "stop"),
+    (True, 0, True, "stop"),
+])
+def test_owned_windows_capture_retires_the_tree_except_for_explicit_service_success(
+    monkeypatch, retain, status, read_failed, retirement,
+):
+    events = []
+
+    class Handle:
+        def Close(self):
+            events.append("close process")
+
+    class Child:
+        returncode = status
+        stdout = io.BytesIO(b"owned output")
+        _handle = Handle()
+
+        def wait(self, *, timeout):
+            assert timeout == 5
+            events.append("wait")
+
+    class Job:
+        def attach_and_resume(self, child):
+            assert isinstance(child, Child)
+            events.append("resume")
+
+        def stop(self):
+            events.append("stop")
+
+        def release_children(self):
+            events.append("release")
+
+        def close(self):
+            events.append("close job")
+
+    def spawn(argv, **kwargs):
+        assert argv == ["adb.exe", "devices", "-l"]
+        assert kwargs["creationflags"] == 0x204
+        assert kwargs["stdout"] == process.subprocess.PIPE
+        assert kwargs["stderr"] == process.subprocess.STDOUT
+        assert kwargs["shell"] is False
+        events.append("create suspended")
+        return Child()
+
+    monkeypatch.setattr(process, "_WindowsJob", Job)
+    monkeypatch.setattr(process.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(process.subprocess, "Popen", spawn)
+    with pytest.raises(OSError) if read_failed else contextlib.nullcontext():
+        with process.owned_windows_process(["adb.exe", "devices", "-l"], capture_output=True,
+                                           retain_children_on_success=retain) as child:
+            assert child.stdout.read() == b"owned output"
+            if read_failed:
+                raise OSError("fixture output read failed")
+    expected = ["create suspended", "resume", retirement]
+    if retirement == "stop":
+        expected.append("wait")
+    assert events == [*expected, "close process", "close job"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Native Windows job containment")
