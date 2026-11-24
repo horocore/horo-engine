@@ -162,8 +162,12 @@ include("${PROJECT_SOURCE_DIR}/cmake/physics/HoroPhysicsStateImages.cmake")
 foreach(_horo_state_header IN ITEMS
         state/snapshot/PhysicsStateSaveContract.h
         scene_state/PhysicsSceneStateStorage.h
-        PhysicsStateHashInternal.h)
+        state/envelope/PhysicsStateHashInternal.h)
+    set(_horo_state_header_source "${CMAKE_CURRENT_SOURCE_DIR}/physics/${_horo_state_header}")
+    if(NOT EXISTS "${_horo_state_header_source}")
+        message(FATAL_ERROR "Missing private Physics state header: ${_horo_state_header_source}")
+    endif()
     get_filename_component(_horo_state_header_name "${_horo_state_header}" NAME)
     file(GENERATE OUTPUT "${_horo_physics_scene_host_headers}/${_horo_state_header_name}"
-        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/physics/${_horo_state_header}\"\n")
+        CONTENT "#pragma once\n#include \"${_horo_state_header_source}\"\n")
 endforeach()
