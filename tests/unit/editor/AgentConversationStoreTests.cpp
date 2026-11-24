@@ -248,6 +248,40 @@ namespace Horo::Agent {
         }
     }
 
+    TEST_CASE("Full default agent history preserves the complete conversation across restart", "[unit][agent][conversation_history]") {
+        Project project;
+        constexpr AgentHistoryLimits limits;
+        AgentConversationId conversation;
+        std::vector<std::uint8_t> accepted;
+        {
+            auto history = project.Open();
+            const auto created = history.Create("Long exchange", 1);
+            REQUIRE(created.HasValue());
+            conversation = created.Value();
+            for (std::size_t turn = 0; turn < limits.messagesPerConversation / 2; ++turn) {
+                const auto text = "Turn " + std::to_string(turn);
+                const auto recorded =
+                    history.RecordCompleted({.conversation = conversation, .userText = text, .now = turn + 2}, {"Visible response", {}});
+                REQUIRE(recorded.HasValue());
+            }
+            accepted = project.Image();
+            CHECK(accepted.size() <= limits.snapshotBytes);
+            RequireError(history.BeginTurn(conversation, "Overflow", {}, limits.messagesPerConversation + 1), AgentHistoryErrors::Capacity);
+            CHECK(project.Image() == accepted);
+        }
+
+        auto reopened = project.Open();
+        REQUIRE(reopened.Availability() == Availability::Ready);
+        REQUIRE(reopened.Conversations().size() == 1);
+        const auto &saved = reopened.Conversations().front();
+        CHECK(saved.id == conversation);
+        REQUIRE(saved.messages.size() == limits.messagesPerConversation);
+        CHECK(saved.messages.front().text == "Turn 0");
+        CHECK(saved.messages.back().state == MessageState::Complete);
+        RequireError(reopened.BeginTurn(conversation, "Overflow", {}, limits.messagesPerConversation + 2), AgentHistoryErrors::Capacity);
+        CHECK(project.Image() == accepted);
+    }
+
     TEST_CASE("Agent history tolerates corrupt and future images without replacing them", "[unit][agent][conversation_history]") {
         Project project;
         Availability expected = Availability::Corrupt;
