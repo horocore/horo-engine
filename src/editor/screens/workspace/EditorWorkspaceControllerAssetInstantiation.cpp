@@ -240,7 +240,7 @@ namespace Horo::Editor {
             if (const auto shown = ApplyPrefabDropPreview(m_viewportScene, m_prefabDrop->geometry, placement); shown.HasError())
                 return;
             m_assetPlacementPreviewActive = true;
-            ++m_viewportSceneRevision;
+            AdvanceViewportSceneRevision();
             return;
         }
         const std::filesystem::path source = ResolveAssetSourcePath(ProjectRoot(), request, *record);
@@ -257,7 +257,7 @@ namespace Horo::Editor {
             return;
         }
         m_assetPlacementPreviewActive = true;
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
     }
 
     void EditorWorkspaceController::CancelAssetPlacementPreview() {
@@ -266,13 +266,13 @@ namespace Horo::Editor {
             return;
         static_cast<void>(ClearAssetViewportPlacementPreview(m_viewportScene));
         m_assetPlacementPreviewActive = false;
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
     }
 
     void EditorWorkspaceController::HandleInstantiateAsset(const AssetSceneDropRequest &request) {
         // Retain source evidence until final revalidation; remove only the disposable render overlay.
         if (ClearAssetViewportPlacementPreview(m_viewportScene))
-            ++m_viewportSceneRevision;
+            AdvanceViewportSceneRevision();
         m_assetPlacementPreviewActive = false;
         const Assets::AssetRecord *record = ResolveAssetDropRecord(request);
         if (record == nullptr) {

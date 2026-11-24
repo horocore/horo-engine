@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -131,6 +132,61 @@ namespace {
         Check(viewport.RequestedExtent() == resizedExtent);
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
+
+    /** @brief Reads the exact resident viewport on the native graphics queue for comparison. */
+    std::vector<std::uint8_t> ReadNativeViewportPixels(MetalEditorGraphicsBridge &bridge, const EditorViewportTextureView textureView,
+                                                       const EditorViewportExtent extent) {
+        id<MTLTexture> texture = (__bridge id<MTLTexture>)(reinterpret_cast<void *>(textureView.textureId));
+        Check(texture != nil);
+        Check(texture.width == extent.width && texture.height == extent.height);
+        const std::size_t bytesPerRow = texture.width * 4U;
+        const std::size_t byteCount = bytesPerRow * texture.height;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)bridge.Device();
+        id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)bridge.CommandQueue();
+        id<MTLBuffer> readback = [device newBufferWithLength:byteCount options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> readbackCommands = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [readbackCommands blitCommandEncoder];
+        [blit copyFromTexture:texture
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                            toBuffer:readback
+                   destinationOffset:0
+              destinationBytesPerRow:bytesPerRow
+            destinationBytesPerImage:byteCount];
+        [blit endEncoding];
+        [readbackCommands commit];
+        [readbackCommands waitUntilCompleted];
+        Check(readbackCommands.status == MTLCommandBufferStatusCompleted);
+        std::vector<std::uint8_t> rgba(byteCount);
+        std::copy_n(static_cast<const std::uint8_t *>(readback.contents), byteCount, rgba.data());
+        return rgba;
+    }
+
+    /** @brief Compares the published crop to native texture rows at the same top-left pixel origin. */
+    void CheckNativeCrop(const EditorViewportImageArtifact &artifact, const std::span<const std::uint8_t> rgba,
+                         const EditorViewportExtent extent) {
+        const auto bytesPerRow = std::size_t{extent.width} * EditorViewportImageRegion::Channels;
+        const auto cropRowBytes = std::size_t{artifact.region.width} * EditorViewportImageRegion::Channels;
+        for (std::size_t row = 0; row < artifact.region.height; ++row) {
+            const auto offset = (artifact.region.y + row) * bytesPerRow + artifact.region.x * EditorViewportImageRegion::Channels;
+            CHECK(std::memcmp(artifact.rgba.data() + row * cropRowBytes, rgba.data() + offset, cropRowBytes) == 0);
+        }
+    }
+
+    /** @brief Checks that the full readback contains the expected lit geometry and background. */
+    void CheckViewportColors(const std::span<const std::uint8_t> rgba, const EditorViewportExtent extent) {
+        std::uint8_t minimum = 255;
+        std::uint8_t maximum = 0;
+        for (std::size_t index = 0; index < rgba.size(); index += 4) {
+            minimum = std::min(minimum, std::min(rgba[index], std::min(rgba[index + 1], rgba[index + 2])));
+            maximum = std::max(maximum, std::max(rgba[index], std::max(rgba[index + 1], rgba[index + 2])));
+        }
+        Check(maximum > minimum + 32);
+        const std::size_t center = (static_cast<std::size_t>(extent.height / 2) * extent.width + extent.width / 2) * 4;
+        Check(rgba[center] < 150 && rgba[center + 1] > 130 && rgba[center + 2] > 150);
+    }
 }  // namespace
 
 TEST_CASE("Metal presents a GUI frame with a replacement font atlas", "[integration][renderer][gpu][font-atlas]") {
@@ -225,6 +281,7 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     shadowDepth.usage = shadowDepth.usage | RenderTextureUsage::Storage;
     CHECK_FALSE(frontend->Capabilities().support.Supports(shadowDepth));
 
+    bool captureAuthorized = true;
     EditorViewportRendererMetal viewport{*frontend, graphicsBridge};
     EditorViewportLightingProfile lighting;
     lighting.requested = LightPreparationMode::BaselineForwardCpu;
@@ -274,8 +331,8 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
     constexpr EditorViewportImageRegion region{63, 63, 3, 2};
-    const auto requested = viewport.RequestImageCapture(region, [] {
-        return true;
+    const auto requested = viewport.RequestImageCapture(region, [&captureAuthorized] {
+        return captureAuthorized;
     });
     REQUIRE(requested.HasValue());
     REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
@@ -327,47 +384,29 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     CHECK(crop->artifact->region == region);
     REQUIRE(crop->artifact->rgba.size() == region.Bytes());
 
-    id<MTLTexture> texture = (__bridge id<MTLTexture>)(reinterpret_cast<void *>(textureView.textureId));
-    Check(texture != nil);
-    Check(texture.width == 128 && texture.height == 128);
-    const std::size_t bytesPerRow = texture.width * 4U;
-    const std::size_t byteCount = bytesPerRow * texture.height;
-    id<MTLDevice> device = (__bridge id<MTLDevice>)graphicsBridge.Device();
-    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)graphicsBridge.CommandQueue();
-    id<MTLBuffer> readback = [device newBufferWithLength:byteCount options:MTLResourceStorageModeShared];
-    id<MTLCommandBuffer> readbackCommands = [queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [readbackCommands blitCommandEncoder];
-    [blit copyFromTexture:texture
-                     sourceSlice:0
-                     sourceLevel:0
-                    sourceOrigin:MTLOriginMake(0, 0, 0)
-                      sourceSize:MTLSizeMake(texture.width, texture.height, 1)
-                        toBuffer:readback
-               destinationOffset:0
-          destinationBytesPerRow:bytesPerRow
-        destinationBytesPerImage:byteCount];
-    [blit endEncoding];
-    [readbackCommands commit];
-    [readbackCommands waitUntilCompleted];
-    std::vector<std::uint8_t> rgba(byteCount);
-    std::copy_n(static_cast<const std::uint8_t *>(readback.contents), byteCount, rgba.data());
-    const auto cropRowBytes = std::size_t{region.width} * EditorViewportImageRegion::Channels;
-    for (std::size_t row = 0; row < region.height; ++row) {
-        const auto offset = (region.y + row) * bytesPerRow + region.x * EditorViewportImageRegion::Channels;
-        CHECK(std::memcmp(crop->artifact->rgba.data() + row * cropRowBytes, rgba.data() + offset, cropRowBytes) == 0);
-    }
+    constexpr EditorViewportExtent viewportExtent{128, 128};
+    const auto pixels = ReadNativeViewportPixels(graphicsBridge, textureView, viewportExtent);
+    CheckNativeCrop(*crop->artifact, pixels, viewportExtent);
+    CheckViewportColors(pixels, viewportExtent);
 
-    std::uint8_t minimum = 255;
-    std::uint8_t maximum = 0;
-    for (std::size_t index = 0; index < rgba.size(); index += 4) {
-        minimum = std::min(minimum, std::min(rgba[index], std::min(rgba[index + 1], rgba[index + 2])));
-        maximum = std::max(maximum, std::max(rgba[index], std::max(rgba[index + 1], rgba[index + 2])));
+    SECTION("Loss of approval revokes a completed crop") {
+        REQUIRE_FALSE(crop->publication.expired());
+        captureAuthorized = false;
+        const auto revoked = viewport.ReadImageCapture(requested.Value());
+        REQUIRE(revoked);
+        CHECK(revoked->phase == EditorViewportImagePhase::Cancelled);
+        CHECK_FALSE(revoked->artifact);
+        CHECK(crop->publication.expired());
     }
-    Check(maximum > minimum + 32);
-    const std::size_t center = (static_cast<std::size_t>(texture.height / 2) * texture.width + texture.width / 2) * 4;
-    Check(rgba[center] < 150 && rgba[center + 1] > 130 && rgba[center + 2] > 150);
-
-    CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, textureView);
+    SECTION("A replacement viewport generation retires the completed crop") {
+        REQUIRE_FALSE(crop->publication.expired());
+        CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, textureView);
+        const auto resized = viewport.ReadImageCapture(requested.Value());
+        REQUIRE(resized);
+        CHECK(resized->phase == EditorViewportImagePhase::Resized);
+        CHECK_FALSE(resized->artifact);
+        CHECK(crop->publication.expired());
+    }
     frontend->DetachStaticMeshPassExecutor(viewport);
     Horo::Render::Test::RequireDrainedOwner(*frontend);
     viewport.Shutdown();

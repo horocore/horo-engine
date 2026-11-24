@@ -297,8 +297,19 @@ TEST_CASE("Approved viewport pixels are published through the workspace and with
     CHECK(client->Call(delivery).HasError());
 
     const auto pendingDelivery = submit(read);
-    workspace.RevokeWorkspaceCommands();
-    CHECK(client->Call(pendingDelivery).HasError());
+    SECTION("Changing the camera withdraws prepared pixels before another render frame") {
+        workspace.ProcessCommand(navigate);
+        CHECK(client->Call(pendingDelivery).HasError());
+        CHECK(execute(read).at("result").at("phase") == "cancelled");
+    }
+    SECTION("Starting Play withdraws prepared authored viewport pixels") {
+        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::StartPlay});
+        CHECK(client->Call(pendingDelivery).HasError());
+    }
+    SECTION("Workspace retirement withdraws prepared pixels") {
+        workspace.RevokeWorkspaceCommands();
+        CHECK(client->Call(pendingDelivery).HasError());
+    }
     REQUIRE(session.Close().HasValue());
     resources.Shutdown();
 }

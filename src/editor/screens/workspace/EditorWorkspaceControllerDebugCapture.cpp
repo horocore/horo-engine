@@ -3,6 +3,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -19,8 +20,25 @@ namespace Horo::Editor {
                                                    .defaultSeverity = ErrorSeverity::Warning,
                                                    .summary = "The exact authored viewport is unavailable."};
 
-        /** @brief Binds renderer-owned observation and cancellation to the endpoint lifetime. */
-        void BindImageReadback(EditorDebugCaptureEndpoint &endpoint, IEditorViewportRenderer &viewport, CancellationToken lifetime) {
+        /** @brief Keeps one owner-lane capture identity until the viewport or endpoint retires. */
+        template <typename Start>
+        void BindImageReadback(EditorDebugCaptureEndpoint &endpoint, IEditorViewportRenderer &viewport, CancellationToken lifetime,
+                               Start start) {
+            const auto activeImage = std::make_shared<std::optional<std::uint64_t>>();
+            endpoint.startImage = [lifetime, activeImage, start = std::move(start)](EditorDebugImageSource source,
+                                                                                    EditorViewportImageRegion region,
+                                                                                    std::function<bool()> authorized) {
+                if (lifetime.IsCancellationRequested())
+                    return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
+                auto admitted = start(source, region, std::move(authorized));
+                if (admitted.HasValue())
+                    activeImage->emplace(admitted.Value());
+                return admitted;
+            };
+            endpoint.retireImage = [&viewport, lifetime, activeImage]() noexcept {
+                if (const auto id = std::exchange(*activeImage, std::nullopt); id && !lifetime.IsCancellationRequested())
+                    static_cast<void>(viewport.CancelImageCapture(*id));
+            };
             endpoint.readImage = [&viewport, lifetime](std::uint64_t id) {
                 if (lifetime.IsCancellationRequested())
                     return std::optional<EditorViewportImageSnapshot>{};
@@ -69,13 +87,11 @@ namespace Horo::Editor {
                     return std::optional<EditorDebugImageSource>{};
                 return ReadDebugImageSource(*viewport);
             };
-            endpoint.startImage = [this, viewport, lifetime](EditorDebugImageSource source, EditorViewportImageRegion region,
-                                                             std::function<bool()> authorized) {
-                if (lifetime.IsCancellationRequested())
-                    return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
+            BindImageReadback(endpoint, *viewport, lifetime,
+                              [this, viewport](EditorDebugImageSource source, EditorViewportImageRegion region,
+                                               std::function<bool()> authorized) {
                 return StartDebugImage(*viewport, source, region, std::move(authorized));
-            };
-            BindImageReadback(endpoint, *viewport, lifetime);
+            });
         }
         m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(std::move(endpoint));
         return m_debugCaptureEndpoint;

@@ -782,8 +782,8 @@ contain elapsed time and world position. `debug.get_capture` reports progress
 and copied samples. `debug.cancel_capture` requires exact approval and cancels
 a sampling trace or withdraws a ready result, including queued deliveries.
 The workspace retains one trace for up to 30 seconds and
-stops sampling when the Play generation or target changes. Workspace retirement
-withdraws the artifact.
+stops sampling when the Play generation or target changes. Leaving active Play
+withdraws the trace and its queued deliveries.
 
 The same pack offers an approved `viewport.capture_image` crop on the OpenGL
 and Vulkan authored desktop viewports and both Metal viewport paths while
@@ -805,8 +805,9 @@ Call `viewport.image_source` with an empty argument object before requesting a
 crop. Pass its result as the `source` field of `viewport.capture_image` along
 with the existing crop coordinates. The approval binds the Scene, viewport
 camera, projection publication, and physical extent. A change before dispatch
-requires a fresh observation and approval. A change during readback withdraws
-the pending capture and its pixels.
+requires a fresh observation and approval. Camera, projection, and Play
+transitions revoke queued pixels at the workspace owner. The renderer also
+withdraws pending captures and their pixels when the native target changes.
 
 ## Editor gameplay build commands
 

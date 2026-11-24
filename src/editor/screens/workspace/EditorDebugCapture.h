@@ -173,6 +173,7 @@ namespace Horo::Editor {
         std::function<Result<std::uint64_t>(EditorDebugImageSource, EditorViewportImageRegion, std::function<bool()>)> startImage;
         std::function<std::optional<EditorViewportImageSnapshot>(std::uint64_t)> readImage;
         std::function<bool(std::uint64_t)> cancelImage;
-        CancellationToken lifetime; /**< Revokes previously prepared MCP deliveries on workspace retirement. */
+        std::function<void()> retireImage; /**< Owner-lane withdrawal when the authored viewport changes. */
+        CancellationToken lifetime;        /**< Revokes previously prepared MCP deliveries on workspace retirement. */
     };
 }  // namespace Horo::Editor

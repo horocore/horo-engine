@@ -1388,6 +1388,8 @@ namespace Horo::Editor {
         void InvalidateAgentSceneSelection() noexcept;
         /** @brief Revokes only viewport-specific reviews after camera or tool changes. */
         void InvalidateAgentViewport() noexcept;
+        /** @brief Withdraws captures of the prior viewport projection before advancing its revision. */
+        void AdvanceViewportSceneRevision() noexcept;
         /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */
         [[nodiscard]] AgentSceneSelectionSnapshot CaptureAgentSelectionValues(const CancellationSource &lifetime) const;
         /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */

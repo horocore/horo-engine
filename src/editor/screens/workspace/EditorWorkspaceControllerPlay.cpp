@@ -216,6 +216,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::StopPlaySession() {
+        m_debugCapture.RetireScene();
+        m_debugCaptureEntity.reset();
         m_playSession.Stop();
         RefreshCollisionActivation();
         m_nativeGameplayReloadPending = false;
@@ -239,6 +241,10 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
+        if (m_debugCaptureEntity && m_playSession.State() != EditorPlaySessionState::Playing) {
+            m_debugCapture.RetireScene();
+            m_debugCaptureEntity.reset();
+        }
         RefreshCollisionActivation();
         switch (m_playSession.State()) {
             case EditorPlaySessionState::Idle:
@@ -495,7 +501,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::ClearSimulatorViewport() {
         m_viewModel.simulatorPreviewAvailable = false;
         m_viewportScene = {};
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
     }
 
     void EditorWorkspaceController::ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView,
@@ -511,7 +517,7 @@ namespace Horo::Editor {
             return;
         }
         m_viewportScene = std::move(extracted).Value();
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
         m_viewModel.viewportCamera = camera;
         m_viewModel.simulatorPreviewAvailable =
             m_selectedXrPlayHost && m_selectedXrPlayHost->ViewSource() == EditorPlayViewSource::Simulator;

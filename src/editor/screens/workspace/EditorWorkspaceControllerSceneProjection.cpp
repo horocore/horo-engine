@@ -824,10 +824,18 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::InvalidateAgentViewport */
     void EditorWorkspaceController::InvalidateAgentViewport() noexcept {
+        if (m_debugCaptureEndpoint && m_debugCaptureEndpoint->retireImage)
+            m_debugCaptureEndpoint->retireImage();
         if (m_agentViewportLifetime) {
             m_agentViewportLifetime->RequestCancellation();
             m_agentViewportLifetime.reset();
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::AdvanceViewportSceneRevision */
+    void EditorWorkspaceController::AdvanceViewportSceneRevision() noexcept {
+        InvalidateAgentViewport();
+        ++m_viewportSceneRevision;
     }
 
     void EditorWorkspaceController::RefreshSceneProjections() {
@@ -947,7 +955,7 @@ namespace Horo::Editor {
         m_viewportScene = std::move(extracted).Value();
         m_viewportScene.cameraCrossFade = camera.Value().crossFade;
         m_viewModel.viewportCamera = camera.Value().destination;
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
         if (!m_viewport.Current().transformPreviews.empty()) {
             const Result<void> reapplied =
                 ApplyEditorViewportTransformPreview(*active, m_viewport.Current().transformPreviews, m_viewportScene);

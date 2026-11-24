@@ -305,7 +305,7 @@ namespace Horo::Editor {
             m_viewportScene = {};
             m_viewportScene.camera = m_viewport.Current().camera;
             m_activeRuntimeRevision = {};
-            ++m_viewportSceneRevision;
+            AdvanceViewportSceneRevision();
         }
         m_viewport.ClearTransformPreview();
         m_viewModel.primarySelectionPreviewWorldTransform.reset();

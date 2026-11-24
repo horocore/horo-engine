@@ -82,7 +82,7 @@ namespace Horo::Editor {
         m_prefabStageAttemptRevision = snapshot.fence.revision;
         m_prefabStageExtractedRevision = 0;
         m_prefabViewportScene = {};
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
         auto limits = PrefabLimits();
         if (limits.HasError()) {
             m_viewModel.prefabDocumentError = limits.ErrorValue();
@@ -145,7 +145,7 @@ namespace Horo::Editor {
         }
         m_prefabViewportScene = std::move(extracted).Value();
         m_prefabStageExtractedRevision = snapshot.previewRevision;
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPrefabDocuments */
@@ -184,7 +184,7 @@ namespace Horo::Editor {
             m_activePrefabDocument = next;
             m_prefabStageAttemptRevision = 0;
             m_prefabStageExtractedRevision = 0;
-            ++m_viewportSceneRevision;
+            AdvanceViewportSceneRevision();
         }
         m_prefabStagePending = false;
         if (found != m_prefabDocuments.end()) {
@@ -415,7 +415,7 @@ namespace Horo::Editor {
             m_prefabStagePending = !snapshot.externalConflict && (*owner)->HasStage();
             m_prefabStageExtractedRevision = 0;
             m_prefabViewportScene = {};
-            ++m_viewportSceneRevision;
+            AdvanceViewportSceneRevision();
             if (!snapshot.externalConflict)
                 m_prefabStageAttemptRevision = 0;
         }
@@ -629,7 +629,7 @@ namespace Horo::Editor {
         m_activePrefabDocument.reset();
         m_prefabViewportScene = {};
         m_viewModel.prefabDocuments.clear();
-        ++m_viewportSceneRevision;
+        AdvanceViewportSceneRevision();
         return Result<void>::Success();
     }
 }  // namespace Horo::Editor
