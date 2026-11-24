@@ -582,12 +582,47 @@ class AndroidDeployTests(unittest.TestCase):
     def test_disconnected_transport_never_reselects_target(self):
         status, report, commands = self.execute({
             LOGCAT: (1, "error: device disconnected"),
-            ("get-serialno",): [SERIAL, (1, "error: device not found")],
+            ("get-serialno",): [SERIAL] * 3 + [(1, "error: device not found")],
         })
         self.assertEqual((status, report["error"]), (1, "device_disconnected"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_disconnected"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
         self.assertEqual(commands.count(("devices", "-l")), 1)
+
+    def test_changed_transport_blocks_install_launch_and_evidence_admission(self):
+        for confirmed, stage, install, launch in (
+            (1, "install", False, False),
+            (2, "launch", True, False),
+            (3, "diagnostics", True, True),
+            (4, "diagnostics", True, True),
+        ):
+            with self.subTest(confirmed=confirmed):
+                status, report, commands = self.execute({
+                    ("get-serialno",): [SERIAL] * confirmed + ["private-foreign-device"],
+                })
+                self.assertEqual((status, report.get("error"), report["stage"]), (1, "device_transport_changed", stage))
+                self.assertEqual(report["status"], "partial")
+                self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+                self.assertEqual(any(command[0] == "install" for command in commands), install)
+                self.assertEqual(launch_command(APPLICATION) in commands, launch)
+                self.assertNotIn(("shell", "am", "force-stop", "--user", "10", APPLICATION), commands)
+                self.assertEqual(commands.count(("devices", "-l")), 1)
+                self.assertNotIn("observed", report)
+                if launch:
+                    self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_transport_changed"})
+                self.assertNotIn("private-foreign-device", json.dumps(report))
+
+    def test_openxr_discards_discovery_when_transport_changes_before_publication(self):
+        status, report, _ = self.execute({
+            LOGCAT: log_line(OPENXR),
+            ("get-serialno",): [SERIAL] * 5 + ["private-foreign-device"],
+        }, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "device_transport_changed"))
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertNotIn("private-foreign-device", json.dumps(report))
 
     def test_buffered_records_with_reused_pid_or_foreign_uid_cannot_supply_evidence(self):
         stale = log_line(ENTRY, stamp=START)

@@ -352,8 +352,10 @@ For the qualification packages, `python scripts/project.py android-deploy`
 takes the existing signed package output directory, declared profile, Android
 SDK and a specific ADB serial. It verifies the staged APK, the activity
 component and the installed byte digest before launching. It selects the
-device's current ADB transport and Android user explicitly for install and launch. A
-replacement connection requires a new invocation. Missing,
+device's current ADB transport and Android user explicitly for install and launch.
+It confirms the serial before install and launch, when collecting evidence, and
+again before reporting success. A serial mismatch invalidates the captured
+diagnostics. A replacement connection requires a new invocation. Missing,
 unauthorized, disconnected or incompatible targets return portable failure
 codes and no automatic device retry or downgrade.
 

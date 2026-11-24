@@ -1206,6 +1206,11 @@ class AdmittedAdbDevice:
             raise AndroidDeployError("device_command_failed")
         return "\n".join(output.splitlines()).strip()
 
+    def require_identity(self) -> None:
+        """Confirm that the admitted transport still names the selected device."""
+        if self.run("get-serialno") != self.serial:
+            raise AndroidDeployError("device_transport_changed")
+
     def process_id(self, application: str) -> int | None:
         output = self.run("shell", "pidof", application, missing_process=True)
         if not output:
@@ -1249,8 +1254,7 @@ def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedA
     if transport == 0:
         raise AndroidDeployError("device_transport_unavailable")
     device = AdmittedAdbDevice(executable, serial, transport, deadline, adb_connection_mode(serial, matches[0][2:]))
-    if device.run("get-serialno") != serial:
-        raise AndroidDeployError("device_transport_changed")
+    device.require_identity()
     return device
 
 
@@ -1607,6 +1611,7 @@ def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: Dep
     """Collect bounded markers from the exact process captured by this launch."""
     raw, through = read_deployed_process_log(device, process, window.start)
     facts = package_log_evidence(raw, process, window.evidence_after, through, categories, timeline)
+    device.require_identity()
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
@@ -1687,6 +1692,7 @@ class AndroidPackageLaunch:
         start = AndroidLogClock.read(self.device)
         nonce = secrets.token_hex(16)
         launch_options = ["--es", DEPLOY_LAUNCH_EXTRA, nonce]
+        self.device.require_identity()
         deadline_ms = None
         if self.openxr_diagnostic:
             remaining = math.ceil((self.device.deadline - time.monotonic()) * 1000)
@@ -1788,8 +1794,7 @@ class AndroidPackageLaunch:
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
                                    time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
         try:
-            if device.run("get-serialno") != device.serial:
-                raise AndroidDeployError("device_transport_changed")
+            device.require_identity()
             if device.process_id(self.application) is None:
                 if self.process is None:
                     raise AndroidDeployError("launch_process_unattributed")
@@ -1986,6 +1991,7 @@ def android_deploy_main(argv=None) -> int:
             report["stage"] = "install"
             if device.process_id(application) is not None:
                 raise AndroidDeployError("application_already_running")
+            device.require_identity()
             installed = device.run("install", "-r", "--user", user, str(artifact.path)).splitlines()
             if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
                 raise AndroidDeployError("install_unconfirmed")
@@ -2013,6 +2019,7 @@ def android_deploy_main(argv=None) -> int:
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             if openxr and deploy_device_build_digest(device) != device_build:
                 raise AndroidDeployError("device_build_changed")
+            device.require_identity()
             report["status"] = "diagnostic_complete" if openxr else "complete"
             exit_code = 0
     except KeyboardInterrupt:
@@ -2020,6 +2027,10 @@ def android_deploy_main(argv=None) -> int:
         exit_code = 130
     except AndroidDeployError as error:
         report["error"] = error.code
+        if error.code == "device_transport_changed":
+            report.pop("observed", None)
+            if runtime["status"] == "cold_system_discovered":
+                runtime["status"] = "not_observed"
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
     if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
