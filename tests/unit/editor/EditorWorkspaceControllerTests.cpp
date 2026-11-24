@@ -542,6 +542,56 @@ namespace {
         CHECK(controller.ViewModel().objects.back().components.light->enabled);
     }
 
+    TEST_CASE("Scene inspection resolves unordered pages and validates objects outside the returned range", "[unit][editor][inspection]") {
+        TestWorkspaceController controller;
+        EditorWorkspaceViewCommandData create;
+        create.command = EditorWorkspaceViewCommand::CreatePrimitive;
+        create.primitivePayload = Runtime::PrimitiveId{"primitive.mesh.box"};
+        constexpr std::size_t createdCount = 64;
+        for (std::size_t index = 0; index < createdCount; ++index)
+            controller.ProcessCommand(create);
+
+        const auto endpoint = controller.Controller().BindSceneInspection("test-project", 1).lock();
+        REQUIRE(endpoint);
+        const auto &objects = controller.ViewModel().objects;
+        REQUIRE(objects.size() == createdCount + 1);
+        ObjectInspectionRequest request{.limit = 3};
+        for (std::size_t index = 0; index < ObjectInspectionRequest::MaximumObjects; ++index)
+            request.objects.push_back(objects[objects.size() - 1 - index * 2].id.value);
+
+        const auto first = endpoint->readComponents(request);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().records.size() == request.limit);
+        for (std::size_t index = 0; index < request.limit; ++index)
+            CHECK(first.Value().records[index].object == request.objects[index]);
+        REQUIRE(first.Value().nextOffset == request.limit);
+        request.expected = first.Value().scene;
+        request.offset = *first.Value().nextOffset;
+        const auto second = endpoint->readComponents(request);
+        REQUIRE(second.HasValue());
+        CHECK(second.Value().records.front().object == request.objects[request.offset]);
+
+        SECTION("Missing objects beyond the returned range reject the entire page") {
+            request.objects.back() = objects.back().id.value + 1;
+            const auto rejected = endpoint->readComponents(request);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "object_unavailable");
+        }
+        SECTION("Duplicate objects beyond the returned range reject the entire page") {
+            request.objects.back() = request.objects.front();
+            const auto rejected = endpoint->readComponents(request);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "invalid_page");
+        }
+        SECTION("An earlier missing object takes precedence over a later invalid ID") {
+            request.objects.front() = objects.back().id.value + 1;
+            request.objects.back() = 0;
+            const auto rejected = endpoint->readComponents(request);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "object_unavailable");
+        }
+    }
+
     TEST_CASE("Viewport image admission binds the authored source through owner and extent changes", "[unit][editor][debug-capture]") {
         TestWorkspaceController controller;
         CaptureViewport viewport;

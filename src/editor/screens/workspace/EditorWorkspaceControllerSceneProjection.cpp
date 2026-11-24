@@ -257,21 +257,63 @@ namespace Horo::Editor {
 
         using InspectionObjects = std::array<const SceneObject *, ObjectInspectionRequest::MaximumObjects>;
 
+        struct InspectionLookup final {
+            std::uint64_t id;
+            std::size_t requestIndex;
+        };
+
+        /** @brief Finds the valid prefix so earlier missing or hidden objects retain precedence over later malformed IDs. */
+        std::size_t ValidInspectionPrefix(const std::span<const std::uint64_t> ids) {
+            for (std::size_t index = 0; index < ids.size(); ++index) {
+                const auto earlier = ids.first(index);
+                if (!ids[index] || std::ranges::find(earlier, ids[index]) != earlier.end())
+                    return index;
+            }
+            return ids.size();
+        }
+
+        /** @brief Scans the authored objects once with a bounded, request-local lookup table. */
+        InspectionObjects FindInspectionObjects(const std::span<const SceneObject> objects, const std::span<const std::uint64_t> ids) {
+            InspectionObjects resolved{};
+            if (ids.empty())
+                return resolved;
+            if (ids.size() == 1) {
+                const auto object = std::ranges::find(objects, SceneObjectId{ids.front()}, &SceneObject::id);
+                if (object != objects.end())
+                    resolved.front() = &*object;
+                return resolved;
+            }
+            std::array<InspectionLookup, ObjectInspectionRequest::MaximumObjects> storage{};
+            const auto lookup = std::span{storage}.first(ids.size());
+            for (std::size_t index = 0; index < ids.size(); ++index)
+                lookup[index] = {ids[index], index};
+            std::ranges::sort(lookup, {}, &InspectionLookup::id);
+            auto remaining = lookup.size();
+            for (const auto &object : objects) {
+                const auto entry = std::ranges::lower_bound(lookup, object.id.value, {}, &InspectionLookup::id);
+                if (entry == lookup.end() || entry->id != object.id.value || resolved[entry->requestIndex])
+                    continue;
+                resolved[entry->requestIndex] = &object;
+                if (--remaining == 0)
+                    break;
+            }
+            return resolved;
+        }
+
         /** @brief Resolves each requested visible ID once, including IDs outside the page. */
         Result<InspectionObjects> ResolveInspectionObjects(const std::span<const SceneObject> objects,
                                                            const std::span<const std::uint64_t> ids) {
             using Output = Result<InspectionObjects>;
-            InspectionObjects resolved{};
-            for (std::size_t index = 0; index < ids.size(); ++index) {
-                const auto id = ids[index];
-                const auto earlier = ids.first(index);
-                if (!id || std::ranges::find(earlier, id) != earlier.end())
-                    return Output::Failure(MakeError(InspectionInvalidPage));
-                const auto object = std::ranges::find(objects, SceneObjectId{id}, &SceneObject::id);
-                if (object == objects.end() || !object->effectivelyVisible)
+            if (ids.size() > ObjectInspectionRequest::MaximumObjects)
+                return Output::Failure(MakeError(InspectionInvalidPage));
+            const auto prefix = ValidInspectionPrefix(ids);
+            const auto resolved = FindInspectionObjects(objects, ids.first(prefix));
+            for (const auto *object : std::span{resolved}.first(prefix)) {
+                if (!object || !object->effectivelyVisible)
                     return Output::Failure(MakeError(InspectionObjectUnavailable));
-                resolved[index] = &*object;
             }
+            if (prefix != ids.size())
+                return Output::Failure(MakeError(InspectionInvalidPage));
             return Output::Success(resolved);
         }
 
