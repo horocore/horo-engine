@@ -864,6 +864,7 @@ add_executable(HoroAudioBackendContractTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioBackendContractTests.cpp
         unit/runtime/audio/AudioCaptureBufferTests.cpp
+        unit/runtime/audio/AudioCaptureMonitorTests.cpp
 )
 target_compile_features(HoroAudioBackendContractTests PRIVATE cxx_std_20)
 target_include_directories(HoroAudioBackendContractTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)

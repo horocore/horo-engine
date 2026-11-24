@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -94,7 +95,12 @@ namespace Horo::Audio::Backend {
             return false;
         }
 
-        AudioDeviceEpoch OpenDefault(Sdl3AudioBackend &backend) {
+        enum class PlaybackSelection {
+            FollowDefault,
+            PinPhysical
+        };
+
+        AudioDeviceEpoch OpenPlayback(Sdl3AudioBackend &backend, const PlaybackSelection selection) {
             const auto probe = Complete(backend, Probe{});
             const auto &capabilities = std::get<AudioBackendProbe>(probe.outcome);
             REQUIRE(capabilities.availability == AudioBackendAvailability::Available);
@@ -108,8 +114,14 @@ namespace Horo::Audio::Backend {
             REQUIRE(ValidateAudioDeviceSnapshot(catalog));
             REQUIRE_FALSE(catalog.devices.empty());
 
-            const AudioDeviceEpoch epoch{catalog.devices.front().id, 1, 1};
-            const AudioDeviceFormatRequest format{.device = AudioDefaultDeviceRole::Multimedia,
+            const auto physical = std::ranges::find(catalog.devices, AudioDeviceClass::Physical, &AudioDiscoveredDevice::deviceClass);
+            if (selection == PlaybackSelection::PinPhysical)
+                REQUIRE(physical != catalog.devices.end());
+            const auto selected = selection == PlaybackSelection::PinPhysical ? physical->id : catalog.devices.front().id;
+            const AudioDeviceEpoch epoch{selected, 1, 1};
+            const auto device = selection == PlaybackSelection::PinPhysical ? AudioDeviceSelection{selected}
+                                                                            : AudioDeviceSelection{AudioDefaultDeviceRole::Multimedia};
+            const AudioDeviceFormatRequest format{.device = device,
                                                   .preferred = {48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)},
                                                   .period = {64, 256, 2'048},
                                                   .nativeRatePolicy = AudioDeviceRatePolicy::AllowPreparedResampler};
@@ -124,18 +136,95 @@ namespace Horo::Audio::Backend {
             AudioDeviceEpoch epoch;
         };
 
-        BackendFixture CreateOpenedBackend() {
+        BackendFixture CreateOpenedBackend(const PlaybackSelection selection = PlaybackSelection::FollowDefault) {
             auto created = CreateSdl3AudioBackend(Config());
             REQUIRE(created.HasValue());
             auto backend = std::move(created).Value();
             REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
-            const auto epoch = OpenDefault(*backend);
+            const auto epoch = OpenPlayback(*backend, selection);
             return {std::move(backend), epoch};
         }
 
         void StartRendering(Sdl3AudioBackend &backend, const AudioDeviceEpoch &epoch, Trace &trace) {
             REQUIRE(std::holds_alternative<Started>(Complete(backend, Start{epoch, {&trace, Render}}).outcome));
             REQUIRE(WaitForEvent(backend, ExpectedCallbackEvent::Ready));
+        }
+
+        /** @brief Pins an explicit SDL dummy microphone without touching a physical device. */
+        AudioCaptureBufferDescriptor MonitorCapture(const AudioCaptureDeviceSnapshot &catalog) {
+            const auto source = std::ranges::find_if(catalog.devices, [](const auto &device) {
+                return device.deviceClass != AudioDeviceClass::Virtual && device.preferredFormat.has_value();
+            });
+            REQUIRE(source != catalog.devices.end());
+            return {.device = source->id,
+                    .generation = 1,
+                    .clockDomain = Config().clockDomain,
+                    .format = *source->preferredFormat,
+                    .slots = 2,
+                    .maximumFrames = 4096,
+                    .budgetBytes = 256 * 1024};
+        }
+
+        /** @brief Waits for one bounded dummy callback block without involving output or capture callbacks directly. */
+        void RequireMonitorBlock(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant, const AudioCaptureBufferDescriptor &capture) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            std::vector<AudioSample> pcm(capture.maximumFrames * capture.format.layout.orderedChannels.size());
+            AudioCapturedBlock block;
+            while (std::chrono::steady_clock::now() < deadline) {
+                const auto read = backend.ReadMonitoring(capture.generation, grant, block, pcm);
+                REQUIRE(read.HasValue());
+                if (read.Value() == AudioMonitorRead::Copied)
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            FAIL("The local monitor did not receive a current dummy capture block.");
+        }
+
+        TEST_CASE("SDL local monitoring requires a pinned output and retires before output quiescence", "[audio][sdl3][monitor]") {
+            auto selection = PlaybackSelection::FollowDefault;
+            SECTION("automatically migrating system output cannot be monitored") {
+                selection = PlaybackSelection::FollowDefault;
+            }
+            SECTION("pinned physical output has an exact local route") {
+                selection = PlaybackSelection::PinPhysical;
+            }
+            auto fixture = CreateOpenedBackend(selection);
+            auto &backend = *fixture.backend;
+            Trace trace;
+            StartRendering(backend, fixture.epoch, trace);
+            REQUIRE(backend.CommitRendering(fixture.epoch).HasValue());
+            const auto discovered = backend.DiscoverCapture();
+            REQUIRE(discovered.HasValue());
+            const auto &catalog = discovered.Value().snapshot;
+            const auto capture = MonitorCapture(catalog);
+            Sdl3CaptureGrant grant{.device = capture.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = capture.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Monitoring},
+                                   .foreground = true};
+            CHECK(backend.StartCapture(capture, grant.intent, grant).HasError());
+            grant.intent.monitor = AudioCaptureMonitorRoute{.input = capture.device,
+                                                            .captureGeneration = capture.generation,
+                                                            .output = fixture.epoch,
+                                                            .bus = {Owner(), 3, 1},
+                                                            .clockDomain = capture.clockDomain,
+                                                            .maximumAgeNanoseconds = 200'000'000,
+                                                            .gain = 0.5F,
+                                                            .isolation = AudioMonitorIsolation::PrivateListening};
+            const auto started = backend.StartCapture(capture, grant.intent, grant);
+            if (selection == PlaybackSelection::FollowDefault) {
+                CHECK(started.HasError());
+                return;
+            }
+            REQUIRE(started.HasValue());
+            AudioCapturedBlock raw;
+            CHECK(backend.ReadCapture(capture.generation, raw, {}).HasError());
+            RequireMonitorBlock(backend, grant, capture);
+            static_cast<void>(Begin(backend, Quiesce{fixture.epoch}));
+            REQUIRE(backend.AdvanceControl().HasValue());
+            CHECK(backend.CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend.ReadMonitoring(capture.generation, grant, raw, {}).HasError());
         }
 
         TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {

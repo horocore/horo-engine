@@ -191,6 +191,21 @@ namespace Horo::Audio::Backend {
         SDL_AudioDeviceID logicalDevice{};
         SDL_AudioStream *stream{};
         AudioDeviceEpoch epoch;
+
+        /** @brief Uses only the currently rendering, non-faulted playback epoch as a monitor destination. */
+        [[nodiscard]] AudioDeviceEpoch MonitorOutput() const noexcept {
+            if (callback.lifecycle.load() != Sdl3AudioBackendState::Rendering || callback.faultLatched.load() ||
+                epoch.device == defaultDevice)
+                return {};
+            const auto native = NativeDevice(epoch.device);
+            int count{};
+            const std::unique_ptr<SDL_AudioDeviceID, decltype(&SDL_free)> endpoints{SDL_GetAudioPlaybackDevices(&count), &SDL_free};
+            if (!native || !endpoints || count <= 0 || static_cast<std::size_t>(count) > MaximumAudioDiscoveredDevices)
+                return {};
+            const std::span playback{endpoints.get(), static_cast<std::size_t>(count)};
+            return std::ranges::find(playback, native) != playback.end() ? epoch : AudioDeviceEpoch{};
+        }
+
         AudioProcessingFormat format;
         std::uint32_t callbackFrames{};
         std::vector<AudioSample> planarStorage;
@@ -564,6 +579,8 @@ namespace Horo::Audio::Backend {
         }
 
         Result<void> Apply(const Quiesce &, const OperationId &operation) {
+            if (capture.activeGrant.intent.monitor)
+                capture.Stop();
             if (!callback.quiesced.load()) {
                 callback.lifecycle.store(Sdl3AudioBackendState::Quiescing);
                 return Result<void>::Success();

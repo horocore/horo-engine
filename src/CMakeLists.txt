@@ -1456,7 +1456,9 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
-add_library(HoroAudioCaptureBuffer STATIC audio/capture/AudioCaptureBuffer.cpp)
+add_library(HoroAudioCaptureBuffer STATIC
+        audio/capture/AudioCaptureBuffer.cpp
+        audio/capture/AudioCaptureMonitor.cpp)
 target_compile_features(HoroAudioCaptureBuffer PUBLIC cxx_std_20)
 target_include_directories(HoroAudioCaptureBuffer PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/capture/include>")

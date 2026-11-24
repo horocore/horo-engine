@@ -6,7 +6,7 @@
 
 #include "Horo/Audio/Internal/AudioBackend.h"
 #include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
-#include "Horo/Audio/Internal/AudioCaptureBuffer.h"
+#include "Horo/Audio/Internal/AudioCaptureMonitor.h"
 
 #include <cstdint>
 #include <memory>
@@ -34,6 +34,7 @@ namespace Horo::Audio::Backend {
     struct Sdl3CaptureIntent final {
         Sdl3CapturePurpose purpose{Sdl3CapturePurpose::Unspecified};
         bool allowBackground{};
+        std::optional<AudioCaptureMonitorRoute> monitor;
         bool operator==(const Sdl3CaptureIntent &) const noexcept = default;
     };
 
@@ -158,7 +159,7 @@ namespace Horo::Audio::Backend {
          * @param grant Exact host permission decision for this request.
          * @return Success once callback admission opens, or a typed error. No prompt is requested.
          */
-        [[nodiscard]] Result<void> StartCapture(const AudioCaptureBufferDescriptor &descriptor, Sdl3CaptureIntent intent,
+        [[nodiscard]] Result<void> StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureIntent &intent,
                                                 const Sdl3CaptureGrant &grant);
 
         /** @brief Reconciles current consent and native health without requiring the consumer to read PCM.
@@ -181,9 +182,19 @@ namespace Horo::Audio::Backend {
          * @param pcm Consumer-owned destination for interleaved float PCM.
          * @return Copy status and loss count, or typed stale session, permission loss, device loss or callback fault.
          * @details Connection testing reports its level through CaptureActivity and never grants PCM access.
+         * Monitoring requires ReadMonitoring so raw PCM cannot bypass its gain and queue-age policy.
          */
         [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, AudioCapturedBlock &block,
                                                              std::span<AudioSample> pcm);
+
+        /** @brief Reads gain-limited local monitor PCM under the current exact consent and output route.
+         * @param generation Exact active capture generation. @param grant Refreshed host admission for this route.
+         * @param block Metadata written on successful copy. @param pcm Owner-provided local mixer input storage.
+         * @return Bounded copy status or typed consent/output health failure. Expired PCM is discarded.
+         * @details Does not connect endpoints or invoke an output callback. The application owns the published mixer source.
+         */
+        [[nodiscard]] Result<AudioMonitorRead> ReadMonitoring(std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                              AudioCapturedBlock &block, std::span<AudioSample> pcm);
 
         /** @brief Stops an explicitly approved recording, transferring its private unread tail to the caller.
          * @param generation Exact active capture generation.

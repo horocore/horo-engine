@@ -229,8 +229,10 @@ namespace Horo::Audio::Backend::Sdl3Detail {
 namespace Horo::Audio::Backend {
     namespace {
         /** @brief Admits only a known purpose with matching grant policy and current focus. */
-        bool AuthorizedIntent(const Sdl3CaptureIntent intent, const Sdl3CaptureGrant &grant) noexcept {
-            return intent.purpose > Sdl3CapturePurpose::Unspecified && intent.purpose <= Sdl3CapturePurpose::ConnectionTest &&
+        bool AuthorizedIntent(const Sdl3CaptureIntent &intent, const Sdl3CaptureGrant &grant) noexcept {
+            using enum Sdl3CapturePurpose;
+            const bool routeMatchesPurpose = intent.monitor.has_value() == (intent.purpose == Monitoring);
+            return intent.purpose > Unspecified && intent.purpose <= ConnectionTest && routeMatchesPurpose &&
                    grant.authorityRevision != 0 && grant.intent == intent && (grant.foreground || intent.allowBackground);
         }
 
@@ -242,7 +244,7 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Requires both host admission and current native eligibility before opening a device. */
-        const ErrorCodeDescriptor *AdmissionFailure(const Sdl3CaptureIntent intent, const Sdl3CaptureGrant &grant,
+        const ErrorCodeDescriptor *AdmissionFailure(const Sdl3CaptureIntent &intent, const Sdl3CaptureGrant &grant,
                                                     const AudioCapturePermission advertised) noexcept {
             if (const auto permission = Sdl3Detail::CapturePermission();
                 !AuthorizedIntent(intent, grant) || permission != advertised || !Sdl3Detail::CaptureAuthorized(permission))
@@ -276,7 +278,7 @@ namespace Horo::Audio::Backend {
     }
 
     /** @copydoc Sdl3AudioBackend::StartCapture */
-    Result<void> Sdl3AudioBackend::StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureIntent intent,
+    Result<void> Sdl3AudioBackend::StartCapture(const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureIntent &intent,
                                                 const Sdl3CaptureGrant &grant) {
         auto &capture = impl_->capture;
         if (const auto *failure = AdmissionFailure(intent, grant, capture.snapshot.permission))
@@ -285,6 +287,11 @@ namespace Horo::Audio::Backend {
             return Sdl3Detail::Failure(AudioErrors::HandleCapacityExhausted);
         if (!impl_->initialized || descriptor.clockDomain != impl_->config.clockDomain || !MatchesGrant(descriptor, grant, capture))
             return Sdl3Detail::Failure(AudioErrors::IdentityInvalid);
+        if (intent.monitor) {
+            const auto route = AdmitAudioCaptureMonitor(*intent.monitor, descriptor, impl_->MonitorOutput());
+            if (route.HasError())
+                return route;
+        }
         const auto endpoint = capture.ResolveEndpoint(descriptor);
         if (endpoint.HasError())
             return Result<void>::Failure(endpoint.ErrorValue());
@@ -302,6 +309,11 @@ namespace Horo::Audio::Backend {
         if (!grant || !SameAdmission(capture.activeGrant, *grant)) {
             capture.Stop();
             return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
+        }
+        if (const auto &monitor = capture.activeGrant.intent.monitor;
+            monitor && !MatchesAudioDeviceEpoch(impl_->MonitorOutput(), monitor->output)) {
+            capture.Stop();
+            return Sdl3Detail::Failure(AudioErrors::DeviceUnavailable);
         }
         if (const auto *failure = capture.stream->Failure()) {
             capture.Stop();
@@ -325,7 +337,7 @@ namespace Horo::Audio::Backend {
         auto &capture = impl_->capture;
         if (!capture.stream || generation != capture.lastGeneration)
             return Output::Failure(MakeError(AudioErrors::HandleStale));
-        if (capture.activeGrant.intent.purpose == Sdl3CapturePurpose::ConnectionTest)
+        if (capture.activeGrant.intent.purpose == Sdl3CapturePurpose::ConnectionTest || capture.activeGrant.intent.monitor.has_value())
             return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
         if (const auto *failure = capture.stream->Failure()) {
             capture.Stop();
@@ -335,6 +347,21 @@ namespace Horo::Audio::Backend {
         const auto status = buffer.TryRead(block, pcm);
         const auto latestDrop = buffer.LatestDroppedBlock();
         return Output::Success({status, buffer.DroppedFrames(), latestDrop});
+    }
+
+    /** @copydoc Sdl3AudioBackend::ReadMonitoring */
+    Result<AudioMonitorRead> Sdl3AudioBackend::ReadMonitoring(const std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                              AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
+        using Output = Result<AudioMonitorRead>;
+        auto &capture = impl_->capture;
+        if (!capture.stream || generation != capture.lastGeneration)
+            return Output::Failure(MakeError(AudioErrors::HandleStale));
+        if (!capture.activeGrant.intent.monitor)
+            return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+        if (const auto reconciled = ReconcileCapture(generation, grant); reconciled.HasError())
+            return Output::Failure(reconciled.ErrorValue());
+        const AudioMonotonicTimestamp now{impl_->config.clockDomain, SDL_GetTicksNS()};
+        return Output::Success(ReadAudioMonitorBlock(capture.stream->Buffer(), *capture.activeGrant.intent.monitor, now, block, pcm));
     }
 
     /** @copydoc Sdl3AudioBackend::StopCapture */

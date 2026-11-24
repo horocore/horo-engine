@@ -125,6 +125,16 @@ retention. Device combinations that risk acoustic feedback are warned/rejected b
 typed product policy; Audio does not silently enable echo cancellation or modify
 the microphone signal.
 
+The monitor route is scoped to one capture generation, a pinned playback
+endpoint and callback epoch, and a mixer bus owned by that playback runtime.
+The host must verify private listening for that exact route. SDL rejects the
+automatically migrating default playback endpoint. Monitoring PCM is available
+only through its gain-limited reader, which discards samples outside the queue
+age budget. Playback quiescence retires monitoring and any replacement requires
+fresh admission. An opt-in echo reference is eligible only from the program
+tap before microphone monitor mixing, in the same output epoch and clock
+domain. An echo-canceller owns its alignment and processing separately.
+
 ### 6. Recording publishes through AST
 
 Editor/game code submits start/stop/cancel through an application recording use
