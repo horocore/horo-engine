@@ -102,10 +102,8 @@ namespace Horo::Render::Internal {
                     {"cookedKey", FormatSha256(artifact.reflection->cookedArtifactKey)}};
         }
 
-        /** @brief Constructs the complete bounded schema1 baseline or schema2 look-enabled generation identity. */
-        Json Generation(const ColorOutputAnalyticBundle &analytic, std::span<const CompiledShaderArtifact> programs,
-                        std::span<const Bytes> sources, bool accessibilityEncoder) {
-            Require(analytic.program != nullptr);
+        /** @brief Validates backend, stage count and source inventory before generation indexes into the inputs. */
+        void CheckGenerationInputs(std::span<const CompiledShaderArtifact> programs, std::span<const Bytes> sources) {
             Require(programs.size() == 2 || programs.size() == 3);
             const auto backend = programs.front().backend;
             const bool vulkan = backend == ShaderTargetBackend::Vulkan;
@@ -114,13 +112,23 @@ namespace Horo::Render::Internal {
             for (const auto &program : programs)
                 Require(program.backend == target.backend && program.payloadFormat == target.payloadFormat);
             Require(sources.size() == (programs.size() == 2 ? 3u : 5u));
+        }
+
+        /** @brief Constructs the canonical generation identity from validated stage and source evidence. */
+        Json Generation(const ColorOutputAnalyticBundle &analytic, std::span<const CompiledShaderArtifact> programs,
+                        std::span<const Bytes> sources, bool accessibilityEncoder) {
+            Require(analytic.program != nullptr);
+            CheckGenerationInputs(programs, sources);
+            const bool vulkan = programs.front().backend == ShaderTargetBackend::Vulkan;
+            const bool look = programs.size() == 3;
             CheckAssembly(analytic, sources[0], sources[1]);
             auto rows = Json::array();
             constexpr std::array<std::size_t, 3> sourceIndices{0, 2, 3};
             for (std::size_t i = 0; i < programs.size(); ++i)
                 rows.push_back(ProgramRow(i, sources[sourceIndices[i]], programs[i]));
             const auto &d = analytic.program->Descriptor();
-            const unsigned schema = vulkan ? 3U : (programs.size() == 2 ? 1U : 2U);
+            const unsigned metalSchema = look ? 2U : 1U;
+            const unsigned schema = vulkan ? 3U : metalSchema;
             Json value{{"schemaVersion", schema},
                        {"kind", "horo-color-output-product"},
                        {"profile", "aces2-sdr100-rec709-linear-v1"},
@@ -135,7 +143,7 @@ namespace Horo::Render::Internal {
                 value["target"] = "vulkan-manual-exposure";
             if (accessibilityEncoder)
                 value["encoderRevision"] = 2;
-            if (programs.size() == 3) {
+            if (look) {
                 CheckAssembly(analytic, sources[3], sources[4]);
                 value["lookWrapperDigest"] = FormatSha256(Hash(sources[4]));
             }

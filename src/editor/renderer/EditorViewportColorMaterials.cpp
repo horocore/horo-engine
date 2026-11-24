@@ -65,34 +65,33 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportColorPipeline::WriteSceneParameters */
+    Result<void> EditorViewportColorPipeline::WriteSceneParameters(std::span<std::byte> bytes) {
+        const bool automatic = settings_.mode == ExposureMode::AutomaticHistogram && PreviousSlot() != SlotCount;
+        const float ev = settings_.mode == ExposureMode::Manual ? settings_.manualEv : settings_.initialEv;
+        const float scale = std::exp2(ev + settings_.compensationEv);
+        const auto &prior = Previous();
+        const std::array<std::array<float, 4>, 3> values{
+            {{float(extent_.width), float(extent_.height), 0, 0},
+             {automatic ? 1.0F : 0.0F, scale, 0, 0},
+             {std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
+        const auto parameterCount = manualOnly_ ? values.size() - 1 : values.size();
+        for (std::uint32_t i = 0; i < parameterCount; ++i)
+            if (const auto packed = Parameter(bytes, programs_[0].layout, i + 1, values[i]); packed.HasError())
+                return packed;
+        return WriteLookParameters(bytes);
+    }
+
     /** @copydoc EditorViewportColorPipeline::WriteParameters */
     Result<void> EditorViewportColorPipeline::WriteParameters(std::size_t role) {
         std::array<std::byte, 4096> bytes{};
-        const auto size = std::span{bytes}.first(programs_[role].uniformBytes);
-        if (role == 1) {
-            const auto packed = WriteEncodeParameters(size);
-            if (packed.HasError())
-                return packed;
-        } else {
-            const bool automatic = settings_.mode == ExposureMode::AutomaticHistogram && PreviousSlot() != SlotCount;
-            const float ev = settings_.mode == ExposureMode::Manual ? settings_.manualEv : settings_.initialEv;
-            const float scale = std::exp2(ev + settings_.compensationEv);
-            const auto &prior = Previous();
-            const std::array<std::array<float, 4>, 3> values{
-                {{float(extent_.width), float(extent_.height), 0, 0},
-                 {automatic ? 1.0F : 0.0F, scale, 0, 0},
-                 {std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
-            for (std::uint32_t i = 0; i < values.size() - (manualOnly_ ? 1 : 0); ++i)
-                if (const auto packed = Parameter(size, programs_[role].layout, i + 1, values[i]); packed.HasError())
-                    return packed;
-        }
-        if (role == 0)
-            if (const auto look = WriteLookParameters(size); look.HasError())
-                return look;
-        return port_.writeUniform(port_.context, slots_[candidateSlot_].uniform[role], size);
+        const auto uniform = std::span{bytes}.first(programs_[role].uniformBytes);
+        if (const auto packed = role == 0 ? WriteSceneParameters(uniform) : WriteEncodeParameters(uniform); packed.HasError())
+            return packed;
+        return port_.writeUniform(port_.context, slots_[candidateSlot_].uniform[role], uniform);
     }
 
     /** @copydoc EditorViewportColorPipeline::Bind */

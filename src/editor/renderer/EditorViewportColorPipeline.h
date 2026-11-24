@@ -152,6 +152,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareLook();
         /** @brief Copies exact validated domain/interpolation controls into actual reflected offsets. */
         [[nodiscard]] Result<void> WriteLookParameters(std::span<std::byte> bytes);
+        /** @brief Packs analytic scene and optional look parameters for the current frame slot. */
+        [[nodiscard]] Result<void> WriteSceneParameters(std::span<std::byte> bytes);
         /** @brief Writes final-encoder controls and the admitted display RGB rows. */
         [[nodiscard]] Result<void> WriteEncodeParameters(std::span<std::byte> bytes) const;
         /** @brief Creates one cold immutable slot/predecessor material variant without mutating GPU data. */

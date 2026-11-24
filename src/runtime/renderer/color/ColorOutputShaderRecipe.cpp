@@ -5,7 +5,7 @@
 namespace Horo::Render {
     namespace {
         /** @brief Scene, two analytic auxiliary tables and previous GPU state all remain independent resources. */
-        void DescribeScene(ShaderManifest &manifest) {
+        void DescribeScene(ShaderManifest &manifest, bool manualExposure = false) {
             using enum Horo::Render::ShaderStageVisibility;
             using enum Horo::Render::ShaderValueType;
             using enum Horo::Render::ShaderResourceAccess;
@@ -19,6 +19,11 @@ namespace Horo::Render {
                                    {{2}, {1}, Float32, 1, 4, 1},
                                    {{3}, {1}, Float32, 1, 4, 1},
                                    {{100}, {7}, Uint32, 1, 1, 1}};
+            if (manualExposure) {
+                manifest.bindings.pop_back();
+                manifest.parameters.resize(2);
+                manifest.sourceRevision = 2;
+            }
         }
 
         /** @brief Extends the exact scene route with a real independently bound creative cube atlas. */
@@ -45,14 +50,20 @@ namespace Horo::Render {
                     manifest.parameters.push_back({{id}, {1}, ShaderValueType::Float32, 1, 4, 1});
             }
         }
+
+        /** @brief Admits Metal color output and the Vulkan route with manual exposure and no creative look. */
+        bool SupportsColorOutput(const ShaderTargetRequirement &target, ColorOutputShaderStage stage) noexcept {
+            if (target.backend == ShaderTargetBackend::Metal)
+                return target.payloadFormat == ShaderPayloadFormat::MetalLibrary24;
+            return target.backend == ShaderTargetBackend::Vulkan && target.payloadFormat == ShaderPayloadFormat::SpirV16 &&
+                   stage != ColorOutputShaderStage::SceneToDisplayLinearWithLook;
+        }
     }  // namespace
 
     /** @copydoc MakeColorOutputShaderManifest */
     Result<ShaderManifest> MakeColorOutputShaderManifest(ColorOutputShaderStage stage, const ShaderTargetRequirement &target) {
         using Return = Result<ShaderManifest>;
-        const bool metal = target.backend == ShaderTargetBackend::Metal && target.payloadFormat == ShaderPayloadFormat::MetalLibrary24;
-        const bool manualVulkan = target.backend == ShaderTargetBackend::Vulkan && target.payloadFormat == ShaderPayloadFormat::SpirV16;
-        if ((!metal && !manualVulkan) || (manualVulkan && stage == ColorOutputShaderStage::SceneToDisplayLinearWithLook))
+        if (!SupportsColorOutput(target, stage))
             return Return::Failure(MakeError(ShaderManifestErrors::UnsupportedTarget));
         ShaderManifest manifest{.schemaVersion = 1,
                                 .sourceRevision = 1,
@@ -61,12 +72,7 @@ namespace Horo::Render {
         switch (stage) {
             using enum Horo::Render::ColorOutputShaderStage;
             case SceneToDisplayLinear:
-                DescribeScene(manifest);
-                if (manualVulkan) {
-                    manifest.bindings.pop_back();  // Omit GPU exposure history.
-                    manifest.parameters.resize(2);
-                    manifest.sourceRevision = 2;
-                }
+                DescribeScene(manifest, target.backend == ShaderTargetBackend::Vulkan);
                 break;
             case SceneToDisplayLinearWithLook:
                 DescribeLook(manifest);
