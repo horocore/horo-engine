@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <format>
+#include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <span>
 
 namespace {
     using namespace Horo;
@@ -35,6 +38,43 @@ namespace {
             return ChangeSet::Capture(policy, {"proposal", 1, {"provider", "model", "request"}, std::move(files)}).Value();
         }
     };
+
+    struct ReviewBatchFixture final {
+        std::string before;
+        std::string after;
+        std::vector<SourceDocumentSnapshot> originals;
+        std::vector<SourcePathObservation> observations;
+        std::vector<FileOperation> edits;
+    };
+
+    /** @brief Opens a proposal-sized batch with an independent hunk on every line. */
+    ReviewBatchFixture OpenReviewBatch(Workspace &workspace, const Limits &limits) {
+        ReviewBatchFixture batch;
+        std::vector<TextHunk> hunks;
+        for (std::size_t index = 0; index < limits.maximumHunksPerFile; ++index) {
+            hunks.emplace_back(batch.before.size(), "old", "new");
+            batch.before += "old\n";
+            batch.after += "new\n";
+        }
+        for (std::size_t index = 0; index < limits.maximumFiles; ++index) {
+            const auto name = std::format("src/review-{}.cpp", 100 + index);
+            const auto source = workspace.Open(name.c_str(), batch.before, index + 1);
+            batch.originals.push_back(source);
+            batch.observations.emplace_back(source.Identity().key.source, source);
+            batch.edits.emplace_back(EditFile{FileBase::Capture(source).Value(), hunks});
+        }
+        return batch;
+    }
+
+    /** @brief Verifies every reviewed file still contains the bytes that were admitted. */
+    void CheckReviewDisk(const Workspace &workspace, const ReviewBatchFixture &batch) {
+        for (const auto &source : batch.originals) {
+            const auto path = workspace.project.directory / source.Identity().key.source.Value();
+            std::ifstream disk(path, std::ios::binary);
+            REQUIRE(disk.good());
+            CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == batch.before));
+        }
+    }
 }  // namespace
 
 TEST_CASE("Review decisions target exact hunks and undo an entire decision batch", "[editor][proposal][review]") {
@@ -216,6 +256,61 @@ TEST_CASE("Applying accepted proposal hunks stages one unsaved buffer transactio
     REQUIRE(undone.HasValue());
     CHECK(undone.Value()[0].Text() == a.Text());
     CHECK(undone.Value()[1].Text() == b.Text());
+}
+
+TEST_CASE("Reviewed source batches stay atomic at the file and hunk limits", "[editor][proposal][scale]") {
+    Workspace workspace;
+    auto batch = OpenReviewBatch(workspace, Limits{});
+    const auto proposal = workspace.Build(std::move(batch.edits));
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, batch.observations).Value();
+    ReviewDecisions decisions{proposal};
+    REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Accept).HasValue());
+    auto prepared = decisions.PrepareAccepted(workspace.policy, plan);
+    REQUIRE(prepared.HasValue());
+    auto candidate = std::move(prepared).Value();
+    NativeDurableFileSystem files;
+    REQUIRE(candidate.ObserveDisk(workspace.project.directory, files).HasValue());
+
+    SECTION("The entire accepted batch publishes once and undo restores every buffer") {
+        const auto result = candidate.CommitObserved(workspace.documents, files);
+        REQUIRE(result.HasValue());
+        const auto &applied = result.Value().batch;
+        REQUIRE(applied.Items().size() == batch.originals.size());
+        for (const auto &item : applied.Items()) {
+            CHECK(item.snapshot.Text() == batch.after);
+            CHECK(item.snapshot.Dirty());
+        }
+        const auto undone = workspace.documents.UndoBatch(applied);
+        REQUIRE(undone.HasValue());
+        REQUIRE(undone.Value().size() == batch.originals.size());
+        for (const auto &restored : undone.Value()) {
+            CHECK(restored.Text() == batch.before);
+            CHECK_FALSE(restored.Dirty());
+        }
+    }
+
+    SECTION("A user edit to the final file after preparation prevents all publication") {
+        const auto &last = batch.originals.back();
+        const auto live = workspace.documents.Edit(last.Identity().instance, {last.Revision(), 0, 3, "user"});
+        REQUIRE(live.HasValue());
+        const auto rejected = candidate.CommitObserved(workspace.documents, files);
+        REQUIRE(rejected.HasError());
+        CHECK(workspace.documents.Snapshot(last.Identity().instance).Value().SharesStateWith(live.Value()));
+        for (const auto &source : std::span{batch.originals}.first(batch.originals.size() - 1))
+            CHECK(workspace.documents.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+    }
+
+    SECTION("Cancellation after observing all files preserves every original buffer") {
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        const auto rejected = candidate.CommitObserved(workspace.documents, files, cancellation.Token());
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == SourceDocumentErrors::Cancelled.code.Value());
+        for (const auto &source : batch.originals)
+            CHECK(workspace.documents.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+    }
+
+    CheckReviewDisk(workspace, batch);
 }
 
 TEST_CASE("Applied source review audit round-trips without recovery source or authority", "[editor][proposal][audit]") {
