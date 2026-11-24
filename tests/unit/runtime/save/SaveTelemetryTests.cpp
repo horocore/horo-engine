@@ -538,6 +538,42 @@ TEST_CASE("Support bundle rejects ambiguous diagnostic members before classifyin
     CHECK(archive.find("unrelated-scene-result") != std::string::npos);
 }
 
+TEST_CASE("Support bundles withhold diagnostic records that embed a private Save error",
+          "[save][telemetry][privacy][bundle][embedded-error]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto input = session.directory / "diagnostics";
+    std::filesystem::path entry;
+    {
+        std::ofstream output{input, std::ios::binary};
+        SECTION("A log message quotes a Save failure embedded in its fields") {
+            entry = "crash/records.jsonl";
+            output << R"({"category":"editor.scene","message":"private-message-copy",)"
+                      R"("fields":{"domain":"horo.save","display":"private-display"}})"
+                   << '\n'
+                   << R"({"category":"editor.scene","message":"unrelated-diagnostic"})" << '\n';
+        }
+        SECTION("A crash aggregate has a diagnostic record with an embedded private cause") {
+            entry = "crash/report.json";
+            output << R"({"records":[
+                {"subsystem":"editor.scene","name":"private-message-copy",
+                 "fields":{"detail":{"error":{"domain":"horo.save","message":"private-display"}}}},
+                {"domain":"horo.scene","message":"unrelated-diagnostic",
+                 "cause":{"domain":"horo.platform","message":"unrelated-cause"}}
+            ]})";
+        }
+        REQUIRE(output.good());
+    }
+    const auto bundled = session.host->GenerateDiagnosticBundle(
+        {.outputPath = session.directory / "bundle.zip",
+         .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
+    REQUIRE(bundled.HasValue());
+    const auto archive = Read(bundled.Value().outputPath);
+    CHECK(archive.find("private-message-copy") == std::string::npos);
+    CHECK(archive.find("private-display") == std::string::npos);
+    CHECK(archive.find("unrelated-diagnostic") != std::string::npos);
+}
+
 TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before publication", "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);

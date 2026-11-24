@@ -143,11 +143,21 @@ namespace Horo::Diagnostics {
             return output;
         }
 
+        constexpr std::array DiagnosticNamespaceFields{"category", "subsystem", "domain"};
+
+        /** @brief Identifies a structured log, operation or error that may repeat structured details in its message. */
+        [[nodiscard]] bool IsDiagnosticRecord(const Json &value) {
+            return std::ranges::any_of(DiagnosticNamespaceFields, [&value](const char *key) {
+                const auto field = value.find(key);
+                return field != value.end() && field->is_string();
+            });
+        }
+
         /** @brief Reports whether the record belongs to a host-owned summary rather than the raw export. */
         [[nodiscard]] bool SummaryOnlyRecord(const Json &value, const std::span<const std::string> namespaces) {
             if (namespaces.empty() || !value.is_object())
                 return false;
-            for (const auto key : {"category", "subsystem", "domain"}) {
+            for (const auto key : DiagnosticNamespaceFields) {
                 const auto field = value.find(key);
                 if (field == value.end() || !field->is_string())
                     continue;
@@ -175,40 +185,57 @@ namespace Horo::Diagnostics {
             return key == "cause" || key == "causes";
         }
 
-        bool RedactJson(Json &value, std::span<const std::string> namespaces, std::string_view key = {});
+        enum class DiagnosticRedaction {
+            Kept,
+            DescendantWithheld,
+            Withheld
+        };
 
-        /** @brief Redacts every array member and reports withheld entries only for causal lists. */
-        bool RedactArray(Json &value, const std::span<const std::string> namespaces, const std::string_view key) {
-            bool withheld = false;
-            for (Json &child : value)
-                withheld = RedactJson(child, namespaces, key) || withheld;
-            return IsCausalField(key) && withheld;
+        DiagnosticRedaction RedactJson(Json &value, std::span<const std::string> namespaces);
+
+        /** @brief Withholds records that may repeat private descendant values, while preserving unrelated aggregate entries. */
+        DiagnosticRedaction RedactObject(Json &value, const std::span<const std::string> namespaces) {
+            using enum DiagnosticRedaction;
+            const bool record = !namespaces.empty() && IsDiagnosticRecord(value);
+            bool privateDescendant = false;
+            for (auto &[childKey, child] : value.items()) {
+                const auto redaction = RedactJson(child, namespaces);
+                if (Detail::IsSensitiveKey(childKey))
+                    child = "[REDACTED]";
+                if (redaction == Kept)
+                    continue;
+                if (record || IsCausalField(childKey)) {
+                    value = nullptr;
+                    return Withheld;
+                }
+                privateDescendant = true;
+            }
+            return privateDescendant ? DescendantWithheld : Kept;
         }
 
-        /** @brief Redacts a record and reports whether its enclosing causal record also needs to be dropped. */
-        bool RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key) {
-            if (Detail::IsSensitiveKey(key)) {
-                value = "[REDACTED]";
-                return false;
-            }
+        /** @brief Redacts every array entry and makes private descendants visible to the enclosing record. */
+        DiagnosticRedaction RedactArray(Json &value, const std::span<const std::string> namespaces) {
+            using enum DiagnosticRedaction;
+            bool privateDescendant = false;
+            for (Json &child : value)
+                privateDescendant = RedactJson(child, namespaces) != Kept || privateDescendant;
+            return privateDescendant ? DescendantWithheld : Kept;
+        }
+
+        /** @brief Redacts credentials and paths, and reports the extent of privacy-based record withdrawal. */
+        DiagnosticRedaction RedactJson(Json &value, const std::span<const std::string> namespaces) {
+            using enum DiagnosticRedaction;
             if (SummaryOnlyRecord(value, namespaces)) {
                 value = nullptr;
-                return true;
+                return Withheld;
             }
-            if (value.is_object()) {
-                for (auto &[childKey, child] : value.items()) {
-                    if (RedactJson(child, namespaces, childKey) && IsCausalField(childKey)) {
-                        // Wrappers can quote private messages or copy their diagnostic fields.
-                        value = nullptr;
-                        return true;
-                    }
-                }
-            } else if (value.is_array()) {
-                return RedactArray(value, namespaces, key);
-            } else if (value.is_string()) {
+            if (value.is_object())
+                return RedactObject(value, namespaces);
+            if (value.is_array())
+                return RedactArray(value, namespaces);
+            if (value.is_string())
                 value = RedactAbsolutePaths(value.get_ref<const std::string &>());
-            }
-            return false;
+            return Kept;
         }
 
         [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text, const std::span<const std::string> namespaces) {
@@ -226,7 +253,7 @@ namespace Horo::Diagnostics {
                         break;
                     return std::nullopt;
                 }
-                if (RedactJson(*record, namespaces))
+                if (RedactJson(*record, namespaces) == DiagnosticRedaction::Withheld)
                     continue;
                 sanitized += record->dump();
                 sanitized += '\n';

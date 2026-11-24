@@ -1211,6 +1211,12 @@ and requires a separate privacy, authentication, and endpoint policy.
 
 ## Redaction And Privacy
 
+When a host exports a namespace only through a privacy summary, the bundle
+withholds any structured log, operation, or error that contains a record from
+that namespace. The containing record can repeat private fields in its own
+message. This rule applies to nested fields and causal chains. Aggregate
+documents still retain independent diagnostic records that pass redaction.
+
 Observability output is classified before storage or export:
 
 ```cpp
