@@ -89,6 +89,43 @@ namespace Horo::Navigation::Qualification {
         return Physics::PhysicsWorldSettings::Capture(settings).Value();
     }
 
+    /** @brief Common capsule and native collision identities for reference navigation workloads. */
+    inline Character::CharacterControllerDescriptor ReferenceController(const Character::CharacterWorld &character) {
+        const auto &world = character.Descriptor();
+        Character::CharacterControllerDescriptor descriptor;
+        descriptor.sceneGeneration = world.sceneGeneration;
+        descriptor.characterWorld = world.identity;
+        descriptor.physicsWorld = world.physicsWorld;
+        descriptor.collisionProfile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+        descriptor.queryChannel = Physics::PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
+        descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 3,
+                                      Physics::PhysicsMaterialSlotId::FromValue(5)};
+        descriptor.capsule = {0.25F, 0.5F};
+        descriptor.collisionRootPosition = {1, RootHeight, 5};
+        descriptor.gravity = {};
+        return descriptor;
+    }
+
+    /** @brief Installs static query geometry on the same profile used by the reference capsule. */
+    inline void AddReferenceShape(Physics::PhysicsWorld &physics, const Character::CharacterControllerDescriptor &controller,
+                                  const Physics::PhysicsQueryFixtureShape &shape, const Math::Vec3 position) {
+        REQUIRE(physics
+                    .CreateQueryFixture({.shape = shape,
+                                         .pose = {.translation = position},
+                                         .layer = Physics::CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value(),
+                                         .profile = controller.collisionProfile,
+                                         .channel = controller.queryChannel})
+                    .HasValue());
+    }
+
+    /** @brief Copies the exact publication identifiers required by Character's native query adapter. */
+    inline Character::CharacterPhysicsQueryExpectations ReferenceExpectations(const Character::CharacterWorld &world,
+                                                                              const std::uint64_t tick) {
+        const auto &d = world.Descriptor();
+        return {d.sceneGeneration,  d.identity, d.physicsWorld,           d.collisionFilterGeneration,
+                d.originGeneration, tick,       d.physicsSnapshotRevision};
+    }
+
     /** @brief Test host owns services in dependency order and drains jobs before provider/world destruction. */
     struct Host final {
         JobSystem jobs;
@@ -240,35 +277,15 @@ namespace Horo::Navigation::Qualification {
         Host &operator=(const Host &) = delete;
 
         Character::CharacterControllerDescriptor Controller() const {
-            Character::CharacterControllerDescriptor descriptor;
-            descriptor.sceneGeneration = activation.sceneGeneration.Value();
-            descriptor.characterWorld = character->Descriptor().identity;
-            descriptor.physicsWorld = physics->Identity();
-            descriptor.collisionProfile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
-            descriptor.queryChannel = Physics::PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
-            descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 3,
-                                          Physics::PhysicsMaterialSlotId::FromValue(5)};
-            descriptor.capsule = {0.25F, 0.5F};
-            descriptor.collisionRootPosition = {1, RootHeight, 5};
-            descriptor.gravity = {};
-            return descriptor;
+            return ReferenceController(*character);
         }
 
         void AddShape(const Physics::PhysicsQueryFixtureShape &shape, const Math::Vec3 position) {
-            const auto descriptor = Controller();
-            REQUIRE(physics
-                        ->CreateQueryFixture({.shape = shape,
-                                              .pose = {.translation = position},
-                                              .layer = Physics::CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value(),
-                                              .profile = descriptor.collisionProfile,
-                                              .channel = descriptor.queryChannel})
-                        .HasValue());
+            AddReferenceShape(*physics, Controller(), shape, position);
         }
 
         Character::CharacterPhysicsQueryExpectations Expectations(const std::uint64_t tick) const {
-            const auto &d = character->Descriptor();
-            return {d.sceneGeneration,  d.identity, d.physicsWorld,           d.collisionFilterGeneration,
-                    d.originGeneration, tick,       d.physicsSnapshotRevision};
+            return ReferenceExpectations(*character, tick);
         }
 
         NavigationOutcomeProvenance Source() const {

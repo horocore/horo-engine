@@ -75,14 +75,17 @@ for capture and batch submission. A separate run
 saturates the one-job queue, replaces the capture after teleport and removal,
 and checks that the old work is rejected and its provider pin released.
 
-The solver workload advances authored input positions. A separate retirement
-case admits 64 actual Gameplay formation moves and queues 64 Character
-commands with feedback pending. It retires the group, rejects late command
-and feedback access, and checks that all Character, Navigation job, and
-topology owners drain. Sustained movement of all 64 Characters is outside
-this case. The ADR-109 4 MiB envelope still requires accounting for worker
-allocations, native allocator calls, retained and retired buffers, and
-allocator overhead on the reference configuration.
+The scripted solver workload advances authored input positions. The native
+formation run feeds 64 committed capsule roots and achieved velocities into
+the next crowd capture, requires forward displacement with bounded lateral
+travel, and applies one command per controller per tick. Revoking its full
+pending queue and closing the world prevents subsequent movement callbacks.
+
+The Gameplay formation retirement case separately admits 64 moves with
+Character feedback pending. It retires the group, rejects late access, and
+checks that the Character, Navigation job, and topology owners drain. The
+ADR-109 4 MiB envelope still requires accounting for worker allocations,
+native allocator calls, retained and retired buffers, and allocator overhead.
 
 ## Reference corpus and exact outcomes
 
