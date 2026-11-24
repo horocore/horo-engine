@@ -438,7 +438,13 @@ resolving new versions or changing either project document. The lock drops only
 entries unreachable from the remaining roots. Withdrawing the last root produces
 a schema-v1 lock with empty `roots` and `packages` arrays. The preview preserves
 the artifact and source identities of every retained entry. Reference checks,
-approval, and durable publication belong to the uninstall transaction.
+approval, and durable publication belong to the uninstall transaction. A
+successful removal retains the exact previous request and lock in the same
+rollback checkpoint as a package update. The package cache is left intact so
+the existing rollback command can stage the previously locked artifacts. A
+failed removal attempts to restore the prior pair before releasing the
+mutation lease. If repair cannot finish, the journal remains for the next
+project preparation.
 
 Observed native package registrations include service dependencies and system
 service requirements. The uninstall transaction checks retained observations

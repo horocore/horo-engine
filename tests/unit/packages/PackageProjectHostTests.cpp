@@ -70,6 +70,10 @@ namespace {
             write_ = write;
         }
 
+        void BlockRecoveryRequestWrite(bool blocked) {
+            blockRecoveryRequest_ = blocked;
+        }
+
         Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
             return native_.InspectEntry(path);
         }
@@ -106,7 +110,11 @@ namespace {
         Result<void> AtomicReplaceTracked(const std::filesystem::path &source, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
             const bool lock = destination.filename() == "packages.lock";
-            if (lock && write_ == LockWrite::FailBeforeReplace)
+            if (lock && write_ == LockWrite::FailBeforeReplace) {
+                failedLockWrite_ = true;
+                return Result<void>::Failure(Failure());
+            }
+            if (destination.filename() == "packages.json" && failedLockWrite_ && blockRecoveryRequest_)
                 return Result<void>::Failure(Failure());
             auto replaced = native_.AtomicReplaceTracked(source, destination, receipt);
             if (replaced.HasValue() && lock && write_ == LockWrite::FailAfterReplace)
@@ -129,6 +137,8 @@ namespace {
 
         NativeDurableFileSystem native_;
         LockWrite write_{LockWrite::Normal};
+        bool blockRecoveryRequest_{};
+        bool failedLockWrite_{};
     };
 
     struct HostFixture final {
@@ -248,7 +258,7 @@ namespace {
         }
     };
 
-    TEST_CASE("Package metadata removal recovers both sides of the lock commit point", "[packages][application][host]") {
+    TEST_CASE("Package metadata removal recovers both sides of the lock commit point", "[packages][application][host][removal-rollback]") {
         HostFixture fixture;
         MetadataFiles files;
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
@@ -262,44 +272,75 @@ namespace {
         const auto oldLock = fixture.Read("packages.lock");
         const auto assets = fixture.AssetSource();
 
-        SECTION("Failed replacement restores the exact previous request and allows retry") {
+        bool expectRecovery = false;
+        SECTION("Committed lock with an uncertain flush keeps the new pair") {
+            files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
+            expectRecovery = true;
+        }
+
+        SECTION("Failed replacement leaves the prior pair intact and no rollback point") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
             CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
                       .HasError());
-            REQUIRE(std::filesystem::exists(journal));
-            CHECK(fixture.Read("packages.json") != oldRequest);
-            {
-                const Editor::ProjectMutationCoordinator mutations{files};
-                const auto sceneSave = mutations.TryAcquire({policy.projectRoot, Editor::ProjectMutationOwner::Save, "scene-save"});
-                REQUIRE(sceneSave.HasValue());
-                const auto blocked = PreparePackageProject(policy, files, {});
-                REQUIRE(blocked.HasError());
-                CHECK(blocked.ErrorValue().code.Value() == "project.migration.locked");
-                CHECK(std::filesystem::exists(journal));
-                CHECK(fixture.Read("packages.json") != oldRequest);
-            }
-            REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
+            CHECK_FALSE(std::filesystem::exists(journal));
             CHECK(fixture.Read("packages.json") == oldRequest);
             CHECK(fixture.Read("packages.lock") == oldLock);
-            CHECK_FALSE(std::filesystem::exists(journal));
+            CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
             files.SetLockWrite(MetadataFiles::LockWrite::Normal);
-            REQUIRE(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
-                        .HasValue());
         }
 
-        SECTION("Committed lock with an uncertain flush keeps the new pair") {
-            files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);
-            const auto committed =
+        if (auto committed =
                 PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets));
-            REQUIRE(committed.HasValue());
-            CHECK(committed.Value().recoveryDiagnostic.has_value());
-            CHECK(std::filesystem::exists(journal));
+            committed.HasValue()) {
+            CHECK(committed.Value().recoveryDiagnostic.has_value() == expectRecovery);
+            CHECK(std::filesystem::exists(journal) == expectRecovery);
+        } else {
+            FAIL("Package removal did not commit");
         }
 
         const auto current = PreparePackageProject(policy, files, {});
         REQUIRE(current.HasValue());
         CHECK(current.Value().application.portableRequest->Dependencies().empty());
         CHECK(current.Value().application.lockedPlan->Packages().empty());
+        CHECK_FALSE(std::filesystem::exists(journal));
+        const auto previous = ReadPackageProjectRollback(policy, files, {});
+        REQUIRE(previous.HasValue());
+        CHECK(previous.Value().request == oldRequest);
+        CHECK(previous.Value().lock == oldLock);
+    }
+
+    TEST_CASE("Interrupted package removal recovery keeps the journal for the next preparation", "[packages][application][host]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto journal = policy.projectRoot / ".horo/local/package-metadata.pending";
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto initial = PreparePackageProject(policy, files, {});
+        REQUIRE(initial.HasValue());
+        const auto assets = fixture.AssetSource();
+
+        files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
+        files.BlockRecoveryRequestWrite(true);
+        CHECK(PublishPackageProjectRemoval(policy, initial.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
+                  .HasError());
+        REQUIRE(std::filesystem::exists(journal));
+        CHECK(fixture.Read("packages.json") != oldRequest);
+        {
+            const Editor::ProjectMutationCoordinator mutations{files};
+            const auto sceneSave = mutations.TryAcquire({policy.projectRoot, Editor::ProjectMutationOwner::Save, "scene-save"});
+            REQUIRE(sceneSave.HasValue());
+            const auto blocked = PreparePackageProject(policy, files, {});
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == "project.migration.locked");
+            CHECK(std::filesystem::exists(journal));
+            CHECK(fixture.Read("packages.json") != oldRequest);
+        }
+        files.BlockRecoveryRequestWrite(false);
+        REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK_FALSE(std::filesystem::exists(journal));
     }
 
@@ -489,8 +530,11 @@ namespace {
         const auto approved = PreparePackageProject(policy, files, {});
         REQUIRE(approved.HasValue());
         files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
+        files.BlockRecoveryRequestWrite(true);
         REQUIRE(PublishPackageProjectRemoval(policy, approved.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets))
                     .HasError());
+        REQUIRE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+        files.BlockRecoveryRequestWrite(false);
         const auto edited = fixture.Read("packages.json") + "\n";
         fixture.Write("packages.json", edited);
         const auto conflicted = PreparePackageProject(policy, files, {});

@@ -214,10 +214,10 @@ namespace Horo::Application::Internal {
         };
 
         /** @brief Stores one exact document pair, bounded by the same limits as project metadata. */
-        std::string EncodeRollbackPoint(const MetadataDocuments &previous, const PackageUpdateApproval &approval) {
+        std::string EncodeRollbackPoint(const MetadataDocuments &previous, const MetadataDocuments &next) {
             std::string bytes{RollbackMagic};
-            AppendDigest(bytes, approval.candidateRequest);
-            AppendDigest(bytes, approval.candidateLock);
+            AppendDigest(bytes, Digest(next.request));
+            AppendDigest(bytes, Digest(next.lock));
             bytes.append(std::to_string(previous.request.size()));
             bytes.push_back('\n');
             bytes.append(previous.request);
@@ -435,6 +435,37 @@ namespace Horo::Application::Internal {
             return Publication::Success({});
         }
 
+        /** @brief Keeps the prior pair through a recoverable metadata publication under the caller's mutation lease. */
+        Result<PackageMetadataPublication> CommitWithRollbackPoint(const std::filesystem::path &metadata, const MetadataDocuments &previous,
+                                                                   const MetadataDocuments &next,
+                                                                   const Packages::PackageLockfileLimits &limits, DurableFileSystem &files,
+                                                                   const Platform::ProjectReadContext &context) {
+            using Publication = Result<PackageMetadataPublication>;
+            if (auto reconciled = ReconcileRollbackPoint(metadata, previous, limits, files); reconciled.HasError())
+                return Publication::Failure(reconciled.ErrorValue());
+            if (previous.lock == next.lock)
+                return Publication::Success({});
+            if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
+                return Publication::Failure(authority.ErrorValue());
+            AtomicFileReplacementReceipt receipt;
+            if (auto checkpoint = ReplaceMetadata(RollbackPath(metadata, true), EncodeRollbackPoint(previous, next), files, receipt);
+                checkpoint.HasError())
+                return Publication::Failure(checkpoint.ErrorValue());
+
+            auto result = CommitDocuments(metadata, previous, next, files, context);
+            if (result.HasValue()) {
+                if (result.Value().recoveryDiagnostic)
+                    return result;
+                auto reconciled = ReconcileRollbackPoint(metadata, next, limits, files);
+                return reconciled.HasError() ? Publication::Success({std::move(reconciled).ErrorValue()}) : std::move(result);
+            }
+            if (auto recovered = RecoverMetadata(metadata, limits, files, {}); recovered.HasError())
+                return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(recovered).ErrorValue()));
+            if (auto reconciled = ReconcileRollbackPoint(metadata, previous, limits, files); reconciled.HasError())
+                return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(reconciled).ErrorValue()));
+            return result;
+        }
+
         /** @brief Keeps the most relevant scan failure while preserving diagnostics from independent scans. */
         void RecordRemovalFailure(std::optional<Error> &blocking, Error failure) {
             if (!blocking) {
@@ -589,29 +620,8 @@ namespace Horo::Application::Internal {
             return Publication::Failure(previous.ErrorValue());
         if (!previous.Value().Matches(update.base))
             return Publication::Failure(MetadataConflict());
-        if (auto reconciled = ReconcileRollbackPoint(metadata, previous.Value(), limits, files); reconciled.HasError())
-            return Publication::Failure(reconciled.ErrorValue());
-        if (previous.Value().lock == update.candidateLock)
-            return Publication::Success({});
         const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
-        AtomicFileReplacementReceipt rollbackReceipt;
-        if (auto checkpoint = ReplaceMetadata(RollbackPath(metadata, true), EncodeRollbackPoint(previous.Value(), update.approval), files,
-                                              rollbackReceipt);
-            checkpoint.HasError())
-            return Publication::Failure(checkpoint.ErrorValue());
-        auto result = CommitDocuments(metadata, previous.Value(), next, files, context);
-        if (result.HasValue()) {
-            if (!result.Value().recoveryDiagnostic) {
-                if (auto reconciled = ReconcileRollbackPoint(metadata, next, limits, files); reconciled.HasError())
-                    return Publication::Success({std::move(reconciled).ErrorValue()});
-            }
-            return result;
-        }
-        if (auto recovered = RecoverMetadata(metadata, limits, files, {}); recovered.HasError())
-            return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(recovered).ErrorValue()));
-        if (auto reconciled = ReconcileRollbackPoint(metadata, previous.Value(), limits, files); reconciled.HasError())
-            return Publication::Failure(WithCause(std::move(result).ErrorValue(), std::move(reconciled).ErrorValue()));
-        return result;
+        return CommitWithRollbackPoint(metadata, previous.Value(), next, limits, files, context);
     }
 
     /** @copydoc ReadPackageProjectRollback */
@@ -688,6 +698,6 @@ namespace Horo::Application::Internal {
             return Publication::Failure(next.ErrorValue());
         if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
             return Publication::Failure(stable.ErrorValue());
-        return CommitDocuments(metadata, previous.Value(), next.Value(), files, sources.context);
+        return CommitWithRollbackPoint(metadata, previous.Value(), next.Value(), policy.limits.lockfile, files, sources.context);
     }
 }  // namespace Horo::Application::Internal

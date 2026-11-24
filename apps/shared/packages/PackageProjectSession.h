@@ -138,7 +138,7 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(
         const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal);
 
-    /** @brief Publishes the pair for an approved removal and keeps an undo journal until the pair is durable.
+    /** @brief Publishes an approved removal and retains the prior metadata pair for explicit rollback.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.
      * @param sources Read authorities for the same project and exact registration evidence.
