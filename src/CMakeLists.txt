@@ -1378,7 +1378,7 @@ target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
 
 add_library(HoroPhysicsModel STATIC
         physics/model/surfaces/SurfaceMaterial.cpp
-        physics/PhysicsErrors.cpp
+        physics/model/diagnostics/PhysicsErrors.cpp
         physics/model/identity/PhysicsFilterIdentity.cpp
         runtime/scene/PhysicsSceneComponents.cpp
         runtime/scene/CharacterSceneComponents.cpp
@@ -1706,7 +1706,7 @@ add_library(HoroPhysics STATIC
         physics/world/lifecycle/PhysicsWorldScene.cpp
         physics/world/lifecycle/PhysicsWorldTickHelpers.h
         physics/world/settings/PhysicsWorldBudgets.cpp
-        physics/PhysicsWorldDescriptor.cpp
+        physics/world/settings/PhysicsWorldDescriptor.cpp
         physics/world/settings/PhysicsWorldSettings.cpp
 )
 add_library(HoroEngine::Physics ALIAS HoroPhysics)

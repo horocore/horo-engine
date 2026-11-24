@@ -1,3 +1,3 @@
 # Physics world settings
 
-World budgets, step policy, transform authority, and binding validation.
+World descriptor and binding validation, budgets, step policy, and transform authority.
