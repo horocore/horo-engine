@@ -188,6 +188,10 @@ struct ClosedCaptionSettings {
   not promise lossless captions under overload. UI layout is bounded per frame.
 - `captionEventCount` identifies the populated prefix and cannot exceed capacity.
   Captions respect display safe areas and remain eligible when audio is muted.
+- Speaker-following captions retain their horizontal anchors inside the safe
+  area and select the nearest unoccupied vertical gap. Cues without a speaker
+  position prefer the bottom center. A cue is unplaced when its text cannot
+  fit at that horizontal position at its measured size.
 
 ---
 

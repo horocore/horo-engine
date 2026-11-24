@@ -131,6 +131,32 @@ namespace Horo::Runtime::Ui {
         REQUIRE(ArrangeCaptions({{0, 0}, {100, 100}}, appearance, text).HasError());
     }
 
+    TEST_CASE("Speaker-following captions avoid shared anchors and unanchored captions within the safe area",
+              "[runtime_ui][captions][layout]") {
+        CaptionAppearance appearance;
+        appearance.enabled = true;
+        appearance.position = CaptionPosition::FollowSpeaker;
+        appearance.safeAreaMarginPercent = 0;
+        constexpr UiLogicalExtent CueSize{60, 20};
+        constexpr UiLogicalPoint Speaker{60, 40};
+        const std::array cues{
+            CaptionMeasuredCue{{1, 1}, CueSize, Speaker}, CaptionMeasuredCue{{1, 2}, CueSize, Speaker},
+            CaptionMeasuredCue{{1, 3}, CueSize, {}},      CaptionMeasuredCue{{1, 4}, CueSize, Speaker},
+            CaptionMeasuredCue{{1, 5}, CueSize, {}},      CaptionMeasuredCue{{1, 6}, {15, 20}, UiLogicalPoint{5, 40}},
+        };
+        const auto layout = ArrangeCaptions({{0, 0}, {120, 80}}, appearance, cues);
+        REQUIRE(layout.HasValue());
+        const auto &placed = layout.Value().placements;
+        REQUIRE(layout.Value().count == 5);
+        CHECK(layout.Value().unplaced == 1);
+        CHECK(placed[0].bounds.origin == UiLogicalPoint{30, 40});
+        CHECK(placed[1].bounds.origin == UiLogicalPoint{30, 20});
+        CHECK(placed[2].bounds.origin == UiLogicalPoint{30, 60});
+        CHECK(placed[3].bounds.origin == UiLogicalPoint{30, 0});
+        CHECK(placed[4].cue == cues.back().cue);
+        CHECK(placed[4].bounds.origin == UiLogicalPoint{0, 40});
+    }
+
     TEST_CASE("Captions remain eligible independently of audio and keep localized catalog ownership", "[runtime_ui][captions]") {
         CaptionTimeline timeline;
         REQUIRE(timeline.Reset(1).HasValue());

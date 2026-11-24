@@ -44,6 +44,90 @@ namespace Horo::Runtime::Ui {
             }
             return true;
         }
+
+        /** @brief Checks the fixed-point bounds before narrowing safe-area edges. */
+        bool CaptionViewportValid(const UiLogicalRect &viewport) noexcept {
+            constexpr auto Limit = std::numeric_limits<std::int32_t>::max();
+            return viewport.IsValid() && viewport.extent.width > 0 && viewport.extent.height > 0 &&
+                   static_cast<std::int64_t>(viewport.origin.x) + viewport.extent.width <= Limit &&
+                   static_cast<std::int64_t>(viewport.origin.y) + viewport.extent.height <= Limit;
+        }
+
+        struct CaptionBand final {
+            std::int32_t top;
+            std::int32_t bottom;
+        };
+
+        /** @brief Finds the nearest vertical gap at the chosen horizontal position, with earlier placements retained. */
+        std::optional<std::int32_t> FindCaptionGap(const CaptionLayout &layout, const UiLogicalExtent size, const std::int32_t x,
+                                                   const std::int32_t preferredY) {
+            std::array<CaptionBand, MaximumCaptionCues> storage{};
+            std::size_t count = 0;
+            for (const auto &placement : std::span{layout.placements}.first(layout.count)) {
+                const auto &rect = placement.bounds;
+                if (x < rect.origin.x + rect.extent.width && rect.origin.x < x + size.width)
+                    storage[count++] = {rect.origin.y, rect.origin.y + rect.extent.height};
+            }
+            const auto occupied = std::span{storage}.first(count);
+            std::ranges::sort(occupied, {}, &CaptionBand::top);
+            std::optional<std::int32_t> closest;
+            auto bestDistance = std::numeric_limits<std::int64_t>::max();
+            const auto consider = [&closest, &bestDistance, preferredY, height = size.height](const std::int32_t start,
+                                                                                              const std::int32_t end) {
+                if (static_cast<std::int64_t>(end) - start < height)
+                    return;
+                const auto y = std::clamp(preferredY, start, end - height);
+                const auto distance = std::abs(static_cast<std::int64_t>(y) - preferredY);
+                if (distance < bestDistance) {
+                    closest = y;
+                    bestDistance = distance;
+                }
+            };
+            auto cursor = layout.safeArea.origin.y;
+            for (const auto band : occupied) {
+                consider(cursor, band.top);
+                cursor = std::max(cursor, band.bottom);
+            }
+            consider(cursor, layout.safeArea.origin.y + layout.safeArea.extent.height);
+            return closest;
+        }
+
+        /** @brief Preserves the speaker's horizontal anchor and uses the bottom center when it is unavailable. */
+        std::optional<UiLogicalPoint> FollowSpeakerOrigin(const CaptionLayout &layout, const CaptionMeasuredCue &entry) {
+            const auto &safe = layout.safeArea;
+            auto x = safe.origin.x + (safe.extent.width - entry.extent.width) / 2;
+            auto preferredY = safe.origin.y + safe.extent.height - entry.extent.height;
+            if (entry.speaker) {
+                const auto requestedX = static_cast<std::int64_t>(entry.speaker->x) - entry.extent.width / 2;
+                x = static_cast<std::int32_t>(
+                    std::clamp(requestedX, static_cast<std::int64_t>(safe.origin.x),
+                               static_cast<std::int64_t>(safe.origin.x) + safe.extent.width - entry.extent.width));
+                preferredY = entry.speaker->y;
+            }
+            if (const auto y = FindCaptionGap(layout, entry.extent, x, preferredY); y.has_value())
+                return UiLogicalPoint{x, *y};
+            return std::nullopt;
+        }
+
+        /** @brief Reserves space for one complete caption and preserves existing placements on failure. */
+        std::optional<UiLogicalPoint> PlaceCaption(const CaptionLayout &layout, const CaptionMeasuredCue &entry,
+                                                   const CaptionPosition position, CaptionBand &stack) {
+            const auto &size = entry.extent;
+            if (size.width > layout.safeArea.extent.width || size.height > layout.safeArea.extent.height)
+                return std::nullopt;
+            if (position == CaptionPosition::FollowSpeaker)
+                return FollowSpeakerOrigin(layout, entry);
+            if (static_cast<std::int64_t>(stack.bottom) - stack.top < size.height)
+                return std::nullopt;
+            const auto x = layout.safeArea.origin.x + (layout.safeArea.extent.width - size.width) / 2;
+            if (position == CaptionPosition::Top) {
+                const auto y = stack.top;
+                stack.top += size.height;
+                return UiLogicalPoint{x, y};
+            }
+            stack.bottom -= size.height;
+            return UiLogicalPoint{x, stack.bottom};
+        }
     }  // namespace
 
     /** @copydoc CaptionAppearance::IsValid */
@@ -60,11 +144,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc ArrangeCaptions */
     Result<CaptionLayout> ArrangeCaptions(const UiLogicalRect viewport, const CaptionAppearance &appearance,
                                           const std::span<const CaptionMeasuredCue> measured) {
-        const auto right = static_cast<std::int64_t>(viewport.origin.x) + viewport.extent.width;
-        const auto bottom = static_cast<std::int64_t>(viewport.origin.y) + viewport.extent.height;
-        if (!viewport.IsValid() || viewport.extent.width == 0 || viewport.extent.height == 0 || !appearance.IsValid() ||
-            !AreMeasuredCaptionsValid(measured) || right > std::numeric_limits<std::int32_t>::max() ||
-            bottom > std::numeric_limits<std::int32_t>::max())
+        if (!CaptionViewportValid(viewport) || !appearance.IsValid() || !AreMeasuredCaptionsValid(measured))
             return Result<CaptionLayout>::Failure(MakeError(UiErrors::CaptionInvalid));
         CaptionLayout output;
         const auto marginX =
@@ -77,35 +157,12 @@ namespace Horo::Runtime::Ui {
             return Result<CaptionLayout>::Failure(MakeError(UiErrors::CaptionInvalid));
         if (!appearance.enabled)
             return Result<CaptionLayout>::Success(output);
-        auto top = output.safeArea.origin.y;
-        auto bottomEdge = static_cast<std::int32_t>(bottom) - marginY;
+        CaptionBand stack{output.safeArea.origin.y, output.safeArea.origin.y + output.safeArea.extent.height};
         for (const auto &entry : measured) {
-            const auto &size = entry.extent;
-            if (size.width > output.safeArea.extent.width || size.height > output.safeArea.extent.height) {
+            if (const auto origin = PlaceCaption(output, entry, appearance.position, stack))
+                output.placements[output.count++] = {entry.cue, {*origin, entry.extent}};
+            else
                 ++output.unplaced;
-                continue;
-            }
-            UiLogicalPoint origin{output.safeArea.origin.x + (output.safeArea.extent.width - size.width) / 2, top};
-            if (appearance.position == CaptionPosition::FollowSpeaker && entry.speaker) {
-                origin.x = static_cast<std::int32_t>(std::clamp(static_cast<std::int64_t>(entry.speaker->x) - size.width / 2,
-                                                                static_cast<std::int64_t>(output.safeArea.origin.x),
-                                                                right - marginX - size.width));
-                origin.y =
-                    std::clamp(entry.speaker->y, output.safeArea.origin.y, static_cast<std::int32_t>(bottom) - marginY - size.height);
-            } else {
-                if (static_cast<std::int64_t>(bottomEdge) - top < size.height) {
-                    ++output.unplaced;
-                    continue;
-                }
-                if (appearance.position == CaptionPosition::Top) {
-                    origin.y = top;
-                    top += size.height;
-                } else {
-                    bottomEdge -= size.height;
-                    origin.y = bottomEdge;
-                }
-            }
-            output.placements[output.count++] = {entry.cue, {origin, size}};
         }
         return Result<CaptionLayout>::Success(output);
     }
