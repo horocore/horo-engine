@@ -92,6 +92,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool ActivatePane(std::string_view paneId);
         /** @brief Selects the built-in MCP pane and filters it to the exact logged operation. */
         [[nodiscard]] bool FocusMcpAudit(const WorkspaceMcpAuditReference &reference);
+        /** @brief Activates Assets and reveals a current canonical asset path supplied by the workspace owner. */
+        [[nodiscard]] bool RevealAsset(std::string_view absolutePath);
 
     private:
         struct RegisteredPane {

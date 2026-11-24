@@ -10,13 +10,13 @@
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserActions.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserDialogs.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserActions.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserDialogs.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 
 #include <algorithm>
 #include <array>
@@ -249,6 +249,8 @@ namespace Horo::Editor {
             ImGui::SetCursorScreenPos(interactionMin);
             if (ImGui::InvisibleButton("##AssetCard", {metrics.cardWidth, metrics.cardHeight}))
                 context.interactionSession.Select(entry.absolutePath);
+            if (context.interactionSession.ConsumeReveal(entry.absolutePath))
+                ImGui::SetScrollHereY(0.5F);
             const bool hovered = ImGui::IsItemHovered();
             const bool cut = context.viewModel.contentBrowserClipboard.mode == ContentBrowserClipboardMode::Move &&
                              context.viewModel.contentBrowserClipboard.absoluteSourcePath == entry.absolutePath;
@@ -326,8 +328,9 @@ namespace Horo::Editor {
             ImGui::BeginChild("##AssetGridViewport", {gridViewportWidth, viewport.bodyHeight}, false,
                               ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoSavedSettings);
             ImDrawList *gridDrawList = ImGui::GetWindowDrawList();
-            const ImVec2 gridOrigin{gridViewportOrigin.x + AssetBrowserLayout::GridPaddingX,
-                                    gridViewportOrigin.y + AssetBrowserLayout::GridPaddingTop};
+            const ImVec2 contentStart = ImGui::GetCursorScreenPos();
+            const ImVec2 gridOrigin{contentStart.x + AssetBrowserLayout::GridPaddingX,
+                                    contentStart.y + AssetBrowserLayout::GridPaddingTop};
             const float gridWidth = std::max(1.0F, gridViewportWidth - AssetBrowserLayout::GridPaddingX * 2.0F - 5.0F);
             float gridY = gridOrigin.y;
             if (!viewport.viewModel.contentBrowserOperationError.empty()) {
@@ -367,6 +370,7 @@ namespace Horo::Editor {
                 return directory.entries[entryIndex].absolutePath == state.selectedAbsolutePath;
             })) {
                 state.selectedAbsolutePath.clear();
+                state.scrollToSelection = false;
             }
             viewport.cardRenderer.RetainVisible(directory, visibleEntries);
 

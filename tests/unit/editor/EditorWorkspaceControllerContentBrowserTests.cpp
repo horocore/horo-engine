@@ -378,6 +378,32 @@ namespace {
         CHECK(std::filesystem::is_regular_file(directory / filename));
     }
 
+    TEST_CASE("The browser reveals the registered recording by identity without following an old receipt", "[unit][editor][recording]") {
+        Tests::OwnedTestDirectory project{"recording-browser"};
+        const auto root = std::filesystem::canonical(project.Path());
+        const auto file = root / "assets/Recordings/take.wav";
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream{file} << "recorded asset fixture";
+        const auto id = Assets::AssetId::FromBytes({0x51});
+        Assets::AssetRegistry registry;
+        Assets::AssetRecord record{.id = id,
+                                   .type = Assets::AssetTypeId::Parse("core.audio").Value(),
+                                   .sourcePath = ProjectPath::Parse("assets/Recordings/take.wav").Value(),
+                                   .metadataPath = ProjectPath::Parse("assets/Recordings/take.wav.horo").Value()};
+        REQUIRE(registry.Publish({record}).status == Assets::AssetRegistryBuildStatus::Complete);
+        TestWorkspaceController workspace{root};
+        workspace.RefreshAssets(registry.Snapshot());
+        const auto revealed = workspace.Controller().RevealRecordedAsset(id);
+        REQUIRE(revealed.has_value());
+        CHECK(std::filesystem::path{*revealed} == file);
+        CHECK(std::filesystem::path{workspace.ViewModel().contentBrowser.absoluteCurrentPath} == file.parent_path());
+
+        record.id = Assets::AssetId::FromBytes({0x52});
+        REQUIRE(registry.Publish({record}).status == Assets::AssetRegistryBuildStatus::Complete);
+        workspace.RefreshAssets(registry.Snapshot());
+        CHECK_FALSE(workspace.Controller().RevealRecordedAsset(id).has_value());
+    }
+
     TEST_CASE("Published Asset Registry Revisions Refresh The Content Browser Projection", "[unit][editor]") {
         const std::filesystem::path projectRoot =
             std::filesystem::temp_directory_path() /

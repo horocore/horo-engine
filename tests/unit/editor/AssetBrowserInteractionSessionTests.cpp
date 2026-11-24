@@ -81,3 +81,17 @@ TEST_CASE("Content Browser interaction session reduces absolute-path actions", "
     REQUIRE((import.menuInvocation->action == EditorMenuAction::ImportAssets));
     REQUIRE((import.menuInvocation->assetDestination == std::filesystem::path{destination}));
 }
+
+TEST_CASE("Revealing a recording clears filters and scrolls to its exact selection once", "[unit][editor]") {
+    Horo::Editor::AssetBrowserInteractionSession session;
+    session.State().search.front() = 'x';
+    session.State().assetTypeFilter = "core.mesh";
+    const auto recording = AbsoluteTestPath("assets/Recordings/take.wav");
+    session.RevealSelection(recording);
+    CHECK(session.State().selectedAbsolutePath == recording);
+    CHECK(session.State().search.front() == '\0');
+    CHECK(session.State().assetTypeFilter.empty());
+    CHECK_FALSE(session.ConsumeReveal(AbsoluteTestPath("assets/other.wav")));
+    CHECK(session.ConsumeReveal(recording));
+    CHECK_FALSE(session.ConsumeReveal(recording));
+}

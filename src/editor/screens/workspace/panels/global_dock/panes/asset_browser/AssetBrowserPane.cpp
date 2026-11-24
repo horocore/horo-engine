@@ -13,6 +13,11 @@ namespace Horo::Editor {
         m_cardRenderer.Detach();
     }
 
+    /** @copydoc AssetBrowserPane::Reveal */
+    void AssetBrowserPane::Reveal(const std::string_view absolutePath) {
+        m_interactionSession.RevealSelection(absolutePath);
+    }
+
     /** @copydoc AssetBrowserPane::Draw */
     void AssetBrowserPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorWorkspaceViewModel &viewModel,
                                 EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {

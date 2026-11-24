@@ -4,10 +4,12 @@
  * @brief Borrowed GUI services, theme and optional drawing registry.
  */
 
+#include "Horo/Assets/AssetId.h"
 #include "Horo/Editor/GuiLiveReload.h"
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -78,6 +80,11 @@ namespace Horo::Editor {
         [[nodiscard]] virtual float RecordingPeakLevel() const noexcept = 0;
         /** @brief Returns the published project-relative path until the next recording action. */
         [[nodiscard]] virtual std::string_view SavedRecordingPath() const noexcept = 0;
+
+        /** @brief Consumes the exact registered result once, while its project is still active. */
+        [[nodiscard]] virtual std::optional<Assets::AssetId> TakeSavedRecording() noexcept {
+            return std::nullopt;
+        }
     };
 
     /** @brief Host-owned permission surface. Only explicit user activation may issue a request. */

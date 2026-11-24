@@ -103,6 +103,10 @@ namespace Horo::Editor {
                                                          context.viewModel, context.command, context.gui);
             }
 
+            void Reveal(const std::string_view absolutePath) {
+                pane_.Reveal(absolutePath);
+            }
+
         private:
             AssetBrowserPane pane_;
         };
@@ -259,6 +263,17 @@ namespace Horo::Editor {
         if (builtIn == panes_.end() || !ActivatePane(builtIn->pane->Id()))
             return false;
         static_cast<McpPaneAdapter &>(*builtIn->pane).FocusAudit(reference);
+        return true;
+    }
+
+    /** @copydoc GlobalDockPanel::RevealAsset */
+    bool GlobalDockPanel::RevealAsset(const std::string_view absolutePath) {
+        const auto builtIn = std::ranges::find_if(panes_, [](const RegisteredPane &entry) {
+            return entry.builtIn && entry.builtInTab == GlobalDockTab::Assets;
+        });
+        if (builtIn == panes_.end() || !ActivatePane(builtIn->pane->Id()))
+            return false;
+        static_cast<AssetPaneAdapter &>(*builtIn->pane).Reveal(absolutePath);
         return true;
     }
 

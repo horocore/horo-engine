@@ -29,6 +29,8 @@ namespace Horo::Editor {
 
         /** @brief Releases every renderer-owned preview texture. */
         void Detach() noexcept;
+        /** @brief Selects a canonical path and clears filters that might hide the result. */
+        void Reveal(std::string_view absolutePath);
 
         /** @brief Draws the complete Assets tab content. */
         void Draw(const ImVec2 &contentOrigin, float contentWidth, const EditorWorkspaceViewModel &viewModel,

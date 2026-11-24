@@ -1,6 +1,8 @@
 #include "../../../../apps/HoroEditor/app/EditorMicrophoneRecording.h"
 #include "Horo/Application/Internal/AudioRecording.h"
 #include "Horo/Audio/AudioErrors.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
+#include "NativePublicationFiles.h"
 #include "OwnedTestDirectory.h"
 
 #include <array>
@@ -13,11 +15,27 @@ namespace Horo::Application::Internal {
         using namespace Audio;
         using namespace Audio::Backend;
 
+        /** @brief Injects a disk write refusal after the first staged member was written. */
+        class RecordingStorage final : public TestSupport::NativePublicationFiles {
+        public:
+            bool failSecondWrite{};
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
+                                             const std::filesystem::perms permissions) override {
+                if (failSecondWrite && ++writes_ == 2)
+                    return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed, "Injected full disk"));
+                return native.WritePrivateDurable(path, bytes, created, permissions);
+            }
+
+        private:
+            unsigned writes_{};
+        };
+
         /** @brief Owns a temporary project, ordinary asset writer, and simulated capture source. */
         struct RecordingFixture final {
             Tests::OwnedTestDirectory temporary{"audio-recording"};
             const std::filesystem::path root = std::filesystem::canonical(temporary.Path());
-            NativeDurableFileSystem files;
+            RecordingStorage files;
             Editor::ProjectMutationCoordinator mutations{files};
             Assets::AssetRegistry registry;
             ProjectAssetImportCommitter publisher{mutations, files, &registry};
@@ -77,9 +95,10 @@ namespace Horo::Application::Internal {
                 CHECK_FALSE(snapshot.Find(fixture.destination.id));
             } else {
                 REQUIRE(result->HasValue());
-                CHECK(result->Value() == "assets/take.wav");
+                CHECK(result->Value().id == fixture.destination.id);
+                CHECK(result->Value().path == "assets/take.wav");
                 REQUIRE(snapshot.Find(fixture.destination.id));
-                CHECK(std::filesystem::exists(fixture.root / result->Value()));
+                CHECK(std::filesystem::exists(fixture.root / result->Value().path));
             }
         }
 
@@ -107,6 +126,19 @@ namespace Horo::Application::Internal {
             CHECK(record->type.Value() == "core.audio");
             CHECK(record->sourcePath.String() == "assets/take.wav");
             CHECK(record->metadataPath.String() == "assets/take.wav.horo");
+        }
+
+        TEST_CASE("A recording write failure withdraws both the staged recording and its identity", "[audio][recording]") {
+            RecordingFixture fixture;
+            fixture.files.failSecondWrite = true;
+            auto buffer = fixture.Buffer();
+            REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
+            auto recording = fixture.Recording();
+            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, {});
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == FileStorageErrors::IoFailed.code.Value());
+            CHECK(std::filesystem::is_empty(fixture.root / "assets"));
+            CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
         }
 
         TEST_CASE("Recording cancellation and capture loss discard the complete unpublished take", "[audio][recording]") {

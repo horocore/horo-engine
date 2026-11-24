@@ -223,6 +223,20 @@ namespace Horo::Editor {
         RefreshPrefabDocuments();
     }
 
+    /** @copydoc EditorWorkspaceController::RevealRecordedAsset */
+    std::optional<std::string> EditorWorkspaceController::RevealRecordedAsset(const Assets::AssetId id) {
+        const auto *record = m_assetRegistry.Find(id);
+        if (!record || record->type.Value() != "core.audio")
+            return std::nullopt;
+        const auto path = ProjectRoot() / WorkspaceNativePath(record->sourcePath.String());
+        NavigateContentBrowser(path.parent_path(), true);
+        const auto &entries = m_viewModel.contentBrowser.entries;
+        const auto identity = id.ToString();
+        if (const auto found = std::ranges::find(entries, identity, &ContentBrowserEntry::assetId); found != entries.end() && found->registered)
+            return found->absolutePath;
+        return std::nullopt;
+    }
+
     void EditorWorkspaceController::UpdateContentBrowser() {
         PollContentBrowserPreviews();
         if (!m_contentBrowserRefreshPending)

@@ -45,6 +45,25 @@ namespace Horo::Editor {
     /** @copydoc AssetBrowserInteractionSession::Select */
     void AssetBrowserInteractionSession::Select(const std::string_view absolutePath) {
         m_state.selectedAbsolutePath = IsAbsolute(absolutePath) ? std::string{absolutePath} : std::string{};
+        m_state.scrollToSelection = false;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::Reveal */
+    void AssetBrowserInteractionSession::RevealSelection(const std::string_view absolutePath) {
+        if (!IsAbsolute(absolutePath))
+            return;
+        Select(absolutePath);
+        m_state.search.fill('\0');
+        m_state.assetTypeFilter.clear();
+        m_state.scrollToSelection = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConsumeReveal */
+    bool AssetBrowserInteractionSession::ConsumeReveal(const std::string_view absolutePath) noexcept {
+        if (!m_state.scrollToSelection || m_state.selectedAbsolutePath != absolutePath)
+            return false;
+        m_state.scrollToSelection = false;
+        return true;
     }
 
     /** @copydoc AssetBrowserInteractionSession::OpenRename */

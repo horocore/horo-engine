@@ -12,7 +12,7 @@ namespace Horo::Editor {
     namespace {
         using namespace Application::Internal;
         using RecordResult = Result<Assets::AssetRecord>;
-        using SaveResult = Result<std::string>;
+        using SaveResult = Result<EditorPublishedRecording>;
 
         /** @brief Limits a take to 20 seconds or 8 MiB of PCM, whichever is smaller. */
         std::uint64_t RecordingFrames(const Audio::AudioProcessingFormat &format) noexcept {
@@ -35,16 +35,17 @@ namespace Horo::Editor {
 
         /** @brief Adds a durable new record to the live snapshot without reverting unrelated registry changes. */
         SaveResult AdoptRecording(Assets::AssetRegistry &registry, Assets::AssetRecord asset) {
-            const auto path = asset.sourcePath.String();
+            EditorPublishedRecording result{asset.id, asset.sourcePath.String()};
             const auto snapshot = registry.Snapshot();
             if (const auto *existing = snapshot.Find(asset.id))
-                return existing->sourcePath.String() == path ? SaveResult::Success(path)
-                                                             : SaveResult::Failure(MakeError(Audio::AudioErrors::IdentityInvalid));
+                return existing->sourcePath.String() == result.path && existing->type == asset.type
+                           ? SaveResult::Success(std::move(result))
+                           : SaveResult::Failure(MakeError(Audio::AudioErrors::IdentityInvalid));
             auto records = std::vector(snapshot.Records().begin(), snapshot.Records().end());
             records.push_back(std::move(asset));
             if (registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Failed)
                 return SaveResult::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
-            return SaveResult::Success(path);
+            return SaveResult::Success(std::move(result));
         }
     }  // namespace
 

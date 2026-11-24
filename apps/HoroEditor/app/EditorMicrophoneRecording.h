@@ -7,6 +7,12 @@
 #include <thread>
 
 namespace Horo::Editor {
+    /** @brief A durable recording adopted by the active project registry. */
+    struct EditorPublishedRecording final {
+        Assets::AssetId id;
+        std::string path;
+    };
+
     /** @brief Owns bounded PCM accumulated on the control lane before transfer to the project publisher. */
     class EditorRecordingTake final {
     public:
@@ -42,7 +48,7 @@ namespace Horo::Editor {
         /** @brief Returns whether a previous save still occupies the worker slot. */
         [[nodiscard]] bool Busy() const noexcept;
         /** @brief Adopts a finished asset in the live registry on its owner lane. Empty while still busy. */
-        [[nodiscard]] std::optional<Result<std::string>> Poll();
+        [[nodiscard]] std::optional<Result<EditorPublishedRecording>> Poll();
 
     private:
         ProjectMutationCoordinator &mutations_;

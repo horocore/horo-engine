@@ -9,6 +9,7 @@
 #include "Horo/PlatformServices/PlatformDiagnostics.h"
 #include "docking/WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 #include "screen/EditorWorkspaceInputRouting.h"
@@ -123,6 +124,26 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
     }
 
+    /** @copydoc EditorWorkspaceScreen::RevealSavedRecording */
+    void EditorWorkspaceScreen::RevealSavedRecording() {
+        if (!context_.microphoneRecorder)
+            return;
+        const auto id = context_.microphoneRecorder->TakeSavedRecording();
+        if (!id)
+            return;
+        for (const auto &panel : contributions_.panels.GetAllPanels()) {
+            auto *dock = dynamic_cast<GlobalDockPanel *>(panel.get());
+            if (!dock)
+                continue;
+            if (const auto path = controller_->RevealRecordedAsset(*id); path && dock->RevealAsset(*path)) {
+                EditorWorkspaceViewCommandData command;
+                controller_->StagePanelActivation(dock->GetId(), dock->GetDefaultDockArea(), command);
+                controller_->ProcessCommand(command);
+            }
+            return;
+        }
+    }
+
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
         PumpWorkspaceCommands();
@@ -175,6 +196,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
+            RevealSavedRecording();
             controller_->UpdateBlackboardUsageReview();
             controller_->UpdateWorldBake();
             controller_->UpdateTerrainCook();

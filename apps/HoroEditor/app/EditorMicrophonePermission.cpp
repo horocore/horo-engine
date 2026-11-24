@@ -89,6 +89,7 @@ namespace Horo::Editor {
         EditorRecordingPublication publication;
         EditorMicrophoneRecordingStatus recordingStatus{EditorMicrophoneRecordingStatus::Idle};
         std::string savedPath;
+        std::optional<Assets::AssetId> savedAsset;
 
         CaptureCheck(ProjectMutationCoordinator &mutations, DurableFileSystem &files, Assets::AssetRegistry &registry)
             : publication(mutations, files, registry) {}
@@ -238,7 +239,9 @@ namespace Horo::Editor {
                 recordingStatus = Failed;
                 return;
             }
-            savedPath = std::move(*result).Value();
+            auto saved = std::move(*result).Value();
+            savedPath = std::move(saved.path);
+            savedAsset = saved.id;
             recordingStatus = Saved;
         }
 
@@ -409,6 +412,7 @@ namespace Horo::Editor {
         if (!CanRecord() || input >= check_->inputs.size())
             return;
         check_->savedPath.clear();
+        check_->savedAsset.reset();
         try {
             auto target = RecordingTarget(check_->project, wavePath);
             if (target) {
@@ -435,6 +439,7 @@ namespace Horo::Editor {
         if (check_->RecordingRequested())
             check_->stopping = true;
         check_->publication.Cancel();
+        check_->savedAsset.reset();
         check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
     }
 
@@ -451,5 +456,10 @@ namespace Horo::Editor {
     /** @copydoc IEditorMicrophoneRecorder::SavedRecordingPath */
     std::string_view EditorMicrophonePermission::SavedRecordingPath() const noexcept {
         return check_->savedPath;
+    }
+
+    /** @copydoc IEditorMicrophoneRecorder::TakeSavedRecording */
+    std::optional<Assets::AssetId> EditorMicrophonePermission::TakeSavedRecording() noexcept {
+        return std::exchange(check_->savedAsset, std::nullopt);
     }
 }  // namespace Horo::Editor

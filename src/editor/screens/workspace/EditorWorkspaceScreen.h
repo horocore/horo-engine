@@ -206,6 +206,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OnLeave() override;
 
     private:
+        /** @brief Consumes a saved recording and requests its selection in the current Asset Browser. */
+        void RevealSavedRecording();
         /** @brief Queries every canonical authored owner before allowing the workspace leave workflow. */
         bool HasDirtyDocuments() const;
         /** @brief Validates captured leave consent against each independently owned document group. */

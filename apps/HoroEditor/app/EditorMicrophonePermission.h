@@ -48,6 +48,7 @@ namespace Horo::Editor {
         [[nodiscard]] EditorMicrophoneRecordingStatus RecordingStatus() const noexcept override;
         [[nodiscard]] float RecordingPeakLevel() const noexcept override;
         [[nodiscard]] std::string_view SavedRecordingPath() const noexcept override;
+        [[nodiscard]] std::optional<Assets::AssetId> TakeSavedRecording() noexcept override;
 
     private:
         struct CaptureCheck;

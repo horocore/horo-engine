@@ -641,6 +641,8 @@ namespace Horo::Editor {
         /** @brief Replaces the Content Browser projection when a newer registry revision is published.
          */
         void RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry);
+        /** @brief Opens the containing directory of a current registered recording and returns its exact browser path. */
+        [[nodiscard]] std::optional<std::string> RevealRecordedAsset(Assets::AssetId id);
         /** @brief Advances a requested synchronous Content Browser refresh without blocking the request
          * frame. */
         void UpdateContentBrowser();

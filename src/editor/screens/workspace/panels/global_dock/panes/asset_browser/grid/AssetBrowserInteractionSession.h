@@ -71,6 +71,7 @@ namespace Horo::Editor {
         float utilityMinimum{};
         float utilityMaximum{1};
         bool openCreateTaskDecision{};
+        bool scrollToSelection{};
     };
 
     /**
@@ -92,6 +93,10 @@ namespace Horo::Editor {
 
         /** @brief Selects one absolute entry path. */
         void Select(std::string_view absolutePath);
+        /** @brief Clears search/type filters, selects the path and requests one scroll when it is drawn. */
+        void RevealSelection(std::string_view absolutePath);
+        /** @brief Consumes the pending scroll only for the exact selected card. */
+        [[nodiscard]] bool ConsumeReveal(std::string_view absolutePath) noexcept;
 
         /** @brief Prepares the rename workflow for an entry. */
         void OpenRename(const ContentBrowserEntry &entry);
