@@ -1,6 +1,7 @@
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Editor/GuiScreen.h"
 #include "editor/input/EditorInputActions.h"
+#include "editor/screens/workspace/EditorWorkspaceScreen.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 #include "editor/screens/workspace/screen/EditorWorkspaceInputRouting.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
@@ -13,6 +14,36 @@
 #include <fstream>
 #include <imgui_internal.h>
 #include <tuple>
+
+TEST_CASE("Editor Play projects a rebindable interaction as one gameplay press", "[editor][play][input]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Input::InputRouter router;
+    REQUIRE(router.SetActionMap(BuildEditorInputActions()).HasValue());
+    Input::InputBindingProfile profile;
+    profile.overrides.push_back({Input::ActionId{kGameplayInteractAction},
+                                 {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}});
+    REQUIRE(router.SetProfile(profile).HasValue());
+    WorkspaceScreenDetail::WorkspaceInputState workspace{router};
+    Input::RawInputCollector input;
+    input.BeginFrame(1);
+    input.SetKey(Input::Key::Right, true);
+    input.SetKey(Input::Key::Space, true);
+    router.BeginFrame(input.Commit());
+    workspace.gameplayFrames.Capture(router, workspace.context);
+
+    const auto pressed = workspace.ConsumeGameplay(10);
+    REQUIRE(pressed.size() == 2);
+    CHECK(pressed[0].action.Value() == kGameplayMoveAction);
+    CHECK(pressed[0].x == 1.0F);
+    CHECK(pressed[1].action.Value() == kGameplayInteractAction);
+    CHECK(pressed[1].pressed);
+    CHECK_FALSE(pressed[1].released);
+
+    const auto catchup = workspace.ConsumeGameplay(11);
+    REQUIRE(catchup.size() == 1);
+    CHECK(catchup.front().x == 1.0F);
+}
 
 TEST_CASE("Workspace review controls follow the selected source tab at high DPI", "[editor][source][review]") {
     using namespace Horo;

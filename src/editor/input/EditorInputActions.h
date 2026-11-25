@@ -7,6 +7,7 @@
 
 namespace Horo::Editor {
     inline constexpr const char *kGameplayMoveAction = "gameplay.move";
+    inline constexpr const char *kGameplayInteractAction = "gameplay.interact";
     inline constexpr const char *kGameplayXrMoveAction = "gameplay.xr.move";
     inline constexpr const char *kGameplayXrSnapTurnAction = "gameplay.xr.snap_turn";
     inline constexpr const char *kGameplayXrTeleportAction = "gameplay.xr.teleport";

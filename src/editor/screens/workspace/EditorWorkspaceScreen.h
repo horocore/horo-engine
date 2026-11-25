@@ -28,6 +28,7 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -87,13 +88,22 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     struct WorkspaceInputState {
         explicit WorkspaceInputState(Input::InputRouter &inputRouter)
             : router(inputRouter),
-              context(router.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace)) {}
+              context(router.PushContext(Input::InputContextId{kEditorWorkspaceInputContext}, Input::InputContextKind::EditorWorkspace)) {}
+
+        /** @brief Consumes one routed tick and borrows its movement and optional interaction press. */
+        [[nodiscard]] std::span<const Gameplay::GameplayInputAction> ConsumeGameplay(Input::SimulationTick tick) noexcept;
 
         Input::InputRouter &router;
         Input::InputContextToken context;
-        Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
+        Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, Input::ActionId{kGameplayInteractAction}};
         std::optional<Input::InputBindingProfile> previousProfile;
         std::optional<Input::BindingProfilePaths> profilePaths;
+
+    private:
+        // Keep action identities stable across ticks. An interaction is a pulse, not a synthetic held input.
+        std::array<Gameplay::GameplayInputAction, 2> gameplayActions_{{{Gameplay::GameplayActionId{kGameplayMoveAction}},
+                                                                       {Gameplay::GameplayActionId{kGameplayInteractAction},
+                                                                        1.0F, 0.0F, false, true, false}}};
     };
 
     /** @brief Borrowed contribution catalogs; application-owned panel/status registrations outlive the screen. */

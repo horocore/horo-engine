@@ -19,6 +19,19 @@
 #include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
+    /** @copydoc WorkspaceInputState::ConsumeGameplay */
+    std::span<const Gameplay::GameplayInputAction> WorkspaceInputState::ConsumeGameplay(Input::SimulationTick tick) noexcept {
+        const auto command = gameplayFrames.Consume(tick);
+        auto &movement = gameplayActions_.front();
+        movement.x = command.moveX;
+        movement.y = command.moveY;
+        movement.down = command.moveDown;
+        movement.pressed = command.movePressed;
+        movement.released = command.moveReleased;
+        const auto actions = std::span{gameplayActions_};
+        return command.interactPressed ? std::span<const Gameplay::GameplayInputAction>{actions} : actions.first(1);
+    }
+
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
     EditorWorkspaceScreen::EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
         : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
@@ -230,14 +243,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                              controller_->ViewModel().playState != EditorPlayState::Paused)) {
             return;
         }
-        const Input::GameplayInputFrame command = input_.gameplayFrames.Consume(simulationTick);
-        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                   command.moveX,
-                                                   command.moveY,
-                                                   command.moveDown,
-                                                   command.movePressed,
-                                                   command.moveReleased};
-        controller_->UpdatePlayFixed({&action, 1}, fixedDeltaSeconds);
+        controller_->UpdatePlayFixed(input_.ConsumeGameplay(simulationTick), fixedDeltaSeconds);
         PublishViewportSceneIfChanged();
     }
 
@@ -251,14 +257,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                              controller_->ViewModel().playState != EditorPlayState::Paused))
             return Result<void>::Success();
-        const auto command = input_.gameplayFrames.Consume(context.simulationTick);
-        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                   command.moveX,
-                                                   command.moveY,
-                                                   command.moveDown,
-                                                   command.movePressed,
-                                                   command.moveReleased};
-        controller_->UpdatePlayFixed({&action, 1}, context);
+        controller_->UpdatePlayFixed(input_.ConsumeGameplay(context.simulationTick), context);
         return Result<void>::Success();
     }
 
