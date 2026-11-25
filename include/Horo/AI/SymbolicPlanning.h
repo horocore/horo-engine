@@ -205,7 +205,10 @@ namespace Horo::AI {
                                                                                  SymbolicCompoundId root, std::size_t work);
 
         [[nodiscard]] Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const override;
-        /** @brief Reads an immutable result after the task owner receives completion. */
+        /** @brief Reads the immutable result at the task owner's safe point.
+         * @return Null before completion or if cancellation has withdrawn a solved result. Unsolved results contain no steps.
+         * @details Reacquire at each use. A previously borrowed pointer does not grant authority to execute its steps.
+         */
         [[nodiscard]] const SymbolicPlan *Read() const noexcept;
 
     private:
@@ -225,6 +228,8 @@ namespace Horo::AI {
         std::size_t initialCount_{};
         std::size_t goalCount_{};
         std::size_t work_{};
+        // The worker writes the tokens and result once before publishing Complete to readers.
+        mutable std::array<CancellationToken, 4> resultCancellation_;
         mutable std::atomic<State> state_{State::Ready};
         mutable SymbolicPlan result_;
     };

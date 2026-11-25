@@ -2,6 +2,7 @@
 #include "Horo/AI/SymbolicPlanning.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::AI {
     namespace {
@@ -124,6 +125,25 @@ namespace Horo::AI {
                 CHECK(job->Read()->Status() == SymbolicPlanStatus::Cancelled);
                 CHECK(job->Read()->Steps().empty());
             }
+        }
+
+        TEST_CASE("Completed symbolic jobs hide solved sequences after cancellation", "[ai][planning][jobs]") {
+            DomainFixture input;
+            const auto job = SymbolicPlanningJob::Create(std::make_shared<const SymbolicDomain>(input.Capture()), {}, input.goal, 1024);
+            REQUIRE(job.HasValue());
+            const auto incarnation = Id<AiRuntimeIncarnation>(1);
+            AiTaskOperationContext operation{.taskDefinition = input.openTask, .task = {incarnation, {2, 1}}, .agent = {incarnation, {1, 1}}};
+            CancellationToken worker;
+            const auto scope = GENERATE(&AiTaskOperationContext::cancellation, &AiTaskOperationContext::capabilityCancellation,
+                                        &AiTaskOperationContext::ownerCancellation,
+                                        static_cast<CancellationToken AiTaskOperationContext::*>(nullptr));
+            CancellationSource owner;
+            (scope ? operation.*scope : worker) = owner.Token();
+            REQUIRE(job.Value()->Run(operation, worker).HasValue());
+            REQUIRE(job.Value()->Read());
+            REQUIRE(job.Value()->Read()->Status() == SymbolicPlanStatus::Solved);
+            owner.RequestCancellation();
+            CHECK(job.Value()->Read() == nullptr);
         }
 
         TEST_CASE("The AI task job service delivers symbolic planning completion", "[ai][planning][jobs]") {

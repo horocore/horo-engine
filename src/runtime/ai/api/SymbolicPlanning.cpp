@@ -442,16 +442,23 @@ namespace Horo::AI {
         auto expected = State::Ready;
         if (!state_.compare_exchange_strong(expected, State::Running))
             return Result<void>::Failure(MakeError(AIErrors::TaskTransitionInvalid));
+        resultCancellation_ = {cancellation, operation.cancellation, operation.capabilityCancellation, operation.ownerCancellation};
         const auto initial = std::span{initial_}.first(initialCount_);
         if (hierarchy_)
             result_ = hierarchy_->SearchImpl(initial, root_, work_, cancellation, &operation);
         else
             result_ = domain_->SearchImpl(initial, std::span{goal_}.first(goalCount_), work_, cancellation, &operation);
+        const bool cancelled = result_.Status() == SymbolicPlanStatus::Cancelled || PlanningCancelled(cancellation, &operation);
         state_.store(State::Complete, std::memory_order_release);
-        return result_.Status() == SymbolicPlanStatus::Cancelled ? JobCancelled() : Result<void>::Success();
+        return cancelled ? JobCancelled() : Result<void>::Success();
     }
 
     const SymbolicPlan *SymbolicPlanningJob::Read() const noexcept {
-        return state_.load(std::memory_order_acquire) == State::Complete ? &result_ : nullptr;
+        if (state_.load(std::memory_order_acquire) != State::Complete)
+            return nullptr;
+        if (result_.Status() == SymbolicPlanStatus::Solved &&
+            std::ranges::any_of(resultCancellation_, &CancellationToken::IsCancellationRequested))
+            return nullptr;
+        return &result_;
     }
 }  // namespace Horo::AI

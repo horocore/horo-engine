@@ -2872,7 +2872,9 @@ The opt-in symbolic planning contract compiles Boolean facts and positive-cost
 transitions against frozen task declarations. Search owns only copied values
 and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. A host can submit
-the same detached computation through the existing AI task job service.
+the same detached computation through the existing AI task job service. The
+owner's safe-point read withholds solved results if task, capability,
+reservation or worker cancellation has since withdrawn the computation.
 HTN depth and pending-task limits discard only the affected branch. Search tries
 later admitted methods in stable order while shared work remains. If every
 alternative fails and any branch was truncated, the outcome is budget exhaustion.
