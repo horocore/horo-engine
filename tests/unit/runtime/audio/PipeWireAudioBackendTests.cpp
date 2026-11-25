@@ -150,6 +150,31 @@ namespace Horo::Audio::Backend {
             REQUIRE(std::filesystem::exists(marker));
         }
 
+        /** @brief Checks that a same-name source receives a fresh identity and typed lifecycle records. */
+        void VerifyCaptureReplacement(AudioBackend &backend, const AudioDiscoveredCaptureDevice &previous, const std::uint64_t revision) {
+            const auto next = backend.DiscoverCapture();
+            REQUIRE(next.HasValue());
+            const auto &after = next.Value().snapshot;
+            REQUIRE(after.devices.size() == 1);
+            const auto &replacement = after.devices.front();
+            CHECK(replacement.displayName == previous.displayName);
+            CHECK(replacement.id != previous.id);
+            CHECK(after.revision > revision);
+            CHECK(ResolveAudioCaptureDevice(after, previous.id).status == AudioDeviceResolutionStatus::Unavailable);
+            CHECK(ResolveAudioCaptureDevice(after, AudioDefaultDeviceRole::Multimedia).device == replacement.id);
+            const auto &changes = next.Value().changes;
+            REQUIRE(changes.size() == 2);
+            CHECK(changes[0].kind == AudioCaptureDeviceChangeKind::Removed);
+            CHECK(changes[0].device == previous.id);
+            CHECK(changes[0].revision == after.revision);
+            CHECK(changes[1].kind == AudioCaptureDeviceChangeKind::Added);
+            CHECK(changes[1].device == replacement.id);
+            CHECK(changes[1].revision == after.revision);
+            REQUIRE(next.Value().defaultChanges[1]);
+            CHECK_FALSE(next.Value().defaultChanges[1]->previous);
+            CHECK(next.Value().defaultChanges[1]->current == replacement.id);
+        }
+
         /** @brief Verifies the actual PipeWire recorder default and removal before opening playback. */
         void VerifyCaptureRefresh(AudioBackend &backend, const std::filesystem::path &control) {
             const auto first = backend.DiscoverCapture();
@@ -187,22 +212,7 @@ namespace Horo::Audio::Backend {
             std::ofstream(control / "capture-default-unavailable").put('\n');
             WaitForGraphChange(control / "capture-changed");
 
-            const auto next = backend.DiscoverCapture();
-            REQUIRE(next.HasValue());
-            const auto &after = next.Value().snapshot;
-            REQUIRE(after.devices.size() == 1);
-            CHECK(after.devices.front().displayName == "horo-test-mic-b");
-            CHECK(after.revision > before.revision);
-            CHECK(ResolveAudioCaptureDevice(after, selected.device).status == AudioDeviceResolutionStatus::Unavailable);
-            CHECK(ResolveAudioCaptureDevice(after, AudioDefaultDeviceRole::Multimedia).device == after.devices.front().id);
-            REQUIRE(next.Value().changes.size() == 2);
-            CHECK(next.Value().changes[0].kind == AudioCaptureDeviceChangeKind::Removed);
-            CHECK(next.Value().changes[0].device == selected.device);
-            CHECK(next.Value().changes[1].kind == AudioCaptureDeviceChangeKind::Added);
-            CHECK(next.Value().changes[1].device == after.devices.front().id);
-            REQUIRE(next.Value().defaultChanges[1]);
-            CHECK_FALSE(next.Value().defaultChanges[1]->previous);
-            CHECK(next.Value().defaultChanges[1]->current == after.devices.front().id);
+            VerifyCaptureReplacement(backend, before.devices.front(), cleared.Value().snapshot.revision);
         }
     }  // namespace
 

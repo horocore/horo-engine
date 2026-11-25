@@ -62,6 +62,12 @@ def remove_device(env, logs, tools, label):
         raise RuntimeError("invalid private PipeWire node identity")
     subprocess.run([client, "destroy", str(node_id)], env=env, stdout=logs, stderr=logs, check=True, timeout=3)
 
+    def is_removed():
+        graph = read_graph(env, dump)
+        return bool(graph) and all(node["id"] != node_id for node in graph)
+
+    wait_for(is_removed, f"private PipeWire node {label} was not removed")
+
 
 def start_session(runtime, env, logs, tools, label, processes):
     daemon, session, _, _, _ = tools
@@ -99,7 +105,7 @@ def main():
                 (root / "capture-default-cleared").touch()
                 wait_for((root / "capture-default-unavailable").exists, "cleared metadata retained the recording default")
                 remove_device(env, logs, tools, "horo-test-mic-a")
-                add_default_device(env, logs, tools, "horo-test-mic-b", 2000, capture=True)
+                add_default_device(env, logs, tools, "horo-test-mic-a", 2000, capture=True)
                 wait_for(lambda: has_default(env, tools[3], "default.audio.sink", "horo-test-a"),
                          "private session manager did not restore the playback default")
                 (root / "capture-changed").touch()
