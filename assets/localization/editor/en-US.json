@@ -4623,6 +4623,9 @@
     "workspace.packages.reference_component": {
       "text": "Saved component (object or prefab occurrence)"
     },
+    "workspace.packages.reference_component_access": {
+      "text": "Native component access (consumer package / registration)"
+    },
     "workspace.packages.reference_service": {
       "text": "Required gameplay service (consumer package / registration)"
     },

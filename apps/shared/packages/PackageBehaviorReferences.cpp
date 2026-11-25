@@ -341,17 +341,49 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Checks both dependency-bearing registration kinds against the same provider identities. */
-        Result<void> InspectServiceConsumer(std::vector<Diagnostic> &references, const ServiceOwners &owners,
-                                            const Registration &consumer) {
+        /** @brief Indexes services and component schemas from roles in the exact departing set. */
+        struct NativeReferenceOwners final {
+            ServiceOwners services;
+            ComponentOwners components;
+
+            /** @brief Adds inert provider identities from an already matched departing registration. */
+            void Add(const Registration &registration) {
+                for (const auto &service : registration.services)
+                    services[service.id].insert(registration.package);
+                for (const auto &component : registration.components)
+                    components[component].insert(registration.package);
+            }
+
+            /** @brief Reports whether the withdrawal supplies a native identity that retained roles can use. */
+            [[nodiscard]] bool Empty() const {
+                return services.empty() && components.empty();
+            }
+        };
+
+        /** @brief Checks explicit dependencies on a departing service or component type. */
+        Result<void> InspectNativeConsumer(std::vector<Diagnostic> &references, const NativeReferenceOwners &owners,
+                                           const Registration &consumer) {
             for (const auto &service : consumer.services)
-                if (auto result = CollectServiceReferences(references, owners, consumer, service.id.Value(), service.dependencies);
+                if (auto result = CollectServiceReferences(references, owners.services, consumer, service.id.Value(), service.dependencies);
                     result.HasError())
                     return result;
             for (const auto &system : consumer.systems)
-                if (auto result = CollectServiceReferences(references, owners, consumer, system.id.Value(), system.requiredServices);
+                if (auto result = CollectServiceReferences(references, owners.services, consumer, system.id.Value(), system.requiredServices);
                     result.HasError())
                     return result;
+            for (const auto &use : consumer.componentUses) {
+                const auto matching = owners.components.find(use.component);
+                if (matching == owners.components.end())
+                    continue;
+                if (matching->second.size() > MaximumServiceReferences - references.size())
+                    return Result<void>::Failure(ReferenceError("packages.host.component_reference_limit"));
+                const auto &registration = std::visit([](const auto &identity) -> const std::string & { return identity.Value(); },
+                                                      use.consumer);
+                for (const auto &provider : matching->second)
+                    references.emplace_back(DiagnosticCode{"packages.host.component_access_in_use"}, DiagnosticSeverity::Error,
+                                            provider.Value() + " / " + use.component.Value(), SourceLocation{consumer.descriptorPath},
+                                            consumer.package.Value() + "/" + registration);
+            }
             return Result<void>::Success();
         }
 
@@ -361,11 +393,12 @@ namespace Horo::Application::Internal {
             return entry != locked.end() && MatchesLockedArtifact(registration, *entry->second);
         }
 
-        /** @brief A departing service needs evidence from the retained roles that could consume it. */
-        bool HasDepartingService(std::span<const Registration> registrations, const Packages::ValidatedPackageLockfileV1 &lock,
-                                 const Packages::PackageRemovalGraphPreview &removal) {
+        /** @brief Departing services and components require coverage of retained native consumers. */
+        bool HasDepartingNativeDependency(std::span<const Registration> registrations,
+                                          const Packages::ValidatedPackageLockfileV1 &lock,
+                                          const Packages::PackageRemovalGraphPreview &removal) {
             return std::ranges::any_of(registrations, [&](const Registration &entry) {
-                if (entry.services.empty() || !IsDeparting(removal, entry.package))
+                if ((entry.services.empty() && entry.components.empty()) || !IsDeparting(removal, entry.package))
                     return false;
                 const auto locked = std::ranges::find(lock.Packages(), entry.package, &Packages::LockedPackage::package);
                 return locked != lock.Packages().end() && MatchesLockedArtifact(entry, *locked);
@@ -477,7 +510,7 @@ namespace Horo::Application::Internal {
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
-            const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
+            const bool inspectRetained = HasDepartingNativeDependency(sources.registrations, lock, removal);
             for (const auto &entry : lock.Packages()) {
                 const bool departing = IsDeparting(removal, entry.package);
                 if (!inspectRetained && !departing)
@@ -534,10 +567,10 @@ namespace Horo::Application::Internal {
         return CheckLiveRemovalCoverage(sources, lock, removal);
     }
 
-    /** @copydoc InspectPackageServiceReferences */
-    Result<std::vector<Diagnostic>> InspectPackageServiceReferences(const PackageRemovalSources &sources,
-                                                                    const Packages::ValidatedPackageLockfileV1 &lock,
-                                                                    const Packages::PackageRemovalGraphPreview &removal) {
+    /** @copydoc InspectPackageNativeReferences */
+    Result<std::vector<Diagnostic>> InspectPackageNativeReferences(const PackageRemovalSources &sources,
+                                                                   const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                   const Packages::PackageRemovalGraphPreview &removal) {
         using Inspection = Result<std::vector<Diagnostic>>;
         if (removal.removed.empty())
             return Inspection::Success({});
@@ -548,23 +581,21 @@ namespace Horo::Application::Internal {
         for (const auto &entry : removal.removed)
             departing.insert(entry.package);
 
-        ServiceOwners owners;
+        NativeReferenceOwners owners;
         std::vector<const Registration *> retained;
         for (const auto &registration : sources.registrations) {
             if (!MatchesCurrentLock(locked, registration))
                 continue;
-            if (departing.contains(registration.package)) {
-                for (const auto &service : registration.services)
-                    owners[service.id].insert(registration.package);
-            } else {
+            if (departing.contains(registration.package))
+                owners.Add(registration);
+            else
                 retained.push_back(&registration);
-            }
         }
-        if (owners.empty())
+        if (owners.Empty())
             return Inspection::Success({});
         std::vector<Diagnostic> references;
         for (const auto *consumer : retained)
-            if (auto result = InspectServiceConsumer(references, owners, *consumer); result.HasError())
+            if (auto result = InspectNativeConsumer(references, owners, *consumer); result.HasError())
                 return Inspection::Failure(result.ErrorValue());
         return Inspection::Success(std::move(references));
     }

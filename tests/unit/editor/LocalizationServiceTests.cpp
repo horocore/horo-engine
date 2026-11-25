@@ -406,6 +406,7 @@ namespace {
                                   "workspace.packages.reference_importer",
                                   "workspace.packages.reference_behavior",
                                   "workspace.packages.reference_component",
+                                  "workspace.packages.reference_component_access",
                                   "workspace.packages.reference_service",
                                   "workspace.packages.reference_decision",
                                   "workspace.packages.reference_perception",

@@ -25,6 +25,7 @@ namespace Horo::Editor {
             {"packages.host.importer_in_use", "reference_importer", false, true},
             {"packages.host.behavior_in_use", "reference_behavior", true, true},
             {"packages.host.component_in_use", "reference_component", true, true},
+            {"packages.host.component_access_in_use", "reference_component_access", true, true},
             {"packages.host.service_in_use", "reference_service", true, true},
             {"packages.host.decision_node_in_use", "reference_decision", true, true},
             {"packages.host.perception_reference_review", "reference_perception", true, false},

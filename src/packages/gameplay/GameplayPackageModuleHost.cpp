@@ -10,8 +10,10 @@
 #include "PackageContentStaging.h"
 
 #include <algorithm>
+#include <concepts>
 #include <new>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Packages {
     namespace {
@@ -348,11 +350,59 @@ namespace Horo::Packages {
             return Result<bool>::Success(bool{queries.Value().schema} || !persistence.Value().empty());
         }
 
+        using Inventory = GameplayPackageModuleHost::RegistrationInventory;
+
+        /** @brief Copies declared accesses, excluding behavior resource names outside the component identity namespace. */
+        Result<void> CaptureComponentUses(Inventory &inventory, const auto &resources, const auto &consumer) {
+            for (const auto &resource : resources) {
+                Gameplay::ComponentTypeId component;
+                if constexpr (std::same_as<std::decay_t<decltype(resource)>, std::string>) {
+                    auto parsed = Gameplay::ComponentTypeId::Parse(resource);
+                    if (parsed.HasError())
+                        continue;
+                    component = std::move(parsed).Value();
+                } else {
+                    component = resource;
+                }
+                if (inventory.componentUses.size() == Inventory::MaximumComponentUses)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+                inventory.componentUses.push_back({std::move(component), consumer});
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures read/write dependencies for one registration without retaining its callbacks. */
+        Result<void> CaptureAccess(Inventory &inventory, const auto &access, const auto &consumer) {
+            if (auto reads = CaptureComponentUses(inventory, access.reads, consumer); reads.HasError())
+                return reads;
+            return CaptureComponentUses(inventory, access.writes, consumer);
+        }
+
+        /** @brief Copies bounded behavior and system metadata from the same frozen owner. */
+        Result<void> CaptureScheduledRegistrations(const Gameplay::LoadedGameModule &loaded, Inventory &inventory) {
+            for (const auto &behavior : loaded.Registry().Registrations()) {
+                const auto &descriptor = behavior.descriptor;
+                inventory.behaviors.push_back(descriptor.typeId);
+                for (const auto &phase : descriptor.phases)
+                    if (auto captured = CaptureAccess(inventory, phase.access, descriptor.typeId); captured.HasError())
+                        return captured;
+            }
+            for (const auto &system : loaded.Systems().Registrations()) {
+                inventory.systems.push_back(system.descriptor);
+                if (auto captured = CaptureAccess(inventory, system.descriptor.access, system.descriptor.id); captured.HasError())
+                    return captured;
+            }
+            std::ranges::sort(inventory.componentUses);
+            const auto duplicates = std::ranges::unique(inventory.componentUses);
+            inventory.componentUses.erase(duplicates.begin(), duplicates.end());
+            return Result<void>::Success();
+        }
+
         /** @brief Copies inert registration facts from an exact loaded gameplay role without retaining the image or invoking factories. */
         Result<void> CaptureRegistrationContents(const Gameplay::LoadedGameModule &loaded,
                                                  GameplayPackageModuleHost::RegistrationInventory &inventory) {
-            for (const auto &behavior : loaded.Registry().Registrations())
-                inventory.behaviors.push_back(behavior.descriptor.typeId);
+            if (auto scheduled = CaptureScheduledRegistrations(loaded, inventory); scheduled.HasError())
+                return scheduled;
             const auto components = loaded.Components().Descriptors();
             if (components.size() > GameplayPackageModuleHost::RegistrationInventory::MaximumComponentIds)
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
@@ -360,8 +410,6 @@ namespace Horo::Packages {
                 inventory.components.push_back(component.typeId);
             for (const auto &service : loaded.Services().Registrations())
                 inventory.services.push_back(service.descriptor);
-            for (const auto &system : loaded.Systems().Registrations())
-                inventory.systems.push_back(system.descriptor);
             auto decisionNodes = loaded.AcquireDecisionNodes();
             if (decisionNodes.HasError())
                 return Result<void>::Failure(decisionNodes.ErrorValue());

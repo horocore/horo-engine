@@ -88,12 +88,14 @@ namespace Horo::Application::Internal {
                 MergeObservedIds(observed.behaviors, match->behaviors);
                 MergeObservedIds(observed.decisionNodes, match->decisionNodes);
                 MergeObservedIds(observed.components, match->components);
+                MergeObservedIds(observed.componentUses, match->componentUses);
                 observed.hasCustomSenses = observed.hasCustomSenses || match->hasCustomSenses;
                 observed.hasAdditionalReferenceClasses =
                     observed.hasAdditionalReferenceClasses || match->hasAdditionalReferenceClasses;
             }
             if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors ||
                 observed.components.size() > Registration::MaximumComponentIds ||
+                observed.componentUses.size() > Registration::MaximumComponentUses ||
                 observed.decisionNodes.size() > AI::DecisionNodeGeneration::MaximumNodes)
                 return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
             if (match != evidence.registrations.end())

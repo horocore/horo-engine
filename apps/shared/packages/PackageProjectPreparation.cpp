@@ -514,11 +514,11 @@ namespace Horo::Application::Internal {
             else
                 std::ranges::move(sceneSources.Value(), std::back_inserter(references));
 
-            auto services = InspectPackageServiceReferences(sources, lock, impact);
-            if (services.HasError())
-                RecordRemovalFailure(blocking, std::move(services).ErrorValue());
+            auto nativeReferences = InspectPackageNativeReferences(sources, lock, impact);
+            if (nativeReferences.HasError())
+                RecordRemovalFailure(blocking, std::move(nativeReferences).ErrorValue());
             else
-                std::ranges::move(services.Value(), std::back_inserter(references));
+                std::ranges::move(nativeReferences.Value(), std::back_inserter(references));
 
             auto decisions = InspectPackageDecisionReferences(sources, lock, impact);
             if (decisions.HasError())

@@ -4623,6 +4623,9 @@
     "workspace.packages.reference_component": {
       "text": "Kayıtlı bileşen (nesne veya prefab örneği)"
     },
+    "workspace.packages.reference_component_access": {
+      "text": "Native bileşen erişimi (kullanan paket / kayıt)"
+    },
     "workspace.packages.reference_service": {
       "text": "Gerekli oynanış hizmeti (kullanan paket / kayıt)"
     },

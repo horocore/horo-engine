@@ -9,6 +9,7 @@
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <functional>
+#include <variant>
 
 namespace Horo::Packages {
     /** @brief Exact locked package attribution accompanying its real acquired node generation. */
@@ -89,7 +90,16 @@ namespace Horo::Packages {
         /** @brief Owned, non-executable inventory copied from one published package module.
          * @details Artifact and generation attribute registrations to the exact admitted native image. */
         struct RegistrationInventory final {
+            /** @brief A behavior or system with declared access to a persistent component identity. */
+            struct ComponentUse final {
+                Gameplay::ComponentTypeId component;
+                std::variant<Gameplay::BehaviorTypeId, Gameplay::GameplaySystemId> consumer;
+
+                [[nodiscard]] auto operator<=>(const ComponentUse &) const noexcept = default;
+            };
+
             static constexpr std::size_t MaximumComponentIds = 4096;
+            static constexpr std::size_t MaximumComponentUses = 16'384;
             HoroPackageId package;
             PackageVersion version;
             Sha256Digest artifact;
@@ -103,6 +113,7 @@ namespace Horo::Packages {
             bool hasCustomSenses{}; /**< The role has a native Perception surface requiring saved-source review. */
             bool hasAdditionalReferenceClasses{}; /**< The role contributes assets, components, native queries, or persistent adapters. */
             std::vector<Gameplay::ComponentTypeId> components; /**< Stable IDs from the exact native component registry. */
+            std::vector<ComponentUse> componentUses; /**< Declared behavior and system reads or writes, in canonical order. */
         };
 
         /** @brief Copies behavior, component and decision IDs and service and system descriptors from exact published runtime roles.

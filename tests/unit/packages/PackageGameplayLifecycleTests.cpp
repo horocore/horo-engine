@@ -555,6 +555,9 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     CHECK(registration.package == fixture.enabled.package);
     REQUIRE(registration.behaviors.size() == 1);
     CHECK(registration.behaviors.front().Value() == "game.tests.package_behavior");
+    REQUIRE(registration.componentUses.size() == 1);
+    CHECK(registration.componentUses.front().component.Value() == "game.tests.external_component");
+    CHECK(std::get<Gameplay::BehaviorTypeId>(registration.componentUses.front().consumer) == registration.behaviors.front());
     REQUIRE(registration.decisionNodes.size() == 1);
     CHECK(registration.decisionNodes.front().Value() == 201);
     CHECK(registration.hasCustomSenses);

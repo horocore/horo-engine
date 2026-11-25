@@ -63,16 +63,16 @@ namespace Horo::Application::Internal {
                                                                 const Packages::ValidatedPackageLockfileV1 &lock,
                                                                 const Packages::PackageRemovalGraphPreview &removal);
 
-    /** @brief Finds retained package services and systems that require a service from an exact departing artifact.
+    /** @brief Finds retained native registrations that use services or component types from exact departing artifacts.
      * @param sources Owned-registration observations bound to the current project.
      * @param lock Current validated lock used to filter stale observations.
      * @param removal Exact withdrawal effects from that lock.
      * @return Bounded dependency diagnostics or a reference-limit error.
      * @details Only supplied, observed package roles are examined. Registrations leaving together cannot block removal.
      */
-    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageServiceReferences(const PackageRemovalSources &sources,
-                                                                                  const Packages::ValidatedPackageLockfileV1 &lock,
-                                                                                  const Packages::PackageRemovalGraphPreview &removal);
+    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageNativeReferences(const PackageRemovalSources &sources,
+                                                                                 const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                                 const Packages::PackageRemovalGraphPreview &removal);
 
     /** @brief Finds authored Decision nodes and saved sources requiring custom sense review.
      * @param sources Owned registration observations and root-bound saved source.

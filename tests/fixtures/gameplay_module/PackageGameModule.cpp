@@ -73,7 +73,8 @@ namespace {
         static Horo::Gameplay::BehaviorDescriptor DescribeBehavior() {
             Horo::Gameplay::BehaviorDescriptor descriptor;
             descriptor.displayName = "Package Behavior";
-            descriptor.phases.push_back({Horo::Gameplay::BehaviorPhase::Gameplay, "game.tests.package_behavior", {}, {}, {}});
+            descriptor.phases.push_back({Horo::Gameplay::BehaviorPhase::Gameplay, "game.tests.package_behavior",
+                                         {{"game.tests.external_component"}, {"game.tests.external_component"}}, {}, {}});
             return descriptor;
         }
     };

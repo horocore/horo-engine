@@ -1016,7 +1016,7 @@ namespace {
         return {*retained, std::move(archive)};
     }
 
-    TEST_CASE("Package removal needs coverage of a retained runtime consumer before withdrawing a service",
+    TEST_CASE("Package removal needs coverage of retained users of a service or component",
               "[packages][application][host][removal-coverage]") {
         using namespace Packages;
         HostFixture fixture{true};
@@ -1027,14 +1027,15 @@ namespace {
         const auto expected = PreparePackageProject(policy, fixture.files, {});
         REQUIRE(expected.HasValue());
         const auto service = Gameplay::GameplayServiceId::Parse("game.tests.required").Value();
+        const auto component = Gameplay::ComponentTypeId::Parse("game.tests.required_component").Value();
+        const bool providesService = GENERATE(true, false);
         using Inventory = GameplayPackageModuleHost::RegistrationInventory;
-        const std::array roles{
+        std::array roles{
             Inventory{.package = fixture.graph.package,
                       .version = fixture.graph.version,
                       .artifact = fixture.graph.archive.Digest(),
                       .activationGeneration = 1,
                       .moduleId = "com.horo.application-fixture.native",
-                      .services = {{.id = service}},
                       .descriptorPath = "extensions/native/extension.json"},
             Inventory{.package = retained.lock.package,
                       .version = retained.lock.version,
@@ -1043,6 +1044,10 @@ namespace {
                       .moduleId = "com.horo.retained.native",
                       .descriptorPath = "extensions/native/extension.json"},
         };
+        if (providesService)
+            roles.front().services.push_back({.id = service});
+        else
+            roles.front().components.push_back(component);
         auto sources = fixture.RemovalSources(*assets);
         sources.registrations = std::span{roles}.first(1);
         const auto oldRequest = fixture.Read("packages.json");
@@ -1063,7 +1068,26 @@ namespace {
         CHECK(locked.Value().Packages().front() == retained.lock);
     }
 
-    TEST_CASE("Package removal reports retained service and system requirements from the current lock", "[packages][application][host]") {
+    /** @brief Verifies exact provider, retained descriptor and consumer identity for both dependency kinds. */
+    void CheckRetainedNativeReferences(std::span<const Diagnostic> references, const std::string &provider) {
+        REQUIRE(references.size() == 4);
+        for (const auto &reference : references.first(2)) {
+            CHECK(reference.code.Value() == "packages.host.service_in_use");
+            CHECK(reference.message == provider + ": game.tests.required");
+            CHECK(reference.location.source == "extensions/retained/extension.json");
+        }
+        CHECK(references[0].path == "com.horo.retained/game.tests.consumer");
+        CHECK(references[1].path == "com.horo.retained/game.tests.tick");
+        for (const auto &reference : references.last(2)) {
+            CHECK(reference.code.Value() == "packages.host.component_access_in_use");
+            CHECK(reference.message == provider + " / game.tests.provider_component");
+            CHECK(reference.location.source == "extensions/retained/extension.json");
+        }
+        CHECK(references[2].path == "com.horo.retained/game.tests.retained_behavior");
+        CHECK(references[3].path == "com.horo.retained/game.tests.tick");
+    }
+
+    TEST_CASE("Package removal reports retained native dependencies from the current lock", "[packages][application][host]") {
         using namespace Packages;
         HostFixture fixture;
         const auto assets = fixture.AssetSource();
@@ -1084,6 +1108,8 @@ namespace {
         const auto serviceId = Gameplay::GameplayServiceId::Parse("game.tests.required").Value();
         const auto consumerId = Gameplay::GameplayServiceId::Parse("game.tests.consumer").Value();
         const auto systemId = Gameplay::GameplaySystemId::Parse("game.tests.tick").Value();
+        const auto component = Gameplay::ComponentTypeId::Parse("game.tests.provider_component").Value();
+        const auto behaviorId = Gameplay::BehaviorTypeId::Parse("game.tests.retained_behavior").Value();
         using Inventory = GameplayPackageModuleHost::RegistrationInventory;
         std::array registrations{
             Inventory{.package = retired,
@@ -1091,7 +1117,8 @@ namespace {
                       .artifact = retiredDigest,
                       .activationGeneration = 1,
                       .moduleId = "game.tests.provider",
-                      .services = {{.id = serviceId}}},
+                      .services = {{.id = serviceId}},
+                      .components = {component}},
             Inventory{.package = retained,
                       .version = version,
                       .artifact = retainedDigest,
@@ -1099,20 +1126,14 @@ namespace {
                       .moduleId = "game.tests.retained",
                       .services = {{.id = consumerId, .dependencies = {serviceId}}},
                       .descriptorPath = "extensions/retained/extension.json",
-                      .systems = {{.id = systemId, .requiredServices = {serviceId}}}},
+                      .systems = {{.id = systemId, .requiredServices = {serviceId}}},
+                      .componentUses = {{component, behaviorId}, {component, systemId}}},
         };
         sources.registrations = registrations;
 
-        const auto references = InspectPackageServiceReferences(sources, lock.Value(), removal);
+        const auto references = InspectPackageNativeReferences(sources, lock.Value(), removal);
         REQUIRE(references.HasValue());
-        REQUIRE(references.Value().size() == 2);
-        for (const auto &reference : references.Value()) {
-            CHECK(reference.code.Value() == "packages.host.service_in_use");
-            CHECK(reference.message == retired.Value() + ": game.tests.required");
-            CHECK(reference.location.source == "extensions/retained/extension.json");
-        }
-        CHECK(references.Value()[0].path == "com.horo.retained/game.tests.consumer");
-        CHECK(references.Value()[1].path == "com.horo.retained/game.tests.tick");
+        CheckRetainedNativeReferences(references.Value(), retired.Value());
 
         SECTION("stale retained artifact") {
             registrations[1].artifact = retiredDigest;
@@ -1120,7 +1141,7 @@ namespace {
         SECTION("both packages leave the graph") {
             removal.removed.emplace_back(retained, version);
         }
-        const auto safe = InspectPackageServiceReferences(sources, lock.Value(), removal);
+        const auto safe = InspectPackageNativeReferences(sources, lock.Value(), removal);
         REQUIRE(safe.HasValue());
         CHECK(safe.Value().empty());
     }
