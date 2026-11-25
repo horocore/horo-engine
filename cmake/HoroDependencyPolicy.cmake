@@ -569,7 +569,7 @@ horo_allow_target_dependencies(TARGET HoroNpcDialogueHttpsHostInternal DEPENDENC
 horo_allow_target_dependencies(TARGET HoroNpcDialogueScenePresentationInternal DEPENDENCIES HoroAI HoroAISceneIntegration HoroProjectSettings HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET HoroPackageProjectHost
     DEPENDENCIES HoroPackageApplication HoroPackageGameplayHost HoroHostSignatureDocuments HoroSecurity HoroAssets HoroAI
-        HoroProjectMutationGuard HoroProjectReadFilesApi HoroSceneSource HoroPrefabAuthoring)
+        HoroAISceneIntegration HoroProjectMutationGuard HoroProjectReadFilesApi HoroSceneSource HoroPrefabAuthoring)
 horo_allow_target_dependencies(TARGET HoroEditorImageProviderHostInternal
     DEPENDENCIES HoroApplication HoroRenderFrontend HoroSecurity HoroPlatform HoroHostSignatureDocuments
         HoroEditorNativeReconstructionReleaseLayoutInternal HoroReleaseManifestSignatureHostInternal HoroEditorVulkanShaderInternal)

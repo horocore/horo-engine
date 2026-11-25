@@ -4,6 +4,9 @@
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/AI/PerceptionSenseScene.h"
 #include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/PackageModalSession.h"
@@ -332,6 +335,55 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     CHECK(fixture.retirement->Close().HasValue());
 }
 
+namespace {
+    /** @brief Writes exact fixture bytes for the project-bound scanner. */
+    void WriteFixtureSource(const std::filesystem::path &path, std::string_view bytes) {
+        std::ofstream file{path, std::ios::binary};
+        file << bytes;
+        REQUIRE(file.good());
+    }
+
+    /** @brief Leaves a safe point query in place after testing Perception and unreadable blockers. */
+    void CheckQueryRemoval(const std::filesystem::path &root, const auto &attemptRemoval) {
+        namespace AI = Horo::AI;
+        const auto query = AI::QueryId::Create(1).Value();
+        const auto stage = AI::QueryStageId::Create(1).Value();
+        const auto schema = AI::QueryResultSchemaId::Create(1).Value();
+        const auto point = AI::CreateBuiltinLatticeQuery(query, stage, schema, "Local points", {.stepMillimeters = 25, .outerSteps = 1}, 9);
+        const auto perception = AI::CreateBuiltinPerceptionQuery(
+            query, stage, AI::QueryStageId::Create(2).Value(), schema, "Perceived actors", AI::QueryPerceptionMatch::Remembered, 4);
+        REQUIRE(point.HasValue());
+        REQUIRE(perception.HasValue());
+        const auto writeQuery = [](const std::filesystem::path &path, const AI::EnvironmentQueryAsset &source) {
+            const auto encoded = AI::EnvironmentQuerySourceCodec::Encode(source);
+            REQUIRE(encoded.HasValue());
+            WriteFixtureSource(path, {reinterpret_cast<const char *>(encoded.Value().data()), encoded.Value().size()});
+        };
+        const auto pointPath = root / "Assets/Points.horo_eqs";
+        writeQuery(pointPath, point.Value());
+        WriteFixtureSource(root / "Assets/Points.horo_eqs.horo",
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff82","assetType":"core.environment_query"})");
+        const auto perceptionPath = root / "Assets/Actors.horo_eqs";
+        const auto perceptionSidecar = root / "Assets/Actors.horo_eqs.horo";
+        WriteFixtureSource(perceptionSidecar,
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff83","assetType":"core.environment_query"})");
+        writeQuery(perceptionPath, perception.Value());
+        const auto checkBlockedQuery = [&](const std::string_view code) {
+            const auto report = attemptRemoval();
+            REQUIRE(report.outcome == Horo::Application::PackageOperationOutcome::Failed);
+            REQUIRE(report.diagnostic);
+            REQUIRE(report.diagnostic->diagnostics.size() == 1);
+            CHECK(report.diagnostic->diagnostics.front().code.Value() == code);
+            CHECK(report.diagnostic->diagnostics.front().location.source == "Assets/Actors.horo_eqs");
+        };
+        checkBlockedQuery("packages.host.perception_reference_review");
+        WriteFixtureSource(perceptionPath, "{");
+        checkBlockedQuery("packages.host.perception_reference_unreadable");
+        REQUIRE(std::filesystem::remove(perceptionSidecar));
+        REQUIRE(std::filesystem::remove(perceptionPath));
+    }
+}  // namespace
+
 TEST_CASE("Signed offline Editor package selection publishes only exactly approved Decision nodes", "[packages][decision-node][editor]") {
     using namespace Horo::Application::Internal;
     enum class Admission {
@@ -370,13 +422,8 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     const auto lock = ValidatedPackageLockfileV1::Generate(resolution, std::span{&entry.lock.package, 1}, request.Value().Digest(),
                                                            std::span{&artifact, 1});
     REQUIRE(lock.HasValue());
-    const auto write = [](const std::filesystem::path &path, std::string_view bytes) {
-        std::ofstream file{path, std::ios::binary};
-        file << bytes;
-        REQUIRE(file.good());
-    };
-    write(relativeMetadata / "packages.json", intent);
-    write(relativeMetadata / "packages.lock", lock.Value().SerializeCanonical());
+    WriteFixtureSource(relativeMetadata / "packages.json", intent);
+    WriteFixtureSource(relativeMetadata / "packages.lock", lock.Value().SerializeCanonical());
     const auto cacheRoot = content / "decision-host-cache";
     auto cache = PackageCacheStore::Create(fixture.base.files, cacheRoot);
     REQUIRE(cache.HasValue());
@@ -400,9 +447,9 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
                                              {"expiresAtUnixMilliseconds", 0},
                                              {"revoked", false}}}}}
                                .dump();
-    write(trustDocument, trustJson);
+    WriteFixtureSource(trustDocument, trustJson);
     const auto projectTrust = root / "unapproved-publishers.json";
-    write(projectTrust, trustJson);
+    WriteFixtureSource(projectTrust, trustJson);
     JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
     const SteadyClock clock;
     const SystemWallClock wall;
@@ -519,9 +566,9 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     REQUIRE(saved.HasValue());
     const auto graphPath = root / "Assets/Agent.horo_bt";
     const auto graphSidecar = root / "Assets/Agent.horo_bt.horo";
-    write(graphPath, {reinterpret_cast<const char *>(saved.Value().data()), saved.Value().size()});
-    write(graphSidecar,
-          R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff81","assetType":"core.behavior_tree"})");
+    WriteFixtureSource(graphPath, {reinterpret_cast<const char *>(saved.Value().data()), saved.Value().size()});
+    WriteFixtureSource(graphSidecar,
+                       R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff81","assetType":"core.behavior_tree"})");
     const auto blocked = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
     REQUIRE(blocked.HasValue());
     const auto references = pump(blocked.Value());
@@ -533,9 +580,17 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
         }));
     REQUIRE(std::filesystem::remove(graphSidecar));
     REQUIRE(std::filesystem::remove(graphPath));
+
+    CheckQueryRemoval(root, [&] {
+        const auto operation = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(operation.HasValue());
+        return pump(operation.Value());
+    });
+
     const auto removed = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
     REQUIRE(removed.HasValue());
     REQUIRE(pump(removed.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    CHECK(std::filesystem::is_regular_file(root / "Assets/Points.horo_eqs"));
     const auto refreshed = PreparePackageProject(base, fixture.base.files, {});
     REQUIRE(refreshed.HasValue());
     CHECK(refreshed.Value().application.lockedPlan->Packages().empty());

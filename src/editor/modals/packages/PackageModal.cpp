@@ -278,7 +278,8 @@ namespace Horo::Editor {
             if (diagnostic.code.Value() == "packages.host.importer_in_use")
                 Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
             if (diagnostic.code.Value() == "packages.host.decision_node_in_use" ||
-                diagnostic.code.Value() == "packages.host.perception_reference_review")
+                diagnostic.code.Value() == "packages.host.perception_reference_review" ||
+                diagnostic.code.Value() == "packages.host.perception_reference_unreadable")
                 Ui::Hint(diagnostic.location.source.c_str(), context_.theme.fonts);
         }
     }

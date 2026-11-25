@@ -482,7 +482,13 @@ exact observations of every departing runtime role after retirement, and
 checks saved behavior, Decision and service references. Mixed roles, unknown
 archive paths and unreviewed component, asset, query or persistence
 contributions block removal. Custom senses block removal when saved authoring
-sources still require a binding review.
+sources still require a binding review. An EQS source is independent of a
+departing sense when its complete source is admitted against the engine-owned
+point-query schema. Perception queries and queries with unresolved stages still
+require review. Unreadable queries are reported with their project-relative
+paths and block the operation. The application package project host borrows the
+inert EQS descriptor schema and authoring validator from AI Scene integration.
+The review does not compose a live Scene or execute queries.
 
 `horo-engine package preview-remove --project /path/to/project --package-id
 com.vendor.pack` checks saved asset importer references and reports any locked
