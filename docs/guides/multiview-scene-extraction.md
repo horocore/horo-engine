@@ -208,6 +208,13 @@ The regression checks packed pixels from two eyes at known depths and rejects
 a stale completion. The same native qualification exercises the full-eye
 graph when the separately cooked motion and reduction programs are supplied.
 
+The Linux Editor test `HoroRenderVulkanTests '[native-quad]'` uses the
+installed OpenXR Play path with a scripted runtime, a real Vulkan queue and a
+four-layer swapchain. Set `HORO_XR_PLAY_NATIVE_COOK_ROOT` to the directory with
+the canonical `viewport`, `shadow` and `multiview` cook pairs. The test verifies
+two consecutive submissions, each view's active rectangle and array layer, and
+the release of the same allocation after each completed frame.
+
 The opt-in environment lighting program is cooked from
 `assets/shaders/runtime/multiview_environment_mesh.hlsl` using
 `HoroEditorVulkanShaderCook` with `--multiview-environment`. Its

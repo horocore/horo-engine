@@ -185,6 +185,19 @@ namespace Horo::Tests::OpenXRApplication {
             }
         };
 
+        /** @brief Selects the same complete quad profile for instrumented and native Vulkan Play tests. */
+        void ConfigureQuadProjection(ApplicationNativeScript &script, ConfigurationResolutionRequest &request) {
+            request.invocation.emplace(SettingKey{"xr.capability_profile"},
+                                       ConfigurationInputValue{static_cast<std::int64_t>(XR::XRFeatureProfile::FoveatedInsetProjection),
+                                                               std::nullopt});
+            request.invocation.emplace(SettingKey{"xr.limits.views"}, ConfigurationInputValue{std::int64_t{4}, std::nullopt});
+            script.census.advertisesQuad = true;
+            script.events.expectedViewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+            script.presentation.quad = true;
+            script.presentation.count = 4;
+            script.frames.expectedViews = 4;
+        }
+
         /** @brief Owns real installation, native preparation and canonical scene/input parents through explicit cleanup. */
         struct ApplicationFixture final {
             static constexpr std::int64_t VignettePercent = 40;
@@ -256,18 +269,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         ConfigurationResolutionRequest request = {})
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
-                if (quadPlay) {
-                    request.invocation.emplace(SettingKey{"xr.capability_profile"},
-                                               ConfigurationInputValue{static_cast<std::int64_t>(
-                                                                           XR::XRFeatureProfile::FoveatedInsetProjection),
-                                                                       std::nullopt});
-                    request.invocation.emplace(SettingKey{"xr.limits.views"}, ConfigurationInputValue{std::int64_t{4}, std::nullopt});
-                    script.census.advertisesQuad = true;
-                    script.events.expectedViewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
-                    script.presentation.quad = true;
-                    script.presentation.count = 4;
-                    script.frames.expectedViews = 4;
-                }
+                if (quadPlay)
+                    ConfigureQuadProjection(script, request);
                 if (planePreview)
                     request.invocation.emplace(SettingKey{"xr.preview.spatial_planes"}, ConfigurationInputValue{true, std::nullopt});
                 if (anchorPreview)

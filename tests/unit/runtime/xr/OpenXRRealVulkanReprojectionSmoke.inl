@@ -279,6 +279,8 @@ namespace Horo::Tests::OpenXRApplication {
             XR::OpenXRInternal::NativeFrameMetricHandles metrics;
         };
 
+        enum class NativePlayProjection { StereoSynthesis, Quad };
+
         /** @brief Signs the exact smooth-movement action used by the native comfort fixture. */
         std::string ComfortBindingDocument() {
             auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
@@ -330,16 +332,23 @@ namespace Horo::Tests::OpenXRApplication {
             std::unique_ptr<Editor::EditorGuiRendererVulkan> gui;
             std::unique_ptr<Host::OpenXRPlayHost> play;
 
+            NativePlayFixture(const std::filesystem::path &cooks, const NativePlayProjection projection)
+                : NativePlayFixture(cooks, nullptr, {}, {}, nullptr, projection) {}
+
             explicit NativePlayFixture(const std::filesystem::path &cooks, const Host::IOpenXRPlayLightingSource *lighting = nullptr,
                                        const std::filesystem::path &lightingCooks = {},
                                        std::shared_ptr<const Host::IOpenXRLightPermission> lightPermission = {},
-                                       const NativeComfortProjection *comfort = nullptr)
+                                       const NativeComfortProjection *comfort = nullptr,
+                                       const NativePlayProjection projection = NativePlayProjection::StereoSynthesis)
                 : product{HORO_TEST_OPENXR_LOADER, comfort ? std::optional{ComfortBindingDocument()} : std::nullopt} {
                 REQUIRE(window);
                 platform = std::make_unique<Editor::SdlVulkanPresentationPort>(*window);
                 images = std::make_unique<NativePlayImages>(*platform, bridge);
-                script.native.synthesisExtension = true;
-                ++script.native.extensionCount;
+                const bool synthesis = projection == NativePlayProjection::StereoSynthesis;
+                if (synthesis) {
+                    script.native.synthesisExtension = true;
+                    ++script.native.extensionCount;
+                }
                 if (lightPermission) {
                     static constexpr std::array<std::string_view, 1> extensions{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME};
                     script.native.extraExtensions = extensions;
@@ -357,10 +366,14 @@ namespace Horo::Tests::OpenXRApplication {
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"},
                                            ConfigurationInputValue{std::int64_t{comfort ? 6 : 5}, std::nullopt});
-                request.invocation.emplace(SettingKey{"xr.features.space_warp"},
-                                           ConfigurationInputValue{static_cast<std::int64_t>(
-                                                                       XR::XRProjectFeaturePolicy::OptionalProjection),
-                                                                   std::nullopt});
+                if (synthesis) {
+                    request.invocation.emplace(SettingKey{"xr.features.space_warp"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(
+                                                                           XR::XRProjectFeaturePolicy::OptionalProjection),
+                                                                       std::nullopt});
+                } else {
+                    ConfigureQuadProjection(script, request);
+                }
                 if (comfort) {
                     request.invocation.emplace(SettingKey{"xr.locomotion.maximum_vignette_percent"},
                                                ConfigurationInputValue{std::int64_t{40}, std::nullopt});
@@ -403,10 +416,12 @@ namespace Horo::Tests::OpenXRApplication {
                 if (comfort)
                     RequireValue(viewport->PrepareXrComfortProgram(
                         LoadNativeCook(comfort->shaders, "xr-comfort-vulkan", Editor::LoadEditorVulkanXrComfortCook)));
-                viewport->StageXrMotionProgram(LoadNativeCook(cooks, "motion", Editor::LoadEditorVulkanMultiviewMotionCook));
-                viewport->StageXrCoverageProgram(LoadNativeCook(cooks, "coverage", Editor::LoadEditorVulkanMultiviewCoverageCook));
-                viewport->StageXrCoverageReductionProgram(
-                    LoadNativeCook(cooks, "reduction", Editor::LoadEditorVulkanCoverageReductionCook));
+                if (synthesis) {
+                    viewport->StageXrMotionProgram(LoadNativeCook(cooks, "motion", Editor::LoadEditorVulkanMultiviewMotionCook));
+                    viewport->StageXrCoverageProgram(LoadNativeCook(cooks, "coverage", Editor::LoadEditorVulkanMultiviewCoverageCook));
+                    viewport->StageXrCoverageReductionProgram(
+                        LoadNativeCook(cooks, "reduction", Editor::LoadEditorVulkanCoverageReductionCook));
+                }
                 gui = std::make_unique<Editor::EditorGuiRendererVulkan>(*window, *frontend, bridge);
                 RequireValue(gui->Initialize());
                 RequireValue(session->PrepareSession());
@@ -541,6 +556,41 @@ namespace Horo::Tests::OpenXRApplication {
             return RequireValue(extractor.Extract(tree, descriptor, {.commands = commands, .transforms = transforms}));
         }
     }  // namespace
+
+    TEST_CASE("Signed quad Play submits four distinct layers on a real Vulkan queue", "[xr][application][play][native-quad]") {
+        const auto *root = SDL_getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        if (!root)
+            SKIP("Supply the canonical Vulkan viewport, shadow and multiview cooks.");
+        NativePlayFixture fixture{root, NativePlayProjection::Quad};
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        auto &script = fixture.script;
+        REQUIRE(script.swapchain.created.arraySize == 4);
+        CHECK(fixture.play->ReadSetup().requestedProfile == XR::XRFeatureProfile::FoveatedInsetProjection);
+        script.clock.sample = 1;
+        XrSwapchain swapchain{XR_NULL_HANDLE};
+        for (std::uint32_t frame = 1; frame <= 2; ++frame) {
+            CAPTURE(frame);
+            fixture.Project(frame);
+            REQUIRE(script.frames.layers == 1);
+            REQUIRE(script.frames.views == 4);
+            const auto submitted = script.frames.encoded.front().subImage.swapchain;
+            REQUIRE(submitted != XR_NULL_HANDLE);
+            if (frame == 1)
+                swapchain = submitted;
+            CHECK(submitted == swapchain);
+            CHECK(fixture.images->Read(submitted).releases == frame);
+            for (std::uint32_t view = 0; view < script.frames.views; ++view) {
+                const auto &projection = script.frames.encoded[view];
+                CHECK(projection.subImage.swapchain == submitted);
+                CHECK(projection.subImage.imageArrayIndex == view);
+                CHECK(projection.subImage.imageRect.extent.width == 1024 - static_cast<std::int32_t>(view) * 128);
+                CHECK(projection.subImage.imageRect.extent.height == 1024);
+                CHECK(projection.next == nullptr);
+            }
+            script.frames.prediction += script.frames.period;
+        }
+        scene->Shutdown();
+    }
 
     TEST_CASE("Signed Play submits true Vulkan full-eye reduction to its matching native synthesis End",
               "[xr][application][play][reprojection][native-positive]") {
