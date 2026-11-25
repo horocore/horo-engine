@@ -348,6 +348,7 @@ add_executable(HoroEditorAgentTurnTests
     unit/editor/ImmersiveSpeechTranscriptionTests.cpp
     unit/editor/ImmersiveSpeechWorkerTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveAuthoringContext.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveCommandEnvelope.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveSpeechTranscription.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveSpeechWorker.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")

@@ -17,6 +17,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
         HoroEditor/app/EditorLocalAgentContext.cpp
         HoroEditor/app/ImmersiveAuthoringContext.cpp
+        HoroEditor/app/ImmersiveCommandEnvelope.cpp
         HoroEditor/app/ImmersiveSpeechTranscription.cpp
         HoroEditor/app/ImmersiveSpeechWorker.cpp
         HoroEditor/app/EditorLocalAgentHistory.cpp

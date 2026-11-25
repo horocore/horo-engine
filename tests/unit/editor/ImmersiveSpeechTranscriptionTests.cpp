@@ -1,4 +1,4 @@
-#include "../../../apps/HoroEditor/app/ImmersiveSpeechTranscription.h"
+#include "../../../apps/HoroEditor/app/ImmersiveCommandEnvelope.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
@@ -116,6 +116,140 @@ namespace Horo::Editor {
         /** @brief Uses a tight provider window inside the admitted PCM. */
         SpeechHypothesisView Transcript(const Kind kind = Kind::Partial) {
             return {kind, {5, 1'000'000}, {5, 1'040'000}, 0.8F, "Seçili nesne"};
+        }
+
+        /** @brief Makes one owner-scoped XR observation with an independently measured audio-clock interval. */
+        ImmersiveSpatialObservation SpatialObservation(const ImmersivePlanningContext &context, const std::uint64_t revision,
+                                                       const std::uint64_t earliest, const std::uint64_t latest) {
+            const auto session = context.Identity().xrSession;
+            const auto origin = XR::XRWorldOriginRevision::Create(1).Value();
+            return {{session, XR::XRTrackingSnapshotRevision::Create(revision).Value(), origin,
+                     XR::XRRuntimeTime::Create(static_cast<std::int64_t>(revision) * 17).Value(), 2},
+                    {{session, {1, 2}},
+                     XR::XRControllerInteractionPose::Aim,
+                     {context.Identity().referenceSpace, XR::XRSpaceKind::World, origin},
+                     XR::XRTrackingConfidence::High,
+                     Math::Vec3{}},
+                    {5, earliest},
+                    {5, latest}};
+        }
+
+        /** @brief Produces final evidence from the actual provider and transcription lifecycle. */
+        ImmersiveSpeechEvidence FinalEvidence(SpeechFixture &fixture) {
+            fixture.StartWithAudio();
+            REQUIRE(fixture.stream->FinishInput() == Status::Accepted);
+            fixture.provider.next = Transcript(Kind::Final);
+            auto result = fixture.stream->Poll();
+            REQUIRE(result.status == Status::Finished);
+            REQUIRE(result.evidence);
+            return std::move(*result.evidence);
+        }
+
+        TEST_CASE("Immersive commands retain only spatial evidence aligned with final speech", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            std::array samples{SpatialObservation(context, 1, 970'000, 990'000), SpatialObservation(context, 2, 1'005'000, 1'010'000),
+                               SpatialObservation(context, 3, 1'020'000, 1'030'000), SpatialObservation(context, 4, 1'050'000, 1'060'000)};
+            const auto cutoff = samples.back().cutoff;
+            const auto assembled =
+                ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, cutoff, samples});
+            REQUIRE(assembled.status == Aligned);
+            REQUIRE(assembled.envelope);
+            samples[1].earliest.nanoseconds = 0;
+            REQUIRE(assembled.envelope->Spatial().size() == 2);
+            CHECK(assembled.envelope->Spatial().front().earliest.nanoseconds == 1'005'000);
+            CHECK(assembled.envelope->Spatial().back().cutoff.tracking.Value() == 3);
+            CHECK(assembled.envelope->Speech().Hypothesis().text == "Seçili nesne");
+            CHECK(assembled.envelope->IsCurrent(cutoff));
+            auto rebound = cutoff;
+            ++rebound.bindingRevision;
+            CHECK_FALSE(assembled.envelope->IsCurrent(rebound));
+            const auto speechOnly = ImmersiveCommandEnvelope::Assemble(context, speech);
+            REQUIRE(speechOnly.status == SpeechOnly);
+            REQUIRE(speechOnly.envelope);
+            CHECK(speechOnly.envelope->Spatial().empty());
+            CHECK(speechOnly.envelope->IsCurrent());
+            fixture.stop.request_stop();
+            CHECK_FALSE(assembled.envelope->IsCurrent(cutoff));
+            CHECK_FALSE(speechOnly.envelope->IsCurrent());
+        }
+
+        TEST_CASE("Immersive commands reject uncertain timing and mismatched provenance", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            std::array samples{SpatialObservation(context, 1, 1'005'000, 1'015'000), SpatialObservation(context, 2, 1'020'000, 1'030'000)};
+            auto history = ImmersiveSpatialHistoryView{context, samples.back().cutoff, samples};
+            auto expected = AmbiguousTiming;
+            SECTION("measurement crosses the phrase boundary") {
+                samples[0].earliest.nanoseconds = 990'000;
+            }
+            SECTION("measurement may land exactly at the exclusive phrase end") {
+                samples.back().latest.nanoseconds = Transcript().end.nanoseconds;
+            }
+            SECTION("two measurement intervals overlap") {
+                samples[0].latest.nanoseconds = samples[1].earliest.nanoseconds;
+            }
+            SECTION("XR sequence disagrees with capture time") {
+                std::swap(samples[0].cutoff, samples[1].cutoff);
+            }
+            SECTION("sample belongs to another clock domain") {
+                ++samples[0].latest.clockDomain;
+                expected = InvalidSpatialEvidence;
+            }
+            SECTION("XR origin changed") {
+                history.cutoff.origin = XR::XRWorldOriginRevision::Create(2).Value();
+                expected = StaleEvidence;
+            }
+            SECTION("XR session changed") {
+                ++history.cutoff.session.slot.generation;
+                expected = StaleEvidence;
+            }
+            const auto result = ImmersiveCommandEnvelope::Assemble(context, speech, history);
+            CHECK(result.status == expected);
+            CHECK_FALSE(result.envelope);
+        }
+
+        TEST_CASE("Immersive commands can retain multiple candidates from a single measured cutoff", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            const auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            const auto outside = SpatialObservation(context, 2, Transcript().end.nanoseconds, Transcript().end.nanoseconds);
+            std::array samples{sample, sample, outside};
+            ++samples[1].candidate.device.slot.index;
+            const auto result =
+                ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, outside.cutoff, samples});
+            REQUIRE(result.status == ImmersiveCommandStatus::Aligned);
+            REQUIRE(result.envelope);
+            REQUIRE(result.envelope->Spatial().size() == 2);
+            CHECK(result.envelope->Spatial()[1].candidate.device != result.envelope->Spatial()[0].candidate.device);
+        }
+
+        TEST_CASE("Immersive commands fence history ownership, partial speech and maximum observations", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            fixture.provider.next = Transcript();
+            const auto partial = fixture.stream->Poll();
+            REQUIRE(partial.evidence);
+            const auto context = fixture.Context();
+            CHECK(ImmersiveCommandEnvelope::Assemble(context, *partial.evidence).status == PartialSpeech);
+
+            SpeechFixture finalFixture;
+            const auto speech = FinalEvidence(finalFixture);
+            const auto finalContext = finalFixture.Context();
+            const auto sample = SpatialObservation(finalContext, 1, 1'005'000, 1'015'000);
+            CHECK(
+                ImmersiveCommandEnvelope::Assemble(finalContext, speech, ImmersiveSpatialHistoryView{context, sample.cutoff, {&sample, 1}})
+                    .status == StaleEvidence);
+            const std::array<ImmersiveSpatialObservation, ImmersiveCommandEnvelope::MaximumObservations + 1> oversized{};
+            CHECK(ImmersiveCommandEnvelope::Assemble(finalContext, speech,
+                                                     ImmersiveSpatialHistoryView{finalContext, sample.cutoff, oversized})
+                      .status == CapacityExceeded);
         }
 
         TEST_CASE("Immersive speech issues owned partial and final evidence after sealing PCM", "[agent][immersive][speech]") {

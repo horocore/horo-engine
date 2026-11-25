@@ -72,6 +72,11 @@ namespace Horo::Editor {
         [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const && = delete;
         [[nodiscard]] bool IsCurrent() const noexcept;
 
+        /** @brief Checks whether two snapshots were issued for the exact same owner and generation. */
+        [[nodiscard]] bool SharesGeneration(const ImmersivePlanningContext &other) const noexcept {
+            return epoch_ && epoch_ == other.epoch_ && generation_ == other.generation_;
+        }
+
     private:
         friend class ImmersiveAuthoringContext;
         ImmersiveContextIdentity identity_;

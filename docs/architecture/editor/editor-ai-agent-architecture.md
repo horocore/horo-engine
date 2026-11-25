@@ -187,6 +187,13 @@ Ownership rules:
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.
+- The editor aligns final speech with bounded XR observations in the Audio
+  capture clock domain. Each observation carries the host's before/after
+  measurement around its XR cutoff. XR timestamps order publications within
+  that session. Uncertain phrase boundaries and overlapping observations fail
+  explicitly. Missing spatial evidence produces a speech-only result. The
+  envelope retains the speech lease and rechecks XR origin and binding revisions
+  when the editor adopts it.
 - Physics, XR interaction, and gameplay own point, grab, contact, throw, and
   trigger mechanics. AIA may adapt those events into spatial evidence but does
   not own the mechanics or gameplay meaning.
