@@ -893,6 +893,55 @@ namespace Horo::Application::PrefabAtomicTest {
             }
         }
 
+        TEST_CASE("Project Perception admits built-in hearing beside native listeners", "[prefab][integration][ai][perception][host]") {
+            const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
+            const auto definition = std::move(Runtime::SceneDefinitionBuilder{{7}, {42}}).Build().Value();
+            auto source = nlohmann::json::parse(R"({
+                "schema": 2,
+                "sceneAsset": "5c881920-450f-4ca7-b938-d151696ea419",
+                "sceneRevision": 42,
+                "worldOriginMillimeters": [0,0,0],
+                "controllers": [{"controller":11,"listeners":[91,92],"sources":[2,20],"layers":1,"mask":1}],
+                "native": {"listeners":[{"id":91,"sense":2},{"id":92,"sense":20}],"radiusMillimeters":4000,
+                           "visibleLayers":1,"workUnitsPerTick":64}
+            })");
+            using AI::TestSupport::MakeIdentity;
+            const auto customSense = MakeIdentity<AI::SenseTypeId>(20);
+            const auto customStimulus = MakeIdentity<AI::StimulusTypeId>(21);
+            const AI::PerceptionDescriptorOrigin origin{.provider = MakeIdentity<AI::PerceptionProviderId>(22)};
+            AI::PerceptionSenseContract contract{{customSense, origin, "Native sense", {}},
+                                                  {customStimulus, origin, "Native stimulus", 1, {}}};
+            bool hearingOnly{};
+            SECTION("mixed project aligns hearing and native stimulus identities") {}
+            SECTION("hearing does not require a contract from the module") {
+                hearingOnly = true;
+                source["controllers"][0]["listeners"] = {91};
+                source["controllers"][0]["sources"] = {2};
+                source["native"]["listeners"].erase(1);
+            }
+            const auto policy = CaptureProjectPerception(definition, asset, source.dump());
+            REQUIRE(policy.HasValue());
+            REQUIRE(policy.Value()->native);
+            const auto contracts = std::span{&contract, hearingOnly ? 0U : 1U};
+            const auto captured = Internal::FreezeProjectNativePerceptionRegistry(*policy.Value()->native, contracts);
+            REQUIRE(captured.HasValue());
+            const auto listeners = captured.Value()->Listeners();
+            REQUIRE(listeners.size() == (hearingOnly ? 1U : 2U));
+            CHECK(listeners.front().descriptor.sense == AI::SenseTypeIds::Hearing);
+            CHECK(listeners.front().descriptor.stimuli[0].identity == AI::StimulusTypeIds::Sound);
+            CHECK(listeners.front().availability == AI::PerceptionListenerAvailability::Available);
+            if (!hearingOnly) {
+                CHECK(listeners.back().descriptor.sense == customSense);
+                CHECK(listeners.back().descriptor.stimuli[0].identity == customStimulus);
+                CHECK(Internal::FreezeProjectNativePerceptionRegistry(*policy.Value()->native, {}).HasError());
+            }
+            contract.sense.identity = AI::SenseTypeIds::Hearing;
+            CHECK(Internal::FreezeProjectNativePerceptionRegistry(*policy.Value()->native, std::span{&contract, 1}).HasError());
+            contract.sense.identity = customSense;
+            contract.stimulus.identity = AI::StimulusTypeIds::Sound;
+            CHECK(Internal::FreezeProjectNativePerceptionRegistry(*policy.Value()->native, std::span{&contract, 1}).HasError());
+        }
+
         /** @brief Returns a well-formed authored controller for which the captured catalog has no descriptor. */
         AI::AiControllerComponent UnavailableController(AI::AiControllerComponent component) {
             component.controller = AI::TestSupport::MakeIdentity<AI::ControllerTypeId>(999);

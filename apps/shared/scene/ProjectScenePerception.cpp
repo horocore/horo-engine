@@ -21,6 +21,38 @@ namespace Horo::Application::Internal {
         constexpr std::size_t MaximumAncestors = 128;
         using Positions = Result<std::vector<AI::AiScenePerceptionPosition>>;
 
+        /** @brief Engine-owned hearing metadata. No executable provider is constructed. */
+        struct GameplayHearingDescriptors final {
+            const AI::PerceptionDescriptorOrigin origin{.provider = AI::PerceptionProviderId::Create(1).Value()};
+            const AI::SenseTypeDescriptor sense{AI::SenseTypeIds::Hearing, origin, "Gameplay hearing", {}};
+            const AI::StimulusTypeDescriptor stimulus{AI::StimulusTypeIds::Sound, origin, "Committed Gameplay sound", 1, {}};
+        };
+
+        /** @brief Copies native metadata and refuses claims on the engine-owned Gameplay hearing route. */
+        Result<void> AddNativeContract(const AI::PerceptionSenseContract &contract, std::vector<AI::SenseTypeDescriptor> &senses,
+                                        std::vector<AI::StimulusTypeDescriptor> &stimuli) {
+            if (contract.sense.identity == AI::SenseTypeIds::Hearing || contract.stimulus.identity == AI::StimulusTypeIds::Sound)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
+            senses.push_back(contract.sense);
+            const auto existing = std::ranges::find(stimuli, contract.stimulus.identity, &AI::StimulusTypeDescriptor::identity);
+            if (existing == stimuli.end())
+                stimuli.push_back(contract.stimulus);
+            else if (*existing != contract.stimulus)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds one authored listener to its admitted sense and compatible payload. */
+        AI::PerceptionListenerDescriptor BindListener(AI::PerceptionListenerTypeId identity, const AI::SenseTypeDescriptor &sense,
+                                                       const AI::StimulusTypeDescriptor &stimulus) {
+            return {.identity = identity,
+                    .origin = sense.origin,
+                    .displayName = sense.displayName,
+                    .sense = sense.identity,
+                    .stimuli = {{stimulus.identity}},
+                    .stimulusCount = 1};
+        }
+
         /** @brief Reads a closed, bounded shape with duplicate object keys rejected before insertion. */
         Json ParsePolicy(const std::string &text) {
             std::array<std::set<std::string, std::less<>>, 6> keys;
@@ -394,30 +426,34 @@ namespace Horo::Application::Internal {
             std::vector<AI::SenseTypeDescriptor> senses;
             std::vector<AI::StimulusTypeDescriptor> stimuli;
             std::vector<AI::PerceptionListenerDescriptor> listeners;
-            senses.reserve(contracts.size());
-            stimuli.reserve(contracts.size());
+            const auto authoredHearing = std::ranges::find(policy.listeners, AI::SenseTypeIds::Hearing,
+                                                            &ProjectPerceptionListenerSelection::sense);
+            const bool usesHearing = authoredHearing != policy.listeners.end();
+            senses.reserve(contracts.size() + usesHearing);
+            stimuli.reserve(contracts.size() + usesHearing);
             listeners.reserve(policy.listeners.size());
             for (const auto &contract : contracts) {
-                senses.push_back(contract.sense);
-                const auto existing = std::ranges::find(stimuli, contract.stimulus.identity, &AI::StimulusTypeDescriptor::identity);
-                if (existing == stimuli.end())
-                    stimuli.push_back(contract.stimulus);
-                else if (*existing != contract.stimulus)
-                    return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
+                if (auto added = AddNativeContract(contract, senses, stimuli); added.HasError())
+                    return Output::Failure(std::move(added).ErrorValue());
+            }
+            std::optional<GameplayHearingDescriptors> hearing;
+            if (usesHearing) {
+                hearing.emplace();
+                senses.push_back(hearing->sense);
+                stimuli.push_back(hearing->stimulus);
             }
             for (const auto &listener : policy.listeners) {
+                if (listener.sense == AI::SenseTypeIds::Hearing) {
+                    listeners.push_back(BindListener(listener.listener, hearing->sense, hearing->stimulus));
+                    continue;
+                }
                 const auto owner = std::ranges::find(contracts, listener.sense, [](const auto &item) {
                     return item.sense.identity;
                 });
                 if (owner == contracts.end())
                     return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
                                                      "The selected native module did not declare a requested Perception sense."));
-                listeners.push_back({.identity = listener.listener,
-                                     .origin = owner->sense.origin,
-                                     .displayName = owner->sense.displayName,
-                                     .sense = owner->sense.identity,
-                                     .stimuli = {{owner->stimulus.identity}},
-                                     .stimulusCount = 1});
+                listeners.push_back(BindListener(listener.listener, owner->sense, owner->stimulus));
             }
             auto captured = AI::PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, policy.capabilities);
             if (captured.HasError())

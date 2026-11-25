@@ -1803,6 +1803,12 @@ source's `Feed()` to `PollPerceptionAtSensePoll`. The same Scene and spatial
 owner admit only addressed, registered hearing listeners. The feed is borrowed
 for that poll, before Blackboard publication and the Decision phase. Hearing
 listeners use this event path without a per-agent native provider instance.
+An authored project can select built-in Hearing (`sense` 2) in its existing
+Perception listener declarations. The shared Editor Play and headless project
+registry supply the Hearing/Sound descriptors whenever a listener selects them.
+Native modules retain ownership of their custom senses and cannot supply the
+reserved Hearing or Sound descriptor. Registering a listener creates no sound
+events. An authoritative Gameplay producer still supplies the sensing feed.
 Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without

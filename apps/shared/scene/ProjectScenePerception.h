@@ -22,7 +22,7 @@ namespace Horo::Application::Internal {
         std::optional<AI::PerceptionBlackboardProjection> blackboardProjection;
     };
 
-    /** @brief Stable listener authored for exactly one registered custom sense. */
+    /** @brief Stable listener authored for an engine Gameplay sense or a registered custom sense. */
     struct ProjectPerceptionListenerSelection final {
         AI::PerceptionListenerTypeId listener;
         AI::SenseTypeId sense;
@@ -62,7 +62,7 @@ namespace Horo::Application::Internal {
         const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, std::string_view path, Assets::AssetId asset,
         const Runtime::RuntimeSceneDefinition &definition, std::size_t workUnitsLimit = AI::AiTaskSchedulerSettings::HardWorkUnits);
 
-    /** @brief Combines authored listener identities with the prepared image's exact inert sense/stimulus contracts.
+    /** @brief Resolves authored listeners against engine hearing and the prepared image's inert native contracts.
      * @param policy Explicit native listener declarations. @param contracts Owner-copied inert metadata from one prepared image.
      * @return Immutable registry or typed descriptor/capability failure without starting a module or constructing a sense.
      */
