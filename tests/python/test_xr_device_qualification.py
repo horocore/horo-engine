@@ -142,22 +142,53 @@ def desktop_identity(smoke):
     return identity
 
 
+def desktop_preflight_command(tmp_path, smoke, receipt):
+    record = tmp_path / "smoke.json"
+    expected = tmp_path / "expected.json"
+    record.write_text(json.dumps(smoke), encoding="utf-8")
+    expected.write_text(json.dumps(declared(smoke)), encoding="utf-8")
+    return [sys.executable, str(SCRIPT), str(record), "--expect", str(expected), "--desktop-preflight", str(receipt)]
+
+
 @pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"])
 def test_desktop_preflight_cli_checks_exact_receipt_and_physical_gate(tmp_path, smoke, desktop_identity, line_ending):
     receipt = tmp_path / "receipt.txt"
     receipt.write_bytes(desktop_preflight_receipt(desktop_identity).removesuffix(b"\n") + line_ending)
     desktop_identity["packageReceiptSha256"] = hashlib.sha256(receipt.read_bytes()).hexdigest()
-    record = tmp_path / "smoke.json"
-    expected = tmp_path / "expected.json"
-    record.write_text(json.dumps(smoke), encoding="utf-8")
-    expected.write_text(json.dumps(declared(smoke)), encoding="utf-8")
-    command = [sys.executable, str(SCRIPT), str(record), "--expect", str(expected), "--desktop-preflight", str(receipt)]
+    command = desktop_preflight_command(tmp_path, smoke, receipt)
     assert subprocess.run(command, capture_output=True, check=False).returncode == 0
     smoke["evidenceLevel"] = "RuntimeCompatibility"
-    record.write_text(json.dumps(smoke), encoding="utf-8")
+    (tmp_path / "smoke.json").write_text(json.dumps(smoke), encoding="utf-8")
     rejected = subprocess.run(command, capture_output=True, check=False)
     assert rejected.returncode == 1
     assert b"Physical headset evidence is required" in rejected.stderr
+
+
+@pytest.mark.parametrize(("component", "corrupt_digest", "error"), [
+    ("2" * 64, False, None),
+    (None, False, "Separate Desktop preflight requires the package component digest"),
+    ("3" * 64, False, "Desktop preflight uses a different installed component"),
+    ("2" * 64, True, "Desktop preflight does not match the declared receipt digest"),
+])
+def test_desktop_preflight_cli_can_verify_a_separate_receipt(tmp_path, smoke, desktop_identity, component, corrupt_digest, error,
+                                                               monkeypatch, capsys):
+    receipt = tmp_path / "receipt.txt"
+    data = desktop_preflight_receipt(desktop_identity)
+    receipt.write_bytes(data)
+    preflight = "f" * 64 if corrupt_digest else hashlib.sha256(data).hexdigest()
+    command = desktop_preflight_command(tmp_path, smoke, receipt) + ["--desktop-preflight-sha256", preflight]
+    if component is not None:
+        command += ["--desktop-component-sha256", component]
+
+    monkeypatch.setattr(sys, "argv", command[1:])
+    if error is None:
+        assert xr.main() == 0
+        assert "Physical smoke evidence matches the declaration" in capsys.readouterr().out
+    else:
+        with pytest.raises(SystemExit) as rejected:
+            xr.main()
+        assert rejected.value.code == 1
+        assert error in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(("field", "different", "message"), [

@@ -9,7 +9,7 @@ from pathlib import Path
 from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_preflight, validate_android_preflight
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
-    check_desktop_preflight, check_physical_gate, decode_record, fields, in_set, is_digest, is_token,
+    check_desktop_preflight, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
     is_source_revision, is_standalone_android, load_record, require, validate_identity, validate_record,
 )
 
@@ -114,9 +114,8 @@ def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
             "Unsupported PCVR host or renderer for the packaged OpenXR route")
     digest = row.get("desktopPreflightSha256", identity["packageReceiptSha256"])
     require(digest is not None, "Required Desktop preflight was not run")
-    if digest != identity["packageReceiptSha256"]:
-        require(component is not None, "Separate Desktop preflight requires the package component digest")
-    evidence.desktop_preflight(digest, identity, component)
+    expected = desktop_receipt_digest(identity["packageReceiptSha256"], digest, component)
+    evidence.desktop_preflight(expected, identity, component)
 
 
 def verify_android_route(expected: dict, evidence: Evidence, record: dict, revision: str) -> None:

@@ -223,6 +223,16 @@ def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
     return facts
 
 
+def desktop_receipt_digest(package_receipt: str, preflight: str | None, component: str | None) -> str:
+    """Resolve the expected receipt digest and require independent identity for a separate receipt."""
+    digest = package_receipt if preflight is None else preflight
+    require(is_digest(digest), "Invalid Desktop preflight digest")
+    require(component is None or is_digest(component), "Invalid Desktop component digest")
+    if digest != package_receipt:
+        require(component is not None, "Separate Desktop preflight requires the package component digest")
+    return digest
+
+
 def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
                             component_digest: str | None = None) -> None:
     """Match a retired Desktop package probe to the physical tuple it can inform."""
@@ -251,25 +261,41 @@ def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
     require(runtime_version == identity["runtimeVersion"], "Desktop preflight uses a different runtime version")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def check_desktop_preflight_file(path: Path, identity: dict, preflight: str | None, component: str | None) -> None:
+    """Verify either the package receipt itself or an independently identified preflight."""
+    digest = desktop_receipt_digest(identity["packageReceiptSha256"], preflight, component)
+    with path.open("rb") as receipt:
+        check_desktop_preflight(receipt.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component)
+
+
+def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
+    """Parse an invocation and validate the relationships between receipt inputs."""
     parser.add_argument("record", type=Path)
     parser.add_argument("--expect", type=Path, help="Exact release tuple and test-plan declaration")
     parser.add_argument("--desktop-preflight", type=Path, help="Exact packaged Desktop preflight receipt for the declared tuple")
+    parser.add_argument("--desktop-preflight-sha256", help="Expected SHA-256 for a separate Desktop preflight receipt")
+    parser.add_argument("--desktop-component-sha256", help="Installed OpenXR component SHA-256 from package provenance")
     parser.add_argument("--require", choices=sorted(OPTIONAL_CHECKS), action="append", default=[])
     options = parser.parse_args()
     if options.require and options.expect is None:
         parser.error("--require needs --expect")
     if options.desktop_preflight is not None and options.expect is None:
         parser.error("--desktop-preflight needs --expect")
+    if options.desktop_preflight is None and (options.desktop_preflight_sha256 is not None or options.desktop_component_sha256 is not None):
+        parser.error("Desktop receipt digest options need --desktop-preflight")
+    return options
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    options = parse_options(parser)
     try:
         record = validate_record(load_record(options.record))
         if options.expect is not None:
             check_physical_gate(record, load_record(options.expect), set(options.require))
         if options.desktop_preflight is not None:
-            with options.desktop_preflight.open("rb") as receipt:
-                identity = record["tuple"]
-                check_desktop_preflight(receipt.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, identity["packageReceiptSha256"])
+            check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
+                                         options.desktop_component_sha256)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")

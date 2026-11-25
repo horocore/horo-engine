@@ -139,7 +139,19 @@ capability. Keep any limited optional results visible in the matrix.
 For PCVR, `--desktop-preflight` validates the exact stdout receipt from
 `horo-engine --probe-xr-package ... --connection tethered` or
 `--connection wireless-streaming`, matching the tuple. Save the version 2
-receipt bytes directly and use their SHA-256 for `packageReceiptSha256`.
+receipt bytes directly. When the probe receipt and product package receipt
+are separate files, keep the product receipt's digest as
+`packageReceiptSha256`. Pass the independently recorded probe digest and
+installed OpenXR component digest for the separate receipt.
+
+```sh
+python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json \
+  --desktop-preflight desktop-preflight.txt --desktop-preflight-sha256 "$PREFLIGHT_SHA256" \
+  --desktop-component-sha256 "$COMPONENT_SHA256"
+```
+
+When the probe receipt is also the package receipt, the checker uses
+`packageReceiptSha256` by default.
 Use the runtime-reported labels from the probe in `runtime` and `headsetModel`,
 and record `runtimeVersion` as `major.minor.patch`. The checker also confirms
 the executable digest, host, renderer, and declared connection mode. Verify the
