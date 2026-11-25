@@ -329,6 +329,15 @@ query and runtime version only after successful instance retirement. Native
 session and graphics activation require separate product composition and device
 qualification.
 
+Select `qualification-openxr-quest-development` to build the signed ARM64
+cold-discovery APK for Quest. It uses a dedicated application ID and the same
+locked OpenXR loader and native host. Its manifest declares
+`com.oculus.feature.PASSTHROUGH` as required. The feature declaration makes
+the package eligible for the Quest passthrough path. Runtime capability,
+passthrough consent and underlay rendering are verified separately during
+session composition. Use the same profile name for `android-deploy` and select
+`--runtime openxr` explicitly.
+
 If native instance destruction fails, the Activity keeps the exact instance,
 JNI references and loader for retry on its control lane. The recorded
 diagnostic stays failed even if a later retry succeeds. Host exit polls the

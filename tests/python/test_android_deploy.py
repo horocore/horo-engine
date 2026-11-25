@@ -328,6 +328,19 @@ class AndroidDeployTests(unittest.TestCase):
                 else:
                     self.assertEqual(commands.count(DEVICE_BUILD_QUERY), 2)
 
+    def test_quest_profile_requires_openxr_intent_and_launches_its_own_application(self):
+        name = project.OPENXR_QUEST_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        status, report, commands = self.execute(profile_name=name)
+        self.assertEqual((status, report["error"]), (1, "explicit_openxr_intent_required"))
+        self.assertEqual(commands, [])
+
+        status, report, commands = self.execute({LOGCAT: log_line(OPENXR)}, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
+        self.assertEqual(report["artifact"]["profile"], name)
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertIn(launch_command(profile["applicationId"], openxr=True), commands)
+
     def test_openxr_rejects_unverifiable_or_changed_system_builds(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
         for build in ("", "private\nsecond-line", "x" * 257, "özel-build"):

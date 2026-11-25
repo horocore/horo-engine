@@ -35,6 +35,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 MAXIMUM_FILE = 256 * 1024 * 1024
 OPENXR_DEVELOPMENT_PROFILE = "qualification-openxr-development"
+OPENXR_QUEST_DEVELOPMENT_PROFILE = "qualification-openxr-quest-development"
+OPENXR_DEVELOPMENT_PROFILES = frozenset((OPENXR_DEVELOPMENT_PROFILE, OPENXR_QUEST_DEVELOPMENT_PROFILE))
+QUEST_PASSTHROUGH_FEATURE = "com.oculus.feature.PASSTHROUGH"
 OPENXR_LOADER_NAME = "libopenxr_loader.so"
 OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
 OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
@@ -108,7 +111,7 @@ def android_profile(profile_name: str) -> tuple[dict, dict]:
     profile = profiles["profiles"].get(profile_name)
     if profile is None:
         raise AndroidError("Select a declared Android profile.")
-    if profile_name == OPENXR_DEVELOPMENT_PROFILE:
+    if profile_name in OPENXR_DEVELOPMENT_PROFILES:
         loader = json.loads(bounded_bytes(ROOT / "android/openxr-loader-lock.json", 65536))
         if loader.get("schema") != 1:
             raise AndroidError("Unsupported Android OpenXR loader lock schema.")
@@ -120,16 +123,17 @@ def load_contract(profile_name: str, abis: list[str]) -> tuple[dict, dict]:
     tools, profile = android_profile(profile_name)
     if not abis or len(set(abis)) != len(abis):
         raise AndroidError("Select a declared profile and a unique nonempty ABI set.")
-    validate_profile(profile, tools, abis)
+    validate_profile(profile, tools, abis, profile_name=profile_name)
     return tools, profile
 
 
-def validate_profile(profile: dict, tools: dict, abis: list[str]) -> None:
+def validate_profile(profile: dict, tools: dict, abis: list[str], *, profile_name: str = "") -> None:
     if any(abi not in profile["abis"] or abi not in tools["abis"] for abi in abis):
         raise AndroidError("Unsupported profile/ABI pair; use arm64-v8a or the declared x86_64 development profile.")
     if not tools["minimumApi"] <= profile["minimumApi"] <= profile["targetApi"] <= tools["sdkApi"]:
         raise AndroidError("Incompatible min/target/compile API levels; select the declared API 29/36 tuple.")
     validate_profile_identity(profile)
+    validate_profile_features(profile_name, profile)
     validate_openxr_profile(profile, tools, abis)
     validate_asset_names(profile)
     for target, source in profile["assets"].items():
@@ -175,13 +179,23 @@ def validate_renderer_profile(profile: dict) -> None:
         raise AndroidError("Android Vulkan development requires its presentation-intent asset without device qualification claims.")
 
 
+def validate_profile_features(profile_name: str, profile: dict) -> None:
+    """Reserve required passthrough hardware for the opt-in Quest application."""
+    quest = profile_name == OPENXR_QUEST_DEVELOPMENT_PROFILE
+    if profile["features"] != ([QUEST_PASSTHROUGH_FEATURE] if quest else []):
+        raise AndroidError("Qualification profile has an invalid required hardware feature list.")
+    if quest and (profile["applicationId"] != "org.horocore.packagequalification.openxr.quest"
+                  or profile["abis"] != ["arm64-v8a"]):
+        raise AndroidError("Quest qualification requires its dedicated application identity and ARM64 ABI.")
+
+
 def validate_profile_identity(profile: dict) -> None:
     validate_renderer_profile(profile)
     permissions = [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", "android.permission.ACTIVITY_RECOGNITION"]
     if "openxrProfile" in profile:
         permissions.extend(OPENXR_PERMISSIONS)
-    if profile["permissions"] != permissions or profile["features"]:
-        raise AndroidError("Qualification profile permissions differ from its declared capability policy or require hardware features.")
+    if profile["permissions"] != permissions:
+        raise AndroidError("Qualification profile permissions differ from its declared capability policy.")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+", profile["applicationId"]):
         raise AndroidError("Invalid Android application identity.")
     if not re.fullmatch(r"[a-z][a-z0-9-]*", profile["nativeLibrary"]):
@@ -615,6 +629,7 @@ def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abi
 def apk_manifest(profile: dict) -> str:
     application = profile["applicationId"]  # Validated restricted identifier; cannot contain XML metacharacters.
     library = profile["nativeLibrary"]
+    features = "".join(f'\n  <uses-feature android:name="{name}" android:required="true" />' for name in profile["features"])
     openxr = "" if "openxrProfile" not in profile else """
   <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
   <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
@@ -624,7 +639,7 @@ def apk_manifest(profile: dict) -> str:
     <intent><action android:name="org.khronos.openxr.OpenXRApiLayerService" /></intent>
   </queries>"""
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />{features}
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />{openxr}
   <application android:label="Horo Package Qualification" android:theme="@style/Theme.AppCompat.NoActionBar"
                android:extractNativeLibs="false" android:allowBackup="false">
@@ -963,9 +978,14 @@ def verify_manifest(badging: str, profile: dict) -> None:
     permissions = set(re.findall(r"^uses-permission: name='([^']+)'", badging, re.MULTILINE))
     if permissions != set(profile["permissions"]):
         raise AndroidError("Assembled manifest has absent or undeclared permissions.")
-    features = set(re.findall(r"^uses-feature: name='([^']+)'", badging, re.MULTILINE))
+    if len(re.findall(r"^feature-group:", badging, re.MULTILINE)) > 1:
+        raise AndroidError("Qualification manifests cannot declare alternative hardware feature groups.")
+    features = set(re.findall(r"^[ \t]*uses-feature: name='([^']+)'", badging, re.MULTILINE))
     if features != set(profile["features"]):
-        raise AndroidError("Assembled manifest requires undeclared hardware features.")
+        raise AndroidError("Assembled manifest has absent or undeclared required hardware features.")
+    optional_features = set(re.findall(r"^[ \t]*uses-feature-not-required: name='([^']+)'", badging, re.MULTILINE))
+    if QUEST_PASSTHROUGH_FEATURE in optional_features:
+        raise AndroidError("Quest passthrough must only appear as an explicit required feature.")
 
 
 def apk_main(argv=None) -> int:
@@ -1942,14 +1962,14 @@ def android_deploy_main(argv=None) -> int:
         if arguments.runtime == "openxr":
             if not arguments.host or not arguments.connection:
                 raise AndroidDeployError("xr_target_selection_incomplete")
-            if arguments.profile != OPENXR_DEVELOPMENT_PROFILE:
+            if arguments.profile not in OPENXR_DEVELOPMENT_PROFILES:
                 report["stage"] = "artifact"
                 android_profile(arguments.profile)
                 report["stage"] = "runtime"
                 report["qualification"]["profile"] = arguments.profile
                 runtime["status"] = "unsupported"
                 raise AndroidDeployError("android_openxr_route_unavailable")
-        elif arguments.profile == OPENXR_DEVELOPMENT_PROFILE:
+        elif arguments.profile in OPENXR_DEVELOPMENT_PROFILES:
             raise AndroidDeployError("explicit_openxr_intent_required")
         report["stage"] = "artifact"
         with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:

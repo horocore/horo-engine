@@ -232,6 +232,41 @@ class AndroidPackageTests(unittest.TestCase):
         with self.assertRaisesRegex(AndroidError, "cold-discovery preset"):
             android_package.validate_profile(changed, tools, ["arm64-v8a"])
 
+    def test_quest_manifest_declares_required_passthrough_only_in_dedicated_arm64_build(self):
+        name = android_package.OPENXR_QUEST_DEVELOPMENT_PROFILE
+        tools, quest = load_contract(name, ["arm64-v8a"])
+        generic_tools, generic = load_contract(android_package.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        self.assertEqual(tools["openxrLoader"], generic_tools["openxrLoader"])
+        self.assertEqual(quest["openxrProfile"], generic["openxrProfile"])
+        self.assertNotEqual(quest["applicationId"], generic["applicationId"])
+        self.assertEqual(quest["permissions"][1:], generic["permissions"][1:])
+        with self.assertRaisesRegex(AndroidError, "Unsupported profile/ABI pair"):
+            load_contract(name, ["x86_64"])
+
+        feature = android_package.QUEST_PASSTHROUGH_FEATURE
+        required = f'<uses-feature android:name="{feature}" android:required="true" />'
+        self.assertIn(required, android_package.apk_manifest(quest))
+        for profile in (generic, self.profile):
+            self.assertNotIn(feature, android_package.apk_manifest(profile))
+
+    def test_badging_rejects_missing_optional_or_cross_profile_passthrough(self):
+        _, quest = load_contract(android_package.OPENXR_QUEST_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        _, generic = load_contract(android_package.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        feature = android_package.QUEST_PASSTHROUGH_FEATURE
+        required = f"  uses-feature: name='{feature}'\n"
+        optional = f"  uses-feature-not-required: name='{feature}'\n"
+        for profile, accepted in ((quest, required), (generic, "")):
+            identity = (f"package: name='{profile['applicationId']}' versionCode='1' versionName='0.2.0'\n"
+                        "minSdkVersion:'29'\ntargetSdkVersion:'36'\n")
+            permissions = "".join(f"uses-permission: name='{name}'\n" for name in profile["permissions"])
+            badging = identity + permissions + "feature-group: label=''\n"
+            verify_manifest(badging + accepted, profile)
+            for declared in ({required, optional, "", required + optional} - {accepted}):
+                with self.subTest(profile=profile["applicationId"], declared=declared), self.assertRaises(AndroidError):
+                    verify_manifest(badging + declared, profile)
+            with self.assertRaisesRegex(AndroidError, "alternative hardware feature groups"):
+                verify_manifest(badging + accepted + "feature-group: label='alternative'\n", profile)
+
     def test_openxr_loader_requires_both_archive_and_abi_pins_and_explicit_signing(self):
         abi = "arm64-v8a"
         tools, _ = load_contract(android_package.OPENXR_DEVELOPMENT_PROFILE, [abi])
