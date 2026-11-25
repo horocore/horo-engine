@@ -1337,6 +1337,7 @@ add_executable(HoroAITests
         unit/runtime/ai/EnvironmentQueryContextTests.cpp
         unit/runtime/ai/EnvironmentQueryExecutionTests.cpp
         unit/runtime/ai/EnvironmentQueryQualificationTests.cpp
+        unit/runtime/ai/AiReducedPopulationTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
         unit/runtime/ai/PerceptionSenseProviderTests.cpp

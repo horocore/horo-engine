@@ -1894,6 +1894,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskContinuation.cpp
         runtime/ai/api/AITaskJobService.cpp
         runtime/ai/api/AITaskScheduler.cpp
+        runtime/ai/api/AiReducedPopulation.cpp
         runtime/ai/api/SymbolicPlanning.cpp
         runtime/ai/api/LocalLearnedPolicy.cpp
         runtime/ai/api/NpcDialogue.cpp

@@ -4109,6 +4109,17 @@ agent pose becomes unavailable, its distance becomes unknown and the agent
 returns to full cadence. A custom authoritative relevance source can supply
 streaming membership, pins, and urgent events.
 
+An authority can separately instantiate `AiReducedPopulation` with an explicit
+stable identity manifest and a bounded transfer budget. It stores stationary
+positions in signed world millimetres and proposes promotion when a reduced
+agent enters the inclusive axis-aligned radius around the supplied anchor.
+Proposals are produced in stable identity order into caller-owned storage. The
+provider neither constructs canonical agents nor runs their graphs or tasks.
+An integration must validate and publish the prepared transfer and the matching
+canonical Scene change at the same authority cutoff. The reduced population
+ceiling is 1,048,576 identities and the transfer limit is at most 65,536 per
+batch. Full agents have their own Scene and scheduler budgets.
+
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through
