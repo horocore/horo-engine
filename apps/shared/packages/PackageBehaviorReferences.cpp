@@ -511,9 +511,12 @@ namespace Horo::Application::Internal {
             if (!OfflineRemovalContributionBlocker(package.lock) && IsOfflineAssetArchive(package))
                 return Roles::Success({});
             auto roles = Packages::InspectGameplayRemovalRoles(package);
-            if (roles.HasError())
-                return Roles::Failure(WithCause(ReferenceError("packages.host.removal_requires_lifecycle_owner", package.lock.package.Value()),
-                                                roles.ErrorValue()));
+            if (roles.HasError()) {
+                auto cause = std::move(roles).ErrorValue();
+                auto error = ReferenceError("packages.host.removal_requires_lifecycle_owner", package.lock.package.Value());
+                error.diagnostics = std::move(cause.diagnostics);
+                return Roles::Failure(WithCause(std::move(error), std::move(cause)));
+            }
             return roles;
         }
 

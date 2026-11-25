@@ -254,42 +254,63 @@ namespace Horo::Packages {
             return name == GameplayDescriptor || name.ends_with(".horo_script");
         }
 
-        /** @brief Collects only runtime roles and the package paths selected by their native variants. */
-        bool CollectGameplayArtifacts(const Extensions::ExtensionManifest &manifest, std::set<std::string, std::less<>> &artifacts) {
-            if (manifest.modules.empty() || !manifest.contributions.empty())
-                return false;
+        /** @brief Names each declared owner outside the editor's gameplay-only removal route. */
+        void CollectGameplayArtifacts(const Extensions::ExtensionManifest &manifest, std::set<std::string, std::less<>> &artifacts,
+                                      std::vector<Diagnostic> &blockers) {
+            const SourceLocation descriptor{std::string{GameplayDescriptor}};
+            for (const auto &contribution : manifest.contributions)
+                blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"}, DiagnosticSeverity::Error,
+                                      contribution.type + " / " + contribution.owningModule, descriptor, contribution.id);
             for (const auto &module : manifest.modules) {
                 if (module.kind != "native" || !module.imports.empty() || !module.exports.empty() ||
-                    !std::ranges::equal(module.roles, std::array{Extensions::ExtensionModuleRole::RuntimeParticipant}))
-                    return false;
+                    !std::ranges::equal(module.roles, std::array{Extensions::ExtensionModuleRole::RuntimeParticipant})) {
+                    blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_module_owner_required"}, DiagnosticSeverity::Error,
+                                          "Module requires its registered lifecycle owner.", descriptor, module.id);
+                    continue;
+                }
                 if (!module.entry.empty())
                     artifacts.emplace(std::string{GameplayRoot} + '/' + Detail::SelectedPackageNativeEntry(module.entry));
                 for (const auto &variant : module.entries)
                     artifacts.emplace(std::string{GameplayRoot} + '/' + variant.entry);
             }
-            return !artifacts.empty();
+        }
+
+        /** @brief Identifies each archive member outside the gameplay owner's file authority. */
+        void CollectUnownedFiles(const ValidatedPackageArchive &archive, const std::set<std::string, std::less<>> &artifacts,
+                                 std::vector<Diagnostic> &blockers) {
+            for (const auto &file : archive.Manifest().Entries()) {
+                if (IsGameplayRemovalFile(file, artifacts))
+                    continue;
+                const auto &path = file.id.path.Value();
+                blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_file_owner_required"}, DiagnosticSeverity::Error,
+                                      "Archive member requires a separate lifecycle owner.", SourceLocation{path},
+                                      file.contributionRoot ? file.contributionRoot->Value() : path);
+            }
         }
     }  // namespace
 
     /** @copydoc InspectGameplayRemovalRoles */
     Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
         using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
-        const auto outsideOwner = [] { return Roles::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate)); };
-        if (!package.archive || !std::ranges::all_of(package.lock.contributions, [](const auto &type) {
-                return type == "native" || type == "assets";
-            }))
-            return outsideOwner();
+        auto outsideOwner = MakeError(PackageLifecycleErrors::InvalidCandidate);
+        if (!package.archive)
+            return Roles::Failure(std::move(outsideOwner));
+        for (const auto &type : package.lock.contributions)
+            if (type != "native" && type != "assets")
+                outsideOwner.diagnostics.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"},
+                                                       DiagnosticSeverity::Error, type, SourceLocation{"packages.lock"},
+                                                       package.lock.package.Value());
         const auto descriptor = PackagePath::Parse(GameplayDescriptor).Value();
         auto declared = Detail::ReadDeclaredPackageDescriptor(package, descriptor);
         if (declared.HasError())
-            return Roles::Failure(declared.ErrorValue());
+            return Roles::Failure(outsideOwner.diagnostics.empty() ? std::move(declared).ErrorValue() :
+                                                                     WithCause(std::move(outsideOwner), std::move(declared).ErrorValue()));
         std::set<std::string, std::less<>> artifacts;
         const auto &manifest = declared.Value().manifest;
-        if (!CollectGameplayArtifacts(manifest, artifacts) ||
-            !std::ranges::all_of(package.archive->Manifest().Entries(), [&](const auto &file) {
-                return IsGameplayRemovalFile(file, artifacts);
-            }))
-            return outsideOwner();
+        CollectGameplayArtifacts(manifest, artifacts, outsideOwner.diagnostics);
+        CollectUnownedFiles(*package.archive, artifacts, outsideOwner.diagnostics);
+        if (artifacts.empty() || !outsideOwner.diagnostics.empty())
+            return Roles::Failure(std::move(outsideOwner));
         std::vector<PackageRuntimeRoleDeclaration> roles;
         for (const auto &module : manifest.modules)
             roles.emplace_back(descriptor, module.id);

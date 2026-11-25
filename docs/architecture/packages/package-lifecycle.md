@@ -477,6 +477,11 @@ publishes metadata. Dropping an uncommitted reservation reopens admission.
 Once the lock commits, admission on the old session remains revoked until
 the host composes from the new lock.
 
+When a departing archive contains declarations or files outside the editor's
+gameplay removal owner, the review identifies the blocked contribution,
+module, or archive path from its verified manifest. The same rejection keeps
+any confirmed references found in saved project sources.
+
 The desktop editor can apply a reviewed removal for verified asset packages
 and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before
 confirmation. The operation binds to the displayed package plan, inspects

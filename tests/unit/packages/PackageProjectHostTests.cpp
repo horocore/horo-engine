@@ -963,10 +963,18 @@ namespace {
         sources.registrations = owners;
         sources.requireGameplayOwner = true;
         WriteSavedComponentReferences(policy.projectRoot / "Assets", type);
+        const auto originalRequest = fixture.Read("packages.json");
+        const auto originalLock = fixture.Read("packages.lock");
         const auto attempted = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(attempted.HasError());
         CHECK(attempted.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
-        const auto &references = attempted.ErrorValue().diagnostics;
+        const auto &diagnostics = attempted.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 5);
+        CHECK(diagnostics.front().code.Value() == "packages.lifecycle.removal_contribution_owner_required");
+        CHECK(diagnostics.front().location.source == "extensions/native/extension.json");
+        CHECK(diagnostics.front().path == "fixture.importer");
+        CHECK(diagnostics.front().message == "asset.importer / com.horo.application-fixture.native");
+        const auto references = std::span{diagnostics}.subspan(1);
         REQUIRE(references.size() == 4);
         for (const auto &reference : references)
             CHECK(reference.code.Value() == "packages.host.component_in_use");
@@ -976,6 +984,8 @@ namespace {
         CHECK(references[2].path == "4/0/9");
         CHECK(references[3].location.source == "Assets/Example.prefab");
         CHECK(references[3].path == "0/2");
+        CHECK(fixture.Read("packages.json") == originalRequest);
+        CHECK(fixture.Read("packages.lock") == originalLock);
 
         sources.requireGameplayOwner = false;
         const auto ownerAdmitted = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);

@@ -250,7 +250,15 @@ TEST_CASE("Actual gameplay generations drain before repeated update and uninstal
 
 TEST_CASE("Optional SDK failure preserves an actual native backend in the same verified archive", "[packages][gameplay][hybrid]") {
     CHECK(InspectGameplayRemovalRoles(GameplayGraph(false)->packages.front()).HasValue());
-    CHECK(InspectGameplayRemovalRoles(GameplayGraph(true)->packages.front()).HasError());
+    const auto mixed = InspectGameplayRemovalRoles(GameplayGraph(true)->packages.front());
+    REQUIRE(mixed.HasError());
+    const auto &blockers = mixed.ErrorValue().diagnostics;
+    CHECK(std::ranges::any_of(blockers, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_contribution_owner_required" && item.path == "fixture.importer";
+    }));
+    CHECK(std::ranges::any_of(blockers, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_module_owner_required" && item.path == "fixture.backend";
+    }));
     GameplayFixture fixture(true, false, true, true);
     fixture.enabled.requirement = PackageModuleRequirement::Optional;
     REQUIRE(fixture.Activate().HasValue());
