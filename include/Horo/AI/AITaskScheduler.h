@@ -422,6 +422,7 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::unique_ptr<PopulationChange>> PrepareDecisionReplacement(
             const AiScheduledDecisionRegistration &replacement, const std::shared_ptr<const void> &previousImage);
         struct Entry;
+        struct RelevanceSlot;
         /** @brief Locates an exact handle in the active registration index, including the insertion point. */
         [[nodiscard]] std::vector<std::size_t>::iterator HandlePosition(AgentHandle agent) noexcept;
         /** @brief Resolves exact registration. @param agent Exact handle. @return Slot or null. */
@@ -452,6 +453,8 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> ValidateRelevanceUpdates(std::span<const AiDecisionRelevanceUpdate> updates);
         /** @brief Applies promotions and stable demotions before any worker publication for the tick. */
         void ApplyRelevance();
+        /** @brief Reads the compact tier state, or Full when no profile was selected. */
+        [[nodiscard]] AiSimulationTier CurrentTier(const Entry &entry) const noexcept;
         /** @brief Applies a changed tier, retaining the registration and owner lifetime. */
         void ChangeTier(Entry &entry, AiSimulationTier tier) noexcept;
         /** @brief Resolves periodic cadence; zero means external events only or suspension. */
@@ -470,6 +473,7 @@ namespace Horo::AI {
         AiTaskSchedulerSettings settings_;
         std::unique_ptr<AiTaskJobService> jobs_;
         std::vector<Entry> entries_;
+        std::vector<RelevanceSlot> relevance_; /**< Dense simulation-profile state, indexed by canonical slot. */
         std::vector<std::size_t> activeByHandle_; /**< Exact handle lookup for high-frequency relevance publications. */
         std::vector<std::size_t> order_;
         AiSchedulingReport report_;

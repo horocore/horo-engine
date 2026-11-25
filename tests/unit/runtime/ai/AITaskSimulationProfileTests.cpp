@@ -161,6 +161,50 @@ namespace Horo::AI {
             CHECK(secondProbe->cancelled == 0);
         }
 
+        TEST_CASE("Dense AI tier batches preserve exact identity across suspended slot reuse", "[unit][ai][simulation-tier]") {
+            constexpr std::uint32_t population = 4'096;
+            auto settings = Settings();
+            settings.maximumAgents = population;
+            settings.evaluationsPerTick = 1;
+            settings.simulationProfile->demotionDelayTicks = 1;
+            Harness fixture(settings);
+            auto &scheduler = *fixture.scheduler;
+            std::vector<AiScheduledDecisionRegistration> registrations;
+            std::vector<AiDecisionRelevanceUpdate> observations;
+            registrations.reserve(population);
+            observations.reserve(population);
+            for (std::uint32_t slot = 0; slot < population; ++slot) {
+                const auto agent = fixture.Handle(slot);
+                registrations.push_back({.agent = agent,
+                                         .identity = MakeIdentity<AgentId>(slot + 1),
+                                         .image = fixture.image,
+                                         .executor = std::make_shared<Probe>()});
+                observations.push_back({agent, {.anchorDistanceMillimeters = 31'000}});
+            }
+            auto admission = scheduler.PreparePopulationChange(registrations, {});
+            REQUIRE(admission.HasValue());
+            REQUIRE(admission.Value()->ValidatePublication().HasValue());
+            admission.Value()->Publish();
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(observations).HasValue());
+            CHECK(EvaluateTick(scheduler, 1) == 1);
+            CHECK(EvaluateTick(scheduler, 2) == 0);
+            CHECK(Tier(scheduler, fixture.Handle(population - 1)) == AiSimulationTier::Suspended);
+
+            const auto original = fixture.Handle(0);
+            REQUIRE(scheduler.Wake(original, {.explicitRequest = true}).HasValue());
+            REQUIRE(scheduler.Unregister(original).HasValue());
+            auto replacement = original;
+            ++replacement.slot.generation;
+            const auto replacementProbe = std::make_shared<Probe>();
+            REQUIRE(scheduler.Register(replacement, registrations.front().identity, {}, fixture.image, replacementProbe).HasValue());
+            ExpectError(scheduler.SetRelevanceBatchAtSafePoint(observations), AIErrors::TaskContextInvalid);
+            CHECK(EvaluateTick(scheduler, 3) == 1);
+            CHECK(Tier(scheduler, replacement) == AiSimulationTier::Full);
+            CHECK(replacementProbe->reasons.activation);
+            CHECK_FALSE(replacementProbe->reasons.explicitRequest);
+            CHECK(Tier(scheduler, fixture.Handle(population - 1)) == AiSimulationTier::Suspended);
+        }
+
         TEST_CASE("Suspended Scene decision drops optional work and preserves canonical agent state",
                   "[unit][ai][simulation-tier][scene]") {
             JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});

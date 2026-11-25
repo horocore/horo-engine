@@ -4112,6 +4112,15 @@ simulation region. It rechecks that evidence even when the source omits the
 agent on subsequent ticks. Detachment removes the region's contribution, and a
 replacement cell or agent generation cannot inherit the old observation.
 
+With a simulation profile, the scheduler compiles accepted relevance facts into
+compact tier rows. It classifies the rows as a batch before applying transitions
+to exact live registrations. The row capacity matches the configured scheduler
+limit, up to 65,536 agents. A row stores the requested tier, the active tier,
+demotion timing and trusted wake state. Reusing a scheduler slot starts with
+fresh Full state. This approximation changes scheduling cadence and optional
+work only. The Scene remains the owner of the agent, its controller and its
+Blackboard.
+
 | Admitted tier | Work and retained state |
 | --- | --- |
 | Full | Runs the registered cadence and accepts owner wakes. Gameplay pins and urgent stimuli select this tier regardless of distance. |

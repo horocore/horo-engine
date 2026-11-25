@@ -41,9 +41,13 @@ namespace Horo::AI {
             return AiSimulationTier::Suspended;
         }
 
-        /** @brief Only trusted event or explicit owner wakes can reactivate a suspended registration. */
-        [[nodiscard]] bool WakesSuspended(const DecisionWakeReasons &reasons) noexcept {
-            return reasons.perception || reasons.explicitRequest;
+        /** @brief Keeps only explicit or perception wakes for suspended agents and disables full-rate polling below Full. */
+        [[nodiscard]] DecisionWakeReasons AdmittedWake(const AiSimulationTier tier, DecisionWakeReasons reasons) noexcept {
+            if (tier == AiSimulationTier::Suspended)
+                return {.perception = reasons.perception, .explicitRequest = reasons.explicitRequest};
+            if (tier != AiSimulationTier::Full)
+                reasons.polling = false;
+            return reasons;
         }
 
         /** @brief Remaining deterministic allowance after each admitted registration. */
@@ -82,10 +86,6 @@ namespace Horo::AI {
         std::shared_ptr<const void> image;  // Code remains pinned through executor destruction.
         std::shared_ptr<IAiScheduledDecision> executor;
         DecisionWakeReasons pending{.activation = true};
-        AiDecisionRelevance relevance;
-        AiSimulationTier tier{AiSimulationTier::Full};
-        AiSimulationTier demotionTarget{AiSimulationTier::Full};
-        std::uint64_t demotionSince{};
         AiDecisionSliceContext context;
         std::uint64_t nextTick{1};
         std::uint64_t waitingSince{1};
@@ -96,6 +96,32 @@ namespace Horo::AI {
         bool intents{};
         bool blackboardWakeQueued{};
         std::optional<std::vector<PerceptionListenerTypeId>> perceptionWatches;
+    };
+
+    /** @brief Bounded tier state independent of the cold executor and canonical agent storage. */
+    struct AiTaskScheduler::RelevanceSlot final {
+        std::uint64_t demotionSince{};
+        AiSimulationTier requested{AiSimulationTier::Full};
+        AiSimulationTier current{AiSimulationTier::Full};
+        AiSimulationTier demotionTarget{AiSimulationTier::Full};
+        AiSimulationTier next{AiSimulationTier::Full};
+        bool trustedWake{};
+
+        /** @brief Stages a changed tier from admitted facts without invoking callbacks. */
+        [[nodiscard]] bool Stage(const std::uint64_t tick, const std::uint64_t delay) noexcept {
+            next = current == AiSimulationTier::Suspended && requested == current && trustedWake ? AiSimulationTier::EventOnly
+                                                                                                 : requested;
+            if (next <= current) {
+                demotionSince = 0;
+                return next != current;
+            }
+            if (demotionSince == 0 || next != demotionTarget) {
+                demotionTarget = next;
+                demotionSince = tick;
+                return false;
+            }
+            return tick - demotionSince >= delay;
+        }
     };
 
     struct AiTaskScheduler::PopulationChange::Storage final {
@@ -260,7 +286,8 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::AiTaskScheduler */
     AiTaskScheduler::AiTaskScheduler(ConstructionKey, JobSystem &jobs, const AiRuntimeIncarnation incarnation,
                                      const AiTaskSchedulerSettings &settings)
-        : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents) {
+        : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents),
+          relevance_(settings.simulationProfile ? settings.maximumAgents : 0) {
         activeByHandle_.reserve(settings.maximumAgents);
         order_.reserve(settings.maximumAgents);
         auto service = AiTaskJobService::Create(jobs, settings.pendingWorkers);
@@ -453,7 +480,7 @@ namespace Horo::AI {
         if (closed_)
             return;
         auto *entry = FindBoundDecision(agent, plan);
-        if (!entry || entry->policy.intervalTicks != 0 || entry->tier == AiSimulationTier::Suspended || entry->blackboardWakeQueued)
+        if (!entry || entry->policy.intervalTicks != 0 || CurrentTier(*entry) == AiSimulationTier::Suspended || entry->blackboardWakeQueued)
             return;
         entry->blackboardWakeQueued = std::ranges::any_of(plan->Graphs(), [&](const DecisionCompiledGraph &graph) {
             return std::ranges::any_of(graph.bindings->Bindings(), [&](const DecisionPlanBlackboardBinding &binding) {
@@ -491,13 +518,12 @@ namespace Horo::AI {
         auto *entry = Find(agent);
         if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested() || !reasons.Any())
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        if (entry->tier == AiSimulationTier::Suspended) {
-            reasons = {.perception = reasons.perception, .explicitRequest = reasons.explicitRequest};
-        } else if (entry->tier == AiSimulationTier::Reduced || entry->tier == AiSimulationTier::EventOnly) {
-            reasons.polling = false;
-        }
+        const auto tier = CurrentTier(*entry);
+        reasons = AdmittedWake(tier, reasons);
         if (!reasons.Any())
             return Result<void>::Success();
+        if (tier == AiSimulationTier::Suspended)
+            relevance_[static_cast<std::size_t>(entry - entries_.data())].trustedWake = true;
         if (!entry->pending.Any())
             entry->waitingSince = report_.tick == 0 ? 1 : report_.tick;
         entry->pending.activation |= reasons.activation;
@@ -523,8 +549,10 @@ namespace Horo::AI {
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
         if (auto admitted = ValidateRelevanceUpdates(updates); admitted.HasError())
             return admitted;
-        for (const auto &update : updates)
-            Find(update.agent)->relevance = update.relevance;
+        for (const auto &update : updates) {
+            const auto slot = static_cast<std::size_t>(Find(update.agent) - entries_.data());
+            relevance_[slot].requested = DesiredTier(*settings_.simulationProfile, update.relevance);
+        }
         return Result<void>::Success();
     }
 
@@ -547,7 +575,12 @@ namespace Horo::AI {
         auto *entry = Find(agent);
         if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested())
             return Result<AiSimulationTier>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        return Result<AiSimulationTier>::Success(entry->tier);
+        return Result<AiSimulationTier>::Success(CurrentTier(*entry));
+    }
+
+    /** @copydoc AiTaskScheduler::CurrentTier */
+    AiSimulationTier AiTaskScheduler::CurrentTier(const Entry &entry) const noexcept {
+        return relevance_.empty() ? AiSimulationTier::Full : relevance_[static_cast<std::size_t>(&entry - entries_.data())].current;
     }
 
     /** @copydoc AiTaskScheduler::PeriodicInterval */
@@ -555,7 +588,7 @@ namespace Horo::AI {
         const auto cadence = entry.policy.intervalTicks;
         if (cadence == 0)
             return 0;
-        switch (entry.tier) {
+        switch (CurrentTier(entry)) {
             case AiSimulationTier::Full:
                 return cadence;
             case AiSimulationTier::Reduced:
@@ -569,9 +602,11 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::ChangeTier */
     void AiTaskScheduler::ChangeTier(Entry &entry, const AiSimulationTier tier) noexcept {
-        const auto previous = entry.tier;
-        entry.tier = tier;
-        entry.demotionSince = 0;
+        auto &state = relevance_[static_cast<std::size_t>(&entry - entries_.data())];
+        const auto previous = state.current;
+        state.current = tier;
+        state.demotionSince = 0;
+        state.trustedWake = false;
         entry.pending.polling = false;
         const auto interval = PeriodicInterval(entry);
         entry.nextTick = interval == 0 ? 0 : Next(entry.evaluatedTick, interval);
@@ -590,25 +625,17 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::ApplyRelevance */
     void AiTaskScheduler::ApplyRelevance() {
-        const auto &profile = *settings_.simulationProfile;
-        for (auto &entry : entries_) {
+        const auto delay = settings_.simulationProfile->demotionDelayTicks;
+        order_.clear();
+        for (std::size_t slot = 0; slot < relevance_.size(); ++slot)
+            if (relevance_[slot].Stage(report_.tick, delay))
+                order_.push_back(slot);
+        for (const auto slot : order_) {
             if (closed_)
                 break;
-            if (!entry.executor || entry.cancellation.IsCancellationRequested())
-                continue;
-            auto desired = DesiredTier(profile, entry.relevance);
-            if (entry.tier == AiSimulationTier::Suspended && desired == entry.tier && WakesSuspended(entry.pending))
-                desired = AiSimulationTier::EventOnly;
-            if (desired == entry.tier) {
-                entry.demotionSince = 0;
-            } else if (desired < entry.tier) {
-                ChangeTier(entry, desired);
-            } else if (entry.demotionSince == 0 || desired != entry.demotionTarget) {
-                entry.demotionTarget = desired;
-                entry.demotionSince = report_.tick;
-            } else if (report_.tick - entry.demotionSince >= profile.demotionDelayTicks) {
-                ChangeTier(entry, desired);
-            }
+            auto &entry = entries_[slot];
+            if (entry.executor && !entry.cancellation.IsCancellationRequested())
+                ChangeTier(entry, relevance_[slot].next);
         }
     }
 
@@ -620,6 +647,8 @@ namespace Horo::AI {
             ++populationRevision_;
         // A completed job can still be waiting for the owner pump when its registration retires.
         jobs_->DiscardAgentWork(entry.agent);
+        if (!relevance_.empty())
+            relevance_[static_cast<std::size_t>(&entry - entries_.data())] = {};
         auto retired = std::move(entry);
         entry = {};
         return retired;
@@ -679,7 +708,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::AdmitReactiveWakes */
     void AiTaskScheduler::AdmitReactiveWakes(Entry &entry) noexcept {
-        if (entry.policy.intervalTicks != 0 || entry.tier == AiSimulationTier::Suspended)
+        if (entry.policy.intervalTicks != 0 || CurrentTier(entry) == AiSimulationTier::Suspended)
             return;
         const auto deadline = entry.executor->NextFixedWakeTick();
         if (deadline && *deadline <= report_.tick) {
@@ -721,7 +750,7 @@ namespace Horo::AI {
         report_.workUnits += units;
         ++report_.evaluated;
         entry.evaluatedTick = tick;
-        entry.context = {entry.agent, tick, entry.pending, entry.cancellation, entry.tier};
+        entry.context = {entry.agent, tick, entry.pending, entry.cancellation, CurrentTier(entry)};
         entry.pending = {};
         const auto interval = PeriodicInterval(entry);
         entry.nextTick = interval == 0 ? 0 : Next(tick, interval);
@@ -791,7 +820,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::EvaluateReadyEntry */
     void AiTaskScheduler::EvaluateReadyEntry(Entry &entry, const std::uint64_t tick, const AgentHandle pausedAgent) {
-        if (RetireIfCancelled(entry) || entry.agent == pausedAgent || entry.tier == AiSimulationTier::Suspended || !entry.pending.Any())
+        if (RetireIfCancelled(entry) || entry.agent == pausedAgent || CurrentTier(entry) == AiSimulationTier::Suspended || !entry.pending.Any())
             return;
         if (tick - entry.waitingSince >= settings_.starvationTicks)
             ++report_.starved;
