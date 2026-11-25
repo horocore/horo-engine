@@ -50,6 +50,32 @@ namespace Horo::Runtime::Ui {
         REQUIRE(log.Entry(0)->Name().empty());
     }
 
+    TEST_CASE("Accessibility QA log suppresses retained retries without conflating independent publishers",
+              "[runtime_ui][accessibility][review]") {
+        auto tree = MakeTree();
+        auto extractor = MakeExtractor(tree);
+        auto firstPublisher = MakePublisher(tree);
+        auto secondPublisher = MakePublisher(tree);
+        ProjectionFixture fixture;
+        const auto snapshot = extractor.Extract(tree, Descriptor(tree), fixture.View()).Value();
+        REQUIRE(firstPublisher.Publish(snapshot).HasValue());
+        REQUIRE(secondPublisher.Publish(snapshot).HasValue());
+
+        UiAccessibilityReviewLog log;
+        log.SetEnabled(true);
+        REQUIRE(log.Record(snapshot, firstPublisher).Value() == 4);
+        REQUIRE(log.Record(snapshot, secondPublisher).Value() == 4);
+        auto movedPublisher = std::move(firstPublisher);
+        CHECK(log.Record(snapshot, movedPublisher).Value() == 0);
+        CHECK(log.Record(snapshot, secondPublisher).Value() == 0);
+        CHECK(log.Size() == 8);
+        CHECK(log.Overwritten() == 0);
+
+        log.Clear();
+        CHECK(log.Record(snapshot, movedPublisher).Value() == 4);
+        CHECK(log.Size() == 4);
+    }
+
     TEST_CASE("Accessibility QA log is opt-in, owns copied content and never acknowledges delivery",
               "[runtime_ui][accessibility][review]") {
         auto tree = MakeTree();

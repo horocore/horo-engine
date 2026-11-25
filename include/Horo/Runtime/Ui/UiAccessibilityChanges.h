@@ -217,6 +217,9 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> Acknowledge(const UiAccessibilityAnnouncementCursor &cursor);
 
     private:
+        friend class UiAccessibilityReviewLog;
+        /** @brief Identifies this publisher without retaining its storage or snapshot. */
+        [[nodiscard]] std::weak_ptr<const void> ReviewIdentity() const noexcept;
         struct Storage;
         explicit UiAccessibilityChangePublisher(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;

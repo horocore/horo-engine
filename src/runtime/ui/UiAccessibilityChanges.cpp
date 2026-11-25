@@ -187,6 +187,8 @@ namespace Horo::Runtime::Ui {
     }  // namespace
 
     struct UiAccessibilityChangePublisher::Storage final {
+        struct ReviewMarker final {};
+        const std::shared_ptr<const ReviewMarker> reviewIdentity = std::make_shared<const ReviewMarker>();
         UiAccessibilityExtractorDescriptor owner;
         UiAccessibilityChangeLimits limits;
         std::optional<UiAccessibilitySnapshot> baseline;
@@ -445,6 +447,11 @@ namespace Horo::Runtime::Ui {
     bool UiAccessibilityChangePublisher::IsCurrentSnapshot(const UiAccessibilitySnapshot &snapshot) const noexcept {
         return storage_ && !storage_->retired && storage_->baseline && snapshot.IsValid() &&
                storage_->baseline->storage_ == snapshot.storage_;
+    }
+
+    /** @copydoc UiAccessibilityChangePublisher::ReviewIdentity */
+    std::weak_ptr<const void> UiAccessibilityChangePublisher::ReviewIdentity() const noexcept {
+        return storage_ ? std::weak_ptr<const void>{storage_->reviewIdentity} : std::weak_ptr<const void>{};
     }
 
     /** @copydoc UiAccessibilityChangePublisher::Changes */

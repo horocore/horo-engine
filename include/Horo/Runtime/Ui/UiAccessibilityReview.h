@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Ui/UiAccessibilityChanges.h"
 
 #include <array>
+#include <memory>
 
 namespace Horo::Runtime::Ui {
     /** @brief Owned diagnostic event; text ranges never refer back into a widget, snapshot or publisher. */
@@ -50,7 +51,7 @@ namespace Horo::Runtime::Ui {
         void SetEnabled(bool enabled, bool captureText = false) noexcept;
         /** @brief Scrubs retained data and counters without changing recording policy. */
         void Clear() noexcept;
-        /** @brief Copies one successful publication's changes, once per publication at the UI owner boundary.
+        /** @brief Copies one adoption's changes while suppressing repeats still represented in the journal.
          * @param snapshot Exact semantic snapshot adopted by publisher.
          * @param publisher Event producer; speech previews are never treated as delivery acknowledgments.
          * @return Number observed, zero when disabled, or a typed stale-source failure before journal mutation.
@@ -66,7 +67,25 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::uint64_t Overwritten() const noexcept;
 
     private:
-        std::array<UiAccessibilityReviewEntry, Capacity> entries_{};
+        struct Publication final {
+            std::weak_ptr<const void> publisher;
+            UiAccessibilitySemanticRevision revision;
+
+            /** @brief Compares one exact publisher adoption even after publisher moves. */
+            [[nodiscard]] bool Matches(const Publication &other) const noexcept {
+                return revision == other.revision && !publisher.owner_before(other.publisher) && !other.publisher.owner_before(publisher);
+            }
+        };
+
+        /** @brief Adds an event and its source receipt to the bounded diagnostic history. */
+        void Append(const UiAccessibilityReviewEntry &entry, const Publication &publication) noexcept;
+
+        struct RetainedEvent final {
+            UiAccessibilityReviewEntry entry;
+            Publication publication;
+        };
+
+        std::array<RetainedEvent, Capacity> entries_{};
         std::size_t head_{}, count_{};
         std::uint64_t overwritten_{};
         bool enabled_{}, captureText_{};
