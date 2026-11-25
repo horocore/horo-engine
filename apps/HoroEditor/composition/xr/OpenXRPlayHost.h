@@ -615,6 +615,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadNativeLighting(const XR::XRCoordinateSpace &world);
         /** @brief Checks current focus, tracking and cached platform clearance for an exact World. */
         [[nodiscard]] std::optional<XR::XRRuntimeTime> LightingCutoff(const XR::XRLightEstimateScope &scope) const noexcept;
+        /** @brief Lends the native light owner the same live permission check at every provider boundary. */
+        [[nodiscard]] XR::OpenXRInternal::NativeLightAuthorization LightAuthorization() noexcept;
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas, float comfortOpacity);
         /** @brief Prepares native frame resources for the resolved owner-bound presentation value. */
         [[nodiscard]] Result<bool> PrepareRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas, float comfortOpacity);

@@ -807,6 +807,13 @@ namespace Horo::Application::Internal {
         return observed;
     }
 
+    /** @copydoc OpenXRPlayHost::LightAuthorization */
+    OpenXRInternal::NativeLightAuthorization OpenXRPlayHost::LightAuthorization() noexcept {
+        return {this, [](void *context, const XRLightEstimateScope &scope) noexcept {
+            return static_cast<const OpenXRPlayHost *>(context)->LightingCutoff(scope).has_value();
+        }};
+    }
+
     bool OpenXRPlayHost::FrameLightingAuthorized() const noexcept {
         const auto scope = render_->nativeLightingScope;
         if (!scope)
@@ -839,7 +846,7 @@ namespace Horo::Application::Internal {
             light.active = false;
             return std::nullopt;
         }
-        const auto advanced = native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff);
+        const auto advanced = native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff, LightAuthorization());
         if (!light.active || !LightingCutoff(light.scope)) {
             light.active = false;
             return std::nullopt;
@@ -847,7 +854,7 @@ namespace Horo::Application::Internal {
 
         std::optional<XRLightEstimate> estimate;
         if (advanced.HasValue()) {
-            auto current = native_.ReadLightEstimation(light.scope, *cutoff);
+            auto current = native_.ReadLightEstimation(light.scope, *cutoff, LightAuthorization());
             if (!light.active || !LightingCutoff(light.scope)) {
                 light.active = false;
                 return std::nullopt;

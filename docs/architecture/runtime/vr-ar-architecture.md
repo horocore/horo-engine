@@ -1043,6 +1043,11 @@ environment hit tests and light estimation have independent capability/access/li
 states and fallbacks. `XRProjection1_0` and `XRTrackedInteraction1_0` require none of
 them.
 
+The native light estimator rechecks the exact platform grant at its creation
+and sample boundaries. If the runtime returns after the grant is withdrawn,
+the owner discards the candidate and withdraws cached observations before
+returning control to the renderer.
+
 Baseline passthrough is a runtime compositor-layer intent and exposes no raw camera
 frames. `XRSpatialAnchors` owns live anchor identity on the canonical XR session control
 lane. Its fixed-capacity registry binds one explicitly admitted provider and purpose

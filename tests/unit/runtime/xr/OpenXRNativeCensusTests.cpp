@@ -47,6 +47,7 @@ namespace Horo::Tests::OpenXR {
                                        {{session, {2, 1}}, XRSpaceKind::World, IdentityValue<XRWorldOriginRevision>(1)},
                                        IdentityValue<XRLightEstimateGrant>(1)};
             const XRLightEstimateLimits limits{Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+            bool lightPermitted{true};
 
             void Create(bool enabled = true) {
                 static constexpr std::array<std::string_view, 1> extensions{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME};
@@ -70,12 +71,26 @@ namespace Horo::Tests::OpenXR {
                 return XRRuntimeTime::Create(tick).Value();
             }
 
-            Result<bool> Advance(const XrTime tick) {
-                return native.owner.AdvanceLightEstimation(scope, NativeHandle<XrSpace>(15), Time(tick));
+            NativeLightAuthorization Authorization() noexcept {
+                return {this, [](void *context, const XRLightEstimateScope &) noexcept {
+                    return static_cast<const LightFixture *>(context)->lightPermitted;
+                }};
             }
 
-            Result<XRLightEstimate> Read(const XrTime tick) const {
-                return native.owner.ReadLightEstimation(scope, Time(tick));
+            Result<void> Start(const XRLightEstimateScope &requested) {
+                return native.owner.StartLightEstimation(requested, limits, Authorization());
+            }
+
+            Result<bool> Advance(const XrTime tick) {
+                return native.owner.AdvanceLightEstimation(scope, NativeHandle<XrSpace>(15), Time(tick), Authorization());
+            }
+
+            Result<XRLightEstimate> Read(const XrTime tick) {
+                return Read(scope, tick);
+            }
+
+            Result<XRLightEstimate> Read(const XRLightEstimateScope &requested, const XrTime tick) {
+                return native.owner.ReadLightEstimation(requested, Time(tick), Authorization());
             }
         };
 
@@ -152,10 +167,60 @@ namespace Horo::Tests::OpenXR {
             expectsCreate = true;
         }
         fixture.Create(enabled);
-        RequireFailureIdentity(fixture.native.owner.StartLightEstimation(fixture.scope, fixture.limits), *expected);
+        RequireFailureIdentity(fixture.Start(fixture.scope), *expected);
         CHECK(fixture.script.createCalls == (expectsCreate ? 1U : 0U));
         CHECK(fixture.script.sampleCalls == 0);
         CHECK_FALSE(fixture.script.live);
+        REQUIRE(fixture.native.owner.Close().HasValue());
+    }
+
+    TEST_CASE("Live light consent is checked before native creation and sample publication", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        auto &owner = fixture.native.owner;
+        SECTION("denial during capability discovery never creates a sensitive native estimator") {
+            fixture.native.census.onLightProperties = [&fixture] { fixture.lightPermitted = false; };
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
+            CHECK(fixture.script.createCalls == 0);
+        }
+        SECTION("denial inside native creation rolls back the unpublished estimator") {
+            fixture.script.onCreate = [&fixture] { fixture.lightPermitted = false; };
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
+            CHECK(fixture.script.createCalls == 1);
+            CHECK(fixture.script.retireCalls == 1);
+        }
+        SECTION("denial before a query redacts the previous sample without querying the provider") {
+            REQUIRE(fixture.Start(fixture.scope).HasValue());
+            REQUIRE(fixture.Advance(100).Value());
+            fixture.lightPermitted = false;
+            RequireFailureIdentity(fixture.Advance(110), XRErrors::PermissionDenied);
+            CHECK(fixture.script.sampleCalls == 1);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+        }
+        SECTION("denial inside a query prevents either the candidate or cached sample from being read") {
+            REQUIRE(fixture.Start(fixture.scope).HasValue());
+            REQUIRE(fixture.Advance(100).Value());
+            fixture.script.onSample = [&fixture] { fixture.lightPermitted = false; };
+            fixture.script.sampleTime = 110;
+            RequireFailureIdentity(fixture.Advance(110), XRErrors::PermissionDenied);
+            CHECK(fixture.script.sampleCalls == 2);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+        }
+        REQUIRE(owner.Close().HasValue());
+        CHECK_FALSE(fixture.script.live);
+    }
+
+    TEST_CASE("A cached light read withdraws an exact grant before the next sample", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        REQUIRE(fixture.Start(fixture.scope).HasValue());
+        REQUIRE(fixture.Advance(100).Value());
+        fixture.lightPermitted = false;
+        RequireFailureIdentity(fixture.Read(101), XRErrors::PermissionDenied);
+        fixture.lightPermitted = true;
+        RequireFailureIdentity(fixture.Read(102), XRErrors::OperationUnavailable);
         REQUIRE(fixture.native.owner.Close().HasValue());
     }
 
@@ -165,10 +230,10 @@ namespace Horo::Tests::OpenXR {
         fixture.native.census.lightEstimationSupport = XR_TRUE;
         fixture.Create();
         auto &owner = fixture.native.owner;
-        REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+        REQUIRE(fixture.Start(fixture.scope).HasValue());
         auto second = fixture.scope;
         second.grant = IdentityValue<XRLightEstimateGrant>(2);
-        RequireFailureIdentity(owner.StartLightEstimation(second, fixture.limits), XRErrors::CapacityExceeded);
+        RequireFailureIdentity(fixture.Start(second), XRErrors::CapacityExceeded);
         CHECK(fixture.script.createCalls == 1);
         const auto first = fixture.Advance(100);
         REQUIRE(first.HasValue());
@@ -250,7 +315,8 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(partial.Value().directional);
         }
         SECTION("different native space cannot reuse the same scoped grant") {
-            RequireFailureIdentity(owner.AdvanceLightEstimation(fixture.scope, NativeHandle<XrSpace>(16), LightFixture::Time(110)),
+            RequireFailureIdentity(owner.AdvanceLightEstimation(fixture.scope, NativeHandle<XrSpace>(16), LightFixture::Time(110),
+                                                                 fixture.Authorization()),
                                    XRErrors::CoordinateSpaceIncompatible);
             CHECK(fixture.script.sampleCalls == 1);
             RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
@@ -266,12 +332,12 @@ namespace Horo::Tests::OpenXR {
             auto replacement = fixture.scope;
             replacement.space.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
             RequireFailureIdentity(owner.StopLightEstimation(replacement), XRErrors::IdentityStale);
-            RequireFailureIdentity(owner.ReadLightEstimation(replacement, LightFixture::Time(100)), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.Read(replacement, 100), XRErrors::IdentityStale);
             REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
-            RequireFailureIdentity(owner.StartLightEstimation(replacement, fixture.limits), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.Start(replacement), XRErrors::IdentityStale);
             replacement.grant = IdentityValue<XRLightEstimateGrant>(2);
-            REQUIRE(owner.StartLightEstimation(replacement, fixture.limits).HasValue());
-            RequireFailureIdentity(owner.ReadLightEstimation(replacement, LightFixture::Time(100)), XRErrors::OperationUnavailable);
+            REQUIRE(fixture.Start(replacement).HasValue());
+            RequireFailureIdentity(fixture.Read(replacement, 100), XRErrors::OperationUnavailable);
             RequireFailureIdentity(fixture.Read(100), XRErrors::IdentityStale);
         }
         SECTION("a failed child retirement fences reads and blocks parent destruction until retry") {
@@ -301,13 +367,13 @@ namespace Horo::Tests::OpenXR {
             fixture.script.onCreate = [&events] {
                 events.InterruptFocus();
             };
-            RequireFailureIdentity(owner.StartLightEstimation(fixture.scope, fixture.limits), XRErrors::PermissionDenied);
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
             CHECK_FALSE(fixture.script.live);
             CHECK(fixture.script.retireCalls == 1);
             REQUIRE(owner.Close().HasValue());
         }
         SECTION("the native query cannot publish after the same event batch restores focus") {
-            REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+            REQUIRE(fixture.Start(fixture.scope).HasValue());
             REQUIRE(fixture.Advance(100).Value());
             fixture.script.onSample = [&events] {
                 events.InterruptFocus();
@@ -318,7 +384,7 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(owner.Close().HasValue());
         }
         SECTION("a read that loses focus during native validation cannot return its cached sample") {
-            REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+            REQUIRE(fixture.Start(fixture.scope).HasValue());
             REQUIRE(fixture.Advance(100).Value());
             bool interrupt = true;
             fixture.native.fence.onValidate = [&events, &interrupt] {
@@ -329,11 +395,11 @@ namespace Horo::Tests::OpenXR {
             fixture.native.fence.onValidate = {};
             RequireFailureIdentity(fixture.Read(102), XRErrors::OperationUnavailable);
             REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
-            RequireFailureIdentity(owner.StartLightEstimation(fixture.scope, fixture.limits), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::IdentityStale);
             auto fresh = fixture.scope;
             fresh.grant = IdentityValue<XRLightEstimateGrant>(2);
-            REQUIRE(owner.StartLightEstimation(fresh, fixture.limits).HasValue());
-            RequireFailureIdentity(owner.ReadLightEstimation(fresh, LightFixture::Time(102)), XRErrors::OperationUnavailable);
+            REQUIRE(fixture.Start(fresh).HasValue());
+            RequireFailureIdentity(fixture.Read(fresh, 102), XRErrors::OperationUnavailable);
             REQUIRE(owner.Close().HasValue());
         }
     }

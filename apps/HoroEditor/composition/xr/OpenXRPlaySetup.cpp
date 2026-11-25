@@ -29,7 +29,7 @@ namespace Horo::Application::Internal {
         if (projection.HasError())
             return Result<void>::Failure(projection.ErrorValue());
         const Operation operation{*this};
-        if (auto native = native_.StartLightEstimation(scope, limits); native.HasError())
+        if (auto native = native_.StartLightEstimation(scope, limits, LightAuthorization()); native.HasError())
             return native;
         const bool admitted = !pendingRevoke_ && LightingCutoff(scope).has_value();
         scene_->nativeLighting.emplace(scope, std::move(projection).Value(), admitted);

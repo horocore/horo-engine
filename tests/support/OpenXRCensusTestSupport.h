@@ -3,6 +3,7 @@
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <bit>
+#include <functional>
 
 namespace Horo::Tests::OpenXR {
     struct CensusScript {
@@ -24,6 +25,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t maximumLayers{16};
         XrResult gazeResult{XR_SUCCESS};
         XrBool32 lightEstimationSupport{XR_FALSE};
+        std::function<void()> onLightProperties;
         bool spatialPlanes{true};
         bool spatialBounds{true};
         bool spatialLabels{true};
@@ -71,6 +73,8 @@ namespace Horo::Tests::OpenXR {
                 if (header->type == XR_TYPE_SYSTEM_LIGHT_ESTIMATION_PROPERTIES_ANDROID) {
                     auto &light = *static_cast<XrSystemLightEstimationPropertiesANDROID *>(value->next);
                     light.supportsLightEstimation = active->lightEstimationSupport;
+                    if (active->onLightProperties)
+                        active->onLightProperties();
                     return Record("light-estimation-properties");
                 }
                 if (header->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB) {

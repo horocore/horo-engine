@@ -24,6 +24,12 @@ namespace Horo::XR::OpenXRInternal {
         void *context{};
         bool (*allows)(void *, const XRPassthroughScope &){};
     };
+
+    /** @brief Synchronous platform and operator authorization for one exact light-estimate scope. */
+    struct NativeLightAuthorization final {
+        void *context{};
+        bool (*allows)(void *, const XRLightEstimateScope &) noexcept{};
+    };
     class OpenXRSwapchain;
 
     /** @brief Fixed native discovery limits; oversized publications fail, never truncate. */
@@ -440,22 +446,28 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Creates an estimator on the exact enabled session after separate app and OS approval.
          * @param scope Already consented purpose and calibrated World scope. @param limits Explicit cadence and expiry.
+         * @param authorization Live owner-lane approval, borrowed only for this operation.
          * @return Success, or typed capability, permission, identity, resource or validation failure.
          * @pre App must check focus and actual OS clearance and provide a fresh grant on the native control lane.
          */
-        [[nodiscard]] Result<void> StartLightEstimation(const XRLightEstimateScope &scope, const XRLightEstimateLimits &limits);
+        [[nodiscard]] Result<void> StartLightEstimation(const XRLightEstimateScope &scope, const XRLightEstimateLimits &limits,
+                                                        const NativeLightAuthorization &authorization);
         /** @brief Samples one bounded native result after the minimum cadence.
          * @param scope Exact still-approved scope. @param world Synchronous borrow of the same calibrated World child.
          * @param now Current runtime-clock cutoff for request, admission and freshness.
+         * @param authorization Live approval, checked before and after borrowing the provider sample.
          * @return True for a new publication, false for cadence or the same provider update, or a typed failure.
          * @pre The application must suspend this producer and retire the grant on focus loss, origin replacement or privacy revocation.
          */
-        [[nodiscard]] Result<bool> AdvanceLightEstimation(const XRLightEstimateScope &scope, XrSpace world, XRRuntimeTime now);
+        [[nodiscard]] Result<bool> AdvanceLightEstimation(const XRLightEstimateScope &scope, XrSpace world, XRRuntimeTime now,
+                                                          const NativeLightAuthorization &authorization);
         /** @brief Copies current estimate evidence without calling the native feature.
          * @param scope Exact still-approved scope. @param now Cutoff in the same runtime clock.
+         * @param authorization Live approval, including for a previously cached observation.
          * @return Current estimate, or a typed stale, incompatible or unavailable result.
          */
-        [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now) const;
+        [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now,
+                                                                  const NativeLightAuthorization &authorization);
         /** @brief Revokes exact publication and retires the native child before its parent.
          * @param scope Exact scope to revoke; stale scopes cannot revoke a current grant.
          * @return Success or a retryable typed error retaining native cleanup debt.
@@ -556,7 +568,12 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Withdraws the exact light grant and cached observations without destroying native handles. */
         void RevokeLightEstimation() noexcept;
         /** @brief Rechecks the native session and light grant after a foreign call. */
-        [[nodiscard]] Result<void> RecheckLightObservation(const XRSessionId &session);
+        [[nodiscard]] Result<void> RecheckLightObservation(const XRLightEstimateScope &scope,
+                                                            const NativeLightAuthorization &authorization);
+        /** @brief Validates scope and owner lane before borrowing or changing light observations. */
+        [[nodiscard]] Result<void> CheckLightAccess(const XRLightEstimateScope &scope) const;
+        /** @brief Publishes only a fresh decoded observation, dropping absent lobes on repeated samples. */
+        [[nodiscard]] Result<bool> PublishLightObservation(const XRLightEstimate &sample, XRRuntimeTime now);
         /** @brief Withdraws native light, anchor and passthrough admission before an owner-lane lifecycle transition. */
         void RevokeCompositionObservations();
         [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
