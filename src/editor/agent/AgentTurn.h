@@ -110,6 +110,7 @@ namespace Horo::Agent {
         std::optional<ModelErrorCode> providerError;
         std::optional<ModelUsage> usage;
         std::vector<AgentPlannedEffect> effects; /**< One host result per draft intent, in the same order. */
+        std::optional<Security::AgentPolicyReason> contextError;
     };
 
     /** @brief Editor-owned admission for at most one active authoring turn.
@@ -144,11 +145,12 @@ namespace Horo::Agent {
          * @param provider Exact host-selected provider. @param turnId Nonzero host-issued identity.
          * @param request Conversation and host-approved tool definitions.
          * @param limits Budget covering the entire draft. @param validateTool Independent, side-effect-free admission.
-         * @param cancellation Host cancellation. @return A complete review draft or a typed failure with no draft.
+         * @param cancellation Host cancellation. @param context Optional exact user-approved context on this lane.
+         * @return A complete review draft or a typed failure with no draft.
          */
         [[nodiscard]] AgentTurnPlan Plan(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
                                          const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
-                                         std::stop_token cancellation = {});
+                                         std::stop_token cancellation = {}, const AgentTurnContext *context = nullptr);
 
     private:
         struct PlanReview final {

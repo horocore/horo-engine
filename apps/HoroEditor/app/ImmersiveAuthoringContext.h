@@ -11,6 +11,8 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 
 namespace Horo::Editor {
     enum class ImmersiveAuthoringMode : std::uint8_t {
@@ -103,11 +105,13 @@ namespace Horo::Editor {
 
     private:
         friend class ImmersiveAgentRequest;
-        ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop);
+        ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
+                            CancellationToken projectLifetime = {});
 
         ImmersivePlanningContext context_;
         Agent::AgentTurnPlan plan_;
         std::stop_token stop_;
+        CancellationToken projectLifetime_;
     };
 
     /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
@@ -137,18 +141,22 @@ namespace Horo::Editor {
         /** @brief Runs an explicitly captured plan for review without any tool execution port.
          * @param provider Host-selected provider. @param turnId Nonzero host-issued identity.
          * @param limits Host draft budget. @param validateTool Host registry and policy check.
-         * @param stop Worker cancellation. @return Inert draft or terminal rejection.
+         * @param stop Worker cancellation. @param approvedContext Optional consented context for the captured project.
+         * @return Inert draft or terminal rejection.
          */
         [[nodiscard]] ImmersivePlanReview Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
-                                               const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {});
+                                               const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {},
+                                               const Agent::AgentTurnContext *approvedContext = nullptr);
 
     private:
         friend class ImmersiveAuthoringContext;
-        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, bool reviewOnly = false);
+        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, bool reviewOnly = false,
+                              std::string projectIdentity = {});
 
         ImmersivePlanningContext context_;
         Agent::ModelRequest request_;
         bool reviewOnly_{};
+        std::string projectIdentity_;
     };
 
     /** @brief Cold owner-lane publication and admission for one Editor opening. */
@@ -179,10 +187,12 @@ namespace Horo::Editor {
                                                                           ImmersiveRequestKind kind, Agent::ModelRequest &&request) const;
         /** @brief Captures a bounded planning request with host-selected tools for inert review only.
          * @param context Exact current Edit or Simulate context. @param request Host-authored model request without tool history.
+         * @param projectIdentity Exact host project identifier if the draft will include approved project context.
          * @return One owned request or empty if mode, context, policy or payload cannot be admitted.
          */
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlan(const ImmersivePlanningContext &context,
-                                                                       Agent::ModelRequest &&request) const;
+                                                                       Agent::ModelRequest &&request,
+                                                                       std::string_view projectIdentity = {}) const;
 
     private:
         std::shared_ptr<ImmersiveContextEpoch> epoch_;

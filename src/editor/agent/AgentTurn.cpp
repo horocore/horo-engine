@@ -324,13 +324,13 @@ namespace Horo::Agent {
     /** @copydoc AgentTurnRuntime::Plan */
     AgentTurnPlan AgentTurnRuntime::Plan(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
                                          const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
-                                         const std::stop_token cancellation) {
+                                         const std::stop_token cancellation, const AgentTurnContext *context) {
         if (!validateTool)
             return {InvalidRequest};
         PlanReview review{validateTool};
-        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, nullptr, {}, {}, &review});
+        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, context, {}, {}, &review});
         if (result.status != Completed)
-            return {.status = result.status, .providerError = result.providerError};
+            return {.status = result.status, .providerError = result.providerError, .contextError = result.contextError};
         return {.status = Completed,
                 .draft = std::move(result.messages.back()),
                 .usage = result.finalUsage,
@@ -355,9 +355,12 @@ namespace Horo::Agent {
                 return {InvalidRequest, {}};
             if (observeText && tools)
                 return {InvalidRequest, {}};
+            TurnContextGate contextGate{context, isCurrent_};
             const auto contextOffset = request.messages.size() - 1;
             const auto contextCount = context ? context->preview.Items().size() : 0;
             if (context) {
+                if (!contextGate.CheckFreshness())
+                    return StaleContextResult();
                 const auto allowed = context->preview.InsertBeforeDispatch(context->policy, context->project, context->isCurrent,
                                                                            context->provider, turnId, request);
                 if (!allowed.Allowed())
@@ -370,7 +373,6 @@ namespace Horo::Agent {
             TurnStop stop{limits.timeout, cancellation};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
-            TurnContextGate contextGate{context, isCurrent_};
             TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())

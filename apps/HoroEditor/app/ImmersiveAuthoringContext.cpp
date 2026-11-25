@@ -71,8 +71,10 @@ namespace Horo::Editor {
         return epoch_ && generation_ != 0 && epoch_->current.load(std::memory_order_acquire) == generation_;
     }
 
-    ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, const bool reviewOnly)
-        : context_(std::move(context)), request_(std::move(request)), reviewOnly_(reviewOnly) {}
+    ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, const bool reviewOnly,
+                                                 std::string projectIdentity)
+        : context_(std::move(context)), request_(std::move(request)), reviewOnly_(reviewOnly),
+          projectIdentity_(std::move(projectIdentity)) {}
 
     /** @copydoc ImmersiveAgentRequest::Run */
     Agent::AgentTurnResult ImmersiveAgentRequest::Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop) {
@@ -84,8 +86,9 @@ namespace Horo::Editor {
         return runtime.Run(provider, nullptr, turnId, std::exchange(request_, {}), {}, stop);
     }
 
-    ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop)
-        : context_(std::move(context)), plan_(std::move(plan)), stop_(stop) {}
+    ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop,
+                                             CancellationToken projectLifetime)
+        : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), projectLifetime_(std::move(projectLifetime)) {}
 
     /** @copydoc ImmersivePlanReview::Status */
     Agent::AgentTurnStatus ImmersivePlanReview::Status() const noexcept {
@@ -94,7 +97,7 @@ namespace Horo::Editor {
             return plan_.status;
         if (stop_.stop_requested())
             return Cancelled;
-        return context_.IsCurrent() ? Completed : ContextDenied;
+        return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() ? Completed : ContextDenied;
     }
 
     /** @copydoc ImmersivePlanReview::Read */
@@ -105,13 +108,21 @@ namespace Horo::Editor {
     /** @copydoc ImmersiveAgentRequest::Plan */
     ImmersivePlanReview ImmersiveAgentRequest::Plan(Agent::IModelProvider &provider, const std::uint64_t turnId,
                                                     const Agent::AgentTurnLimits &limits, const Agent::AgentPlanToolValidator &validateTool,
-                                                    const std::stop_token stop) {
+                                                    const std::stop_token stop, const Agent::AgentTurnContext *approvedContext) {
         if (!reviewOnly_)
             return {context_, {.status = Agent::AgentTurnStatus::InvalidRequest}, stop};
+        if (!approvedContext && !projectIdentity_.empty())
+            return {context_, {.status = Agent::AgentTurnStatus::ContextDenied}, stop};
+        if (approvedContext && (projectIdentity_.empty() || approvedContext->project.projectIdentity != projectIdentity_ ||
+                                approvedContext->project.projectGeneration != context_.Identity().projectOpening))
+            return {context_,
+                    {.status = Agent::AgentTurnStatus::ContextDenied, .contextError = Security::AgentPolicyReason::StaleAuthority},
+                    stop};
         Agent::AgentTurnRuntime runtime{[this] {
             return IsCurrent();
         }};
-        return {context_, runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop), stop};
+        auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop, approvedContext);
+        return {context_, std::move(plan), stop, approvedContext ? approvedContext->project.cancellation : CancellationToken{}};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}
@@ -173,9 +184,10 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersiveAuthoringContext::CapturePlan */
     std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CapturePlan(const ImmersivePlanningContext &context,
-                                                                                Agent::ModelRequest &&request) const {
+                                                                                Agent::ModelRequest &&request,
+                                                                                const std::string_view projectIdentity) const {
         if (Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted || !ValidFreshRequest(request, true))
             return std::nullopt;
-        return ImmersiveAgentRequest{context, std::move(request), true};
+        return ImmersiveAgentRequest{context, std::move(request), true, std::string{projectIdentity}};
     }
 }  // namespace Horo::Editor

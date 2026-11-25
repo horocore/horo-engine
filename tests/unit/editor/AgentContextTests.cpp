@@ -1,3 +1,4 @@
+#include "../../../apps/HoroEditor/app/ImmersiveAuthoringContext.h"
 #include "AgentContext.h"
 #include "AgentTurnMcp.h"
 #include "Horo/Mcp/McpController.h"
@@ -31,6 +32,21 @@ namespace Horo::Agent {
             };
             return readers;
         }
+
+        struct RecordingModel final : IModelProvider {
+            std::vector<ModelMessage> sent;
+
+            ProviderDiscovery Discover(std::stop_token) override {
+                return {};
+            }
+
+            ModelOutcome Stream(const ModelRequest &request, const ModelEventSink &sink, std::stop_token) override {
+                sent = request.messages;
+                if (!sink({.kind = ModelEventKind::TextDelta, .text = "Result"}) || !sink({.kind = ModelEventKind::Completed}))
+                    return {ModelError{ModelErrorCode::Cancelled, "Stopped by host", {}}};
+                return {};
+            }
+        };
     }  // namespace
 
     TEST_CASE("Agent context dispatch sends exactly the consented redacted preview", "[agent][context]") {
@@ -217,20 +233,7 @@ namespace Horo::Agent {
     }
 
     TEST_CASE("Agent runtime dispatches admitted context without publishing it into history", "[agent][context]") {
-        struct RecordingModel final : IModelProvider {
-            std::vector<ModelMessage> sent;
-
-            ProviderDiscovery Discover(std::stop_token) override {
-                return {};
-            }
-
-            ModelOutcome Stream(const ModelRequest &request, const ModelEventSink &sink, std::stop_token) override {
-                sent = request.messages;
-                if (!sink({.kind = ModelEventKind::TextDelta, .text = "Result"}) || !sink({.kind = ModelEventKind::Completed}))
-                    return {ModelError{ModelErrorCode::Cancelled, "Stopped by host", {}}};
-                return {};
-            }
-        } model;
+        RecordingModel model;
 
         const auto project = Project();
         const auto readers = Readers();
@@ -305,5 +308,63 @@ namespace Horo::Agent {
         CHECK_FALSE(result.providerError.has_value());
         CHECK(model.acceptedLateText == !model.revokeBeforeText);
         CHECK(presented == (model.revokeBeforeText ? 0 : 1));
+    }
+
+    TEST_CASE("Immersive planning dispatches only project-matched consented context", "[agent][context][plan]") {
+        using enum AgentTurnStatus;
+        CancellationSource projectLifetime;
+        auto project = Project();
+        project.cancellation = projectLifetime.Token();
+        const auto readers = Readers();
+        const std::array<AgentContextSelection, 1> selection{
+            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, "compiler", "r3", "selected secret build log"}};
+        const auto preview = AgentContextPreview::Capture(selection, readers, project, AgentProviderResidence::Local, 25, 4);
+        REQUIRE(preview.HasValue());
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(true, 4));
+        const AgentTurnContext approved{preview.Value(), policy, project, readers.isCurrent, AgentProviderResidence::Local};
+        const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
+        Editor::ImmersiveAuthoringContext owner;
+        const auto context = owner.Publish({project.projectGeneration,
+                                            1,
+                                            1,
+                                            session,
+                                            {session, {0, 1}},
+                                            1,
+                                            1,
+                                            1,
+                                            XR::XRCapabilityRevision::Create(1).Value(),
+                                            Editor::ImmersiveAuthoringMode::Edit,
+                                            0,
+                                            true},
+                                           {});
+        REQUIRE(context);
+        RecordingModel model;
+        const auto inspect = [](const ModelToolIntent &) {
+            return AgentPlanToolInspection{ToolDenied};
+        };
+        const auto capture = [&](std::string_view identity) {
+            return owner.CapturePlan(*context, {.model = "fake", .messages = {{.role = ModelRole::User, .text = "Plan the change"}}},
+                                     identity);
+        };
+        auto pending = capture(project.projectIdentity);
+        REQUIRE(pending);
+        CHECK(pending->Plan(model, 25, {}, inspect, {}, &approved).Status() == ContextDenied);
+        REQUIRE(preview.Value().Grant(policy).Allowed());
+        auto foreign = capture("other-project");
+        REQUIRE(foreign);
+        CHECK(foreign->Plan(model, 25, {}, inspect, {}, &approved).Status() == ContextDenied);
+        CHECK(model.sent.empty());
+
+        auto correct = capture(project.projectIdentity);
+        REQUIRE(correct);
+        const auto review = correct->Plan(model, 25, {}, inspect, {}, &approved);
+        REQUIRE(review.Status() == Completed);
+        REQUIRE(model.sent.size() == 2);
+        CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
+        REQUIRE(review.Read(*context));
+        CHECK(review.Read(*context)->draft->text == "Result");
+        projectLifetime.RequestCancellation();
+        CHECK_FALSE(review.Read(*context));
     }
 }  // namespace Horo::Agent
