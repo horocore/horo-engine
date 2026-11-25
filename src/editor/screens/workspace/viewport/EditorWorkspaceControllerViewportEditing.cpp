@@ -36,8 +36,10 @@ namespace Horo::Editor {
             result.view.requiresSpatialWarning = impact.changesWorldTransforms || impact.changesCameras;
             for (const auto &change : preview.Changes()) {
                 const auto &prior = *std::ranges::find(objects, change.object, &SceneObjectSnapshot::id);
-                if (prior.localTransform != change.desired->localTransform)
+                if (prior.localTransform != change.desired->localTransform) {
                     result.transforms.push_back({change.object, change.desired->localTransform});
+                    result.view.transforms.push_back({prior.id.value, prior.name, prior.localTransform, change.desired->localTransform});
+                }
                 if (prior.name != change.desired->name)
                     result.view.renames.push_back({prior.id.value, prior.name, change.desired->name});
                 if (prior.components.light != change.desired->components.light)

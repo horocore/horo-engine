@@ -18,15 +18,47 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Formats an authored vector for the text alternative to a spatial preview. */
+        std::string ReviewValue(const Math::Vec3 &value) {
+            return std::format("({}, {}, {})", value.x, value.y, value.z);
+        }
+
+        /** @brief Keeps rotations in the same XYZW representation as the proposed operation. */
+        std::string ReviewValue(const Math::Quaternion &value) {
+            return std::format("({}, {}, {}, {})", value.x, value.y, value.z, value.w);
+        }
+
+        /** @brief Writes one changed property without asking the user to infer it from the rendered pose. */
+        template <class Value>
+        void DrawReviewTransformChange(const EditorWorkspaceViewModel::AgentSceneReviewView::Transform &target, std::string_view key,
+                                       const Value &before, const Value &after, const EditorGuiContext &context) {
+            if (before == after)
+                return;
+            const auto oldValue = ReviewValue(before);
+            const auto newValue = ReviewValue(after);
+            const auto row = std::vformat(context.localization.Get("editor", key),
+                                          std::make_format_args(target.name, target.object, oldValue, newValue));
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, row, Theme::Text(), context.theme.fonts);
+        }
+
         /** @brief Keeps review details scrollable so a full review leaves room for the live viewport. */
-        void DrawSceneReviewDetails(const EditorWorkspaceViewModel::AgentSceneReviewView &review,
-                                    const ILocalizationService &localization) {
-            const float lines = static_cast<float>(std::min<std::size_t>(review.renames.size() + review.lights.size(), 3));
+        void DrawSceneReviewDetails(const EditorWorkspaceViewModel::AgentSceneReviewView &review, const EditorGuiContext &context) {
+            const auto &localization = context.localization;
+            const auto detailCount = review.renames.size() + review.lights.size() + review.transforms.size();
+            const float lines = static_cast<float>(std::min<std::size_t>(detailCount, 3));
             const float height = std::min(lines * ImGui::GetTextLineHeightWithSpacing(), ImGui::GetContentRegionAvail().y * 0.25F);
             if (height <= 0.0F)
                 return;
             if (ImGui::BeginChild("##SceneReviewDetails", {0, height})) {
                 const auto pattern = localization.Get("editor", "workspace.viewport.agent_review.rename");
+                for (const auto &transform : review.transforms) {
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.position", transform.before.translation,
+                                              transform.after.translation, context);
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.rotation", transform.before.rotation,
+                                              transform.after.rotation, context);
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.scale", transform.before.scale,
+                                              transform.after.scale, context);
+                }
                 for (const auto &rename : review.renames) {
                     const auto row = std::vformat(pattern, std::make_format_args(rename.before, rename.after, rename.object));
                     ImGui::TextWrapped("%s", row.c_str());
@@ -42,18 +74,18 @@ namespace Horo::Editor {
         }
 
         /** @brief Offers an exact local decision next to the preview without exposing the operation to MCP. */
-        void DrawAgentSceneReview(const EditorWorkspaceViewModel::AgentSceneReviewView &review, const bool canApply,
-                                  EditorWorkspaceViewCommandData &command, const ILocalizationService &localization) {
+        void DrawAgentSceneReview(const EditorWorkspaceViewModel::AgentSceneReviewView &review, EditorWorkspaceViewCommandData &command,
+                                  const EditorGuiContext &context) {
+            const auto &localization = context.localization;
             const auto summary = std::vformat(localization.Get("editor", "workspace.viewport.agent_review.summary"),
                                               std::make_format_args(review.objectCount));
             ImGui::TextWrapped("%s", summary.c_str());
             if (review.requiresSpatialWarning)
                 ImGui::TextWrapped("%s", localization.Get("editor", "workspace.viewport.agent_review.spatial_warning").c_str());
-            DrawSceneReviewDetails(review, localization);
+            DrawSceneReviewDetails(review, context);
             const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
             const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");
-            const bool approved =
-                Ui::Button({.label = apply.c_str(), .enabled = canApply, .style = {.width = Ui::StyleWidth::FillAvailable}});
+            const bool approved = Ui::Button({.label = apply.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
             const bool rejected = Ui::Button({.label = discard.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
             if (approved || rejected) {
                 command.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
@@ -194,8 +226,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##Content", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
         if (viewModel.agentSceneReview)
-            DrawAgentSceneReview(*viewModel.agentSceneReview, viewportRenderer_ && viewportRenderer_->IsReady(), command,
-                                 context.localization);
+            DrawAgentSceneReview(*viewModel.agentSceneReview, command, context);
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;

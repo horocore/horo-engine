@@ -473,6 +473,11 @@ namespace {
         REQUIRE(preview.HasValue());
         REQUIRE(controller.ViewModel().agentSceneReview);
         CHECK(controller.ViewModel().agentSceneReview->objectCount == 1);
+        REQUIRE(controller.ViewModel().agentSceneReview->transforms.size() == 1);
+        const auto &reviewedTransform = controller.ViewModel().agentSceneReview->transforms.front();
+        CHECK(reviewedTransform.object == object.id.value);
+        CHECK(reviewedTransform.before == object.localTransform);
+        CHECK(reviewedTransform.after == desired);
         REQUIRE(controller.ViewModel().agentSceneReview->renames.size() == 1);
         CHECK(controller.ViewModel().agentSceneReview->renames.front().before == object.name);
         CHECK(controller.ViewModel().agentSceneReview->renames.front().after == renames.front().name);

@@ -1197,10 +1197,19 @@ namespace Horo::Editor {
                 bool enabled{};
             };
 
+            /** @brief Before and after local pose of a target in the validated preview. */
+            struct Transform final {
+                std::uint64_t object{};
+                std::string name;
+                Math::Transform before;
+                Math::Transform after;
+            };
+
             std::uint64_t id{};
             std::size_t objectCount{};
             std::vector<Rename> renames;
             std::vector<Light> lights;
+            std::vector<Transform> transforms;
             bool requiresSpatialWarning{};
         };
 
