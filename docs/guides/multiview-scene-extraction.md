@@ -215,6 +215,12 @@ the canonical `viewport`, `shadow` and `multiview` cook pairs. The test verifies
 two consecutive submissions, each view's active rectangle and array layer, and
 the release of the same allocation after each completed frame.
 
+The `[native-loss]` case uses the same cooks. It delivers scripted OpenXR
+session loss after Vulkan submission, observes retirement of the old image
+without presenting the lost prediction to OpenXR, and submits four views from
+a replacement Play session. The test covers runtime session loss using the
+Vulkan queue. Headset and driver-loss qualification require separate evidence.
+
 The opt-in environment lighting program is cooked from
 `assets/shaders/runtime/multiview_environment_mesh.hlsl` using
 `HoroEditorVulkanShaderCook` with `--multiview-environment`. Its

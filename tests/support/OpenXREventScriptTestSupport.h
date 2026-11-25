@@ -48,8 +48,11 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Poll(XrInstance, XrEventDataBuffer *buffer) {
             ++active->polls;
-            if (active->pollResult != XR_SUCCESS)
+            if (active->pollResult != XR_SUCCESS) {
+                if (active->pollResult == XR_ERROR_SESSION_LOST)
+                    active->running = false;
                 return std::exchange(active->pollResult, XR_SUCCESS);
+            }
             if (active->loseInstance) {
                 active->loseInstance = false;
                 const XrEventDataInstanceLossPending event{XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING, nullptr, 1};

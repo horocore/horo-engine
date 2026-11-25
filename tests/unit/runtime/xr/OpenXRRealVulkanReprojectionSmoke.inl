@@ -494,9 +494,10 @@ namespace Horo::Tests::OpenXRApplication {
                 std::function<void()> afterPresent;
             };
 
-            void Project(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
-                         const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr,
-                         const PublicationHooks &hooks = {}, const Runtime::FrameContext *dispatch = nullptr) {
+            /** @brief Submits the Vulkan frame while leaving the XR compositor tail unobserved. */
+            void SubmitProjection(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
+                                  const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr,
+                                  const PublicationHooks &hooks = {}, const Runtime::FrameContext *dispatch = nullptr) {
                 CAPTURE(number);
                 const auto step = [](std::string_view name, auto result) {
                     INFO(name);
@@ -528,9 +529,17 @@ namespace Horo::Tests::OpenXRApplication {
                             hooks.afterPresent();
                     }
                 }
+            }
+
+            /** @brief Advances one settled frame regardless of whether an earlier prediction ended through OpenXR. */
+            void Project(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
+                         const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr,
+                         const PublicationHooks &hooks = {}, const Runtime::FrameContext *dispatch = nullptr) {
+                const auto expectedEnds = script.frames.ends + 1;
+                SubmitProjection(number, canvas, submitCanvas, hooks, dispatch);
                 Wait([&] {
-                    step("poll native compositor tail", play->ProgressRenderTail());
-                    return script.frames.ends == number;
+                    REQUIRE(play->ProgressRenderTail().HasValue());
+                    return script.frames.ends == expectedEnds;
                 });
             }
         };
@@ -630,6 +639,59 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(chain.appSpaceDeltaPose.orientation.w == 1.0F);
         }
         scene->Shutdown();
+    }
+
+    TEST_CASE("Signed quad Vulkan Play retires images and restarts after session loss", "[xr][application][play][native-loss]") {
+        const auto *root = SDL_getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        if (!root)
+            SKIP("Supply the canonical Vulkan viewport, shadow and multiview cooks.");
+        NativePlayFixture fixture{root, NativePlayProjection::Quad};
+        auto outgoing = ActivatePlay(fixture, std::nullopt);
+        auto &script = fixture.script;
+        script.clock.sample = 1;
+        fixture.Project(1);
+        const auto stale = script.frames.encoded.front().subImage.swapchain;
+        REQUIRE(stale != XR_NULL_HANDLE);
+        REQUIRE(fixture.images->Read(stale).releases == 1);
+
+        script.frames.prediction += script.frames.period;
+        bool submitted = false;
+        fixture.SubmitProjection(2, nullptr, nullptr, {.afterPresent = [&] { submitted = true; }});
+        REQUIRE(submitted);
+        REQUIRE(script.frames.ends == 1);
+        script.events.pollResult = XR_ERROR_SESSION_LOST;
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        CHECK_FALSE(fixture.play->MirrorView(2).IsValid());
+        NativePlayFixture::Wait([&] {
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            return script.native.liveSessions == 0;
+        });
+        CHECK(script.frames.ends == 1);
+        CHECK(script.events.ends == 0);
+        CHECK(fixture.images->Read(stale).releases == 1);
+        CHECK(fixture.images->Read(stale).image == VK_NULL_HANDLE);
+
+        const CancellationSource cancellation;
+        REQUIRE(fixture.play->BuildInputSnapshot({.frameNumber = 3, .cancellation = cancellation.Token()}, {}).HasValue());
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Idle).HasValue());
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+        auto world = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+        auto participant = fixture.play->MakeSceneParticipant();
+        auto replacement = RequireValue(participant->Prepare(fixture.definition, world->View()));
+        REQUIRE(replacement->ValidatePublication().HasValue());
+        replacement->Publish();
+        outgoing->Shutdown();
+        FocusPlay(fixture);
+        REQUIRE(fixture.play->UsesXrScene());
+        script.frames.prediction += script.frames.period;
+        fixture.Project(3);
+        REQUIRE(script.frames.views == 4);
+        const auto fresh = script.frames.encoded.front().subImage.swapchain;
+        REQUIRE(fresh != XR_NULL_HANDLE);
+        CHECK(fresh != stale);
+        CHECK(fixture.images->Read(fresh).releases == 1);
+        replacement->Shutdown();
     }
 
 #if HORO_ENABLE_TELEMETRY

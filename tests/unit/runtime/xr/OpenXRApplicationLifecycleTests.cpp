@@ -1222,6 +1222,16 @@ namespace Horo::Tests::OpenXRApplication {
             play.CommitAuthoredCharacter(scene, RequireValue(world.ControllerTransform(controller)), step);
         }
 
+        /** @brief Delivers the scripted runtime events for the most recently created Play session. */
+        void FocusPlay(auto &fixture) {
+            fixture.script.events.session = fixture.script.native.lastSession;
+            fixture.script.events.Push(XR_SESSION_STATE_READY);
+            fixture.script.events.Push(XR_SESSION_STATE_SYNCHRONIZED);
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+        }
+
         std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(auto &fixture, const std::optional<Input::PlayerId> player,
                                                                         Editor::EditorMountedXrGeometryCapture mounted = {}) {
             REQUIRE(fixture.play);
@@ -1233,12 +1243,7 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(candidate->ValidatePublication().HasValue());
             candidate->Publish();
             REQUIRE(fixture.play->UsesXrScene());
-            fixture.script.events.session = fixture.script.native.lastSession;
-            fixture.script.events.Push(XR_SESSION_STATE_READY);
-            fixture.script.events.Push(XR_SESSION_STATE_SYNCHRONIZED);
-            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
-            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
-            REQUIRE(fixture.play->PollEvents().HasValue());
+            FocusPlay(fixture);
             return candidate;
         }
 
