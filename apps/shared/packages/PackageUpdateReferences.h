@@ -10,6 +10,10 @@ namespace Horo::Application::Internal {
     /** @brief Gives a typed migration failure with the collected compatibility blockers. */
     [[nodiscard]] Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics = {});
 
+    /** @brief Reports files in a new locked archive that require a live package owner. */
+    void ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
+                            std::vector<Diagnostic> &diagnostics);
+
     /** @brief Reviews sealed archives for reference changes and applicable migration declarations. */
     [[nodiscard]] Result<void> ReviewAssetFiles(const Packages::LockedPackage &previous, const Packages::ValidatedPackageArchive &previousArchive,
                                                 const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &candidateArchive,

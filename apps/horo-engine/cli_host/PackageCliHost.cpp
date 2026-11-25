@@ -438,21 +438,23 @@ namespace Horo::Application::Internal {
             return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
         }
 
-        /** @brief Checks the exact old and staged archives for each replaced asset package before publication. */
-        Result<void> CheckAssetReplacements(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
-                                            const Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
+        /** @brief Checks the exact staged archives and any previous asset bytes before publication. */
+        Result<void> CheckStagedUpdateArchives(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
+                                                const Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
             std::vector<Diagnostic> diagnostics;
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                if (!change.current)
-                    continue;
-                const auto &old = *change.current;
-                const auto next = std::ranges::find_if(staged.packages, [&old](const auto &item) {
-                    return item.lock.package == old.package;
-                });
+                if (!change.candidate)
+                    return Result<void>::Failure(UpdateNeedsMigration());
+                const auto next = std::ranges::find(staged.packages, *change.candidate, &Packages::PackageRestorePackage::lock);
                 if (next == staged.packages.end() || !next->archive)
                     return Result<void>::Failure(UpdateNeedsMigration());
+                if (!change.current) {
+                    ReviewAddedArchive(next->lock, *next->archive, diagnostics);
+                    continue;
+                }
+                const auto &old = *change.current;
                 const auto previous = ReadUpdateArchive(cache, old);
                 if (previous.HasError())
                     return Result<void>::Failure(previous.ErrorValue());
@@ -475,7 +477,7 @@ namespace Horo::Application::Internal {
                                                files, cache, context);
             if (staged.HasError())
                 return Output::Failure(staged.ErrorValue());
-            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), cache, context); content.HasError())
+            if (const auto content = CheckStagedUpdateArchives(update, *staged.Value().Graph(), cache, context); content.HasError())
                 return Output::Failure(content.ErrorValue());
 
             const auto admission = ReadAuthority(update.policy, context);

@@ -397,7 +397,9 @@ archives again before publication.
 `horo-engine package apply-update` takes the same project and candidate options,
 plus `--approve` with the preview fingerprint and `--package-cache-root` with the
 absolute path to an existing verified cache. This path stages offline and
-publishes updates that retain existing package references. An asset-only
+publishes updates that retain existing package references. Newly added packages
+must declare asset-only contributions and pass the same archive path and
+execution checks as replaced asset packages. An asset-only
 replacement can add files at the same version when the package manifest and
 lock policy stay identical and verified archives prove that every existing
 path keeps its bytes and contribution owner. Withdrawals, version changes,

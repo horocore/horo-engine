@@ -8,17 +8,17 @@
 #include <map>
 
 namespace Horo::Application::Internal {
+    /** @brief Checks the contribution policy admitted by offline package updates. */
+    static bool IsAssetOnly(const Packages::LockedPackage &package) {
+        return std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"});
+    }
+
     /** @brief Rejects changes to selected versions, source, policy, or exported contribution classes. */
-    static bool CanPreserveAssetReferences(const Packages::PackageUpdateChange &change) {
-        if (!change.current)
-            return true;
-        if (!change.candidate)
-            return false;
-        const auto &next = *change.candidate;
-        auto compatible = *change.current;
+    static bool CanPreserveAssetReferences(const Packages::LockedPackage &current, const Packages::LockedPackage &next) {
+        auto compatible = current;
         compatible.artifactDigest = next.artifactDigest;
         compatible.fileManifestDigest = next.fileManifestDigest;
-        return compatible == next && std::ranges::equal(next.contributions, std::array<std::string_view, 1>{"assets"});
+        return compatible == next && IsAssetOnly(next);
     }
 
     /** @copydoc UpdateNeedsMigration */
@@ -58,6 +58,22 @@ namespace Horo::Application::Internal {
         return nullptr;
     }
 
+    /** @brief Identifies candidate files whose contribution needs a live package owner. */
+    static void ReviewCandidateFile(const Packages::HoroPackageId &package, const Packages::PackageFileEntry &file,
+                                    std::vector<Diagnostic> &diagnostics) {
+        const auto &path = file.id.path.Value();
+        if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
+            ReportUpdateBlocker(diagnostics, "packages.host.update_archive_requires_owner", package, path);
+    }
+
+    /** @copydoc ReviewAddedArchive */
+    void ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
+                            std::vector<Diagnostic> &diagnostics) {
+        for (const auto &file : archive.Manifest().Entries())
+            if (!Packages::IsPackageAssetRenameMetadata(file))
+                ReviewCandidateFile(candidate.package, file, diagnostics);
+    }
+
     /** @brief Checks the paths that could be visible to existing package consumers. */
     static void ReviewInventory(const Packages::HoroPackageId &package, const Packages::ValidatedPackageArchive &previous,
                                 const Packages::ValidatedPackageArchive &candidate, std::vector<Diagnostic> &diagnostics) {
@@ -66,8 +82,7 @@ namespace Horo::Application::Internal {
             const std::string_view path = file.id.path.Value();
             if (Packages::IsPackageAssetRenameMetadata(file))
                 continue;
-            if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
-                ReportUpdateBlocker(diagnostics, "packages.host.update_archive_requires_owner", package, path);
+            ReviewCandidateFile(package, file, diagnostics);
             byPath.emplace(path, &file);
         }
         for (const auto &oldFile : previous.Manifest().Entries()) {
@@ -123,7 +138,12 @@ namespace Horo::Application::Internal {
     std::vector<Diagnostic> ReviewUpdateLock(const Packages::PackageUpdatePreview &preview) {
         std::vector<Diagnostic> diagnostics;
         for (const auto &change : preview.changes) {
-            if (CanPreserveAssetReferences(change))
+            if (!change.current) {
+                if (change.candidate && !IsAssetOnly(*change.candidate))
+                    ReportUpdateBlocker(diagnostics, "packages.host.update_archive_requires_owner", change.candidate->package);
+                continue;
+            }
+            if (change.candidate && CanPreserveAssetReferences(*change.current, *change.candidate))
                 continue;
             const char *reason = "packages.host.update_lock_policy_changed";
             if (!change.candidate)
@@ -161,8 +181,10 @@ namespace Horo::Application::Internal {
         const auto candidate = ReadUpdateArchive(cache, *change.candidate);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        if (!change.current)
+        if (!change.current) {
+            ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
             return Result<void>::Success();
+        }
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
             return Result<void>::Failure(previous.ErrorValue());

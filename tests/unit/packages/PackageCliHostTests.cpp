@@ -137,7 +137,7 @@ namespace {
 
     /** @brief Writes a resolved asset candidate bound to the fixture's source and archive. */
     void WriteAssetCandidate(NativeProject &fixture, const Packages::PackageVersion &version,
-                             const Packages::ValidatedPackageArchive &archive) {
+                             const Packages::ValidatedPackageArchive &archive, std::string_view contribution = "assets") {
         const auto intent = nlohmann::json{
             {"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
             {"dependencies", {{fixture.graph.package.Value(), {{"source", "fixture.source"}, {"version", version.ToString()}}}}}}.dump();
@@ -152,12 +152,83 @@ namespace {
                                                  .manifestDigest = archive.PackageManifestDigest(),
                                                  .fileManifestDigest = archive.Manifest().Digest(),
                                                  .packageFormatVersion = 1,
-                                                 .contributions = {"assets"}};
+                                                 .contributions = {std::string{contribution}}};
         const auto lock = Packages::ValidatedPackageLockfileV1::Generate(
             plan, std::span{&fixture.graph.package, 1}, request.Value().Digest(), std::span{&entry, 1});
         REQUIRE(lock.HasValue());
         fixture.Write("candidate.json", intent);
         fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
+    }
+
+    /** @brief Replaces the fixture's initial graph with a valid empty request and lock. */
+    void WriteEmptyPackageGraph(NativeProject &fixture) {
+        constexpr auto intent = R"({"sources":{},"dependencies":{}})";
+        const auto request = Packages::ValidatedPackageRequest::Parse(intent);
+        REQUIRE(request.HasValue());
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate({}, {}, request.Value().Digest(), {});
+        REQUIRE(lock.HasValue());
+        fixture.Write("packages.json", intent);
+        fixture.Write("packages.lock", lock.Value().SerializeCanonical());
+    }
+
+    /** @brief Checks that offline review names the package owner blocker at the expected archive path. */
+    void CheckOfflineAdditionBlocker(const Result<CliCommandResult> &result, std::string_view path) {
+        REQUIRE(result.HasError());
+        REQUIRE_FALSE(result.ErrorValue().diagnostics.empty());
+        const auto &blocker = result.ErrorValue().diagnostics.front();
+        CHECK(blocker.code.Value() == "packages.host.update_archive_requires_owner");
+        CHECK(blocker.path == path);
+    }
+
+    TEST_CASE("Offline package update inspects contributions of newly added archives", "[packages][application][cli][update]") {
+        using namespace Tests::PackageApplicationService;
+        enum class Addition { Assets, NativeDeclared, NativeDeclaredAsAssets };
+        const auto mode = GENERATE(Addition::Assets, Addition::NativeDeclared, Addition::NativeDeclaredAsAssets);
+        NativeProject fixture;
+        WriteEmptyPackageGraph(fixture);
+        const auto archive = mode == Addition::Assets ? fixture.graph.archive : Verify(NativeAdmissionArchiveBytes());
+        WriteAssetCandidate(fixture, fixture.graph.version, archive, mode == Addition::NativeDeclared ? "native" : "assets");
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto metadata = root / ".horo";
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        NativeDurableFileSystem files;
+        const auto oldLock = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
+        REQUIRE(oldLock.HasValue());
+        auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+        REQUIRE(cache.HasValue());
+        REQUIRE(std::move(cache).Value().Publish(archive).HasValue());
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const auto apply = MakePackageApplyUpdateCommandAdapter();
+        const CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
+                                                    NativeProject::PathOption("candidate-lock", metadata / "candidate.lock")}};
+        InInvocation([&](CliExecutionContext &context) {
+            const auto approval = preview.adapter->Execute(command, context);
+            REQUIRE(approval.HasValue());
+            auto reviewed = command;
+            reviewed.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            const auto previewed = preview.adapter->Execute(reviewed, context);
+            reviewed.command = apply.adapter->GetDescriptor().path;
+            const auto fingerprint = std::get<std::string>(approval.Value().fields.back().value);
+            reviewed.options.push_back({"approve", {{fingerprint, CliValueSource::Invocation, {}}}});
+            const auto applied = apply.adapter->Execute(reviewed, context);
+            const auto installed = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
+            REQUIRE(installed.HasValue());
+            if (mode == Addition::Assets) {
+                REQUIRE(previewed.HasValue());
+                REQUIRE(applied.HasValue());
+                const auto candidate = files.ReadFileBounded(metadata / "candidate.lock", 1U << 20U, {});
+                REQUIRE(candidate.HasValue());
+                CHECK(installed.Value() == candidate.Value());
+                return;
+            }
+            CHECK(installed.Value() == oldLock.Value());
+            CHECK_FALSE(std::filesystem::exists(metadata / "local/package-metadata.pending"));
+            const auto *path = mode == Addition::NativeDeclaredAsAssets ? "extensions/native/extension.json" : "";
+            CheckOfflineAdditionBlocker(previewed, path);
+            CheckOfflineAdditionBlocker(applied, path);
+        });
     }
 
     TEST_CASE("Headless package update preview reads candidate documents without repairing or modifying the project",
