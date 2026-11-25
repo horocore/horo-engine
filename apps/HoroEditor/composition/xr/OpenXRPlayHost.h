@@ -530,6 +530,8 @@ namespace Horo::Application::Internal {
         struct WriterPair;
         /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
         void ProgressPassthrough();
+        /** @brief Activates the current Scene's reconstruction grant at an idle frame boundary. */
+        void ActivatePassthrough();
         /** @brief Checks whether the current owner lane can read from the focused Play publication. */
         [[nodiscard]] bool PlaneReadsAdmitted() const noexcept;
         /** @brief Validates plane freshness against current native time. @param observedAt Timestamp used for admission. */

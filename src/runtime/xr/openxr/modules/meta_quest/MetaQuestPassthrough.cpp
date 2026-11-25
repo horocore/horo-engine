@@ -32,6 +32,12 @@ namespace Horo::XR::OpenXRInternal {
                 slot_ = nullptr;
             }
 
+            /** @brief A permission callback may withdraw the pending grant during the borrow. */
+            bool Allows(const NativePassthroughAuthorization &authorization) const {
+                const auto *pending = slot_;
+                return pending && authorization.allows && authorization.allows(authorization.context, *pending) && slot_ == pending;
+            }
+
             const XRPassthroughScope *&slot_;
         };
 
@@ -74,14 +80,15 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
-        Result<void> CheckPassthroughStep(const char *operation, const XrResult result, const bool permitted,
-                                          const bool validHandle = true) {
-            if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure(operation, result));
-            if (!permitted)
-                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup"));
-            if (!validHandle)
-                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, operation));
+        /** @brief Maps extension negotiation evidence to activation errors. */
+        Result<void> CheckPassthroughExtension(const NativeExtensionAdmission &extension) {
+            if (extension.state == NativeExtensionState::Denied)
+                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+            if (extension.state == NativeExtensionState::VersionIncompatible ||
+                (extension.state == NativeExtensionState::Enabled && extension.discoveredVersion < NativePassthroughPropertiesVersion))
+                return Result<void>::Failure(MakeError(XRErrors::ContractVersionIncompatible));
+            if (extension.state != NativeExtensionState::Enabled || extension.minimumVersion == 0)
+                return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Passthrough was not requested and enabled"));
             return Result<void>::Success();
         }
 
@@ -120,8 +127,96 @@ namespace Horo::XR::OpenXRInternal {
             RevokePassthrough();
     }
 
+    /** @brief Binds native dispatch and builds only the permitted prefix of one reconstruction grant. */
+    struct OpenXRNativeSession::PassthroughStartup final {
+        OpenXRNativeSession &owner;
+        Passthrough &candidate;
+        const PassthroughPreparation &preparation;
+        const NativePassthroughAuthorization &authorization;
+        PFN_xrGetSystemProperties system{};
+        PFN_xrCreatePassthroughFB create{};
+        PFN_xrCreatePassthroughLayerFB createLayer{};
+        PFN_xrPassthroughStartFB start{};
+        PFN_xrPassthroughLayerResumeFB resume{};
+
+        /** @brief Validates a native transition and rechecks the still-pending grant. */
+        Result<void> Check(const char *operation, const XrResult result = XR_SUCCESS, const bool validHandle = true) const {
+            if (result != XR_SUCCESS)
+                return Result<void>::Failure(PassthroughFailure(operation, result));
+            if (!preparation.Allows(authorization)) {
+                owner.RevokePassthrough();
+                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup"));
+            }
+            if (!validHandle)
+                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, operation));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the complete native activation and cleanup routes before allocating any handle. */
+        Result<void> BindDispatch(const XrInstance instance) {
+            const auto get = owner.dispatch_.getProc;
+            if (!Resolve(get, instance, "xrGetSystemProperties", system) || !Resolve(get, instance, "xrCreatePassthroughFB", create) ||
+                !Resolve(get, instance, "xrCreatePassthroughLayerFB", createLayer) ||
+                !Resolve(get, instance, "xrPassthroughStartFB", start) || !Resolve(get, instance, "xrPassthroughLayerResumeFB", resume) ||
+                !Resolve(get, instance, "xrPassthroughPauseFB", candidate.pause) ||
+                !Resolve(get, instance, "xrDestroyPassthroughLayerFB", candidate.destroyLayer) ||
+                !Resolve(get, instance, "xrDestroyPassthroughFB", candidate.destroy))
+                return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Passthrough dispatch is incomplete"));
+            return Result<void>::Success();
+        }
+
+        /** @brief Creates a checked prefix with ownership retained even when a later step fails. */
+        Result<void> CreateAndStart(const XrSession session) {
+            const XrPassthroughCreateInfoFB feature{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+            XrPassthroughFB created{XR_NULL_HANDLE};
+            auto result = create(session, &feature, &created);
+            if (XR_SUCCEEDED(result))
+                candidate.feature = created;
+            if (auto step = Check("xrCreatePassthroughFB", result, candidate.feature != XR_NULL_HANDLE); step.HasError())
+                return step;
+
+            const XrPassthroughLayerCreateInfoFB layer{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB, nullptr, candidate.feature, 0,
+                                                       XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB};
+            XrPassthroughLayerFB createdLayer{XR_NULL_HANDLE};
+            result = createLayer(session, &layer, &createdLayer);
+            if (XR_SUCCEEDED(result))
+                candidate.layer = createdLayer;
+            if (auto step = Check("xrCreatePassthroughLayerFB", result, candidate.layer != XR_NULL_HANDLE); step.HasError())
+                return step;
+
+            result = start(candidate.feature);
+            candidate.started = XR_SUCCEEDED(result);
+            if (auto step = Check("xrPassthroughStartFB", result); step.HasError())
+                return step;
+            result = resume(candidate.layer);
+            if (auto step = Check("xrPassthroughLayerResumeFB", result); step.HasError())
+                return step;
+            const auto current = owner.Borrow(candidate.scope.session);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            return Check("passthrough publication");
+        }
+
+        /** @brief Checks the current owner and supported reconstruction before making any native child. */
+        Result<void> Activate(const NativeSessionBorrow &native) {
+            if (auto permit = Check("passthrough preflight"); permit.HasError())
+                return permit;
+            if (auto bound = BindDispatch(native.instance); bound.HasError())
+                return bound;
+            if (auto supported = CheckPassthroughSystem(system, native); supported.HasError())
+                return supported;
+            if (const auto current = owner.Borrow(candidate.scope.session); current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (auto permit = Check("passthrough startup"); permit.HasError())
+                return permit;
+            owner.lastPassthroughGrant_ = candidate.scope.grant;
+            return CreateAndStart(native.session);
+        }
+    };
+
     /** @copydoc OpenXRNativeSession::StartPassthrough */
-    Result<void> OpenXRNativeSession::StartPassthrough(const XRPassthroughScope &scope) {
+    Result<void> OpenXRNativeSession::StartPassthrough(const XRPassthroughScope &scope,
+                                                       const NativePassthroughAuthorization &authorization) {
         if (controlThread_ != std::this_thread::get_id() || passthroughCall_ || lightCall_ || retirementCall_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (passthrough_.feature != XR_NULL_HANDLE)
@@ -137,74 +232,15 @@ namespace Horo::XR::OpenXRInternal {
         const auto admission = ReadExtensionAdmission(candidate.scope.session, Extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
-        const auto &extension = admission.Value();
-        if (extension.state == NativeExtensionState::Denied)
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
-        if (extension.state == NativeExtensionState::VersionIncompatible ||
-            (extension.state == NativeExtensionState::Enabled && extension.discoveredVersion < NativePassthroughPropertiesVersion))
-            return Result<void>::Failure(MakeError(XRErrors::ContractVersionIncompatible));
-        if (extension.state != NativeExtensionState::Enabled || extension.minimumVersion == 0)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Passthrough was not requested and enabled"));
+        if (auto enabled = CheckPassthroughExtension(admission.Value()); enabled.HasError())
+            return enabled;
         const auto native = Borrow(candidate.scope.session);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
-        PFN_xrGetSystemProperties system{};
-        PFN_xrCreatePassthroughFB create{};
-        PFN_xrCreatePassthroughLayerFB createLayer{};
-        PFN_xrPassthroughStartFB start{};
-        PFN_xrPassthroughLayerResumeFB resume{};
-        const auto get = dispatch_.getProc;
-        const auto instance = native.Value().instance;
-        if (!Resolve(get, instance, "xrGetSystemProperties", system) || !Resolve(get, instance, "xrCreatePassthroughFB", create) ||
-            !Resolve(get, instance, "xrCreatePassthroughLayerFB", createLayer) || !Resolve(get, instance, "xrPassthroughStartFB", start) ||
-            !Resolve(get, instance, "xrPassthroughLayerResumeFB", resume) ||
-            !Resolve(get, instance, "xrPassthroughPauseFB", candidate.pause) ||
-            !Resolve(get, instance, "xrDestroyPassthroughLayerFB", candidate.destroyLayer) ||
-            !Resolve(get, instance, "xrDestroyPassthroughFB", candidate.destroy))
-            return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Passthrough dispatch is incomplete"));
-        if (auto supported = CheckPassthroughSystem(system, native.Value()); supported.HasError())
-            return supported;
-        if (const auto current = Borrow(candidate.scope.session); current.HasError())
-            return Result<void>::Failure(current.ErrorValue());
-
-        if (auto permit = CheckPassthroughStep("passthrough startup", XR_SUCCESS, preparingPassthrough_ != nullptr); permit.HasError())
-            return permit;
-        lastPassthroughGrant_ = candidate.scope.grant;
-        const auto session = native.Value().session;
-        const auto prepare = [&]() -> Result<void> {
-            const XrPassthroughCreateInfoFB feature{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
-            XrPassthroughFB created{XR_NULL_HANDLE};
-            auto result = create(session, &feature, &created);
-            if (XR_SUCCEEDED(result))
-                candidate.feature = created;
-            if (auto step = CheckPassthroughStep("xrCreatePassthroughFB", result, preparingPassthrough_ != nullptr,
-                                                 candidate.feature != XR_NULL_HANDLE);
-                step.HasError())
-                return step;
-
-            const XrPassthroughLayerCreateInfoFB layer{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB, nullptr, candidate.feature, 0,
-                                                       XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB};
-            XrPassthroughLayerFB createdLayer{XR_NULL_HANDLE};
-            result = createLayer(session, &layer, &createdLayer);
-            if (XR_SUCCEEDED(result))
-                candidate.layer = createdLayer;
-            if (auto step = CheckPassthroughStep("xrCreatePassthroughLayerFB", result, preparingPassthrough_ != nullptr,
-                                                 candidate.layer != XR_NULL_HANDLE);
-                step.HasError())
-                return step;
-
-            result = start(candidate.feature);
-            candidate.started = XR_SUCCEEDED(result);
-            if (auto step = CheckPassthroughStep("xrPassthroughStartFB", result, preparingPassthrough_ != nullptr); step.HasError())
-                return step;
-            result = resume(candidate.layer);
-            if (auto step = CheckPassthroughStep("xrPassthroughLayerResumeFB", result, preparingPassthrough_ != nullptr); step.HasError())
-                return step;
-            const auto current = Borrow(candidate.scope.session);
-            if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
-            return CheckPassthroughStep("passthrough publication", XR_SUCCESS, preparingPassthrough_ != nullptr);
-        }();
+        PassthroughStartup startup{*this, candidate, preparation, authorization};
+        const auto prepare = startup.Activate(native.Value());
+        if (prepare.HasError() && candidate.feature == XR_NULL_HANDLE)
+            return prepare;
         passthrough_ = candidate;
         if (prepare.HasError()) {
             if (auto retired = RetirePassthrough(); retired.HasError())

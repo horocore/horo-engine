@@ -1187,7 +1187,10 @@ slots and platform permission. It submits the runtime reconstruction underlay
 before the same frame's virtual premultiplied projection. The Renderer must
 produce the exact alpha-bearing projection receipt. The native session owner
 withdraws the layer on focus, origin, runtime or consent loss and retires its
-native objects before retiring the session.
+native objects before retiring the session. It rechecks the live permission
+source before native creation, between startup steps, and before publishing
+the grant. Withdrawal stops startup and rolls back the native objects already
+created for that grant.
 If the grant is withdrawn during the final native session validation, the
 owner rejects the layer and attempts to pause the provider before returning
 control to the application. When cleanup fails during activation rollback,

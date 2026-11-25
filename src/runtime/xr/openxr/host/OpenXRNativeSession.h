@@ -19,7 +19,7 @@
 #include <utility>
 
 namespace Horo::XR::OpenXRInternal {
-    /** @brief Synchronous caller-owned authorization for the exact native passthrough submission. */
+    /** @brief Synchronous caller-owned authorization for an exact native passthrough grant. */
     struct NativePassthroughAuthorization final {
         void *context{};
         bool (*allows)(void *, const XRPassthroughScope &){};
@@ -464,10 +464,10 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Creates and starts one selected FB reconstruction underlay after app and runtime permission.
          * @param scope Fresh, explicitly approved visual composition grant for a focused session and exact World.
+         * @param authorization Live permission check borrowed for this call and rechecked between native operations.
          * @return Success or typed unsupported, denied, invalid, capacity or native failure.
-         * @pre The app has independently verified focus, runtime permission and current operator consent.
          */
-        [[nodiscard]] Result<void> StartPassthrough(const XRPassthroughScope &scope);
+        [[nodiscard]] Result<void> StartPassthrough(const XRPassthroughScope &scope, const NativePassthroughAuthorization &authorization);
         /** @brief Immediately stops publishing the exact grant and releases its native layer and feature.
          * @param scope Exact current grant. @return Success or retryable native cleanup debt.
          */
@@ -729,6 +729,8 @@ namespace Horo::XR::OpenXRInternal {
 
         XRAnchorGrant lastAnchorGrant_;
         bool anchorCall_{};
+
+        struct PassthroughStartup;
 
         struct Passthrough final {
             XRPassthroughScope scope;

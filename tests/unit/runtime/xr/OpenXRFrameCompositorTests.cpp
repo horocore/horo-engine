@@ -3,6 +3,10 @@
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        constexpr NativePassthroughAuthorization ApprovedPassthrough{nullptr, [](void *, const XRPassthroughScope &) {
+            return true;
+        }};
+
         TEST_CASE("Native reconstruction underlay requires elected runtime support and explicit consent",
                   "[unit][xr][compositor][passthrough]") {
             const bool selected = GENERATE(false, true);
@@ -11,26 +15,29 @@ namespace Horo::Tests::OpenXR {
             world.kind = XRSpaceKind::World;
             XRPassthroughScope scope{f.session, world, IdentityValue<XRPassthroughGrant>(1)};
             if (!selected || !NativePassthroughExtensionRequest()) {
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::OperationUnsupported);
                 CHECK(f.passthrough.featuresCreated == 0);
                 return;
             }
 
             SECTION("invalid grant is rejected before provider creation") {
                 scope.grant = {};
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationInvalid);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::OperationInvalid);
             }
             SECTION("native properties reject advertised capability without reconstruction") {
                 f.census.passthroughCapabilities = 0;
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::OperationUnsupported);
             }
             SECTION("native layer capacity rejects the extra layer before acquisition") {
                 f.census.maximumLayers = 1;
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::CapacityExceeded);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::CapacityExceeded);
             }
             SECTION("platform denial does not create any native object") {
                 f.passthrough.createResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::PermissionDenied);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::PermissionDenied);
+            }
+            SECTION("startup without a live permission source cannot create an object") {
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, {}), XRErrors::PermissionDenied);
             }
             CHECK_FALSE(f.passthrough.liveFeature);
             CHECK(f.passthrough.featuresCreated == 0);
@@ -45,11 +52,11 @@ namespace Horo::Tests::OpenXR {
             CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, maximumLayers};
             f.Bind();
             const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
-            REQUIRE(f.native.owner.StartPassthrough(scope).HasValue());
+            REQUIRE(f.native.owner.StartPassthrough(scope, ApprovedPassthrough).HasValue());
             CHECK(f.passthrough.running);
             auto differentGrant = scope;
             differentGrant.grant = IdentityValue<XRPassthroughGrant>(2);
-            RequireFailureIdentity(f.native.owner.StartPassthrough(differentGrant), XRErrors::CapacityExceeded);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(differentGrant, ApprovedPassthrough), XRErrors::CapacityExceeded);
 
             const auto frame = f.Begin();
             const auto color = f.Acquire(frame);
@@ -89,7 +96,7 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
                 CHECK(f.passthrough.pauses == 1);
                 CHECK_FALSE(f.passthrough.liveFeature);
-                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
             }
             SECTION("foreign frame and World origin leave the transaction available for abort") {
                 auto wrong = receipt;
@@ -141,7 +148,7 @@ namespace Horo::Tests::OpenXR {
             CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
             f.Bind();
             const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
-            REQUIRE(f.native.owner.StartPassthrough(scope).HasValue());
+            REQUIRE(f.native.owner.StartPassthrough(scope, ApprovedPassthrough).HasValue());
             const auto frame = f.Begin();
             const auto color = f.Acquire(frame);
             const auto plan = f.Plan(frame, color);
@@ -196,17 +203,26 @@ namespace Horo::Tests::OpenXR {
             auto unrelated = scope;
             unrelated.grant = IdentityValue<XRPassthroughGrant>(2);
             const std::string_view withdrawnAt = GENERATE("feature", "layer", "start", "resume", "validation");
+            const bool platformPoll = GENERATE(false, true);
+            bool permitted = true;
+            const auto withdraw = [&] {
+                if (platformPoll)
+                    permitted = false;
+                else
+                    f.native.owner.RevokePassthrough(scope);
+            };
+            const NativePassthroughAuthorization authorization{&permitted, [](void *context, const XRPassthroughScope &) {
+                return *static_cast<const bool *>(context);
+            }};
             f.passthrough.onStartup = [&](std::string_view phase) {
                 CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
                 f.native.owner.RevokePassthrough(unrelated);
                 if (withdrawnAt == phase)
-                    f.native.owner.RevokePassthrough(scope);
+                    withdraw();
                 if (withdrawnAt == "validation" && phase == "resume")
-                    f.native.fence.onValidate = [&] {
-                        f.native.owner.RevokePassthrough(scope);
-                    };
+                    f.native.fence.onValidate = withdraw;
             };
-            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::PermissionDenied);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope, authorization), XRErrors::PermissionDenied);
             f.native.fence.onValidate = {};
             const bool reachedResume = withdrawnAt == "resume" || withdrawnAt == "validation";
             CHECK(f.passthrough.starts == (withdrawnAt == "start" || reachedResume ? 1U : 0U));
@@ -216,12 +232,12 @@ namespace Horo::Tests::OpenXR {
             CHECK_FALSE(f.passthrough.liveLayer);
             CHECK_FALSE(f.passthrough.liveFeature);
             CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
-            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
 
             f.passthrough.onStartup = [&](std::string_view) {
                 f.native.owner.RevokePassthrough(scope);
             };
-            REQUIRE(f.native.owner.StartPassthrough(unrelated).HasValue());
+            REQUIRE(f.native.owner.StartPassthrough(unrelated, ApprovedPassthrough).HasValue());
             CHECK(f.native.owner.ReadPassthrough(unrelated) == NativePassthroughState::Active);
             REQUIRE(f.native.owner.StopPassthrough(unrelated).HasValue());
         }
@@ -234,7 +250,7 @@ namespace Horo::Tests::OpenXR {
             f.passthrough.resumeResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
             const bool cleanupFails = GENERATE(false, true);
             f.passthrough.failLayerDestroy = cleanupFails;
-            const auto denied = f.native.owner.StartPassthrough(scope);
+            const auto denied = f.native.owner.StartPassthrough(scope, ApprovedPassthrough);
             f.passthrough.failLayerDestroy = false;
             RequireFailureIdentity(denied, cleanupFails ? XRErrors::OperationUnavailable : XRErrors::PermissionDenied);
             CHECK(ErrorChainContains(denied.ErrorValue(), XRErrors::PermissionDenied.domain, XRErrors::PermissionDenied.code));
@@ -248,7 +264,7 @@ namespace Horo::Tests::OpenXR {
                 CHECK_FALSE(f.passthrough.liveFeature);
             }
             CHECK(f.passthrough.layersDestroyed == 1);
-            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
         }
 
         TEST_CASE("Lost XR frame retains image and native destruction debt before explicit quiescence reset",

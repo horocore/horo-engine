@@ -7,7 +7,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::StartPassthrough */
-    Result<void> OpenXRNativeSession::StartPassthrough(const XRPassthroughScope &) {
+    Result<void> OpenXRNativeSession::StartPassthrough(const XRPassthroughScope &, const NativePassthroughAuthorization &) {
         return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
     }
 

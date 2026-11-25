@@ -1380,6 +1380,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool installAuthority = true;
         bool arm = true;
         bool revokeArmed = false;
+        bool revokeDuringStartup = false;
         bool revokeOperatorInFlight = false;
         bool revokeInFlight = false;
         bool revokeBeforeSubmit = false;
@@ -1412,6 +1413,9 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("operator revocation during platform admission prevents native activation") {
             revokeBeforeCreate = true;
         }
+        SECTION("platform denial during native creation rolls back before starting reconstruction") {
+            revokeDuringStartup = true;
+        }
         SECTION("operator revocation inside frame permission keeps the projection opaque") {
             revokeDuringBind = true;
         }
@@ -1431,6 +1435,12 @@ namespace Horo::Tests::OpenXRApplication {
         OpenXR::PassthroughScript native;
         if (denyNative)
             native.createResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+        if (revokeDuringStartup) {
+            native.onStartup = [permission](std::string_view phase) {
+                if (phase == "feature")
+                    permission->permitted = false;
+            };
+        }
         ApplicationFixture fixture{true,         5,
                                    Unrequested,  Unrequested,
                                    Unrequested,  false,
@@ -1479,8 +1489,14 @@ namespace Horo::Tests::OpenXRApplication {
         const bool active = arm && !revokeArmed && permission->permitted && !revokeBeforeCreate && !denyNative && layerLimit >= 2;
         CHECK((fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Available) == active);
         CHECK((preview->ReadPassthroughPreviewState() == PreviewState::Active) == active);
-        CHECK(native.featuresCreated == (active ? 1U : 0U));
+        CHECK(native.featuresCreated == (active || revokeDuringStartup ? 1U : 0U));
         CHECK(native.running == active);
+        if (revokeDuringStartup) {
+            CHECK(native.starts == 0);
+            CHECK_FALSE(native.liveFeature);
+        }
+        if (revokeBeforeCreate)
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Unavailable);
         if (denyNative || !permission->permitted) {
             CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
             CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Denied);

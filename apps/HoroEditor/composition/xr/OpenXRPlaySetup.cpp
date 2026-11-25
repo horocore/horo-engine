@@ -657,8 +657,14 @@ namespace Horo::Application::Internal {
                 passthroughScope_.reset();
             return;
         }
+        if (idle)
+            ActivatePassthrough();
+    }
+
+    /** @copydoc OpenXRPlayHost::ActivatePassthrough */
+    void OpenXRPlayHost::ActivatePassthrough() {
         const auto scene = scene_;
-        if (!idle || !scene || !scene->published || scene->retiring || !scene->passthroughGrant || !input_.admitted ||
+        if (!scene || !scene->published || scene->retiring || !scene->passthroughGrant || !input_.admitted ||
             input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return;
         const auto session = scene->session;
@@ -670,20 +676,22 @@ namespace Horo::Application::Internal {
             return;
         }
         const XR::XRPassthroughScope scope{session, world.Value(), grant};
-        if (!composition_.session.AllowsPassthrough(scope)) {
-            RevokePassthrough();
-            passthroughState_ = XR::XRCapabilityState::Denied;
-            return;
-        }
-        // Platform permission is a callback. Its result cannot restore a Play grant revoked during that call.
         if (!MatchesPassthroughGrant(scope))
             return;
         // Preserve exact scope even when native creation failed partway and left a cleanup prefix.
         passthroughScope_ = scope;
-        const auto started = native_.StartPassthrough(scope);
+        const XR::OpenXRInternal::NativePassthroughAuthorization authorization{this,
+                                                                               [](void *context, const XR::XRPassthroughScope &pending) {
+            const auto &host = *static_cast<OpenXRPlayHost *>(context);
+            return host.MatchesPassthroughGrant(pending) && host.composition_.session.AllowsPassthrough(pending) &&
+                   host.MatchesPassthroughGrant(pending);
+        }};
+        const auto started = native_.StartPassthrough(scope, authorization);
         if (started.HasError()) {
+            const bool stillRequested = MatchesPassthroughGrant(scope);
             RevokePassthrough();
-            passthroughState_ = PassthroughStartFailure(started.ErrorValue());
+            if (stillRequested)
+                passthroughState_ = PassthroughStartFailure(started.ErrorValue());
             return;
         }
         if (!HasPassthrough(scope)) {
