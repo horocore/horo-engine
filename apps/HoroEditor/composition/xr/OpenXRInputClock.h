@@ -17,13 +17,26 @@ namespace Horo::Application::Internal {
     /** @brief Optional read-only capture-clock port supplied by the application. */
     struct OpenXRInputCaptureClock final {
         const void *owner{};
-        std::optional<OpenXRInputCaptureStamp> (*read)(const void *owner) noexcept {};
+        std::optional<OpenXRInputCaptureStamp> (*sample)(const void *owner) noexcept {};
+
+        /** @brief Reads the current stamp without retaining or opening the capture owner. */
+        [[nodiscard]] std::optional<OpenXRInputCaptureStamp> Now() const noexcept;
     };
 
     /** @brief Bounds one XR time observation in the listening operation's Audio clock domain. */
     struct OpenXRInputCaptureInterval final {
         OpenXRInputCaptureStamp earliest;
         OpenXRInputCaptureStamp latest;
+
+        /** @brief Bounds an observation, provided both samples are ordered and from the same capture lease. */
+        [[nodiscard]] static std::optional<OpenXRInputCaptureInterval> Between(
+            const std::optional<OpenXRInputCaptureStamp> &earliest, const std::optional<OpenXRInputCaptureStamp> &latest) noexcept;
+    };
+
+    /** @brief Optional clock intervals for two separately sampled facts within one committed Input cutoff. */
+    struct OpenXRInputCaptureWindows final {
+        std::optional<OpenXRInputCaptureInterval> poses;
+        std::optional<OpenXRInputCaptureInterval> actions;
     };
 
     /** @brief Exact Input cutoff and optionally a measurement of that same sample in the Audio clock. */

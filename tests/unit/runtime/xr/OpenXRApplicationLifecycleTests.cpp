@@ -2811,8 +2811,11 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(worldUi->source.assignmentRevision != 0);
         CHECK(worldUi->source.assignmentRevision == sources.Scope().assignmentRevision);
         CHECK(worldUi->cutoff == sources.Scope().cutoff);
-        REQUIRE(worldUi->poseTime);
-        CHECK(worldUi->poseTime->earliest.captureGeneration == 1);
+        REQUIRE(worldUi->captureTime.poses);
+        CHECK(worldUi->captureTime.poses->earliest.captureGeneration == 1);
+        REQUIRE(worldUi->captureTime.actions);
+        CHECK(worldUi->captureTime.actions->earliest.nanoseconds == 102);
+        CHECK(worldUi->captureTime.actions->latest.nanoseconds == 103);
         CHECK(worldUi->sample.space.id.session == worldUi->source.device.session);
         CHECK(worldUi->sample.confidence == confidence);
         CHECK(worldUi->sample.selectDown);

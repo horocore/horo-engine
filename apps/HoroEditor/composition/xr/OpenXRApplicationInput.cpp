@@ -271,7 +271,7 @@ namespace Horo::Application::Internal {
         const auto *worldPlacement = options.worldPlacement;
         // Revoke prior evidence before foreign calls; a failed cutoff must not revive it.
         publication.Revoke();
-        RevokePoseCaptureTime();
+        RevokeInputCaptureTime();
         input_.stageBoundary.reset();
         input_.gaze.reset();
         input_.gazeRevision = {};
@@ -292,8 +292,10 @@ namespace Horo::Application::Internal {
         if (observation.HasError())
             return Result<void>::Failure(observation.ErrorValue());
         const auto &time = observation.Value().time;
+        const auto actionEarliest = options.captureClock.Now();
         if (auto synced = input_.native->Sync(state.session); synced.HasError())
             return synced;
+        const auto actionLatest = options.captureClock.Now();
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         const auto poses = input_.native->ObserveWorldPoses(state.session, time, origin);
@@ -371,7 +373,8 @@ namespace Horo::Application::Internal {
             if (input_.gazeAllowed)
                 input_.gaze = std::move(gaze);
             if (const auto *tracking = publication.Current()) {
-                PublishPoseCaptureTime(*tracking, observation.Value().captureInterval);
+                PublishInputCaptureTime(*tracking, {observation.Value().captureInterval,
+                                                    OpenXRInputCaptureInterval::Between(actionEarliest, actionLatest)});
                 if (const auto boundary = poses.Value().StageBoundary(); boundary && tracking->State() == XRTrackingState::Active)
                     input_.stageBoundary = StageBoundaryObservation{DescribeXRInteractionCutoff(*tracking), *boundary};
                 AdvancePlaneCapture(*tracking);
@@ -383,26 +386,25 @@ namespace Horo::Application::Internal {
         return appended;
     }
 
-    /** @copydoc OpenXRApplicationSession::ReadPoseCaptureTime */
-    std::optional<OpenXRInputCaptureInterval> OpenXRApplicationSession::ReadPoseCaptureTime(
-        const XRTrackingSnapshot &snapshot) const noexcept {
-        if (std::this_thread::get_id() != lane_ || !input_.poseCaptureTime ||
-            input_.poseCaptureTime->cutoff != DescribeXRInteractionCutoff(snapshot))
-            return std::nullopt;
-        return input_.poseCaptureTime->interval;
+    /** @copydoc OpenXRApplicationSession::ReadInputCaptureTime */
+    OpenXRInputCaptureWindows OpenXRApplicationSession::ReadInputCaptureTime(const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !input_.captureTime ||
+            input_.captureTime->cutoff != DescribeXRInteractionCutoff(snapshot))
+            return {};
+        return input_.captureTime->windows;
     }
 
-    /** @copydoc OpenXRApplicationSession::PublishPoseCaptureTime */
-    void OpenXRApplicationSession::PublishPoseCaptureTime(const XRTrackingSnapshot &snapshot,
-                                                          const std::optional<OpenXRInputCaptureInterval> &interval) noexcept {
-        if (interval)
-            input_.poseCaptureTime = PoseCaptureTime{DescribeXRInteractionCutoff(snapshot), *interval};
+    /** @copydoc OpenXRApplicationSession::PublishInputCaptureTime */
+    void OpenXRApplicationSession::PublishInputCaptureTime(const XRTrackingSnapshot &snapshot,
+                                                           const OpenXRInputCaptureWindows windows) noexcept {
+        if (windows.poses || windows.actions)
+            input_.captureTime = InputCaptureTime{DescribeXRInteractionCutoff(snapshot), windows};
     }
 
-    /** @copydoc OpenXRApplicationSession::RevokePoseCaptureTime */
-    void OpenXRApplicationSession::RevokePoseCaptureTime() noexcept {
-        HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR pose time withdrawal requires the owner lane");
-        input_.poseCaptureTime.reset();
+    /** @copydoc OpenXRApplicationSession::RevokeInputCaptureTime */
+    void OpenXRApplicationSession::RevokeInputCaptureTime() noexcept {
+        HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR capture time withdrawal requires the owner lane");
+        input_.captureTime.reset();
     }
 
     /** @copydoc OpenXRApplicationSession::ReadStageBoundary */
@@ -763,7 +765,7 @@ namespace Horo::Application::Internal {
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         input_.stageBoundary.reset();
-        RevokePoseCaptureTime();
+        RevokeInputCaptureTime();
         RequestHapticCancellation();
         RevokeEyeGaze();
         RevokePlaneCapture();

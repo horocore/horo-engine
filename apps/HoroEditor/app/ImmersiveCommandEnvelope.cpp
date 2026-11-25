@@ -25,6 +25,15 @@ namespace Horo::Editor {
                    candidate.confidence > XR::XRTrackingConfidence::None && candidate.confidence <= XR::XRTrackingConfidence::High;
         }
 
+        /** @brief The current pose lies inside the interval between the neutral and pressed action cutoffs. */
+        bool ValidPress(const ImmersiveSpatialObservation &sample, const std::uint64_t clockDomain) noexcept {
+            if (!sample.controllerPress)
+                return true;
+            const auto &press = *sample.controllerPress;
+            return press.earliest.clockDomain == clockDomain && press.latest.clockDomain == clockDomain &&
+                   press.earliest.nanoseconds <= sample.earliest.nanoseconds && press.latest.nanoseconds >= sample.latest.nanoseconds;
+        }
+
         /** @brief Requires a single unambiguous order in both the capture and XR clocks. */
         bool Follows(const ImmersiveSpatialObservation &sample, const ImmersiveSpatialObservation &previous) noexcept {
             if (sample.cutoff == previous.cutoff)
@@ -39,7 +48,7 @@ namespace Horo::Editor {
                                                 const XR::XRInteractionCutoff &cutoff, const std::uint64_t clockDomain) noexcept {
             if (!BelongsToHistory(sample.cutoff, cutoff))
                 return StaleEvidence;
-            if (!ValidObservation(sample, clockDomain))
+            if (!ValidObservation(sample, clockDomain) || !ValidPress(sample, clockDomain))
                 return InvalidSpatialEvidence;
             if (previous && !Follows(sample, *previous))
                 return AmbiguousTiming;
@@ -47,12 +56,21 @@ namespace Horo::Editor {
         }
 
         /** @brief Classifies the closed measurement interval against the half-open phrase window. */
-        ImmersiveCommandStatus Overlap(const ImmersiveSpatialObservation &sample, const SpeechHypothesisView &phrase) noexcept {
-            if (sample.latest.nanoseconds < phrase.start.nanoseconds || sample.earliest.nanoseconds >= phrase.end.nanoseconds)
+        ImmersiveCommandStatus Overlap(const Audio::AudioMonotonicTimestamp earliest, const Audio::AudioMonotonicTimestamp latest,
+                                       const SpeechHypothesisView &phrase) noexcept {
+            if (latest.nanoseconds < phrase.start.nanoseconds || earliest.nanoseconds >= phrase.end.nanoseconds)
                 return SpeechOnly;
-            if (sample.earliest.nanoseconds < phrase.start.nanoseconds || sample.latest.nanoseconds >= phrase.end.nanoseconds)
+            if (earliest.nanoseconds < phrase.start.nanoseconds || latest.nanoseconds >= phrase.end.nanoseconds)
                 return AmbiguousTiming;
             return Aligned;
+        }
+
+        /** @brief An uncertain press cannot be inferred from a precisely timed pose. */
+        ImmersiveCommandStatus ObservationOverlap(const ImmersiveSpatialObservation &sample, const SpeechHypothesisView &phrase) noexcept {
+            if (sample.controllerPress &&
+                Overlap(sample.controllerPress->earliest, sample.controllerPress->latest, phrase) == AmbiguousTiming)
+                return AmbiguousTiming;
+            return Overlap(sample.earliest, sample.latest, phrase);
         }
     }  // namespace
 
@@ -92,7 +110,7 @@ namespace Horo::Editor {
             if (const auto status = CheckObservation(sample, previous, history.cutoff, phrase.start.clockDomain); status != Aligned)
                 return status;
             previous = &sample;
-            const auto overlap = Overlap(sample, phrase);
+            const auto overlap = ObservationOverlap(sample, phrase);
             if (overlap == AmbiguousTiming)
                 return AmbiguousTiming;
             if (overlap == Aligned)

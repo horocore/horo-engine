@@ -179,7 +179,7 @@ namespace Horo::Application::Internal {
         OpenXRWorldUiPointerSource source;
         OpenXRPlayControllerPointerSample sample;
         XR::XRInteractionCutoff cutoff;
-        std::optional<OpenXRInputCaptureInterval> poseTime;
+        OpenXRInputCaptureWindows captureTime;
     };
 
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
@@ -197,13 +197,13 @@ namespace Horo::Application::Internal {
 
         /** @return Capture-clock interval for poses at this cutoff, when measured. */
         [[nodiscard]] std::optional<OpenXRInputCaptureInterval> PoseCaptureTime() const noexcept {
-            return poseCaptureTime_;
+            return captureTime_.poses;
         }
 
     private:
         friend class OpenXRPlayHost;
         OpenXRPlayInteractionScope scope_;
-        std::optional<OpenXRInputCaptureInterval> poseCaptureTime_;
+        OpenXRInputCaptureWindows captureTime_;
         std::array<XR::XRTrackedDeviceRecord, XR::XRTrackingSnapshotHardLimits::MaximumDevices> devices_{};
         std::size_t count_{};
     };

@@ -196,15 +196,17 @@ Ownership rules:
   when the editor adopts it.
 - The native XR Input owner brackets its actual runtime time sample when the
   host supplies an admitted Audio capture clock. It publishes that interval
-  only with the matching committed pose cutoff. Controller action reads occur
-  later and require their own time evidence.
+  only with the matching committed pose cutoff. A separate interval brackets
+  synchronization of the controller action state.
 - The macOS listening owner lends that clock only while its exact microphone
   lease accepts input. A pose batch must match both the measured XR cutoff
   and the listening generation before the editor retains it.
 - The editor observes the existing player-scoped XR pointer after Input commits.
   A new selection press during the same listening operation retains its measured
   ray. Held buttons and source replacement do not create new observations.
-  The button is a sampling trigger. Only the ray carries the pose time interval.
+  The ray carries its own pose interval. When both adjacent states have valid
+  action intervals, the press carries the range between the observed released
+  and pressed states. An uncertain press cannot be inferred from the ray's time.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

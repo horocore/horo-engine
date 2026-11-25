@@ -40,7 +40,7 @@ namespace Horo::Tests::OpenXR {
                     auto alteredObservations = context;
                     alteredObservations.completedSimulationTick = 999;
                     altered.emplace(clock.Read(alteredObservations));
-                    if (capture.read)
+                    if (capture.sample)
                         timed.emplace(clock.ReadWithCaptureClock(context, capture));
                 }
                 if (phase == Runtime::RuntimePhase::VariableUpdate)

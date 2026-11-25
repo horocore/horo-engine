@@ -2070,20 +2070,22 @@ namespace Horo::Editor {
         class EditorXrSpeechPointing final {
             using PointerFrame = Application::Internal::OpenXRWorldUiPointerFrame;
             using Source = Application::Internal::OpenXRWorldUiPointerSource;
+            using Interval = Application::Internal::OpenXRInputCaptureInterval;
 
         public:
             /** @brief Observes one committed input frame. Pointing contributes evidence only. */
             void Update(EditorMicrophoneSpeechSession &speech, const std::optional<PointerFrame> &frame) noexcept {
-                if (!frame || !frame->poseTime) {
+                if (!frame || !frame->captureTime.poses) {
                     Reset();
                     return;
                 }
-                const auto &time = *frame->poseTime;
+                const auto &time = *frame->captureTime.poses;
                 const auto capture = time.earliest.captureGeneration;
                 const bool pressed = source_ == frame->source && generation_ == capture && !down_ && frame->sample.selectDown;
                 source_ = frame->source;
                 generation_ = capture;
                 down_ = frame->sample.selectDown;
+                const auto previousAction = std::exchange(actionTime_, frame->captureTime.actions);
                 if (!pressed)
                     return;
 
@@ -2092,19 +2094,36 @@ namespace Horo::Editor {
                                                               {frame->source.device, XR::XRControllerInteractionPose::Aim, pointer.space,
                                                                pointer.confidence, pointer.ray},
                                                               {time.earliest.clockDomain, time.earliest.nanoseconds},
-                                                              {time.latest.clockDomain, time.latest.nanoseconds}};
+                                                              {time.latest.clockDomain, time.latest.nanoseconds},
+                                                              PressTime(previousAction, actionTime_, time)};
                 static_cast<void>(speech.RecordPointing(observation, capture));
             }
 
             /** @brief Disarms edges until the replacement input source reports a new neutral sample. */
             void Reset() noexcept {
                 source_.reset();
+                actionTime_.reset();
                 generation_ = 0;
                 down_ = false;
             }
 
         private:
+            /** @brief Bounds the observed change without attributing the pose's timestamp to the button. */
+            static std::optional<ImmersiveControllerPress> PressTime(const std::optional<Interval> &released,
+                                                                     const std::optional<Interval> &pressed,
+                                                                     const Interval &pose) noexcept {
+                if (!released || !pressed || released->latest.nanoseconds > pressed->earliest.nanoseconds)
+                    return std::nullopt;
+                const auto transition = Interval::Between(released->earliest, pressed->latest);
+                if (!transition || transition->earliest.captureGeneration != pose.earliest.captureGeneration ||
+                    transition->earliest.clockDomain != pose.earliest.clockDomain)
+                    return std::nullopt;
+                return ImmersiveControllerPress{{transition->earliest.clockDomain, transition->earliest.nanoseconds},
+                                                {transition->latest.clockDomain, transition->latest.nanoseconds}};
+            }
+
             std::optional<Source> source_;
+            std::optional<Interval> actionTime_;
             std::uint64_t generation_{};
             bool down_{};
         };

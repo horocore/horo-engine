@@ -252,6 +252,41 @@ namespace Horo::Editor {
                       .status == CapacityExceeded);
         }
 
+        TEST_CASE("Immersive commands distinguish a measured pose from the observed press range", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 1'010'000, 1'015'000);
+            sample.controllerPress = ImmersiveControllerPress{{5, 1'005'000}, {5, 1'025'000}};
+            auto expected = Aligned;
+            SECTION("both independently measured ranges stay inside the phrase") {}
+            SECTION("a pose inside the phrase cannot disambiguate the earlier press") {
+                sample.controllerPress->earliest.nanoseconds = 995'000;
+                expected = AmbiguousTiming;
+            }
+            SECTION("a pose inside the phrase cannot disambiguate the later press") {
+                sample.controllerPress->latest.nanoseconds = Transcript().end.nanoseconds;
+                expected = AmbiguousTiming;
+            }
+            SECTION("a press from a different clock cannot be combined") {
+                ++sample.controllerPress->latest.clockDomain;
+                expected = InvalidSpatialEvidence;
+            }
+            const auto assembled =
+                ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, sample.cutoff, {&sample, 1}});
+            CHECK(assembled.status == expected);
+            if (expected == Aligned) {
+                REQUIRE(assembled.envelope);
+                const auto &press = assembled.envelope->Spatial().front().controllerPress;
+                REQUIRE(press);
+                CHECK(press->earliest.nanoseconds == 1'005'000);
+                CHECK(press->latest.nanoseconds == 1'025'000);
+            } else {
+                CHECK_FALSE(assembled.envelope);
+            }
+        }
+
         TEST_CASE("Immersive listening freezes one context's spatial history at seal", "[agent][immersive][speech]") {
             using RecordStatus = ImmersiveSpatialCaptureStatus;
             using CommandStatus = ImmersiveCommandStatus;

@@ -10,12 +10,19 @@
 #include <span>
 
 namespace Horo::Editor {
+    /** @brief Bounds the observed transition between released and pressed controller states in Audio time. */
+    struct ImmersiveControllerPress final {
+        Audio::AudioMonotonicTimestamp earliest;
+        Audio::AudioMonotonicTimestamp latest;
+    };
+
     /** @brief Closed interval measured by the host around the exact XR cutoff in the capture clock domain. */
     struct ImmersiveSpatialObservation final {
         XR::XRInteractionCutoff cutoff;
         XR::XRInteractionCandidate candidate;
         Audio::AudioMonotonicTimestamp earliest;
         Audio::AudioMonotonicTimestamp latest;
+        std::optional<ImmersiveControllerPress> controllerPress;
     };
 
     /** @brief Borrowed history from one bounded editor/XR capture, in publication order. */

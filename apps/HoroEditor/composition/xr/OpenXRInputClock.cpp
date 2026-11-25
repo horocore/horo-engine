@@ -38,21 +38,6 @@ namespace Horo::Application::Internal {
             }
         };
 
-        /** @brief Reads an optional external clock without retaining its owner. */
-        std::optional<OpenXRInputCaptureStamp> CaptureNow(const OpenXRInputCaptureClock clock) noexcept {
-            return clock.read ? clock.read(clock.owner) : std::nullopt;
-        }
-
-        /** @brief Accepts only a closed interval in one ordered nonzero capture domain. */
-        std::optional<OpenXRInputCaptureInterval> CaptureInterval(const std::optional<OpenXRInputCaptureStamp> &earliest,
-                                                                  const std::optional<OpenXRInputCaptureStamp> &latest) noexcept {
-            if (!earliest || !latest || !earliest->clockDomain || earliest->clockDomain != latest->clockDomain ||
-                !earliest->captureGeneration || earliest->captureGeneration != latest->captureGeneration ||
-                earliest->nanoseconds > latest->nanoseconds)
-                return std::nullopt;
-            return OpenXRInputCaptureInterval{*earliest, *latest};
-        }
-
         /** @brief Checks the committed tick against the exact owner's immutable simulation step. */
         Result<XR::XRSimulationTime> CommittedSimulationTime(const Runtime::RuntimeDispatchFacts &facts, const Duration step) {
             const auto quantum = step.ToNanoseconds();
@@ -72,6 +57,21 @@ namespace Horo::Application::Internal {
                    after.committedAttempt == before.committedAttempt;
         }
     }  // namespace
+
+    /** @copydoc OpenXRInputCaptureClock::Now */
+    std::optional<OpenXRInputCaptureStamp> OpenXRInputCaptureClock::Now() const noexcept {
+        return sample ? sample(owner) : std::nullopt;
+    }
+
+    /** @copydoc OpenXRInputCaptureInterval::Between */
+    std::optional<OpenXRInputCaptureInterval> OpenXRInputCaptureInterval::Between(
+        const std::optional<OpenXRInputCaptureStamp> &earliest, const std::optional<OpenXRInputCaptureStamp> &latest) noexcept {
+        if (!earliest || !latest || !earliest->clockDomain || earliest->clockDomain != latest->clockDomain ||
+            !earliest->captureGeneration || earliest->captureGeneration != latest->captureGeneration ||
+            earliest->nanoseconds > latest->nanoseconds)
+            return std::nullopt;
+        return OpenXRInputCaptureInterval{*earliest, *latest};
+    }
 
     /** @copydoc OpenXRInputClock::OpenXRInputClock */
     OpenXRInputClock::OpenXRInputClock(XR::OpenXRInternal::OpenXRNativeSession &native) noexcept : native_(&native) {}
@@ -202,19 +202,19 @@ namespace Horo::Application::Internal {
         const auto simulation = CommittedSimulationTime(facts, fixedStep_);
         if (simulation.HasError())
             return Outcome::Failure(simulation.ErrorValue());
-        const auto earliest = CaptureNow(capture);
+        const auto earliest = capture.Now();
         auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
         auto sample = NativeSample(native.Value().native.instance, native.Value().function);
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
-        const auto latest = CaptureNow(capture);
+        const auto latest = capture.Now();
         if (auto fence = native_->BorrowFeatureProvider(*provider_); fence.HasError())
             return Outcome::Failure(fence.ErrorValue());
         if (!MatchesInputDispatch(context, source_, facts))
             return Outcome::Failure(MakeError(XR::XRErrors::IdentityStale));
-        return Outcome::Success({{sample.Value(), simulation.Value(), {}}, CaptureInterval(earliest, latest)});
+        return Outcome::Success({{sample.Value(), simulation.Value(), {}}, OpenXRInputCaptureInterval::Between(earliest, latest)});
     }
 
     /** @copydoc OpenXRInputClock::PresentationTime */

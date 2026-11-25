@@ -425,10 +425,10 @@ namespace Horo::Application::Internal {
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
                                                const Input::InputCollectionFrame &frame, OpenXRInputFrameOptions options = {});
-        /** @brief Copies the Audio clock interval of the exact current pose cutoff, if measured. */
-        [[nodiscard]] std::optional<OpenXRInputCaptureInterval> ReadPoseCaptureTime(const XR::XRTrackingSnapshot &snapshot) const noexcept;
-        /** @brief Withdraws the previously published capture interval before the borrowed clock is replaced. */
-        void RevokePoseCaptureTime() noexcept;
+        /** @brief Copies measured pose and action synchronization intervals for the exact current cutoff. */
+        [[nodiscard]] OpenXRInputCaptureWindows ReadInputCaptureTime(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Withdraws the published capture intervals before the borrowed clock is replaced. */
+        void RevokeInputCaptureTime() noexcept;
         /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
          * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
          * @return Bounded hand gesture candidates with source ownership.
@@ -640,14 +640,13 @@ namespace Horo::Application::Internal {
             XR::XRStageBoundaryProximity proximity;
         };
 
-        struct PoseCaptureTime final {
+        struct InputCaptureTime final {
             XR::XRInteractionCutoff cutoff;
-            OpenXRInputCaptureInterval interval;
+            OpenXRInputCaptureWindows windows;
         };
 
-        /** @brief Retains a measured interval only for the tracking publication produced by this input frame. */
-        void PublishPoseCaptureTime(const XR::XRTrackingSnapshot &snapshot,
-                                    const std::optional<OpenXRInputCaptureInterval> &interval) noexcept;
+        /** @brief Retains measured intervals only for the tracking publication produced by this Input frame. */
+        void PublishInputCaptureTime(const XR::XRTrackingSnapshot &snapshot, OpenXRInputCaptureWindows windows) noexcept;
 
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
@@ -660,7 +659,7 @@ namespace Horo::Application::Internal {
             std::optional<XR::XRPoseSample> gaze;
             XR::XRTrackingSnapshotRevision gazeRevision;
             std::optional<StageBoundaryObservation> stageBoundary;
-            std::optional<PoseCaptureTime> poseCaptureTime;
+            std::optional<InputCaptureTime> captureTime;
             bool gazeAllowed{};
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};

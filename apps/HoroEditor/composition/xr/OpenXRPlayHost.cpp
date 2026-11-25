@@ -83,7 +83,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::SetCaptureClock */
     void OpenXRPlayHost::SetCaptureClock(const OpenXRInputCaptureClock captureClock) noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_ && !busy_, "XR capture clock binding requires the idle owner lane");
-        composition_.session.RevokePoseCaptureTime();
+        composition_.session.RevokeInputCaptureTime();
         composition_.captureClock = captureClock;
     }
 
@@ -408,7 +408,7 @@ namespace Horo::Application::Internal {
         const auto &snapshot = *current.Value();
         OpenXRPlayInteractionSources sources;
         sources.scope_ = {DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment};
-        sources.poseCaptureTime_ = composition_.session.ReadPoseCaptureTime(snapshot);
+        sources.captureTime_ = composition_.session.ReadInputCaptureTime(snapshot);
         using enum XRTrackedDeviceCapability;
         for (const auto &device : snapshot.Devices()) {
             const auto &capabilities = device.capabilities;
@@ -872,7 +872,7 @@ namespace Horo::Application::Internal {
                                           scope.assignmentRevision},
                                          sample.Value(),
                                          scope.cutoff,
-                                         sources.PoseCaptureTime()};
+                                         sources.captureTime_};
     }
 
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */
