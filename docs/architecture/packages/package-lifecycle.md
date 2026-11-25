@@ -491,7 +491,10 @@ contributions block removal. Custom senses block removal when saved authoring
 sources still require a binding review. The host decodes each Scene and Prefab
 once for behavior, native component and custom-sense review. Exact native
 component matches include saved property and topology overrides, including
-conflicts and orphans. For departing component providers, the review checks
+conflicts and orphans. Child scenes, prefab placements and nested or variant
+prefabs must resolve to sources of the expected type in the same reviewed asset
+inventory. A missing or mismatched target blocks removal and reports its asset
+ID and the source that refers to it. For departing component providers, the review checks
 declared reads and writes in observed retained native behavior and system
 registrations. A matching access identifies the consumer package, descriptor and
 registration. Standalone Scenes without AI or

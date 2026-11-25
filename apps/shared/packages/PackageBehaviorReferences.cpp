@@ -34,6 +34,8 @@ namespace Horo::Application::Internal {
         using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
         using ServiceOwners = std::map<Gameplay::GameplayServiceId, std::set<Packages::HoroPackageId>>;
         using LockedPackages = std::map<Packages::HoroPackageId, const Packages::LockedPackage *>;
+        constexpr std::string_view SceneAssetType = "core.scene";
+        constexpr std::string_view PrefabAssetType = "core.prefab";
 
         /** @brief Exact departing provider identities or inert behavior claims for one saved-source scan. */
         struct SavedReferenceOwners final {
@@ -53,7 +55,14 @@ namespace Horo::Application::Internal {
             std::map<std::string, std::string, std::less<>> behaviorSourceRevisions;
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
+            std::vector<Diagnostic> composition;
             PackageSourceReviewFailures failures;
+        };
+
+        /** @brief Pins the same ordered asset inventory for removal and scopes migration to direct attachments. */
+        struct SavedReferenceReview final {
+            const SavedReferenceOwners &owners;
+            std::span<const Assets::AssetRecord> compositionCatalog;
         };
 
         Error ReferenceError(std::string code, std::string_view path = {}) {
@@ -242,16 +251,65 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Confirms a composition edge can be inspected elsewhere in this same registry scan. */
+        struct CompositionSourceReview final {
+            std::span<const Assets::AssetRecord> catalog;
+            std::vector<Diagnostic> &diagnostics;
+            std::string_view path;
+
+            /** @brief Reports the unresolved asset identity, expected kind and authored source. */
+            Result<void> Check(const Assets::AssetId &asset, std::string_view type) const {
+                const auto found = std::ranges::lower_bound(catalog, asset, {}, &Assets::AssetRecord::id);
+                const bool missing = found == catalog.end() || found->id != asset;
+                if (!missing && found->type.Value() == type)
+                    return Result<void>::Success();
+                if (diagnostics.size() >= MaximumBehaviorReferences)
+                    return Result<void>::Failure(ReferenceError("packages.host.composition_reference_limit", path));
+                const auto *code = missing ? "packages.host.composition_reference_missing"
+                                           : "packages.host.composition_reference_type_mismatch";
+                diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::string{type},
+                                         SourceLocation{std::string{path}}, asset.ToString());
+                return Result<void>::Success();
+            }
+        };
+
+        /** @brief Verifies child scene and prefab identities without composing or executing the scene. */
+        Result<void> InspectSceneSourceLinks(const SceneSource::SceneSourceDocument &scene, const CompositionSourceReview &review) {
+            if (review.catalog.empty())
+                return Result<void>::Success();
+            for (const auto &child : scene.childScenes)
+                if (auto checked = review.Check(child.asset, SceneAssetType); checked.HasError())
+                    return checked;
+            for (const auto &placement : scene.prefabInstances)
+                if (auto checked = review.Check(placement.sourcePrefab.Asset(), PrefabAssetType); checked.HasError())
+                    return checked;
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies all nested and variant prefab sources in the same asset inventory. */
+        Result<void> InspectPrefabSourceLinks(const std::optional<Prefab::PrefabComposition> &composition,
+                                             const CompositionSourceReview &review) {
+            if (review.catalog.empty() || !composition)
+                return Result<void>::Success();
+            for (const auto &placement : composition->nestedPlacements)
+                if (auto checked = review.Check(placement.sourcePrefab.Asset(), PrefabAssetType); checked.HasError())
+                    return checked;
+            return composition->variantParent ? review.Check(composition->variantParent->Asset(), PrefabAssetType) : Result<void>::Success();
+        }
+
         /** @brief Reads direct authored attachments; each referenced child or prefab has its own registry entry. */
-        Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceOwners &owners, std::string_view path, std::string_view text) {
+        Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceReview &review, std::string_view path, std::string_view text) {
             const auto scene = SceneSource::DecodeSceneSourceWithChildReferences(text);
             if (scene.HasError())
                 return scan.failures.Record(path,
                     WithCause(ReferenceError("packages.host.scene_reference_unreadable", path), scene.ErrorValue()));
             if (!scene.Value().unsupportedComponentOwners.empty())
                 return scan.failures.Record(path, ReferenceError("packages.host.scene_reference_unsupported", path));
+            const auto &owners = review.owners;
             if (auto found = InspectSceneObjects(scene.Value(), scan, owners, path); found.HasError())
                 return found;
+            if (auto links = InspectSceneSourceLinks(scene.Value(), {review.compositionCatalog, scan.composition, path}); links.HasError())
+                return links;
             return !owners.senses.empty() && RequiresSenseReview(scene.Value()) ? CollectSenseReview(scan, owners, path)
                                                                                  : Result<void>::Success();
         }
@@ -272,8 +330,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads direct prefab attachments, retaining both asset and prefab-local object identity. */
-        Result<void> InspectPrefab(SavedReferenceScan &scan, const SavedReferenceOwners &owners, const Assets::AssetRecord &record, std::string_view text,
-                                   const Prefab::PrefabLimitProfile &limits) {
+        Result<void> InspectPrefab(SavedReferenceScan &scan, const SavedReferenceReview &review, const Assets::AssetRecord &record,
+                                   std::string_view text, const Prefab::PrefabLimitProfile &limits) {
             const auto path = record.sourcePath.String();
             const auto prefab = Prefab::PrefabDocument::Parse(text, limits);
             if (prefab.HasError())
@@ -282,8 +340,11 @@ namespace Horo::Application::Internal {
             if (prefab.Value().Data().assetId != record.id)
                 return scan.failures.Record(path, ReferenceError("packages.host.prefab_reference_identity_mismatch", path));
             const auto &data = prefab.Value().Data();
+            const auto &owners = review.owners;
             if (auto found = InspectPrefabObjects(data, scan, owners, path); found.HasError())
                 return found;
+            if (auto links = InspectPrefabSourceLinks(data.composition, {review.compositionCatalog, scan.composition, path}); links.HasError())
+                return links;
             return !owners.senses.empty() && RequiresSenseReview(data) ? CollectSenseReview(scan, owners, path)
                                                                        : Result<void>::Success();
         }
@@ -291,15 +352,15 @@ namespace Horo::Application::Internal {
         /** @brief Reads a canonical source or records its path while the registry scan can still continue. */
         Result<void> InspectAsset(const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context,
                                   const Assets::AssetRecord &record, const Prefab::PrefabLimitProfile &limits,
-                                  const SavedReferenceOwners &owners, SavedReferenceScan &scan) {
+                                  const SavedReferenceReview &review, SavedReferenceScan &scan) {
             const auto path = record.sourcePath.String();
             const auto source = files.SourceText(path, context, {});
             if (source.HasError())
                 return scan.failures.Record(path, WithCause(ReferenceError("packages.host.behavior_reference_unreadable", path),
                                                              source.ErrorValue()));
             const auto before = scan.behaviors.size();
-            auto inspected = record.type.Value() == "core.scene" ? InspectScene(scan, owners, path, *source.Value().text)
-                                                                : InspectPrefab(scan, owners, record, *source.Value().text, limits);
+            auto inspected = record.type.Value() == SceneAssetType ? InspectScene(scan, review, path, *source.Value().text)
+                                                                   : InspectPrefab(scan, review, record, *source.Value().text, limits);
             if (inspected.HasValue() && scan.behaviors.size() != before)
                 scan.behaviorSourceRevisions.emplace(path, source.Value().revision);
             return inspected;
@@ -307,19 +368,19 @@ namespace Horo::Application::Internal {
 
         /** @brief Shares the original deadline across bounded descendant reads and the resulting observations. */
         Result<SavedReferenceScan> InspectAssets(const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context,
-                                                const Assets::AssetRegistryCandidate &candidate, const SavedReferenceOwners &owners) {
+                                                std::span<const Assets::AssetRecord> records, const SavedReferenceReview &review) {
             using Inspection = Result<SavedReferenceScan>;
             const auto limits = Prefab::PrefabLimitProfile::Create({});
             if (limits.HasError())
                 return Inspection::Failure(limits.ErrorValue());
             SavedReferenceScan scan;
-            for (const auto &record : candidate.records) {
+            for (const auto &record : records) {
                 const auto type = record.type.Value();
-                if (type != "core.scene" && type != "core.prefab")
+                if (type != SceneAssetType && type != PrefabAssetType)
                     continue;
                 if (auto current = Platform::CheckProjectReadContext(context); current.HasError())
                     return Inspection::Failure(current.ErrorValue());
-                const auto inspected = InspectAsset(files, context, record, limits.Value(), owners, scan);
+                const auto inspected = InspectAsset(files, context, record, limits.Value(), review, scan);
                 if (inspected.HasError())
                     return Inspection::Failure(inspected.ErrorValue());
             }
@@ -619,7 +680,7 @@ namespace Horo::Application::Internal {
     /** @brief Scans saved sources against either observed registrations or inert preview claims. */
     static Result<SavedReferenceScan> ScanSavedReferences(const Assets::IAssetRegistrySource &assets,
                                                           const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
-                                                          const SavedReferenceOwners &owners) {
+                                                          const SavedReferenceOwners &owners, bool inspectComposition = false) {
         using Inspection = Result<SavedReferenceScan>;
         if (owners.Empty())
             return Inspection::Success({});
@@ -630,7 +691,8 @@ namespace Horo::Application::Internal {
             return Inspection::Failure(candidate.ErrorValue());
         if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
             return Inspection::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
-        return InspectAssets(files, context, candidate.Value(), owners);
+        const std::span<const Assets::AssetRecord> records = candidate.Value().records;
+        return InspectAssets(files, context, records, {owners, inspectComposition ? records : std::span<const Assets::AssetRecord>{}});
     }
 
     /** @copydoc InspectPackageScenePrefabReferences */
@@ -641,18 +703,19 @@ namespace Horo::Application::Internal {
         const auto owners = IndexOwners(sources.registrations, lock, removal);
         if (owners.HasError())
             return Inspection::Failure(owners.ErrorValue());
-        auto inspected = ScanSavedReferences(sources.assets, sources.files, sources.context, owners.Value());
+        auto inspected = ScanSavedReferences(sources.assets, sources.files, sources.context, owners.Value(), true);
         if (inspected.HasError())
             return Inspection::Failure(inspected.ErrorValue());
         auto scan = std::move(inspected).Value();
         std::vector<Diagnostic> diagnostics;
-        diagnostics.reserve(scan.behaviors.size() + scan.senses.size() + scan.components.size());
+        diagnostics.reserve(scan.behaviors.size() + scan.senses.size() + scan.components.size() + scan.composition.size());
         for (const auto &reference : scan.behaviors)
             diagnostics.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
                                      reference.package.Value() + ": " + reference.type.Value(), SourceLocation{reference.assetPath},
                                      std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
         std::ranges::move(scan.senses, std::back_inserter(diagnostics));
         std::ranges::move(scan.components, std::back_inserter(diagnostics));
+        std::ranges::move(scan.composition, std::back_inserter(diagnostics));
         return std::move(scan.failures).Finish(std::move(diagnostics));
     }
 
