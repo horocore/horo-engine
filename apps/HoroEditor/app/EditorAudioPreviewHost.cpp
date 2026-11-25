@@ -2,6 +2,7 @@
 
 #include "EditorAudioPreviewPreparation.h"
 #include "Horo/Audio/AudioDeviceTiming.h"
+#include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/Internal/NullAudioBackend.h"
 #if HORO_EDITOR_AUDIO_SDL3
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
@@ -10,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <new>
 #include <thread>
 
 namespace Horo::Editor {
@@ -20,6 +22,21 @@ namespace Horo::Editor {
                     static_cast<std::uint64_t>(
                         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) +
                         2'000'000'000ULL};
+        }
+
+        /** @brief Requires observed detachment before a destructor can release the native callback owner. */
+        void WaitForOutputRetirement(const auto &attached, const auto &pump) noexcept {
+            try {
+                const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (attached() && std::chrono::steady_clock::now() < end) {
+                    static_cast<void>(pump());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (attached())
+                    std::terminate();
+            } catch (...) {
+                std::terminate();
+            }
         }
 
         /** @brief Control-owner adapter tracking exact operation admission and acknowledgement.
@@ -163,7 +180,7 @@ namespace Horo::Editor {
         };
 
         /** @brief Captures one closed-peer catalog through the actual bounded native protocol. */
-        Result<Audio::AudioDeviceSnapshot> Discover(DrivenOutput &backend) {
+        Result<Audio::AudioDeviceSnapshot> DiscoverOutput(DrivenOutput &backend) {
             auto operation = backend.Begin(Audio::Backend::Enumerate{}, Deadline());
             if (operation.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(operation.ErrorValue());
@@ -192,6 +209,25 @@ namespace Horo::Editor {
             Audio::AudioBackendKind backend;
         };
 
+        /** @brief Adopts the driver and binds the selected endpoint to the prepared mixer. */
+        Result<PreparedLane> ComposeLane(std::unique_ptr<DrivenOutput> backend, Audio::AudioDeviceSnapshot catalog,
+                                         const Audio::AudioDeviceId device, Audio::Internal::AudioFrontendResources &prepared) {
+            const auto kind = backend->Kind();
+            const Audio::AudioDeviceEpoch epoch{device, 1, prepared.scope.epoch};
+            auto *driver = backend.get();
+            Audio::Internal::AudioFrontendOutput
+                output{std::move(backend),
+                       {epoch, {device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
+                       std::move(catalog),
+                       1};
+            auto frontend = Audio::Internal::AudioFrontendComposition::Create(prepared, output);
+            if (frontend.HasError()) {
+                AudioPreviewHostDetail::RetireDetached(prepared);
+                return Result<PreparedLane>::Failure(frontend.ErrorValue());
+            }
+            return Result<PreparedLane>::Success({std::move(frontend).Value(), driver, kind});
+        }
+
         /** @brief Creates a detached lane against the exact freshly resolved endpoint of the selected backend. */
         Result<PreparedLane> PrepareLane(const AudioPreviewHostDetail::CapturedSource &source, Audio::AudioRuntimeId owner,
                                          const EditorAudioPreviewOutputFactory &factory, Audio::AudioDefaultDeviceRole role,
@@ -206,7 +242,7 @@ namespace Horo::Editor {
             if (expectedBackend && *expectedBackend != kind)
                 return Result<PreparedLane>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
             auto backend = std::make_unique<DrivenOutput>(std::move(selectedOutput));
-            auto catalog = Discover(*backend);
+            auto catalog = DiscoverOutput(*backend);
             if (catalog.HasError())
                 return Result<PreparedLane>::Failure(catalog.ErrorValue());
             const auto selected = Audio::ResolveAudioDevice(catalog.Value(), role);
@@ -216,20 +252,7 @@ namespace Horo::Editor {
             if (preparation.HasError())
                 return Result<PreparedLane>::Failure(preparation.ErrorValue());
             auto prepared = std::move(preparation).Value();
-            const Audio::AudioDeviceEpoch epoch{selected.device, 1, 1};
-            auto *driver = backend.get();
-            Audio::Internal::AudioFrontendOutput
-                output{std::move(backend),
-                       {epoch,
-                        {selected.device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
-                       std::move(catalog).Value(),
-                       1};
-            auto frontend = Audio::Internal::AudioFrontendComposition::Create(prepared, output);
-            if (frontend.HasError()) {
-                AudioPreviewHostDetail::RetireDetached(prepared);
-                return Result<PreparedLane>::Failure(frontend.ErrorValue());
-            }
-            return Result<PreparedLane>::Success({std::move(frontend).Value(), driver, kind});
+            return ComposeLane(std::move(backend), std::move(catalog).Value(), selected.device, prepared);
         }
 
         /** @brief Rejects unsupported policies and malformed roles before disturbing the currently playing lane. */
@@ -280,6 +303,121 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }});
+    }
+
+    struct EditorAudioMonitorOutput::State final {
+        std::unique_ptr<DrivenOutput> backend;
+        Audio::AudioDeviceSnapshot catalog;
+        std::unique_ptr<Audio::AudioFrontend> frontend;
+        DrivenOutput *driver{};  // Borrows only the peer retained by the live frontend.
+
+        /** @brief Only explicit, non-migrating endpoints can be selected for local listening. */
+        bool HasPinnedOutput(const Audio::AudioDeviceId device) const noexcept {
+            const auto endpoint = std::ranges::find(catalog.devices, device, &Audio::AudioDiscoveredDevice::id);
+            if (endpoint == catalog.devices.end())
+                return false;
+            return endpoint->deviceClass == Audio::AudioDeviceClass::Physical ||
+                   (catalog.backend == Audio::AudioBackendKind::NullAudio && endpoint->deviceClass == Audio::AudioDeviceClass::Headless);
+        }
+    };
+
+    EditorAudioMonitorOutput::EditorAudioMonitorOutput(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    EditorAudioMonitorOutput::~EditorAudioMonitorOutput() {
+        Close();
+        WaitForOutputRetirement([this] { return state_->driver != nullptr; }, [this] { return Pump(); });
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Discover */
+    Result<std::unique_ptr<EditorAudioMonitorOutput>> EditorAudioMonitorOutput::Discover(EditorAudioPreviewBackend backend) {
+        using Output = Result<std::unique_ptr<EditorAudioMonitorOutput>>;
+        if (!backend.output || !backend.advanceControl)
+            return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
+        try {
+            auto state = std::make_unique<State>();
+            state->backend = std::make_unique<DrivenOutput>(std::move(backend));
+            auto catalog = DiscoverOutput(*state->backend);
+            if (catalog.HasError())
+                return Output::Failure(std::move(catalog).ErrorValue());
+            if (!Audio::ValidateAudioDeviceSnapshot(catalog.Value()))
+                return Output::Failure(MakeError(Audio::AudioErrors::IdentityInvalid));
+            state->catalog = std::move(catalog).Value();
+            return Output::Success(std::unique_ptr<EditorAudioMonitorOutput>{new EditorAudioMonitorOutput(std::move(state))});
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(Audio::AudioErrors::MemoryAllocationFailed));
+        }
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Outputs */
+    std::span<const Audio::AudioDiscoveredDevice> EditorAudioMonitorOutput::Outputs() const noexcept {
+        return state_->catalog.devices;
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Start */
+    Result<Audio::AudioBusHandle> EditorAudioMonitorOutput::Start(const Audio::AudioDeviceId device,
+                                                                const std::shared_ptr<Audio::AudioStreamingService> &service,
+                                                                const Audio::AudioStreamHandle stream,
+                                                                std::shared_ptr<const void> hostLease) {
+        using Output = Result<Audio::AudioBusHandle>;
+        if (!state_->backend)
+            return Output::Failure(MakeError(Audio::AudioErrors::RuntimeInactive));
+        if (!state_->HasPinnedOutput(device))
+            return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
+        auto prepared = AudioPreviewHostDetail::PrepareMonitor(service, stream, state_->backend->Owner(), std::move(hostLease));
+        if (prepared.HasError())
+            return Output::Failure(std::move(prepared).ErrorValue());
+        auto monitor = std::move(prepared).Value();
+        auto lane = ComposeLane(std::move(state_->backend), std::move(state_->catalog), device, monitor.resources);
+        if (lane.HasError())
+            return Output::Failure(std::move(lane).ErrorValue());
+        auto started = std::move(lane).Value();
+        state_->driver = started.driver;
+        state_->frontend = std::move(started.frontend);
+        if (auto opened = state_->frontend->Start(Deadline()); opened.HasError()) {
+            Close();
+            return Output::Failure(std::move(opened).ErrorValue());
+        }
+        return Output::Success(monitor.bus);
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Pump */
+    Result<void> EditorAudioMonitorOutput::Pump() {
+        if (!state_->driver)
+            return Result<void>::Success();
+        auto advanced = state_->driver->Advance();
+        if (advanced.HasError())
+            Close();
+        auto pumped = state_->frontend->Pump(Deadline());
+        if (state_->frontend->Snapshot().phase == Audio::AudioFrontendPhase::Closed)
+            state_->driver = nullptr;
+        return advanced.HasError() ? std::move(advanced) : std::move(pumped);
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::StartVoice */
+    Result<void> EditorAudioMonitorOutput::StartVoice() {
+        using namespace Audio;
+        const auto snapshot = Snapshot();
+        if (snapshot.phase != AudioFrontendPhase::Active)
+            return Result<void>::Failure(MakeError(AudioErrors::RuntimeInactive));
+        auto admitted = state_->frontend->Transport({snapshot.voice, AudioVoiceControl::Start});
+        if (admitted.HasError())
+            return Result<void>::Failure(std::move(admitted).ErrorValue());
+        if (admitted.Value().status != AudioCommandStagingStatus::Ok)
+            return Result<void>::Failure(MakeError(AudioErrors::QueueSaturated));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Close */
+    void EditorAudioMonitorOutput::Close() noexcept {
+        if (state_->frontend)
+            state_->frontend->Close();
+        else
+            state_->backend.reset();
+    }
+
+    /** @copydoc EditorAudioMonitorOutput::Snapshot */
+    Audio::AudioFrontendSnapshot EditorAudioMonitorOutput::Snapshot() const {
+        return state_->frontend ? state_->frontend->Snapshot() : Audio::AudioFrontendSnapshot{};
     }
 
     struct EditorAudioPreviewHost::State final {
@@ -428,21 +566,10 @@ namespace Horo::Editor {
     }
 
     EditorAudioPreviewHost::~EditorAudioPreviewHost() {
-        try {
-            if (!state_->frontend)
-                return;
-            Stop(state_->snapshot.workspace);
-            const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            while (state_->frontend && std::chrono::steady_clock::now() < end) {
-                static_cast<void>(Pump());
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (state_->frontend)
-                std::terminate();  // A timeout never proves native callback detachment; retain/fatal Audio ownership contract.
-        } catch (...) {
-            // Any cleanup exception leaves native detachment unproven; do not unwind and free the retained output.
-            std::terminate();
-        }
+        if (!state_->frontend)
+            return;
+        Stop(state_->snapshot.workspace);
+        WaitForOutputRetirement([this] { return static_cast<bool>(state_->frontend); }, [this] { return Pump(); });
     }
 
     /** @copydoc IAudioComponentPreview::Start */

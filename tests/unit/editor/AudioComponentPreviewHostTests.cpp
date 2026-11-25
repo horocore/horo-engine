@@ -8,77 +8,77 @@ namespace {
     using namespace Horo::Editor;
     using namespace Horo::Editor::AudioPreviewTest;
 
-    /** @brief Drives a monitor frontend to closure before releasing its callback owner. */
-    struct MonitorOutputGuard final {
-        Audio::AudioFrontend &frontend;
-        ObservedNull &output;
-        static constexpr Audio::AudioMonotonicTimestamp Deadline{1, 1'000'000'000};
+    /** @brief Provides a prepared but empty microphone source with its exact job-system lifetime. */
+    struct MonitorSource final {
+        std::shared_ptr<JobSystem> jobs = std::make_shared<JobSystem>(JobSystemConfig{.workerCount = 1});
+        std::shared_ptr<Audio::AudioStreamingService> service;
+        Audio::AudioStreamHandle stream;
 
-        ~MonitorOutputGuard() {
-            frontend.Close();
-            for (std::size_t step = 0; step < 16 && frontend.Snapshot().phase != Audio::AudioFrontendPhase::Closed; ++step) {
-                (void)frontend.Pump(Deadline);
-                (void)output.AdvanceControl();
-                (void)output.AdvanceCallback();
-            }
+        MonitorSource() {
+            using namespace Audio;
+            auto created = AudioStreamingService::CreateLive(*jobs);
+            REQUIRE(created.HasValue());
+            service = std::move(created).Value();
+            const auto admitted = service->AdmitLivePcm({{48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono)}, 256});
+            REQUIRE(admitted.HasValue());
+            stream = admitted.Value();
         }
     };
 
-    /** @brief Describes the exact static endpoint of the observation backend. */
-    Audio::Internal::AudioFrontendOutput MonitorOutput(std::unique_ptr<ObservedNull> backend, const Audio::AudioCommandScope &scope) {
-        using namespace Horo::Audio;
-        const AudioDeviceId device{scope.owner, 1, 1};
-        return {std::move(backend),
-                {{device, 1, scope.epoch}, {device, {48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
-                {.owner = scope.owner,
-                 .backend = AudioBackendKind::NullAudio,
-                 .revision = 1,
-                 .devices = {{device, "Monitor Fixture", AudioDeviceClass::Headless}},
-                 .defaults = {device, device, device}},
-                1};
-    }
-
-    TEST_CASE("Editor monitor preparation routes live PCM through its isolated mixer bus", "[audio][editor][monitor][headless]") {
-        using namespace Horo::Audio;
-        const auto owner = AudioRuntimeId::Create(17).Value();
-        auto jobs = std::make_shared<JobSystem>(JobSystemConfig{.workerCount = 1});
-        auto created = AudioStreamingService::CreateLive(*jobs);
-        REQUIRE(created.HasValue());
-        std::shared_ptr<AudioStreamingService> service{std::move(created).Value()};
-        const auto stream = service->AdmitLivePcm({{48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono)}, 256});
-        REQUIRE(stream.HasValue());
-        auto monitor = AudioPreviewHostDetail::PrepareMonitor(service, stream.Value(), owner, jobs);
+    TEST_CASE("Editor monitor preparation reserves an isolated mixer bus", "[audio][editor][monitor][headless]") {
+        const auto owner = Audio::AudioRuntimeId::Create(17).Value();
+        const MonitorSource source;
+        auto monitor = AudioPreviewHostDetail::PrepareMonitor(source.service, source.stream, owner, source.jobs);
         REQUIRE(monitor.HasValue());
         auto prepared = std::move(monitor).Value();
         auto &resources = prepared.resources;
+        AudioPreviewHostDetail::RetireDetached(resources);
         REQUIRE(resources.plan->Buses().size() == 2);
         CHECK(prepared.bus.owner == resources.scope.owner);
         CHECK(prepared.bus.slot == resources.plan->ResolveBus(resources.initialVoice.bus).value() + 1);
+    }
+
+    /** @brief Drives the actual retained output until the expected frontend phase. */
+    void AdvanceMonitorUntil(EditorAudioMonitorOutput &monitor, const Audio::AudioFrontendPhase phase) {
+        for (std::size_t step = 0; step < 16 && monitor.Snapshot().phase != phase; ++step)
+            REQUIRE(monitor.Pump().HasValue());
+        REQUIRE(monitor.Snapshot().phase == phase);
+    }
+
+    TEST_CASE("The editor monitor opens only its exact selected output and drives the shared mixer", "[audio][editor][monitor][headless]") {
+        using namespace Audio;
+        const auto owner = AudioRuntimeId::Create(18).Value();
         auto evidence = std::make_shared<OutputEvidence>();
-        auto backend = std::make_unique<ObservedNull>(owner, evidence);
-        auto &output = *backend;
-        auto selection = MonitorOutput(std::move(backend), resources.scope);
-        auto composed = Internal::AudioFrontendComposition::Create(resources, selection);
-        if (composed.HasError())
-            AudioPreviewHostDetail::RetireDetached(resources);
-        REQUIRE(composed.HasValue());
-        auto frontend = std::move(composed).Value();
-        MonitorOutputGuard retirement{*frontend, output};
-        constexpr auto Deadline = MonitorOutputGuard::Deadline;
-        REQUIRE(frontend->Start(Deadline).HasValue());
-        for (std::size_t step = 0; step < 2; ++step) {
-            REQUIRE(output.AdvanceControl().HasValue());
-            REQUIRE(frontend->Pump(Deadline).HasValue());
-        }
-        REQUIRE(output.AdvanceCallback().HasValue());
-        REQUIRE(frontend->Pump(Deadline).HasValue());
-        REQUIRE(frontend->Snapshot().phase == AudioFrontendPhase::Active);
-        REQUIRE(frontend->Transport({frontend->Snapshot().voice, AudioVoiceControl::Start}).Value().status == AudioCommandStagingStatus::Ok);
-        const std::array pcm{0.25F, 0.25F, 0.25F, 0.25F};
-        REQUIRE(service->SubmitLivePcm(stream.Value(), pcm).HasValue());
-        REQUIRE(frontend->Pump(Deadline).HasValue());
-        REQUIRE(output.AdvanceCallback().HasValue());
+        auto driver = ObservedOutput(evidence)(owner);
+        REQUIRE(driver.HasValue());
+        auto discovered = EditorAudioMonitorOutput::Discover(std::move(driver).Value());
+        REQUIRE(discovered.HasValue());
+        auto monitor = std::move(discovered).Value();
+        REQUIRE(monitor->Outputs().size() == 1);
+        const auto pinned = monitor->Outputs().front().id;
+        const MonitorSource source;
+        const auto rejected = monitor->Start({owner, pinned.slot, pinned.generation + 1}, source.service, source.stream, source.jobs);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AudioErrors::DeviceUnavailable.code.Value());
+        const auto bus = monitor->Start(pinned, source.service, source.stream, source.jobs);
+        REQUIRE(bus.HasValue());
+        CHECK(bus.Value().owner == owner);
+        CHECK(monitor->StartVoice().HasError());
+        AdvanceMonitorUntil(*monitor, AudioFrontendPhase::Active);
+        CHECK(monitor->Snapshot().device.device == pinned);
+        REQUIRE(monitor->StartVoice().HasValue());
+        constexpr std::array Samples{0.25F, 0.25F, 0.25F, 0.25F};
+        REQUIRE(source.service->SubmitLivePcm(source.stream, Samples).HasValue());
+        REQUIRE(monitor->Pump().HasValue());
+        REQUIRE(monitor->Pump().HasValue());
         CHECK(evidence->peak > 0.0F);
+
+        monitor->Close();
+        AdvanceMonitorUntil(*monitor, AudioFrontendPhase::Closed);
+        CHECK(source.service->Snapshot(source.stream).HasError());
+        monitor.reset();
+        CHECK(evidence->destroyed);
+        CHECK(evidence->closedAtDestruction);
     }
 
     /** @brief Injects one control-driver failure after a real Null callback, without replacing Audio processing. */
