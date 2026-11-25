@@ -211,7 +211,8 @@ Ownership rules:
   ray. Held buttons and source replacement do not create new observations.
   The ray carries its own pose interval. When both adjacent states have valid
   action intervals, the press carries the range between the observed released
-  and pressed states. An uncertain press cannot be inferred from the ray's time.
+  and pressed states. The ray and transition must independently fit inside the
+  same phrase window. An uncertain press cannot be inferred from the ray's time.
 - On macOS, the local Agent panel offers explicit listening controls for the
   current authored scene in focused XR Play. The scene selection is optional.
   Speech and microphone permission are

@@ -468,6 +468,18 @@ namespace Horo::Editor {
             sample.controllerPress = ImmersiveControllerPress{{5, 1'005'000}, {5, 1'025'000}};
             auto expected = Aligned;
             SECTION("both independently measured ranges stay inside the phrase") {}
+            SECTION("the action transition can be separate from the pose measurement") {
+                sample.controllerPress->earliest.nanoseconds = 1'016'000;
+            }
+            SECTION("the pose alone cannot align a press outside the phrase") {
+                sample.controllerPress = ImmersiveControllerPress{Transcript().end, Transcript().end};
+                expected = SpeechOnly;
+            }
+            SECTION("the press alone cannot align an earlier pose outside the phrase") {
+                sample.earliest.nanoseconds = 990'000;
+                sample.latest.nanoseconds = 995'000;
+                expected = SpeechOnly;
+            }
             SECTION("a pose inside the phrase cannot disambiguate the earlier press") {
                 sample.controllerPress->earliest.nanoseconds = 995'000;
                 expected = AmbiguousTiming;
@@ -480,18 +492,23 @@ namespace Horo::Editor {
                 ++sample.controllerPress->latest.clockDomain;
                 expected = InvalidSpatialEvidence;
             }
+            SECTION("an inverted press interval cannot be combined") {
+                sample.controllerPress->earliest.nanoseconds = 1'026'000;
+                expected = InvalidSpatialEvidence;
+            }
             const auto assembled =
                 ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, sample.cutoff, {&sample, 1}});
             CHECK(assembled.status == expected);
-            if (expected == Aligned) {
-                REQUIRE(assembled.envelope);
-                const auto &press = assembled.envelope->Spatial().front().controllerPress;
-                REQUIRE(press);
-                CHECK(press->earliest.nanoseconds == 1'005'000);
-                CHECK(press->latest.nanoseconds == 1'025'000);
-            } else {
-                CHECK_FALSE(assembled.envelope);
-            }
+            REQUIRE(assembled.envelope.has_value() == (expected == Aligned || expected == SpeechOnly));
+            if (!assembled.envelope)
+                return;
+            const auto spatial = assembled.envelope->Spatial();
+            REQUIRE(spatial.size() == (expected == Aligned ? 1U : 0U));
+            if (spatial.empty())
+                return;
+            REQUIRE(spatial.front().controllerPress);
+            CHECK(spatial.front().controllerPress->earliest.nanoseconds == sample.controllerPress->earliest.nanoseconds);
+            CHECK(spatial.front().controllerPress->latest.nanoseconds == sample.controllerPress->latest.nanoseconds);
         }
 
         TEST_CASE("Immersive listening freezes one context's spatial history at seal", "[agent][immersive][speech]") {

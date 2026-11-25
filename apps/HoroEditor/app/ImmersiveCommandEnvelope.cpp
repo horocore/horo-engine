@@ -55,13 +55,10 @@ namespace Horo::Editor {
                    sample.earliest.nanoseconds <= sample.latest.nanoseconds && ValidCandidate(sample.candidate, sample.cutoff);
         }
 
-        /** @brief The current pose lies inside the interval between the neutral and pressed action cutoffs. */
-        bool ValidPress(const ImmersiveSpatialObservation &sample, const std::uint64_t clockDomain) noexcept {
-            if (!sample.controllerPress)
-                return true;
-            const auto &press = *sample.controllerPress;
+        /** @brief The independently measured action transition uses one ordered Audio clock interval. */
+        bool ValidPress(const ImmersiveControllerPress &press, const std::uint64_t clockDomain) noexcept {
             return press.earliest.clockDomain == clockDomain && press.latest.clockDomain == clockDomain &&
-                   press.earliest.nanoseconds <= sample.earliest.nanoseconds && press.latest.nanoseconds >= sample.latest.nanoseconds;
+                   press.earliest.nanoseconds <= press.latest.nanoseconds;
         }
 
         /** @brief Requires a single unambiguous order in both the capture and XR clocks. */
@@ -78,7 +75,7 @@ namespace Horo::Editor {
                                                 const XR::XRInteractionCutoff &cutoff, const std::uint64_t clockDomain) noexcept {
             if (!BelongsToHistory(sample.cutoff, cutoff))
                 return StaleEvidence;
-            if (!ValidObservation(sample, clockDomain) || !ValidPress(sample, clockDomain))
+            if (!ValidObservation(sample, clockDomain) || (sample.controllerPress && !ValidPress(*sample.controllerPress, clockDomain)))
                 return InvalidSpatialEvidence;
             if (previous && !Follows(sample, *previous))
                 return AmbiguousTiming;
@@ -95,12 +92,13 @@ namespace Horo::Editor {
             return Aligned;
         }
 
-        /** @brief An uncertain press cannot be inferred from a precisely timed pose. */
+        /** @brief A press-qualified ray requires both the pose and transition intervals within the phrase. */
         ImmersiveCommandStatus ObservationOverlap(const ImmersiveSpatialObservation &sample, const SpeechHypothesisView &phrase) noexcept {
-            if (sample.controllerPress &&
-                Overlap(sample.controllerPress->earliest, sample.controllerPress->latest, phrase) == AmbiguousTiming)
-                return AmbiguousTiming;
-            return Overlap(sample.earliest, sample.latest, phrase);
+            const auto pose = Overlap(sample.earliest, sample.latest, phrase);
+            if (!sample.controllerPress || pose == SpeechOnly)
+                return pose;
+            const auto press = Overlap(sample.controllerPress->earliest, sample.controllerPress->latest, phrase);
+            return press == Aligned ? pose : press;
         }
 
         /** @brief Adds a complete support set without picking a preferred hit. */
