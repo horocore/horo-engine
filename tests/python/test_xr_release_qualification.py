@@ -209,11 +209,46 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
     assert "Standalone (xr-platform): Missing or invalid artifact digest" in result.stderr
 
 
+def test_android_discovery_accepts_the_redacted_fields_emitted_by_deployment(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    receipt = android_receipt(row, evidence)
+    receipt["artifact"].update(applicationId="org.horocore.packagequalification.openxr.quest",
+                               declaredRenderer="none", abis=["arm64-v8a"],
+                               expectedApkSha256=receipt["artifact"]["apkSha256"])
+    receipt["device"].update(androidApi=34, expectedBuildSha256=receipt["device"]["buildSha256"])
+    receipt["qualification"]["runtime"]["expectedVersion"] = "1.2.3"
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("path", [(), ("artifact",), ("device",), ("qualification", "runtime")])
+def test_android_discovery_rejects_unclassified_nested_evidence_without_echoing_it(release, path):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    receipt = android_receipt(row, evidence)
+    nested = receipt
+    for field in path:
+        nested = nested[field]
+    nested["privateCapture"] = {"room": "private-room-observation"}
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Unexpected fields in Android preflight" in result.stderr
+    assert "privateCapture" not in result.stderr
+    assert "private-room-observation" not in result.stderr + result.stdout
+
+
 @pytest.mark.parametrize(("section", "key", "value", "message"), [
     ("artifact", "sourceRevision", "b" * 40, "another source revision"),
     ("artifact", "apkSha256", "a" * 64, "different diagnostic APK"),
     ("device", "buildSha256", "a" * 64, "different system build"),
     ("device", "abi", "x86_64", "different packaged ABI"),
+    ("device", "androidApi", {"room": "private-room-observation"}, "Invalid Android preflight API level"),
+    ("artifact", "applicationId", {"serial": "private-device"}, "Invalid Android preflight application"),
     ("qualification", "connection", {"requested": "usb", "observed": "tcpip"}, "different ADB connection"),
     ("qualification", "physicalXrQualification", "passed", "Expected cold discovery evidence"),
     ("observed", "crashObserved", True, "recorded a crash"),

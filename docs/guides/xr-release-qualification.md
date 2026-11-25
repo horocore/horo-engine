@@ -103,6 +103,8 @@ for the physical run, the diagnostic `profile`, and `adbConnection` (`usb`
 or `tcpip`). Store the diagnostic APK and receipt in the same evidence
 directory as the physical record. The checker verifies the source revision,
 package and device build, connection, runtime version and process retirement.
+It accepts only the typed fields emitted by the redacted deployment schema.
+Unknown or invalid fields are rejected without printing their contents.
 The cold-discovery APK has its own digest. The smoke record still identifies
 the exact product binary, headset, physical checks and package receipt.
 
