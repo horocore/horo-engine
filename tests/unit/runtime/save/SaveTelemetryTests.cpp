@@ -605,6 +605,38 @@ TEST_CASE("Support bundles withhold unclassified text alongside private Save evi
     CHECK(archive.find("retained-standalone-report") != std::string::npos);
 }
 
+TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto input = session.directory / "diagnostics";
+    auto entry = std::filesystem::path{"crash/reports.json"};
+    SECTION("JSON crash snapshot") {}
+    SECTION("JSONL crash snapshot") {
+        entry.replace_extension(".jsonl");
+    }
+    {
+        std::ofstream output{input, std::ios::binary};
+        output << R"({"records":{)"
+               << R"("private-direct-slot-key":{"domain":"horo.save","message":"private-save-detail"},)"
+               << R"("private-nested-player-key":{"latest":{"domain":"horo.save","message":"private-save-detail"}},)"
+               << R"("private-array-slot-key":[{"domain":"horo.save","message":"private-save-detail"}],)"
+               << R"("group":[{"domain":"horo.scene","message":"safe-first"},)"
+               << R"({"domain":"horo.save","message":"private-save-detail"},)"
+               << R"({"domain":"horo.scene","message":"safe-second"}]}})" << '\n';
+        REQUIRE(output.good());
+    }
+    const auto bundled = session.host->GenerateDiagnosticBundle(
+        {.outputPath = session.directory / "bundle.zip",
+         .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
+    REQUIRE(bundled.HasValue());
+    const auto archive = Read(bundled.Value().outputPath);
+    for (const std::string_view withheld : {"private-direct-slot-key", "private-nested-player-key", "private-array-slot-key",
+                                           "private-save-detail"})
+        CHECK(archive.find(withheld) == std::string::npos);
+    CHECK(archive.find("safe-first") < archive.find("safe-second"));
+    CHECK(archive.find("safe-second") != std::string::npos);
+}
+
 TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before publication", "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);

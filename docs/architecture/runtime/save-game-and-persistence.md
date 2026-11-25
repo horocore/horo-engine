@@ -1876,6 +1876,9 @@ a flattened causal list suppresses each wrapping causal record, since wrappers
 can copy private text or fields. An object or array that directly mixes free
 text with a private descendant is withheld even without a diagnostic label.
 Independent structured sibling records remain available.
+Withheld records are removed with their enclosing map keys, including wrappers
+that contain no independent evidence after redaction. This keeps slot names
+used as diagnostic map keys out of support bundles.
 Raw diagnostic JSON and JSONL records with duplicate object members or
 excessive nesting fail bundle preparation before any archive is published.
 

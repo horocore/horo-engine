@@ -20,6 +20,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Horo::Diagnostics {
@@ -190,37 +191,63 @@ namespace Horo::Diagnostics {
 
         DiagnosticRedaction RedactJson(Json &value, std::span<const std::string> namespaces);
 
+        /** @brief Removes empty wrappers left after all of their diagnostic entries were withheld. */
+        DiagnosticRedaction FinishAggregate(Json &value, const bool privateDescendant) {
+            using enum DiagnosticRedaction;
+            if (!privateDescendant)
+                return Kept;
+            if (!value.empty())
+                return DescendantWithheld;
+            value = nullptr;
+            return Withheld;
+        }
+
         /** @brief Withholds records that may repeat private descendant values, while preserving unrelated aggregate entries. */
         DiagnosticRedaction RedactObject(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
             const bool hasInlineText = !namespaces.empty() && HasInlineText(value);
             bool privateDescendant = false;
-            for (auto &[childKey, child] : value.items()) {
-                const auto redaction = RedactJson(child, namespaces);
-                if (Detail::IsSensitiveKey(childKey))
-                    child = "[REDACTED]";
-                if (redaction == Kept)
-                    continue;
-                if (hasInlineText || IsCausalField(childKey)) {
-                    value = nullptr;
-                    return Withheld;
+            for (auto child = value.begin(); child != value.end();) {
+                const auto redaction = RedactJson(*child, namespaces);
+                if (redaction != Kept) {
+                    if (hasInlineText || IsCausalField(child.key())) {
+                        value = nullptr;
+                        return Withheld;
+                    }
+                    privateDescendant = true;
+                    // A dynamic member name can carry the same data as the withheld value.
+                    if (redaction == Withheld) {
+                        child = value.erase(child);
+                        continue;
+                    }
                 }
-                privateDescendant = true;
+                if (Detail::IsSensitiveKey(child.key()))
+                    *child = "[REDACTED]";
+                ++child;
             }
-            return privateDescendant ? DescendantWithheld : Kept;
+            return FinishAggregate(value, privateDescendant);
         }
 
         /** @brief Retains independent structured entries and withholds text mixed with private entries. */
         DiagnosticRedaction RedactArray(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
             bool privateDescendant = false;
-            for (Json &child : value)
-                privateDescendant = RedactJson(child, namespaces) != Kept || privateDescendant;
+            auto retained = value.begin();
+            for (auto child = value.begin(); child != value.end(); ++child) {
+                const auto redaction = RedactJson(*child, namespaces);
+                privateDescendant = privateDescendant || redaction != Kept;
+                if (redaction == Withheld)
+                    continue;
+                if (retained != child)
+                    *retained = std::move(*child);
+                ++retained;
+            }
+            value.erase(retained, value.end());
             if (privateDescendant && HasInlineText(value)) {
                 value = nullptr;
                 return Withheld;
             }
-            return privateDescendant ? DescendantWithheld : Kept;
+            return FinishAggregate(value, privateDescendant);
         }
 
         /** @brief Redacts credentials and paths, and reports the extent of privacy-based record withdrawal. */
