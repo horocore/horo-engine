@@ -1,6 +1,7 @@
 #include "Horo/AI/NpcDialogue.h"
 
 #include <algorithm>
+#include <new>
 #include <utility>
 
 namespace Horo::AI {
@@ -113,5 +114,91 @@ namespace Horo::AI {
         if (tick < deadlineTick_ && AllowsProjection(grant) && IsApprovedCue(reply, std::span{cues_}.first(cueCount_)))
             return {Selected, reply->cue};
         return {Fallback, fallback_};
+    }
+
+    /** @brief The worker owns its payload and pin. Only a terminal snapshot permits the owner to read the reply. */
+    struct NpcDialogueJob::Work final {
+        NpcDialogueProviderBinding binding;
+        std::array<NpcDialogueFact, NpcDialogueTurn::MaximumFacts> facts{};
+        std::size_t count{};
+        std::chrono::steady_clock::time_point deadline;
+        CancellationSource cancellation;
+        std::optional<NpcDialogueReply> reply;
+
+        /** @brief Copies the projection while the owner-lane grant is live. */
+        Work(const NpcDialogueProviderBinding &provider, std::span<const NpcDialogueFact> context,
+             std::chrono::steady_clock::time_point cutoff, const CancellationToken &parent)
+            : binding(provider), count(context.size()), deadline(cutoff), cancellation(parent) {
+            std::ranges::copy(context, facts.begin());
+        }
+
+        /** @brief Dispatches only approved tokens and stamps a successful reply with its local origin. */
+        void Run(const NpcDialogueRequestIdentity &origin, const CancellationToken &token) {
+            if (token.IsCancellationRequested() || std::chrono::steady_clock::now() >= deadline)
+                return;
+            try {
+                const auto cue = binding.provider->RequestCue(std::span{facts}.first(count), deadline, token);
+                if (cue.HasValue() && !token.IsCancellationRequested() && std::chrono::steady_clock::now() < deadline)
+                    reply = NpcDialogueReply{origin, cue.Value(), true};
+            } catch (...) {
+                // The owner selects a fallback. Provider exception text must not enter the scheduler's diagnostics.
+            }
+        }
+    };
+
+    /** @copydoc NpcDialogueJob::Start */
+    Result<NpcDialogueJob> NpcDialogueJob::Start(const JobSystem &jobs, NpcDialogueTurn &&turn, const NpcDialogueRequestIdentity &current,
+                                                 const NpcDialogueGrant &grant, const NpcDialogueProviderBinding &binding, std::uint64_t tick,
+                                                 std::chrono::steady_clock::time_point deadline, const CancellationToken &cancellation) {
+        using Accepted = Result<NpcDialogueJob>;
+        if (!binding.provider || !binding.imageLease || binding.route != grant.route || binding.generation != grant.providerGeneration)
+            return Accepted::Failure(MakeError(AIErrors::CapabilityUnavailable));
+        const auto context = turn.Context(current, grant, tick, cancellation);
+        if (!context || std::chrono::steady_clock::now() >= deadline)
+            return Accepted::Failure(MakeError(AIErrors::TaskContextInvalid));
+        try {
+            auto work = std::make_shared<Work>(binding, *context, deadline, cancellation);
+            auto job = jobs.Submit({.parentCancellation = work->cancellation.Token(), .requirement = JobRequirement::Optional,
+                                    .resource = JobResource::Io},
+                                   [work, current](const CancellationToken &token) { work->Run(current, token); });
+            if (job.HasError())
+                return Accepted::Failure(std::move(job).ErrorValue());
+            return Accepted::Success(NpcDialogueJob{std::move(turn), std::move(job).Value(), std::move(work)});
+        } catch (const std::bad_alloc &) {
+            return Accepted::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        }
+    }
+
+    /** @brief Takes ownership of a successfully queued turn and its scheduler receipt. */
+    NpcDialogueJob::NpcDialogueJob(NpcDialogueTurn &&turn, JobHandle &&job, std::shared_ptr<Work> work) noexcept
+        : turn_(std::move(turn)), job_(std::move(job)), work_(std::move(work)) {}
+
+    /** @copydoc NpcDialogueJob::~NpcDialogueJob */
+    NpcDialogueJob::~NpcDialogueJob() {
+        if (work_)
+            work_->cancellation.RequestCancellation();
+    }
+
+    /** @copydoc NpcDialogueJob::Poll */
+    std::optional<NpcDialogueOutcome> NpcDialogueJob::Poll(const NpcDialogueRequestIdentity &current, const NpcDialogueGrant &grant,
+                                                           std::uint64_t tick) {
+        using enum JobState;
+        if (!work_)
+            return NpcDialogueOutcome{NpcDialogueStatus::Consumed};
+        const auto token = work_->cancellation.Token();
+        if (!turn_.Context(current, grant, tick, token) || std::chrono::steady_clock::now() >= work_->deadline) {
+            const auto outcome = turn_.Resolve(current, grant, tick, token, std::nullopt);
+            work_->cancellation.RequestCancellation();
+            work_.reset();
+            return outcome;
+        }
+        const auto snapshot = job_.Snapshot();
+        if (snapshot && (snapshot->state == Queued || snapshot->state == Running))
+            return std::nullopt;
+        // The scheduler publishes terminal state under its record lock after the callback has returned.
+        const auto reply = snapshot && snapshot->state == Succeeded ? work_->reply : std::nullopt;
+        const auto outcome = turn_.Resolve(current, grant, tick, token, reply);
+        work_.reset();
+        return outcome;
     }
 }  // namespace Horo::AI

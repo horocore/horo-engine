@@ -2319,8 +2319,12 @@ local. Before transport and presentation, the owner rechecks the live grant and
 the turn deadline. The reply envelope carries a host-attached turn identity.
 Only an approved, authored dialogue cue can reach presentation. Failed or late
 responses select a deterministic authored fallback, while cancelled or stale
-turns publish no cue. Host transport, moderation and runtime composition are
-separate delivery work. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
+turns publish no cue. `NpcDialogueJob` dispatches a detached copy on a dedicated
+Foundation I/O worker with an explicit provider image pin and a monotonic
+deadline. The presentation owner polls with the current grant and cancels queued
+work upon revocation before it can disclose data. Concrete transport, moderation,
+and game host composition remain separate delivery work. See
+[ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 
 ### AI Runtime Ownership And Scene Generation Safety
 

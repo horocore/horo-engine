@@ -4,10 +4,13 @@
 
 #include "Horo/AI/DecisionIdentity.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/JobSystem.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 
@@ -128,5 +131,66 @@ namespace Horo::AI {
         std::size_t cueCount_{};
         NpcDialogueCueId fallback_;
         bool consumed_{};
+    };
+
+    /** @brief Host-owned decoder and transport for one approved route. */
+    class INpcDialogueProvider {
+    public:
+        virtual ~INpcDialogueProvider() = default;
+
+        /** @brief Requests a cue using only approved authored tokens on a dedicated I/O worker.
+         * @param facts Call-duration payload authorized by the host. @param deadline Exclusive transport deadline.
+         * @param cancellation Check before disclosure and while waiting on I/O.
+         * @return Moderated, decoded cue, or a failure. Never returns free-form text or an executable action.
+         */
+        [[nodiscard]] virtual Result<NpcDialogueCueId> RequestCue(std::span<const NpcDialogueFact> facts,
+                                                                std::chrono::steady_clock::time_point deadline,
+                                                                const CancellationToken &cancellation) const = 0;
+    };
+
+    /** @brief Explicit host binding of a provider implementation and its code lifetime. */
+    struct NpcDialogueProviderBinding final {
+        NpcDialogueRoute route;
+        std::uint64_t generation{};
+        std::shared_ptr<const void> imageLease;
+        std::shared_ptr<const INpcDialogueProvider> provider;
+    };
+
+    /** @brief Owner-lane tracking for one detached, bounded NPC dialogue request. */
+    class NpcDialogueJob final {
+    public:
+        /** @brief Queues a copied projection on the host's dedicated I/O lane.
+         * @param jobs Borrowed host scheduler with I/O capacity. @param turn Turn to transfer on successful submission.
+         * @param current Exact turn identity. @param grant Live grant. @param binding Approved provider and image lease.
+         * @param tick Current owner tick. @param deadline Exclusive worker deadline. @param cancellation Parent revocation token.
+         * @return A tracked request, or a failure leaving the original turn available for fallback.
+         */
+        [[nodiscard]] static Result<NpcDialogueJob> Start(const JobSystem &jobs, NpcDialogueTurn &&turn,
+                                                        const NpcDialogueRequestIdentity &current, const NpcDialogueGrant &grant,
+                                                        const NpcDialogueProviderBinding &binding, std::uint64_t tick,
+                                                        std::chrono::steady_clock::time_point deadline,
+                                                        const CancellationToken &cancellation);
+
+        NpcDialogueJob(const NpcDialogueJob &) = delete;
+        NpcDialogueJob &operator=(const NpcDialogueJob &) = delete;
+        /** @brief Transfers the only owner of the pending turn. */
+        NpcDialogueJob(NpcDialogueJob &&) noexcept = default;
+        NpcDialogueJob &operator=(NpcDialogueJob &&) = delete;
+        /** @brief Requests cancellation without waiting for a worker to return. */
+        ~NpcDialogueJob();
+
+        /** @brief Polls from the owner lane during normal presentation and whenever policy changes.
+         * @param current Latest turn identity. @param grant Latest disclosure grant. @param tick Current owner tick.
+         * @return No value while work remains pending, or a terminal presentation outcome.
+         */
+        [[nodiscard]] std::optional<NpcDialogueOutcome> Poll(const NpcDialogueRequestIdentity &current, const NpcDialogueGrant &grant,
+                                                            std::uint64_t tick);
+
+    private:
+        struct Work;
+        NpcDialogueJob(NpcDialogueTurn &&turn, JobHandle &&job, std::shared_ptr<Work> work) noexcept;
+        NpcDialogueTurn turn_;
+        JobHandle job_;
+        std::shared_ptr<Work> work_;
     };
 }  // namespace Horo::AI

@@ -1,6 +1,9 @@
 #include "Horo/AI/NpcDialogue.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <future>
+#include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace Horo::AI {
@@ -105,5 +108,117 @@ namespace Horo::AI {
                                        Scenario::Deadline).HasError());
         scenario.facts.front().field = scenario.fields.front();
         CHECK(scenario.Capture().HasError());
+    }
+
+    namespace {
+        using namespace std::chrono_literals;
+
+        class ScriptedDialogueProvider final : public INpcDialogueProvider {
+        public:
+            NpcDialogueCueId answer;
+            bool throws{};
+            mutable NpcDialogueFact observed;
+            mutable std::thread::id worker;
+            mutable std::size_t factCount{};
+
+            Result<NpcDialogueCueId> RequestCue(std::span<const NpcDialogueFact> facts, std::chrono::steady_clock::time_point,
+                                               const CancellationToken &) const override {
+                worker = std::this_thread::get_id();
+                factCount = facts.size();
+                if (!facts.empty())
+                    observed = facts.front();
+                if (throws)
+                    throw std::runtime_error("fixture provider detail");
+                if (answer.IsValid())
+                    return Result<NpcDialogueCueId>::Success(answer);
+                return Result<NpcDialogueCueId>::Failure(MakeError(AIErrors::CapabilityUnavailable));
+            }
+        };
+
+        std::optional<NpcDialogueOutcome> WaitForDialogue(NpcDialogueJob &job, const Scenario &scenario) {
+            const auto stop = std::chrono::steady_clock::now() + 2s;
+            do {
+                if (const auto outcome = job.Poll(scenario.request, scenario.grant, 1))
+                    return outcome;
+                std::this_thread::sleep_for(1ms);
+            } while (std::chrono::steady_clock::now() < stop);
+            return std::nullopt;
+        }
+    }  // namespace
+
+    TEST_CASE("NPC dialogue worker sees only approved facts and publishes a cue on the owner lane", "[ai][npc-dialogue][jobs]") {
+        const Scenario scenario;
+        JobSystem jobs({.ioWorkerCount = 1});
+        const auto provider = std::make_shared<ScriptedDialogueProvider>();
+        auto expected = NpcDialogueStatus::Selected;
+        auto cue = scenario.selected;
+        SECTION("provider admits the authored cue") { provider->answer = scenario.selected; }
+        SECTION("provider failure selects the authored fallback") {
+            expected = NpcDialogueStatus::Fallback;
+            cue = scenario.fallback;
+        }
+        SECTION("provider exception is isolated from the job record") {
+            provider->throws = true;
+            expected = NpcDialogueStatus::Fallback;
+            cue = scenario.fallback;
+        }
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        auto captured = scenario.Capture();
+        REQUIRE(captured.HasValue());
+        auto queued = NpcDialogueJob::Start(jobs, std::move(captured).Value(), scenario.request, scenario.grant, binding, 1,
+                                            std::chrono::steady_clock::now() + 5s, {});
+        REQUIRE(queued.HasValue());
+        auto job = std::move(queued).Value();
+        const auto outcome = WaitForDialogue(job, scenario);
+        REQUIRE(outcome.has_value());
+        REQUIRE(outcome->status == expected);
+        CHECK(outcome->cue == cue);
+        CHECK(provider->worker != std::this_thread::get_id());
+        CHECK(provider->factCount == 1);
+        CHECK(provider->observed.field == scenario.fields.front());
+        CHECK(job.Poll(scenario.request, scenario.grant, 1)->status == NpcDialogueStatus::Consumed);
+        const auto records = jobs.SnapshotIfChanged(0);
+        REQUIRE(records.has_value());
+        REQUIRE(records->jobs.size() == 1);
+        CHECK_FALSE(records->jobs.front().error.has_value());
+    }
+
+    TEST_CASE("Rejected NPC dialogue job admission leaves the turn available for fallback", "[ai][npc-dialogue][jobs]") {
+        const Scenario scenario;
+        JobSystem jobs({.ioWorkerCount = 0});
+        const auto provider = std::make_shared<ScriptedDialogueProvider>();
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        auto captured = scenario.Capture();
+        REQUIRE(captured.HasValue());
+        auto turn = std::move(captured).Value();
+        CHECK(NpcDialogueJob::Start(jobs, std::move(turn), scenario.request, scenario.grant, binding, 1,
+                                    std::chrono::steady_clock::now() + 5s, {}).HasError());
+        CHECK(turn.Resolve(scenario.request, scenario.grant, 1, {}, std::nullopt).cue == scenario.fallback);
+    }
+
+    TEST_CASE("Queued NPC dialogue cannot disclose context after the owner revokes its grant", "[ai][npc-dialogue][jobs]") {
+        const Scenario scenario;
+        std::promise<void> release;
+        JobSystem jobs({.ioWorkerCount = 1});
+        const auto blocker = jobs.Submit({.resource = JobResource::Io}, [ready = release.get_future().share()](const CancellationToken &) {
+            static_cast<void>(ready.wait_for(2s));
+        });
+        REQUIRE(blocker.HasValue());
+        const auto provider = std::make_shared<ScriptedDialogueProvider>();
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        auto captured = scenario.Capture();
+        REQUIRE(captured.HasValue());
+        auto queued = NpcDialogueJob::Start(jobs, std::move(captured).Value(), scenario.request, scenario.grant, binding, 1,
+                                            std::chrono::steady_clock::now() + 5s, {});
+        REQUIRE(queued.HasValue());
+        auto job = std::move(queued).Value();
+        auto revoked = scenario.grant;
+        revoked.fields = {};
+        const auto outcome = job.Poll(scenario.request, revoked, 1);
+        release.set_value();
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        REQUIRE(outcome.has_value());
+        CHECK(outcome->cue == scenario.fallback);
+        CHECK(provider->worker == std::thread::id{});
     }
 }  // namespace Horo::AI
