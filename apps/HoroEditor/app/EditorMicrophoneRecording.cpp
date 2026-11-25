@@ -40,7 +40,7 @@ namespace Horo::Editor {
                                  DurableFileSystem &files, const CancellationToken &stop) {
             Assets::AssetRegistry workerRegistry;
             Application::ProjectAssetImportCommitter publisher{mutations, files, &workerRegistry};
-            if (const auto result = take.recording.Publish(std::move(tail), take.destination, publisher, stop); result.HasError())
+            if (const auto result = take.recording.Publish(std::move(tail), take.destination, publisher, files, stop); result.HasError())
                 return RecordResult::Failure(result.ErrorValue());
             const auto snapshot = workerRegistry.Snapshot();
             const auto *asset = snapshot.Find(take.destination.id);

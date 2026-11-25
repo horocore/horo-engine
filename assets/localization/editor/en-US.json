@@ -2278,6 +2278,9 @@
     "settings.audio.microphone.recording.saving": {"text": "Saving the recording to the project…"},
     "settings.audio.microphone.recording.saved": {"text": "Saved recording to"},
     "settings.audio.microphone.recording.failed": {"text": "The recording could not be saved. Check the microphone and choose a new WAV path under assets/."},
+    "settings.audio.microphone.recording.permission_denied": {"text": "Microphone access was denied or withdrawn. The recording was discarded."},
+    "settings.audio.microphone.recording.device_lost": {"text": "The selected microphone is no longer available. Reconnect it or choose another input."},
+    "settings.audio.microphone.recording.insufficient_space": {"text": "The project drive does not have enough free space for this recording. Free up space and record again."},
     "settings.audio.microphone.recording.stop_save": {"text": "Stop and Save"},
     "settings.audio.microphone.recording.cancel": {"text": "Cancel Recording"},
     "settings.audio.output_device": {

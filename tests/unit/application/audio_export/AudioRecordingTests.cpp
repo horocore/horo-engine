@@ -21,6 +21,11 @@ namespace Horo::Application::Internal {
         public:
             bool failSecondWrite{};
             CancellationSource *cancelDuringStageCleanup{};
+            std::optional<std::uint64_t> freeBytes;
+
+            Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
+                return freeBytes ? Result<std::uint64_t>::Success(*freeBytes) : native.AvailableBytes(path);
+            }
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms permissions) override {
@@ -122,7 +127,7 @@ namespace Horo::Application::Internal {
             REQUIRE(recording.Append(fixture.source, prefix, scratch).HasValue());
             REQUIRE(buffer.TryWrite({7, 21'000}, 1, 1, StereoFrame) == AudioCaptureWrite::Accepted);
 
-            const auto published = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, {});
+            const auto published = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, {});
             INFO((published.HasError() ? published.ErrorValue().message : ""));
             REQUIRE(published.HasValue());
             CHECK(published.Value().frames == 2);
@@ -143,10 +148,24 @@ namespace Horo::Application::Internal {
             auto buffer = fixture.Buffer();
             REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
             auto recording = fixture.Recording();
-            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, {});
+            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, {});
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == FileStorageErrors::IoFailed.code.Value());
             CHECK(std::filesystem::is_empty(fixture.root / "assets"));
+            CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
+        }
+
+        TEST_CASE("Recording reports insufficient space without staging an asset", "[audio][recording]") {
+            RecordingFixture fixture;
+            fixture.files.freeBytes = 0;
+            auto buffer = fixture.Buffer();
+            REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
+            auto recording = fixture.Recording();
+
+            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, {});
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == FileStorageErrors::Capacity.code.Value());
+            CHECK_FALSE(std::filesystem::exists(fixture.root / "assets"));
             CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
         }
 
@@ -166,7 +185,8 @@ namespace Horo::Application::Internal {
             SECTION("producer was cancelled instead of stopped normally") {
                 buffer.Cancel();
             }
-            const auto discarded = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, cancellation.Token());
+            const auto discarded =
+                recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, cancellation.Token());
             CHECK(discarded.HasError());
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets/take.wav"));
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets/take.wav.horo"));
@@ -181,7 +201,8 @@ namespace Horo::Application::Internal {
             REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
             auto recording = fixture.Recording();
 
-            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, cancellation.Token());
+            const auto result =
+                recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, cancellation.Token());
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == Assets::AssetSourceErrors::Cancelled.code.Value());
             CHECK(fixture.publisher.LastReceipt().status == ProjectAssetImportStatus::RolledBack);
@@ -204,7 +225,7 @@ namespace Horo::Application::Internal {
             CHECK(recording.Append(source, block, StereoFrame).HasError());
             auto buffer = fixture.Buffer();
             REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
-            const auto discarded = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, {});
+            const auto discarded = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, fixture.files, {});
             CHECK(discarded.HasError());
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets/take.wav"));
         }

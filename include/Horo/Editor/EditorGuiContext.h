@@ -58,7 +58,10 @@ namespace Horo::Editor {
         Recording,
         Saving,
         Saved,
-        Failed
+        Failed,
+        PermissionDenied,
+        DeviceLost,
+        InsufficientSpace
     };
 
     /** @brief Optional project recording controls backed by the same owner as microphone permission. */

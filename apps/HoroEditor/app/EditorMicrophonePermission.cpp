@@ -2,6 +2,7 @@
 
 #include "EditorMicrophoneRecording.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Security/SecureMemory.h"
 #include "ImmersiveSpeechTranscription.h"
 #include "MacOnDeviceSpeechProvider.h"
@@ -21,6 +22,19 @@ namespace Horo::Editor {
                                                                "Start a shorter recording."};
 
     namespace {
+        /** @brief Projects typed capture and storage failures into safe settings messages. */
+        EditorMicrophoneRecordingStatus RecordingFailureStatus(const Error &error) noexcept {
+            using enum EditorMicrophoneRecordingStatus;
+            const auto code = error.code.Value();
+            if (code == Audio::AudioErrors::CapturePermissionDenied.code.Value())
+                return PermissionDenied;
+            if (code == Audio::AudioErrors::CaptureDeviceLost.code.Value() || code == Audio::AudioErrors::DeviceUnavailable.code.Value())
+                return DeviceLost;
+            if (code == FileStorageErrors::Capacity.code.Value())
+                return InsufficientSpace;
+            return Failed;
+        }
+
         /** @brief Requires foreground admission and both independent native permissions. */
         bool SpeechCaptureAllowed(const bool foreground) noexcept {
             return foreground && Audio::Backend::ObserveSdl3MacCapturePermission().permission == Audio::AudioCapturePermission::Granted &&
@@ -161,11 +175,13 @@ namespace Horo::Editor {
         }
 
         /** @brief Refreshes and opens a foreground-only connection test or recording. */
-        bool Start(const Audio::AudioCaptureDeviceId selected, const Clock::time_point now) {
+        Result<void> Start(const Audio::AudioCaptureDeviceId selected, const Clock::time_point now) {
             if (generation == std::numeric_limits<std::uint64_t>::max())
-                return false;
+                return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleGenerationExhausted));
             const auto input = RefreshSelected(selected);
-            return input.HasValue() && Open(selected, input.Value().revision, input.Value().format, now);
+            if (input.HasError())
+                return Result<void>::Failure(input.ErrorValue());
+            return Open(selected, input.Value().revision, input.Value().format, now);
         }
 
         /** @brief Prepares a revocation token and starts speech on the same exclusive native owner. */
@@ -199,8 +215,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Prepares private recording storage before opening the exact admitted native stream. */
-        bool Open(const Audio::AudioCaptureDeviceId selected, const std::uint64_t revision, const Audio::AudioProcessingFormat &format,
-                  const Clock::time_point now) {
+        Result<void> Open(const Audio::AudioCaptureDeviceId selected, const std::uint64_t revision,
+                          const Audio::AudioProcessingFormat &format, const Clock::time_point now) {
             ++generation;
             const bool recording = recordingTarget.has_value();
             const Audio::Backend::Sdl3CaptureIntent intent{.purpose =
@@ -222,15 +238,15 @@ namespace Horo::Editor {
                 auto prepared = EditorRecordingTake::Prepare(request, std::move(*recordingTarget));
                 recordingTarget.reset();
                 if (prepared.HasError())
-                    return false;
+                    return Result<void>::Failure(prepared.ErrorValue());
                 take.emplace(std::move(prepared).Value());
             }
-            if (backend->StartCapture(request, intent, selectedGrant).HasError())
-                return false;
+            if (auto opened = backend->StartCapture(request, intent, selectedGrant); opened.HasError())
+                return opened;
             grant = selectedGrant;
             deadline = now + (recording ? std::chrono::seconds(20) : TestDuration);
             nextHealth = now;
-            return true;
+            return Result<void>::Success();
         }
 
         /** @brief Cancels queued operations and detaches the current session before presentation clears. */
@@ -252,31 +268,39 @@ namespace Horo::Editor {
         }
 
         /** @brief Retires a failed take without writing any partial asset. */
-        void FailRecording() noexcept {
+        void FailRecording(const EditorMicrophoneRecordingStatus reason = EditorMicrophoneRecordingStatus::Failed) noexcept {
             Stop();
-            recordingStatus = EditorMicrophoneRecordingStatus::Failed;
+            recordingStatus = reason;
         }
 
         /** @brief Drains a bounded number of complete microphone blocks per editor update. */
-        bool DrainTake() {
+        Result<void> DrainTake() {
             using enum Audio::Backend::AudioCaptureRead;
             for (unsigned i = 0; i < 4; ++i) {
                 Audio::Backend::AudioCapturedBlock block;
                 const auto read = backend->ReadCapture(grant->generation, grant, block, take->scratch);
-                if (read.HasError() || read.Value().droppedFrames != 0)
-                    return false;
+                if (read.HasError())
+                    return Result<void>::Failure(read.ErrorValue());
+                if (read.Value().droppedFrames != 0)
+                    return Result<void>::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
                 if (read.Value().status == Empty)
-                    return true;
-                if (read.Value().status != Copied || take->Append(block).HasError())
-                    return false;
+                    break;
+                if (read.Value().status != Copied)
+                    return Result<void>::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
+                if (auto appended = take->Append(block); appended.HasError())
+                    return appended;
             }
-            return true;
+            return Result<void>::Success();
         }
 
         /** @brief Detaches an explicitly saved take and transfers publication off the editor lane. */
         void FinishTake() {
-            if (auto tail = backend->FinishRecording(grant->generation, *grant);
-                tail.HasError() || !publication.Start(std::move(*take), std::move(tail).Value())) {
+            auto tail = backend->FinishRecording(grant->generation, *grant);
+            if (tail.HasError()) {
+                FailRecording(RecordingFailureStatus(tail.ErrorValue()));
+                return;
+            }
+            if (!publication.Start(std::move(*take), std::move(tail).Value())) {
                 FailRecording();
                 return;
             }
@@ -291,7 +315,7 @@ namespace Horo::Editor {
             if (!result || recordingStatus != Saving)
                 return;
             if (result->HasError()) {
-                recordingStatus = Failed;
+                recordingStatus = RecordingFailureStatus(result->ErrorValue());
                 return;
             }
             auto saved = std::move(*result).Value();
@@ -304,9 +328,9 @@ namespace Horo::Editor {
         void Observe(const Clock::time_point now) {
             if (now >= nextHealth) {
                 nextHealth = now + HealthInterval;
-                if (backend->ReconcileCapture(grant->generation, grant).HasError()) {
+                if (const auto current = backend->ReconcileCapture(grant->generation, grant); current.HasError()) {
                     if (take) {
-                        FailRecording();
+                        FailRecording(RecordingFailureStatus(current.ErrorValue()));
                         return;
                     }
                     Stop();
@@ -317,8 +341,8 @@ namespace Horo::Editor {
             const auto activity = backend->CaptureActivity();
             peakLevel = activity.peakLevel;
             if (take) {
-                if (!DrainTake())
-                    FailRecording();
+                if (const auto drained = DrainTake(); drained.HasError())
+                    FailRecording(RecordingFailureStatus(drained.ErrorValue()));
                 else if (activity.state == Audio::Backend::Sdl3CaptureActivityState::Capturing)
                     recordingStatus = EditorMicrophoneRecordingStatus::Recording;
                 return;
@@ -335,12 +359,14 @@ namespace Horo::Editor {
                 inputs.clear();
                 status = Discover() ? Idle : Failed;
             }
-            const bool recording = RecordingRequested();
-            if (const auto selected = std::exchange(pending, std::nullopt); selected && !Start(*selected, now)) {
-                if (recording)
-                    FailRecording();
-                else
-                    status = Failed;
+            if (const auto selected = std::exchange(pending, std::nullopt)) {
+                const bool recording = RecordingRequested();
+                if (const auto opened = Start(*selected, now); opened.HasError()) {
+                    if (recording)
+                        FailRecording(RecordingFailureStatus(opened.ErrorValue()));
+                    else
+                        status = Failed;
+                }
             }
             if (grant)
                 Observe(now);

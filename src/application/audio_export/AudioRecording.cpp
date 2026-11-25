@@ -2,6 +2,7 @@
 
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioSourceImporter.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Security/SecureMemory.h"
 #include "WaveEncoding.h"
 
@@ -172,7 +173,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc AudioRecording::Publish */
     Published AudioRecording::Publish(Audio::Backend::AudioCaptureBuffer tail, const AudioRecordingDestination &destination,
-                                      ProjectAssetImportCommitter &publisher, const CancellationToken &cancellation) {
+                                      ProjectAssetImportCommitter &publisher, const DurableFileSystem &files,
+                                      const CancellationToken &cancellation) {
         try {
             auto recording = std::move(*this);
             if (cancellation.IsCancellationRequested() || recording.samples_.empty())
@@ -184,6 +186,11 @@ namespace Horo::Application::Internal {
             const auto shape = PrepareWaveShape(recording.source_.format, recording.frames_, MaximumRecordingBytes);
             if (!shape)
                 return Published::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
+            const auto available = files.AvailableBytes(destination.projectRoot);
+            if (available.HasError())
+                return Published::Failure(available.ErrorValue());
+            if (available.Value() < shape->encodedBytes)
+                return Published::Failure(MakeError(FileStorageErrors::Capacity));
             const auto samples = std::span{recording.samples_}.first(shape->frames * shape->count);
             auto wave = EncodeWave(*shape, recording.source_.format.sampleRate, samples, {.recording = cancellation});
             if (wave.HasError())

@@ -546,6 +546,12 @@ namespace Horo::Editor::SettingsModalInternal {
                     return "audio.microphone.recording.saved";
                 case Failed:
                     return "audio.microphone.recording.failed";
+                case PermissionDenied:
+                    return "audio.microphone.recording.permission_denied";
+                case DeviceLost:
+                    return "audio.microphone.recording.device_lost";
+                case InsufficientSpace:
+                    return "audio.microphone.recording.insufficient_space";
             }
             return "audio.microphone.recording.description";
         }
@@ -572,6 +578,17 @@ namespace Horo::Editor::SettingsModalInternal {
                 recorder.StartRecording(static_cast<std::size_t>(audio.microphoneInput), audio.recordingPath);
         }
 
+        /** @brief Adds the published asset path only after a successful save. */
+        std::string RecordingDescription(const EditorGuiContext &ctx, const IEditorMicrophoneRecorder &recorder,
+                                         const EditorMicrophoneRecordingStatus status) {
+            auto description = SettingsModal::kTextScope.Text(ctx.localization, RecordingStatusKey(status));
+            if (status == EditorMicrophoneRecordingStatus::Saved) {
+                description += ' ';
+                description += recorder.SavedRecordingPath();
+            }
+            return description;
+        }
+
         /** @brief Records from the chosen endpoint into a new project asset. */
         void DrawMicrophoneRecording(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
             auto *recorder = ctx.microphoneRecorder;
@@ -580,15 +597,12 @@ namespace Horo::Editor::SettingsModalInternal {
                 return;
             const auto status = recorder->RecordingStatus();
             const bool busy = RecordingBusy(status);
-            if (!busy && permission->Status() != EditorMicrophonePermissionStatus::Granted)
+            const bool granted = permission->Status() == EditorMicrophonePermissionStatus::Granted;
+            if (status == EditorMicrophoneRecordingStatus::Idle && !granted)
                 return;
             const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.title");
-            auto description = SettingsModal::kTextScope.Text(ctx.localization, RecordingStatusKey(status));
-            if (status == EditorMicrophoneRecordingStatus::Saved) {
-                description += ' ';
-                description += recorder->SavedRecordingPath();
-            }
-            if (!busy) {
+            const auto description = RecordingDescription(ctx, *recorder, status);
+            if (!busy && granted) {
                 const auto &path = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.path");
                 SettingRow(path.c_str(), "", ctx.theme.fonts, [&] {
                     (void)InputTextControl("##microphone-recording-path", audio.recordingPath, 201, ctx.theme.fonts);
@@ -597,7 +611,7 @@ namespace Horo::Editor::SettingsModalInternal {
             SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
                 if (busy)
                     DrawRecordingStop(ctx, *recorder);
-                else
+                else if (granted)
                     DrawRecordingStart(audio, ctx, *recorder, *permission);
             }, "microphone-recording", SettingRowLayout::Stacked);
             if (status == EditorMicrophoneRecordingStatus::Recording)

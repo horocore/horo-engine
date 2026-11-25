@@ -2278,6 +2278,9 @@
     "settings.audio.microphone.recording.saving": {"text": "Kayıt projeye kaydediliyor…"},
     "settings.audio.microphone.recording.saved": {"text": "Kaydın konumu"},
     "settings.audio.microphone.recording.failed": {"text": "Kayıt kaydedilemedi. Mikrofonu kontrol edin ve assets/ altında yeni bir WAV yolu seçin."},
+    "settings.audio.microphone.recording.permission_denied": {"text": "Mikrofon erişimi reddedildi veya geri çekildi. Kayıt silindi."},
+    "settings.audio.microphone.recording.device_lost": {"text": "Seçilen mikrofon artık kullanılamıyor. Mikrofonu yeniden bağlayın veya başka bir giriş seçin."},
+    "settings.audio.microphone.recording.insufficient_space": {"text": "Proje diskinde bu kayıt için yeterli boş alan yok. Yer açıp yeniden kaydedin."},
     "settings.audio.microphone.recording.stop_save": {"text": "Durdur ve Kaydet"},
     "settings.audio.microphone.recording.cancel": {"text": "Kaydı İptal Et"},
     "settings.audio.output_device": {

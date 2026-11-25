@@ -758,6 +758,20 @@ namespace {
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
     }
 
+    TEST_CASE("Recording failure reasons resolve in both editor locales", "[unit][editor][audio][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        constexpr std::array keys{"settings.audio.microphone.recording.permission_denied", "settings.audio.microphone.recording.device_lost",
+                                  "settings.audio.microphone.recording.insufficient_space"};
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
+            Horo::Editor::LocalizationError error;
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            RequireCatalogKeys(service, keys);
+        }
+    }
+
     TEST_CASE("Selected XR mirror meaning is explicit in both supported locales", "[unit][editor][xr][localization]") {
         const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
         for (const auto &[locale, label] :

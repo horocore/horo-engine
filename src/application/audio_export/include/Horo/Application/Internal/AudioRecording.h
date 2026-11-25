@@ -38,6 +38,7 @@ namespace Horo::Application::Internal {
          * @param tail Exact buffer transferred after the capture callback detached, with no callback or reader remaining.
          * @param destination Explicit authorized asset target for this save.
          * @param publisher Host-owned project publication authority.
+         * @param files Filesystem used to check capacity before starting publication.
          * @param cancellation Stop token observed before publication and during validation.
          * @return Published audio metadata or typed failure. Inspect publisher's receipt if publication was attempted.
          * @details This is a one-shot operation. All failure paths discard private PCM. No intermediate recording file is retained.
@@ -45,6 +46,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<PublishedAudioRecording> Publish(Audio::Backend::AudioCaptureBuffer tail,
                                                               const AudioRecordingDestination &destination,
                                                               ProjectAssetImportCommitter &publisher,
+                                                              const DurableFileSystem &files,
                                                               const CancellationToken &cancellation);
 
         /** @brief Irreversibly discards this accumulation and scrubs its private samples. */
