@@ -170,6 +170,17 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Render::RenderOriginLocalScene> OriginScene() const;
 
+        /** @brief Exact origin-relative draw geometry and its corresponding runtime owners. */
+        struct IdentifiedOriginScene final {
+            Render::RenderOriginLocalScene geometry;
+            std::span<const Runtime::EntityRef> drawEntities;
+        };
+
+        /** @brief Borrows origin-relative draws and their runtime owners in the same order.
+         * @return Complete scoped geometry and identities or a stale/foreign origin or Scene failure.
+         * @pre The packet must outlive the synchronous borrow. */
+        [[nodiscard]] Result<IdentifiedOriginScene> OriginSceneWithOwners() const;
+
         /** @brief Checks a newer renderer capture from the same mounted Scene incarnation and view owner.
          * @param previous Prior packet expected by the viewport publication.
          * @return Whether this packet is a provenance-matching successor. Validate Scene before publishing it. */
@@ -178,13 +189,14 @@ namespace Horo::Application::Internal {
     private:
         friend class MountedWorld;
         MountedWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
-                                 std::vector<Runtime::PrimitiveMeshLease> leases,
-                                 std::vector<Render::RenderMeshResourceView> resources) noexcept;
+                                 std::vector<Runtime::PrimitiveMeshLease> leases, std::vector<Render::RenderMeshResourceView> resources,
+                                 std::vector<Runtime::EntityRef> drawEntities) noexcept;
 
         Runtime::RuntimeSceneView parent_;
         Render::RenderOriginFrame frame_;
         std::vector<Runtime::PrimitiveMeshLease> leases_;
         std::vector<Render::RenderMeshResourceView> resources_;
+        std::vector<Runtime::EntityRef> drawEntities_;
     };
 
     /** @brief Private candidate and active World owners retained by the selected application Scene record. */

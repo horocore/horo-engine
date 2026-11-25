@@ -317,6 +317,10 @@ namespace Horo::WorldCook {
                 CHECK(captured.Value().scene.camera.position == Math::Vec3{1.25F, 0, 0});
                 REQUIRE(captured.Value().scene.instances.size() == 1);
                 CHECK(captured.Value().scene.instances.front().localToWorld.At(0, 3) == 1.25F);
+                const auto owners = geometry->OriginSceneWithOwners();
+                REQUIRE(owners.HasValue());
+                REQUIRE(owners.Value().drawEntities.size() == captured.Value().scene.instances.size());
+                CHECK(owners.Value().drawEntities.front() == candidate.Find(cameraEntity.object).value());
                 const auto root = mount->ResolveInitialTrackingRoot(candidate, cameraEntity.object);
                 if (rigidRoot) {
                     REQUIRE(root.HasValue());
@@ -352,10 +356,12 @@ namespace Horo::WorldCook {
             CHECK(mount->Anchors(*current).front() == anchors.front());
             CHECK_FALSE(old.IsCurrent());
             CHECK(geometry->OriginScene().HasValue());
+            CHECK(geometry->OriginSceneWithOwners().HasValue());
             renderer->Shutdown();
             mount.reset();
             CHECK_FALSE(parent.ActiveScene());
             CHECK(geometry->OriginScene().HasError());
+            CHECK(geometry->OriginSceneWithOwners().HasError());
         }
         SECTION("An initial cell conflict rejects the private root and retires the mount operation") {
             const auto old = *parent.ActiveScene();

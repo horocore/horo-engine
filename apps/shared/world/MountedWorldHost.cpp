@@ -2012,9 +2012,11 @@ namespace Horo::Application::Internal {
         std::vector<Runtime::PrimitiveMeshLease> leases;
         std::vector<Render::RenderMeshResourceView> resources;
         std::vector<Render::RenderOriginInstance> instances;
+        std::vector<Runtime::EntityRef> drawEntities;
         leases.reserve(meshes.size());
         resources.reserve(meshes.size());
         instances.reserve(meshes.size());
+        drawEntities.reserve(meshes.size());
         for (const auto object : meshes) {
             const auto placed = lookup(object);
             if (placed.HasError())
@@ -2040,18 +2042,22 @@ namespace Horo::Application::Internal {
                 return Output::Failure(matrix.ErrorValue());
             instances.emplace_back(Global(placed.Value().anchor.positionMillimeters),
                                    Render::RenderStaticMeshInstance{handle, matrix.Value(), resource.localBounds});
+            drawEntities.push_back(entity.entity);
         }
 
         auto frame = renderer.Capture({originCamera.Value(), instances, {}, parent.RuntimeId().value}, basis);
         if (frame.HasError())
             return Output::Failure(frame.ErrorValue());
-        return Output::Success(MountedWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources)});
+        return Output::Success(
+            MountedWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources), std::move(drawEntities)});
     }
 
     MountedWorldRenderPacket::MountedWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
                                                        std::vector<Runtime::PrimitiveMeshLease> leases,
-                                                       std::vector<Render::RenderMeshResourceView> resources) noexcept
-        : parent_(std::move(parent)), frame_(std::move(frame)), leases_(std::move(leases)), resources_(std::move(resources)) {}
+                                                       std::vector<Render::RenderMeshResourceView> resources,
+                                                       std::vector<Runtime::EntityRef> drawEntities) noexcept
+        : parent_(std::move(parent)), frame_(std::move(frame)), leases_(std::move(leases)), resources_(std::move(resources)),
+          drawEntities_(std::move(drawEntities)) {}
 
     /** @copydoc MountedWorldRenderPacket::Scene */
     Result<Render::RenderSceneView> MountedWorldRenderPacket::Scene() const {
@@ -2065,6 +2071,15 @@ namespace Horo::Application::Internal {
         if (!parent_.IsCurrent())
             return Result<Render::RenderOriginLocalScene>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         return frame_.OriginScene(resources_);
+    }
+
+    /** @copydoc MountedWorldRenderPacket::OriginSceneWithOwners */
+    Result<MountedWorldRenderPacket::IdentifiedOriginScene> MountedWorldRenderPacket::OriginSceneWithOwners() const {
+        using Draws = Result<IdentifiedOriginScene>;
+        auto scene = OriginScene();
+        if (scene.HasError())
+            return Draws::Failure(scene.ErrorValue());
+        return Draws::Success({std::move(scene).Value(), drawEntities_});
     }
 
     /** @copydoc MountedWorldRenderPacket::IsSuccessorOf */

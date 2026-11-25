@@ -25,6 +25,14 @@ namespace Horo::Application::Internal {
     }
 
     namespace {
+        /** @brief Checks that each mounted draw has an exact live entity and an authored object identity. */
+        bool MountedDrawOwnersAreCurrent(const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::EntityRef> owners) {
+            return std::ranges::all_of(owners, [&](const Runtime::EntityRef owner) {
+                const auto entity = scene.Get(owner);
+                return entity.HasValue() && entity.Value().authoredObject.has_value();
+            });
+        }
+
         /** @brief Describes the exact selected queue's acquired/released color tuple from existing renderer policy. */
         Render::RenderGraphLogicalState ProjectionAcquired(const Render::RenderQueueId queue) noexcept {
             return {Render::RenderGraphSynchronizationAccess::ReadWrite, Render::RenderGraphSynchronizationOperation::ColorAttachment,
@@ -399,13 +407,15 @@ namespace Horo::Application::Internal {
         const auto captured = mounted_(candidate, root);
         if (captured.HasError())
             return Output::Failure(captured.ErrorValue());
-        const auto &[geometry, trackingRoot, originFromLocal] = captured.Value();
+        const auto &[geometry, trackingRoot, originFromLocal, drawEntities] = captured.Value();
         if (trackingRoot != root || !geometry || !candidate.IsCurrent() ||
             geometry->scene.lightSceneDomain != candidate.RuntimeId().value || !geometry->view.IsValid())
             return Output::Failure(MakeError(XRErrors::IdentityStale));
         constexpr auto maximum = Editor::PreparedEditorXrGeometry::MaximumInstances;
         if (geometry->scene.instances.size() > maximum || geometry->scene.meshResources.size() > maximum)
             return Output::Failure(MakeError(XRErrors::CapacityExceeded));
+        if (drawEntities.size() != geometry->scene.instances.size() || !MountedDrawOwnersAreCurrent(candidate, drawEntities))
+            return Output::Failure(MakeError(XRErrors::IdentityStale, "Mounted XR draw owners do not match the candidate Scene."));
         if (!geometry->scene.IsValid())
             return Output::Failure(MakeError(XRErrors::OperationInvalid));
         const auto origin = geometry->origin.Get();

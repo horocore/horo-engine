@@ -91,15 +91,16 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         };
 
         auto owner = std::make_shared<RetainedGeometry>(RetainedGeometry{std::move(captured).Value(), {}});
-        auto view = owner->packet.OriginScene();
+        auto view = owner->packet.OriginSceneWithOwners();
         if (view.HasError())
             return Output::Failure(view.ErrorValue());
-        const auto geometryOrigin = view.Value().origin.Get();
+        const auto &[geometry, drawEntities] = view.Value();
+        const auto geometryOrigin = geometry.origin.Get();
         const auto placementOrigin = placement.Value().origin.Get();
         if (geometryOrigin.HasError() || placementOrigin.HasError() || geometryOrigin.Value() != placementOrigin.Value())
             return Output::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
-        owner->view.emplace(std::move(view).Value());
-        return Output::Success({{owner, &*owner->view}, trackingRoot, placement.Value().originFromLocal});
+        owner->view.emplace(geometry);
+        return Output::Success({{owner, &*owner->view}, trackingRoot, placement.Value().originFromLocal, drawEntities});
     }
 
     /** @copydoc ProjectPlaySceneHost::CompleteWorldStartup */

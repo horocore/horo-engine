@@ -13,10 +13,12 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Runtime {
     class SceneActivationParticipant;
     class RuntimeSceneView;
+    struct EntityRef;
 }  // namespace Horo::Runtime
 
 namespace Horo::Render {
@@ -46,6 +48,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Render::RenderOriginLocalScene> geometry;
         Runtime::SceneObjectId trackingRoot;
         Math::Transform originFromLocal;
+        std::span<const Runtime::EntityRef> drawEntities; /**< Borrowed from the same shared owner as the geometry. */
     };
 
     /** @brief Captures the exact private Play Scene and explicitly selected authored tracking root. */
