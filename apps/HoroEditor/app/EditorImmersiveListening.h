@@ -29,6 +29,12 @@ namespace Horo::Editor {
         /** @brief Returns the current UI state and a transient preview, if the captured context remains valid. */
         [[nodiscard]] State Status() const noexcept;
         [[nodiscard]] std::string_view Transcript() const & noexcept;
+
+        /** @brief Returns the terminal capture reason while Status is Interrupted. */
+        [[nodiscard]] SpeechTranscriptionStatus FailureReason() const noexcept {
+            return failureReason_;
+        }
+
         /** @brief Reads the captured selection or aligned pointing candidates on the workspace owner lane. */
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewReferences(
             const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
@@ -59,7 +65,8 @@ namespace Horo::Editor {
     private:
         using Scope = Application::Internal::OpenXRPlayListeningScope;
         [[nodiscard]] std::optional<Scope> Current() const;
-        void Fail() noexcept;
+        /** @brief Releases the capture and preserves its user-visible terminal reason. */
+        void Fail(SpeechTranscriptionStatus reason = SpeechTranscriptionStatus::CaptureInterrupted) noexcept;
 
         EditorMicrophonePermission &microphone_;
         EditorMicrophoneSpeechSession &speech_;
@@ -70,5 +77,6 @@ namespace Horo::Editor {
         CancellationToken selectionLifetime_;
         std::optional<ImmersiveCommandEnvelope> preview_;
         State state_{State::Idle};
+        SpeechTranscriptionStatus failureReason_{SpeechTranscriptionStatus::CaptureInterrupted};
     };
 }  // namespace Horo::Editor

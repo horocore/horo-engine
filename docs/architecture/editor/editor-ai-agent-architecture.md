@@ -218,6 +218,9 @@ Ownership rules:
   requested separately. Play capture retains only a transient transcript preview
   and does not grant model, tool or mutation authority. The panel clears capture
   when presentation, selection or the Play lineage is withdrawn.
+  Before capture starts, the panel identifies the on-device path. A recording
+  limit, unavailable recognizer, or low-confidence result releases that capture
+  and reports the reason. A new recording requires a new user action.
 - The local Agent panel can request a read-only review of captured selection
   references. The workspace checks the exact authored revision and active Play
   scene, then reports each candidate's visibility, lock, or scope status.

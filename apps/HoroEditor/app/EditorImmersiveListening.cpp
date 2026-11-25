@@ -150,9 +150,14 @@ namespace Horo::Editor {
                                              .diagnosticsAllowed = true,
                                              .localSpeechOnly = true},
                                             std::span{selected}.first(selection.objectCount));
-        constexpr float MinimumConfidence = 0.5F;
-        if (!context || speech_.Start(input, true, owner_, *context, locale, MinimumConfidence) != SpeechTranscriptionStatus::Accepted) {
+        if (!context) {
             Fail();
+            return;
+        }
+        constexpr float MinimumConfidence = 0.5F;
+        const auto started = speech_.Start(input, true, owner_, *context, locale, MinimumConfidence);
+        if (started != SpeechTranscriptionStatus::Accepted) {
+            Fail(started);
             return;
         }
         scope_ = scope;
@@ -163,8 +168,13 @@ namespace Horo::Editor {
     void EditorImmersiveListening::Finish() {
         if (state_ != State::Listening)
             return;
-        if (!Current() || speech_.Seal(true) != SpeechTranscriptionStatus::Accepted) {
+        if (!Current()) {
             Fail();
+            return;
+        }
+        const auto sealed = speech_.Seal(true);
+        if (sealed != SpeechTranscriptionStatus::Accepted) {
+            Fail(sealed);
             return;
         }
         state_ = State::Finishing;
@@ -185,7 +195,7 @@ namespace Horo::Editor {
         if (update.status == Pending || update.status == Accepted)
             return;
         if (update.status != Finished || !update.evidence) {
-            Fail();
+            Fail(update.status);
             return;
         }
         auto result = speech_.AssembleCommand(true, *update.evidence, current->interaction.cutoff);
@@ -218,8 +228,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorImmersiveListening::Fail */
-    void EditorImmersiveListening::Fail() noexcept {
+    void EditorImmersiveListening::Fail(const SpeechTranscriptionStatus reason) noexcept {
         Cancel();
+        failureReason_ = reason;
         state_ = State::Interrupted;
     }
 
@@ -229,6 +240,7 @@ namespace Horo::Editor {
         selectionLifetime_ = {};
         owner_.Revoke();
         speech_.Cancel();
+        failureReason_ = SpeechTranscriptionStatus::CaptureInterrupted;
         state_ = State::Idle;
     }
 }  // namespace Horo::Editor

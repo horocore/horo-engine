@@ -193,6 +193,10 @@ namespace {
     void RequireXrListeningCatalogKeys(const Horo::Editor::LocalizationService &service) {
         constexpr std::array keys{
             "workspace.local_agent.xr_listening_idle",
+            "workspace.local_agent.xr_listening_limit",
+            "workspace.local_agent.xr_listening_provider_unavailable",
+            "workspace.local_agent.xr_listening_low_confidence",
+            "workspace.local_agent.xr_listening_privacy",
             "workspace.local_agent.xr_listening_active",
             "workspace.local_agent.xr_listening_finishing",
             "workspace.local_agent.xr_listening_speech_only",
@@ -207,36 +211,28 @@ namespace {
             "workspace.local_agent.xr_listening_finish",
             "workspace.local_agent.xr_listening_cancel",
             "workspace.local_agent.xr_listening_discard",
-            "workspace.local_agent.xr_reference_review",
-            "workspace.local_agent.xr_pointing_review",
-            "workspace.local_agent.xr_location_review",
-            "workspace.local_agent.xr_location_coordinates",
-            "workspace.local_agent.xr_surface_review",
-            "workspace.local_agent.xr_surface_empty",
-            "workspace.local_agent.xr_surface_unavailable",
-            "workspace.local_agent.xr_surface_floor",
-            "workspace.local_agent.xr_surface_ceiling",
-            "workspace.local_agent.xr_surface_wall",
-            "workspace.local_agent.xr_surface_platform",
-            "workspace.local_agent.xr_surface_unknown",
-            "workspace.local_agent.xr_contacts_review",
-            "workspace.local_agent.xr_contacts_unavailable",
-            "workspace.local_agent.xr_contacts_tick",
-            "workspace.local_agent.xr_contacts_empty",
-            "workspace.local_agent.xr_contacts_trigger",
-            "workspace.local_agent.xr_contacts_contact",
-            "workspace.local_agent.xr_pointing_unavailable",
-            "workspace.local_agent.xr_pointing_empty",
-            "workspace.local_agent.xr_reference_stale",
-            "workspace.local_agent.xr_reference_revision",
-            "workspace.local_agent.xr_reference_mounted",
-            "workspace.local_agent.xr_reference_empty",
-            "workspace.local_agent.xr_reference_ambiguous",
-            "workspace.local_agent.xr_reference_available",
-            "workspace.local_agent.xr_reference_hidden",
-            "workspace.local_agent.xr_reference_locked",
-            "workspace.local_agent.xr_reference_deleted",
-            "workspace.local_agent.xr_reference_out_of_scope",
+        };
+        RequireCatalogKeys(service, keys);
+    }
+
+    /** @brief Covers the localized read-only XR evidence reviews. */
+    void RequireXrEvidenceCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{
+            "workspace.local_agent.xr_reference_review",     "workspace.local_agent.xr_pointing_review",
+            "workspace.local_agent.xr_location_review",      "workspace.local_agent.xr_location_coordinates",
+            "workspace.local_agent.xr_surface_review",       "workspace.local_agent.xr_surface_empty",
+            "workspace.local_agent.xr_surface_unavailable",  "workspace.local_agent.xr_surface_floor",
+            "workspace.local_agent.xr_surface_ceiling",      "workspace.local_agent.xr_surface_wall",
+            "workspace.local_agent.xr_surface_platform",     "workspace.local_agent.xr_surface_unknown",
+            "workspace.local_agent.xr_contacts_review",      "workspace.local_agent.xr_contacts_unavailable",
+            "workspace.local_agent.xr_contacts_tick",        "workspace.local_agent.xr_contacts_empty",
+            "workspace.local_agent.xr_contacts_trigger",     "workspace.local_agent.xr_contacts_contact",
+            "workspace.local_agent.xr_pointing_unavailable", "workspace.local_agent.xr_pointing_empty",
+            "workspace.local_agent.xr_reference_stale",      "workspace.local_agent.xr_reference_revision",
+            "workspace.local_agent.xr_reference_mounted",    "workspace.local_agent.xr_reference_empty",
+            "workspace.local_agent.xr_reference_ambiguous",  "workspace.local_agent.xr_reference_available",
+            "workspace.local_agent.xr_reference_hidden",     "workspace.local_agent.xr_reference_locked",
+            "workspace.local_agent.xr_reference_deleted",    "workspace.local_agent.xr_reference_out_of_scope",
         };
         RequireCatalogKeys(service, keys);
     }
@@ -443,6 +439,7 @@ namespace {
         RequireCatalogKeys(service, packageKeys);
         RequireCatalogKeys(service, globalDockKeys);
         RequireXrListeningCatalogKeys(service);
+        RequireXrEvidenceCatalogKeys(service);
         RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
         RequireCatalogKeys(service, std::array{"workspace.source_language.unavailable",

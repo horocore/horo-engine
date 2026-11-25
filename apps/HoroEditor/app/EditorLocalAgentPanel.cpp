@@ -443,10 +443,25 @@ namespace Horo::Editor {
                 listeningDevice_.reset();
             }
 
+            /** @brief Presents an actionable reason for a capture that released its scope. */
+            static const char *ListeningFailureKey(const SpeechTranscriptionStatus reason) noexcept {
+                using enum SpeechTranscriptionStatus;
+                switch (reason) {
+                    case LimitExceeded:
+                        return "xr_listening_limit";
+                    case ProviderUnavailable:
+                        return "xr_listening_provider_unavailable";
+                    case LowConfidence:
+                        return "xr_listening_low_confidence";
+                    default:
+                        return "xr_listening_interrupted";
+                }
+            }
+
             /** @brief Maps the local capture state to one localized status. */
-            static const char *ListeningStatusKey(const EditorImmersiveListening::State state) noexcept {
+            static const char *ListeningStatusKey(const EditorImmersiveListening &listening) noexcept {
                 using enum EditorImmersiveListening::State;
-                switch (state) {
+                switch (listening.Status()) {
                     case Idle:
                         return "xr_listening_idle";
                     case Listening:
@@ -460,7 +475,7 @@ namespace Horo::Editor {
                     case Spatial:
                         return "xr_listening_spatial";
                     case Interrupted:
-                        return "xr_listening_interrupted";
+                        return ListeningFailureKey(listening.FailureReason());
                 }
                 return "xr_listening_interrupted";
             }
@@ -476,6 +491,8 @@ namespace Horo::Editor {
             /** @brief Presents explicit discovery and selected input controls. */
             void DrawListeningStart(const EditorGuiContext &context) {
                 const auto &locale = context.localization;
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "xr_listening_privacy"), Theme::Muted(),
+                                context.theme.fonts);
                 DrawListeningPermissions(locale);
                 if (Button(locale, "xr_listening_refresh", true)) {
                     ResetListeningInput();
@@ -518,7 +535,7 @@ namespace Horo::Editor {
                 const auto &locale = context.localization;
                 const auto &fonts = context.theme.fonts;
                 const auto width = ImGui::GetContentRegionAvail().x;
-                Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(state)), Theme::Text(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(*listening_)), Theme::Text(), fonts);
                 if (state == Idle || state == Interrupted) {
                     listeningReferences_.reset();
                     requestedListeningReferences_.reset();
