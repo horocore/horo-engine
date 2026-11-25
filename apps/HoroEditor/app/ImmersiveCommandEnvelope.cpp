@@ -1,6 +1,7 @@
 #include "ImmersiveCommandEnvelope.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace Horo::Editor {
@@ -29,14 +30,29 @@ namespace Horo::Editor {
                    (sample.tracking == current.tracking) == (sample.sampledAt == current.sampledAt);
         }
 
+        /** @brief Rejects malformed geometry before retaining it as local spatial evidence. */
+        bool ValidGeometry(const XR::XRInteractionShape &shape) noexcept {
+            if (const auto *point = std::get_if<Math::Vec3>(&shape))
+                return Math::IsFinite(*point);
+            if (const auto *sphere = std::get_if<Math::BoundingSphere>(&shape))
+                return Math::IsFinite(sphere->center) && std::isfinite(sphere->radius) && sphere->radius > 0.0F;
+            const auto *ray = std::get_if<Math::Ray>(&shape);
+            return ray && ray->minimumDistance < ray->maximumDistance &&
+                   Math::TryMakeRay(ray->origin, ray->direction, ray->minimumDistance, ray->maximumDistance).HasValue();
+        }
+
+        /** @brief Verifies copied candidate identity, confidence and canonical World space. */
+        bool ValidCandidate(const XR::XRInteractionCandidate &candidate, const XR::XRInteractionCutoff &cutoff) noexcept {
+            return candidate.device.IsValid() && candidate.device.session == cutoff.session && candidate.space.id.IsValid() &&
+                   candidate.space.id.session == cutoff.session && candidate.space.kind == XR::XRSpaceKind::World &&
+                   candidate.space.worldOriginRevision == cutoff.origin && candidate.confidence > XR::XRTrackingConfidence::None &&
+                   candidate.confidence <= XR::XRTrackingConfidence::High && ValidGeometry(candidate.shape);
+        }
+
         /** @brief Checks source scope and the host-supplied measurement interval without doing a clock conversion. */
         bool ValidObservation(const ImmersiveSpatialObservation &sample, const std::uint64_t clockDomain) noexcept {
-            const auto &candidate = sample.candidate;
             return sample.earliest.clockDomain == clockDomain && sample.latest.clockDomain == clockDomain &&
-                   sample.earliest.nanoseconds <= sample.latest.nanoseconds && candidate.device.IsValid() &&
-                   candidate.device.session == sample.cutoff.session && candidate.space.id.IsValid() &&
-                   candidate.space.id.session == sample.cutoff.session && candidate.space.worldOriginRevision == sample.cutoff.origin &&
-                   candidate.confidence > XR::XRTrackingConfidence::None && candidate.confidence <= XR::XRTrackingConfidence::High;
+                   sample.earliest.nanoseconds <= sample.latest.nanoseconds && ValidCandidate(sample.candidate, sample.cutoff);
         }
 
         /** @brief The current pose lies inside the interval between the neutral and pressed action cutoffs. */

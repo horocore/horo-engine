@@ -339,6 +339,32 @@ namespace Horo::Editor {
             CHECK_FALSE(result.envelope);
         }
 
+        TEST_CASE("Immersive commands reject geometry outside the measured World space", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            SECTION("local reference space uses the same session and origin") {
+                sample.candidate.space.kind = XR::XRSpaceKind::Local;
+            }
+            SECTION("nonfinite direct point") {
+                sample.candidate.shape = Math::Vec3{std::numeric_limits<float>::infinity(), 0, 0};
+            }
+            SECTION("nonfinite proximity radius") {
+                sample.candidate.shape = Math::BoundingSphere{{}, std::numeric_limits<float>::infinity()};
+            }
+            SECTION("degenerate ray direction") {
+                sample.candidate.shape = Math::Ray{{}, {}, 0, 4};
+            }
+            SECTION("empty ray segment") {
+                sample.candidate.shape = Math::Ray{{}, {0, 0, -1}, 0, 0};
+            }
+            const auto result =
+                ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, sample.cutoff, {&sample, 1}});
+            CHECK(result.status == ImmersiveCommandStatus::InvalidSpatialEvidence);
+            CHECK_FALSE(result.envelope);
+        }
+
         TEST_CASE("Immersive commands can retain multiple candidates from a single measured cutoff", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             const auto speech = FinalEvidence(fixture);

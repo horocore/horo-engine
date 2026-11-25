@@ -201,6 +201,8 @@ Ownership rules:
 - The macOS listening owner lends that clock only while its exact microphone
   lease accepts input. A pose batch must match both the measured XR cutoff
   and the listening generation before the editor retains it.
+  Command assembly accepts finite World-space points, positive-radius spheres,
+  and nonempty ray segments from that cutoff.
 - The editor observes the existing player-scoped XR pointer after Input commits.
   A new selection press during the same listening operation retains its measured
   ray. Held buttons and source replacement do not create new observations.
