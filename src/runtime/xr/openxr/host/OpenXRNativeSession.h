@@ -551,8 +551,8 @@ namespace Horo::XR::OpenXRInternal {
         void RevokeLightEstimation() noexcept;
         /** @brief Rechecks the native session and light grant after a foreign call. */
         [[nodiscard]] Result<void> RecheckLightObservation(const XRSessionId &session);
-        /** @brief Withdraws native light and passthrough admission before an owner-lane lifecycle transition. */
-        void RevokeCompositionObservations() noexcept;
+        /** @brief Withdraws native light, anchor and passthrough admission before an owner-lane lifecycle transition. */
+        void RevokeCompositionObservations();
         [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
         [[nodiscard]] Result<void> RetireSpatialAnchorStore();
         [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorStore(const XRAnchorScope &scope, XrSpace world) const;
@@ -696,6 +696,7 @@ namespace Horo::XR::OpenXRInternal {
             std::array<Slot, XRSpatialAnchors::MaximumAnchors> slots{};
             std::uint32_t maximumAnchors{};
             bool admitted{};
+            bool withdrawn{}; /**< A lifecycle event withdrew consent, including during provider preparation. */
 
             [[nodiscard]] bool Resolve(const NativeSessionBorrow &native, PFN_xrGetInstanceProcAddr getProc);
             [[nodiscard]] Result<void> Release(Slot &slot);

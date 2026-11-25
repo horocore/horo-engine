@@ -307,9 +307,4 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
-    /** @copydoc OpenXRNativeSession::RevokeCompositionObservations */
-    void OpenXRNativeSession::RevokeCompositionObservations() noexcept {
-        RevokeLightEstimation();
-        RevokePassthrough();
-    }
 }  // namespace Horo::XR::OpenXRInternal

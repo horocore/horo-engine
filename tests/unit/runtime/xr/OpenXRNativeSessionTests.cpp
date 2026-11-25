@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 #include "OpenXRProtectedAnchorStore.h"
+#include "OpenXRSessionEvents.h"
+#include "support/OpenXREventScriptTestSupport.h"
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <algorithm>
@@ -22,6 +24,23 @@ namespace Horo::Tests::OpenXR {
 
             void Release(XRSessionPreparation, const XRSessionId &) noexcept override {}
         };
+
+        /** @brief Delivers focus loss and recovery in one native event poll. */
+        void InterruptAnchorFocus(OpenXRNativeSession &owner, XRSessionLifecycle &lifecycle, XrSession session) {
+            XRFrameLifecycle frames{lifecycle};
+            EventScript script;
+            script.session = session;
+            OpenXRSessionEvents events{owner, lifecycle, frames};
+            REQUIRE(events.Bind({&EventScript::GetProc}, {}).HasValue());
+            script.Push(XR_SESSION_STATE_VISIBLE);
+            script.Push(XR_SESSION_STATE_FOCUSED);
+            EventScript::active = &script;
+            const auto observed = events.Poll(true);
+            EventScript::active = nullptr;
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().actionsInterrupted);
+            CHECK(lifecycle.Snapshot().admitsActions);
+        }
 
         struct AnchorScript final {
             static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSpatialAnchorCreateInfoMSFT *info, XrSpatialAnchorMSFT *out) {
@@ -257,6 +276,20 @@ namespace Horo::Tests::OpenXR {
                                   .grant = IdentityValue<XRAnchorGrant>(1)};
         const auto world = NativeHandle<XrSpace>(11);
         const auto publication = std::make_shared<XRSpatialAnchors>(lifecycle);
+        SECTION("focus interruption during provider preparation consumes its pending grant") {
+            bool interrupt = true;
+            fixture.fence.onValidate = [&fixture, &lifecycle, &interrupt] {
+                if (std::exchange(interrupt, false))
+                    InterruptAnchorFocus(fixture.owner, *lifecycle, fixture.script.lastSession);
+            };
+            const auto revoked = fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication);
+            fixture.fence.onValidate = {};
+            RequireFailureIdentity(revoked, XRErrors::PermissionDenied);
+            RequireFailureIdentity(fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication),
+                                   XRErrors::IdentityStale);
+            REQUIRE(fixture.owner.Close().HasValue());
+            return;
+        }
         REQUIRE(fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
         const auto createdAt = XRRuntimeTime::Create(10).Value();
         const auto observedAt = XRRuntimeTime::Create(20).Value();
@@ -270,6 +303,18 @@ namespace Horo::Tests::OpenXR {
                                XRErrors::OperationUnavailable);
         REQUIRE(fixture.owner.SampleSpatialAnchor(scope, world, anchor.Value(), observedAt).HasValue());
 
+        SECTION("one event batch cannot restore a withdrawn anchor or store grant") {
+            InterruptAnchorFocus(fixture.owner, *lifecycle, fixture.script.lastSession);
+            RequireFailureIdentity(publication->Read(scope, anchor.Value(), observedAt), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.owner.SampleSpatialAnchor(scope, world, anchor.Value(), XRRuntimeTime::Create(21).Value()),
+                                   XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.owner.CheckSpatialAnchorStore(scope, world), XRErrors::OperationUnavailable);
+            REQUIRE(fixture.owner.StopSpatialAnchors(scope, XRAnchorWithdrawal::AccessRevoked).HasValue());
+            RequireFailureIdentity(fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication),
+                                   XRErrors::IdentityStale);
+            REQUIRE(fixture.owner.Close().HasValue());
+            return;
+        }
         SECTION("existing records retain their stable name and restore without any old pose") {
             REQUIRE(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one").HasValue());
             RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),

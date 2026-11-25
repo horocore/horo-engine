@@ -115,6 +115,7 @@ namespace Horo::XR::OpenXRInternal {
 
     void OpenXRNativeSession::SpatialAnchors::Withdraw(XRAnchorWithdrawal reason) {
         admitted = false;
+        withdrawn = true;
         if (const auto live = publication.lock())
             (void)live->Withdraw(scope, reason);
     }
@@ -130,6 +131,7 @@ namespace Horo::XR::OpenXRInternal {
         if (scope.grant <= lastAnchorGrant_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const AnchorCall call{anchorCall_};
+        anchors_.withdrawn = false;
         const auto native = Borrow(scope.space.id.session);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
@@ -144,6 +146,10 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         if (!anchors_.Resolve(native.Value(), dispatch_.getProc))
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native anchor dispatch is incomplete"));
+        if (anchors_.withdrawn) {
+            lastAnchorGrant_ = scope.grant;
+            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        }
         const auto opened = publication->Activate(scope, limits, XRCapabilityState::Available);
         if (opened.HasError())
             return opened;
@@ -305,5 +311,13 @@ namespace Horo::XR::OpenXRInternal {
                 return released;
         anchors_ = {};
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokeCompositionObservations */
+    void OpenXRNativeSession::RevokeCompositionObservations() {
+        RevokeLightEstimation();
+        anchorStore_.admitted = false;
+        anchors_.Withdraw(XRAnchorWithdrawal::AccessRevoked);
+        RevokePassthrough();
     }
 }  // namespace Horo::XR::OpenXRInternal
