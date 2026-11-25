@@ -159,7 +159,8 @@ namespace {
         std::unique_ptr<Packages::PackageLifecycleService> removalLifecycle;
         std::shared_ptr<const Packages::PackageRemovalLease> removalLease;
 
-        explicit HostFixture(bool runtime = false) : graph(runtime, runtime) {
+        explicit HostFixture(bool runtime = false, NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter)
+            : graph(runtime, runtime, contributions) {
             const auto root = std::filesystem::canonical(project.Path());
             std::filesystem::create_directories(root / ".horo");
             std::filesystem::create_directories(root / "Assets");
@@ -1016,10 +1017,20 @@ namespace {
         return {*retained, std::move(archive)};
     }
 
+    /** @brief Captures the runtime role identity used by the independently locked fixture packages. */
+    Packages::GameplayPackageModuleHost::RegistrationInventory ObserveFixtureRuntime(const Packages::LockedPackage &locked) {
+        return {.package = locked.package,
+                .version = locked.version,
+                .artifact = locked.artifactDigest,
+                .activationGeneration = 1,
+                .moduleId = locked.package.Value() + ".native",
+                .descriptorPath = "extensions/native/extension.json"};
+    }
+
     TEST_CASE("Package removal needs coverage of retained users of a service or component",
               "[packages][application][host][removal-coverage]") {
         using namespace Packages;
-        HostFixture fixture{true};
+        HostFixture fixture{true, NativeArchiveContributions::ModuleOnly};
         const auto retained = AddRetainedRuntime(fixture);
         const auto assets = fixture.AssetSource({retained});
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
@@ -1029,26 +1040,16 @@ namespace {
         const auto service = Gameplay::GameplayServiceId::Parse("game.tests.required").Value();
         const auto component = Gameplay::ComponentTypeId::Parse("game.tests.required_component").Value();
         const bool providesService = GENERATE(true, false);
-        using Inventory = GameplayPackageModuleHost::RegistrationInventory;
-        std::array roles{
-            Inventory{.package = fixture.graph.package,
-                      .version = fixture.graph.version,
-                      .artifact = fixture.graph.archive.Digest(),
-                      .activationGeneration = 1,
-                      .moduleId = "com.horo.application-fixture.native",
-                      .descriptorPath = "extensions/native/extension.json"},
-            Inventory{.package = retained.lock.package,
-                      .version = retained.lock.version,
-                      .artifact = retained.lock.artifactDigest,
-                      .activationGeneration = 1,
-                      .moduleId = "com.horo.retained.native",
-                      .descriptorPath = "extensions/native/extension.json"},
-        };
+        const auto packages = expected.Value().application.lockedPlan->Packages();
+        const auto provider = std::ranges::find(packages, fixture.graph.package, &LockedPackage::package);
+        REQUIRE(provider != packages.end());
+        std::array roles{ObserveFixtureRuntime(*provider), ObserveFixtureRuntime(retained.lock)};
         if (providesService)
             roles.front().services.push_back({.id = service});
         else
             roles.front().components.push_back(component);
         auto sources = fixture.RemovalSources(*assets);
+        sources.requireGameplayOwner = true;
         sources.registrations = std::span{roles}.first(1);
         const auto oldRequest = fixture.Read("packages.json");
         const auto oldLock = fixture.Read("packages.lock");

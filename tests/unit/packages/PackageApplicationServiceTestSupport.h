@@ -29,8 +29,12 @@ namespace Horo::Tests::PackageApplicationService {
         return std::move(verified).Value();
     }
 
+    enum class NativeArchiveContributions { WithImporter, ModuleOnly };
+    inline constexpr std::string_view FixturePackageId = "com.horo.application-fixture";
+
     /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
-    inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false, std::string_view id = "com.horo.application-fixture") {
+    inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false, std::string_view id = FixturePackageId,
+                                                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter) {
         constexpr auto root = "extensions/native";
 #if defined(_WIN32)
         constexpr auto image = "module.dll";
@@ -40,15 +44,16 @@ namespace Horo::Tests::PackageApplicationService {
         constexpr auto image = "module.so";
 #endif
         const auto moduleId = std::string{id} + ".native";
-        const nlohmann::json descriptor{{"id", id},
+        nlohmann::json descriptor{{"id", id},
                                         {"version", "1.0.0"},
                                         {"modules",
                                          {{{"id", moduleId},
                                            {"version", "1.0.0"},
                                            {"kind", "native"},
                                            {"roles", {runtime ? "runtime-participant" : "backend-capability"}},
-                                           {"entry", image}}}},
-                                        {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", moduleId}}}}};
+                                           {"entry", image}}}}};
+        if (contributions == NativeArchiveContributions::WithImporter)
+            descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", moduleId}}};
         const std::array files{std::pair{std::string{"horo-package.toml"}, std::string{"schemaVersion = 1\n"}},
                                std::pair{std::string{root} + "/extension.json", descriptor.dump()},
                                std::pair{std::string{root} + '/' + image, std::string{"unloadable fixture image"}}};
@@ -70,14 +75,15 @@ namespace Horo::Tests::PackageApplicationService {
     struct AssetGraph final {
         std::vector<std::byte> bytes;
         ValidatedPackageArchive archive{Verify(bytes)};
-        HoroPackageId package{Parse<HoroPackageId>("com.horo.application-fixture")};
+        HoroPackageId package{Parse<HoroPackageId>(FixturePackageId)};
         HoroPackageSourceId source{Parse<HoroPackageSourceId>("fixture.source")};
         PackageVersion version{Parse<PackageVersion>("1.0.0")};
         Sha256Digest requestHash{ComputeSha256(std::as_bytes(std::span{std::string_view{"application-request"}}))};
         std::optional<ValidatedPackageLockfileV1> lock;
 
-        explicit AssetGraph(bool native = false, bool runtime = false)
-            : bytes(native ? NativeAdmissionArchiveBytes(runtime) : Tests::Packages::ValidPackageArchiveBytes()) {
+        explicit AssetGraph(bool native = false, bool runtime = false,
+                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter)
+            : bytes(native ? NativeAdmissionArchiveBytes(runtime, FixturePackageId, contributions) : Tests::Packages::ValidPackageArchiveBytes()) {
             PackageResolutionPlan plan{.packages = {{package, version, source, archive.Digest(), {}}}};
             PackageLockArtifact artifact{.package = package,
                                          .version = version,

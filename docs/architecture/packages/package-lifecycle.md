@@ -516,8 +516,10 @@ Observed native package registrations include service dependencies and system
 service requirements. The uninstall transaction checks retained observations
 against the exact current lock and reports which retained registration requires
 a service owned by a departing package. When a departing package provides a
-gameplay service, every retained runtime role needs a registration observation
-from its exact locked archive. An unobserved consumer blocks removal and reports
+gameplay service or component, every retained runtime role needs a registration
+observation from its exact locked archive, including roles declared by packages
+with additional extension contributions. The gameplay-only withdrawal rule
+applies to departing packages. An unobserved consumer blocks removal and reports
 the missing role. The saved request and lock stay intact until coverage and
 reference checks pass.
 
