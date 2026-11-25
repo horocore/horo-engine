@@ -2405,7 +2405,9 @@ The timeline issues a new caption session when Play changes Scenes, including
 when a new workspace restarts its local Scene identity sequence.
 
 The application binds a remote provider only when its separate approval matches
-the authorized project source fingerprint, route, and provider generation.
+the authorized project root, source fingerprint, route, and provider generation.
+A copy at a different root uses authored offline presentation until that root
+receives its own approval.
 Only the intersection of the project and host field lists is disclosed. An
 absent policy leaves dialogue inactive. A policy without matching approval
 can use the authored offline fallback. The project document has no URL,

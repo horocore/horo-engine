@@ -20,14 +20,6 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                    selection.workerBudget.ToNanoseconds() > 0 && selection.tickBudget != 0;
         }
 
-        /** @brief Captures one exact project document for both provider and local presentation admission. */
-        auto LoadDialogue(const std::filesystem::path &root, std::uint64_t generation, const App::NpcDialogueEndpointApproval *approval) {
-            const auto project = LoadProjectSourceDocument(root);
-            if (project.HasError())
-                return Result<std::optional<App::NpcDialogueProjectActivation>>::Failure(project.ErrorValue());
-            return App::NpcDialogueProjectActivation::Create(project.Value(), generation, approval);
-        }
-
         /** @brief Resolves authored text identities through the same validator used by the runtime caption renderer. */
         Result<void> AppendDialogueCaption(EditorPlayNpcDialogueSelection &selection, const ProjectNpcDialogueCaption &caption) {
             auto key = Runtime::Ui::UiMessageKey::Create(caption.messageNamespace, caption.messageKey);
@@ -52,7 +44,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!ValidDialogueSelection(selection))
             return Result<void>::Failure(MakeError(InvalidProjectScene, "Play dialogue requires an explicit input, HUD and deadline."));
         const auto *approval = selection.approval ? &*selection.approval : nullptr;
-        auto captured = LoadDialogue(root, identity_.value, approval);
+        auto captured = App::NpcDialogueProjectActivation::Create(root, identity_.value, approval);
         if (captured.HasError())
             return Result<void>::Failure(captured.ErrorValue());
         auto selected = std::move(captured).Value();
@@ -65,7 +57,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     /** @copydoc ProjectPlaySceneHost::PrepareAuthoredNpcDialogue */
     Result<void> ProjectPlaySceneHost::PrepareAuthoredNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
                                                                   const EditorPlayAuthoredNpcDialogue &port) {
-        auto captured = LoadDialogue(root, identity_.value, nullptr);
+        auto captured = App::NpcDialogueProjectActivation::Create(root, identity_.value, nullptr);
         if (captured.HasError())
             return Result<void>::Failure(captured.ErrorValue());
         auto activation = std::move(captured).Value();

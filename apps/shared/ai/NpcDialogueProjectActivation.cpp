@@ -5,11 +5,15 @@
 
 namespace Horo::App {
     namespace {
-        /** @brief Requires explicit approval matching exact authored bytes, route and lifetime. */
-        bool Matches(const Application::ProjectSourceDocument &project, const AI::NpcDialogueRoute &route, std::uint64_t generation,
-                     const NpcDialogueEndpointApproval *approval) noexcept {
-            return approval && project.sourceFingerprint == approval->projectSource && approval->endpoint.route == route &&
-                   approval->endpoint.generation == generation;
+        /** @brief Requires explicit approval matching the actual project root, authored bytes, route and lifetime. */
+        bool Matches(const std::filesystem::path &projectRoot, const Application::ProjectSourceDocument &project,
+                     const AI::NpcDialogueRoute &route, std::uint64_t generation, const NpcDialogueEndpointApproval *approval) {
+            if (!approval || !approval->projectRoot.is_absolute() || project.sourceFingerprint != approval->projectSource ||
+                approval->endpoint.route != route || approval->endpoint.generation != generation)
+                return false;
+            std::error_code error;
+            const bool sameRoot = std::filesystem::equivalent(projectRoot, approval->projectRoot, error);
+            return !error && sameRoot;
         }
 
         /** @brief Rejects malformed grants before copying the intersection. */
@@ -21,9 +25,12 @@ namespace Horo::App {
 
     /** @copydoc NpcDialogueProjectActivation::Create */
     Result<std::optional<NpcDialogueProjectActivation>> NpcDialogueProjectActivation::Create(
-        const Application::ProjectSourceDocument &project, std::uint64_t generation, const NpcDialogueEndpointApproval *approval) {
+        const std::filesystem::path &projectRoot, std::uint64_t generation, const NpcDialogueEndpointApproval *approval) {
         using Activation = Result<std::optional<NpcDialogueProjectActivation>>;
-        const auto ai = Application::ResolveProjectAiSettings(project);
+        const auto project = Application::LoadProjectSourceDocument(projectRoot);
+        if (project.HasError())
+            return Activation::Failure(project.ErrorValue());
+        const auto ai = Application::ResolveProjectAiSettings(project.Value());
         if (ai.HasError())
             return Activation::Failure(ai.ErrorValue());
         if (!ai.Value() || !ai.Value()->NpcDialogue())
@@ -37,7 +44,7 @@ namespace Horo::App {
         activation.generation_ = generation;
         activation.triggers_ = policy.triggers;
         activation.presentation_ = policy.presentation;
-        if (!Matches(project, policy.route, generation, approval))
+        if (!Matches(projectRoot, project.Value(), policy.route, generation, approval))
             return Activation::Success(std::move(activation));
         if (!ValidFields(approval->fields))
             return Activation::Failure(MakeError(AI::AIErrors::TaskContextInvalid));

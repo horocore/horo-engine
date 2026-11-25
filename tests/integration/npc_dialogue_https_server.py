@@ -49,14 +49,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run_client(client: Path, endpoint: str, ca_bundle: str, mode: str) -> None:
-    # CTest's built client and fixed arguments from the localhost fixture.
-    subprocess.run([str(client), endpoint, ca_bundle, mode], check=True, timeout=8, shell=False)
+    # CTest supplies the resolved binary, and the fixed loopback fixture supplies its arguments.
+    with tempfile.TemporaryDirectory(prefix="horo-npc-dialogue-projects-") as projects:
+        subprocess.run([str(client), endpoint, ca_bundle, mode],  # nosec B603
+                       cwd=projects, check=True, timeout=8, shell=False)
 
 
 def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> None:
     endpoint = f"https://127.0.0.1:{server.server_port}/dialogue"
     offline = ("untrusted", "offline", "retired", "queued-retire", "disabled-agent", "different-agent", "missing-trigger",
-               "stale-grant", "other-route")
+               "stale-grant", "other-route", "copied-project")
     modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout", *offline)
     for mode in modes:
         server.mode = mode

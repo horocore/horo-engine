@@ -5,9 +5,12 @@
 #include "Horo/Application/ProjectAiSettings.h"
 #include "NpcDialogueHttpsProvider.h"
 
+#include <filesystem>
+
 namespace Horo::App {
     /** @brief Host-owned approval for one captured project policy and exact remote route. */
     struct NpcDialogueEndpointApproval final {
+        std::filesystem::path projectRoot; /**< Absolute host-approved project root. */
         Sha256Digest projectSource;
         NpcDialogueHttpsConfig endpoint;
         std::vector<AI::NpcDialogueFactId> fields; /**< Increasing approved field IDs owned by the host approval. */
@@ -17,13 +20,13 @@ namespace Horo::App {
     class NpcDialogueProjectActivation final {
     public:
         /** @brief Reads the canonical project AI profile and admits only project/host-shared fields.
-         * @param project Captured project source from the authorized root.
+         * @param projectRoot Authorized root from which the activation captures the exact project source.
          * @param generation Current host provider activation generation.
          * @param approval Explicit host grant, or null to activate offline without a provider.
          * @return No value when dialogue is absent, an offline/online activation, or a typed invalid configuration error.
          */
         [[nodiscard]] static Result<std::optional<NpcDialogueProjectActivation>> Create(
-            const Application::ProjectSourceDocument &project, std::uint64_t generation, const NpcDialogueEndpointApproval *approval);
+            const std::filesystem::path &projectRoot, std::uint64_t generation, const NpcDialogueEndpointApproval *approval);
 
         /** @brief Borrows the activation's bounded disclosure grant on the host owner lane. */
         [[nodiscard]] AI::NpcDialogueGrant Grant() const noexcept;

@@ -4,6 +4,8 @@
 
 #include <array>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <string_view>
 #include <thread>
@@ -183,35 +185,59 @@ namespace {
         return RunScenario(scene, jobs, runtime, owner, grant, mode);
     }
 
-    /** @brief Captures the same canonical project bytes used to identify approval. */
-    auto CaptureProject() {
+    /** @brief Builds identical authored project bytes for the approved root and its copy. */
+    std::string ProjectContents() {
         using namespace Application;
         const auto version = ParseHoroVersion("0.2.0").Value();
         const auto &decision = *BuiltInReleaseCompatibilityRegistry().Find({version});
         const auto contract = FormatPersistentContractHash(decision.persistentContract);
-        const auto contents = R"({"horoVersion":"0.2.0","persistentContract":")" + contract + R"(","projectId":"npc-fixture",
+        return R"({"horoVersion":"0.2.0","persistentContract":")" + contract + R"(","projectId":"npc-fixture",
             "name":"NPC fixture","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",
             "settings":{"renderBackend":"null","ai":{"schemaVersion":1,
             "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2],"triggers":[
               {"id":4,"agent":2,"facts":[{"field":2,"value":20}]},
               {"id":3,"agent":1,"facts":[{"field":3,"value":5678},{"field":1,"value":1234},{"field":2,"value":20}]}
             ]}}}})";
-        return DecodeProjectSourceDocument(contents);
+    }
+
+    /** @brief Creates the bounded project document in a directory owned by this TLS fixture. */
+    bool WriteProject(const std::filesystem::path &root, const std::string &contents) {
+        if (!std::filesystem::create_directory(root))
+            return false;
+        const auto marker = root / ".horo/project.json";
+        std::filesystem::create_directories(marker.parent_path());
+        std::ofstream output{marker, std::ios::binary};
+        output << contents;
+        output.close();
+        return !output.fail();
+    }
+
+    /** @brief Writes two distinct roots with the same manifest and returns the approved source fingerprint. */
+    std::optional<Sha256Digest> PrepareProjects(const std::filesystem::path &approved, const std::filesystem::path &copy) {
+        const auto contents = ProjectContents();
+        if (!WriteProject(approved, contents) || !WriteProject(copy, contents))
+            return std::nullopt;
+        const auto source = Application::LoadProjectSourceDocument(approved);
+        return source.HasValue() ? source.Value().sourceFingerprint : std::nullopt;
     }
 
     /** @brief Admits the project/host intersection, or runs the same Scene offline on mismatch. */
     int RunProject(App::NpcDialogueHttpsConfig config, std::string_view mode) {
-        auto project = CaptureProject();
-        if (project.HasError() || !project.Value().sourceFingerprint)
+        const auto fixtureRoot = std::filesystem::current_path();
+        const auto approvedRoot = fixtureRoot / "approved-project";
+        const auto copiedRoot = fixtureRoot / "copied-project";
+        const auto fingerprint = PrepareProjects(approvedRoot, copiedRoot);
+        if (!fingerprint)
             return 12;
-        App::NpcDialogueEndpointApproval approval{*project.Value().sourceFingerprint, std::move(config),
+        App::NpcDialogueEndpointApproval approval{approvedRoot, *fingerprint, std::move(config),
                                                   {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value()}};
         if (mode == "stale-grant")
             approval.projectSource.bytes[0] ^= 1;
         if (mode == "other-route")
             approval.endpoint.route.destination = NpcDialogueDestinationId::Create(3).Value();
         const bool offline = mode == "offline" || mode == "retired";
-        const auto activation = App::NpcDialogueProjectActivation::Create(project.Value(), 1, offline ? nullptr : &approval);
+        const auto &projectRoot = mode == "copied-project" ? copiedRoot : approvedRoot;
+        const auto activation = App::NpcDialogueProjectActivation::Create(projectRoot, 1, offline ? nullptr : &approval);
         if (activation.HasError() || !activation.Value())
             return 13;
         return RunScene(*activation.Value(), mode);
