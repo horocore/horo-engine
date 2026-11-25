@@ -15,9 +15,10 @@
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Checks current foreground admission and the independent recognizer permission. */
+        /** @brief Requires foreground admission and both independent native permissions. */
         bool SpeechCaptureAllowed(const bool foreground) noexcept {
-            return foreground && ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted;
+            return foreground && Audio::Backend::ObserveSdl3MacCapturePermission().permission == Audio::AudioCapturePermission::Granted &&
+                   ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted;
         }
 
     }  // namespace
@@ -422,7 +423,14 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorMicrophonePermission::CheckSpeechCapture(const std::uint64_t generation, const bool foreground) {
-        if (!check_->OwnsSpeech(generation) || !check_->grant)
+        if (!check_->grant)
+            return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleStale));
+        return ReconcileSpeechLease(generation, foreground);
+    }
+
+    /** @copydoc EditorMicrophonePermission::ReconcileSpeechLease */
+    Result<void> EditorMicrophonePermission::ReconcileSpeechLease(const std::uint64_t generation, const bool foreground) {
+        if (!check_->OwnsSpeech(generation))
             return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleStale));
         if (!SpeechCaptureAllowed(foreground)) {
             CancelSpeechCapture(generation);

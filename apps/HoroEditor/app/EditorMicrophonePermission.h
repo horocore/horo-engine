@@ -81,6 +81,11 @@ namespace Horo::Editor {
          * @return Detached tail to consume on the worker only while the lease token is current, or typed failure.
          */
         [[nodiscard]] Result<Audio::Backend::AudioCaptureBuffer> SealSpeechCapture(std::uint64_t generation, bool foreground);
+        /** @brief Rechecks foreground focus, native consent and context for a live or detached speech lease.
+         * @param generation Exact lease generation. @param foreground Current immersive focus.
+         * @return Success while the lease is current, or an error that withdraws its evidence.
+         */
+        [[nodiscard]] Result<void> ReconcileSpeechLease(std::uint64_t generation, bool foreground);
         /** @brief Releases the exact lease and invalidates any pending transcription evidence. */
         void CancelSpeechCapture(std::uint64_t generation) noexcept;
 

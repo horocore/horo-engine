@@ -66,8 +66,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorMicrophoneSpeechSession::Advance */
     SpeechTranscriptionUpdate EditorMicrophoneSpeechSession::Advance(const bool foreground) {
-        if (!foreground && generation_ != 0)
+        if (generation_ != 0 && microphone_.ReconcileSpeechLease(generation_, foreground).HasError()) {
             Cancel();
+            return {CaptureInterrupted, {}};
+        }
         auto update = worker_.Poll();
         if (IsFailure(update.status)) {
             Cancel();
