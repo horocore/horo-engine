@@ -81,6 +81,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareTemporalMotion(EditorViewportMotionSource source) override;
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
+        /** @copydoc IEditorViewportRenderer::RequestColorAccessibilityPreview */
+        [[nodiscard]] Result<void> RequestColorAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview) override;
         [[nodiscard]] Result<void> Initialize();
 
         /** @brief Borrows one canvas recipe during cold preparation. The renderer retains its own native resources. */

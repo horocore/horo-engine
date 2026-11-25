@@ -230,6 +230,14 @@ namespace Horo::Editor {
         /** @brief Reports whether a complete viewport image is available for presentation. */
         [[nodiscard]] virtual bool IsReady() const noexcept = 0;
 
+        /** @brief Selects a transient display-linear accessibility transform for the next viewport frame.
+         * @param preview Desired preview settings, or no override to restore the admitted output transform.
+         * @return Success or a typed unsupported/invalid result before changing the preview.
+         */
+        [[nodiscard]] virtual Result<void> RequestColorAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview) {
+            return preview ? Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput)) : Result<void>::Success();
+        }
+
     private:
         Render::RenderViewId lightingView_;
     };

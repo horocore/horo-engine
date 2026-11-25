@@ -56,6 +56,8 @@ namespace Horo::Editor {
         bool CancelImageCapture(std::uint64_t id) noexcept override;
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
+        /** @copydoc IEditorViewportRenderer::RequestColorAccessibilityPreview */
+        [[nodiscard]] Result<void> RequestColorAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview) override;
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;

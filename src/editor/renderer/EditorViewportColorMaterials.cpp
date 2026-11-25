@@ -55,7 +55,7 @@ namespace Horo::Editor {
             return control;
         if (!accessibilityEncoder_)
             return Result<void>::Success();
-        const auto &matrix = displayAccessibility_.values;
+        const auto &matrix = candidateAccessibility_.values;
         for (std::uint32_t row = 0; row < 3; ++row) {
             const auto offset = 3 * row;
             const std::array<float, 4> values{matrix[offset], matrix[offset + 1], matrix[offset + 2], 0};

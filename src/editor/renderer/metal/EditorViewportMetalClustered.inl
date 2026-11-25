@@ -64,6 +64,15 @@ Result<void> EditorViewportRendererMetal::RequestColorSettings(const Render::Exp
     return impl_->color->RequestSettings(settings);
 }
 
+/** @copydoc EditorViewportRendererMetal::RequestColorAccessibilityPreview */
+Result<void> EditorViewportRendererMetal::RequestColorAccessibilityPreview(
+    const std::optional<Accessibility::ColorblindSettings> &preview) {
+    if (impl_->owner != std::this_thread::get_id())
+        return Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput));
+    return impl_->color ? impl_->color->RequestAccessibilityPreview(preview)
+                        : IEditorViewportRenderer::RequestColorAccessibilityPreview(preview);
+}
+
 /** @copydoc EditorViewportRendererMetal::SetColorFrameDelta */
 void EditorViewportRendererMetal::SetColorFrameDelta(float deltaSeconds) noexcept {
     impl_->colorDelta = deltaSeconds;

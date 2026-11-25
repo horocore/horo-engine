@@ -1,5 +1,6 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
@@ -9,10 +10,108 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <imgui_internal.h>
 #include <limits>
 #include <utility>
 
 namespace Horo::Editor {
+    namespace {
+        class ColorPreviewViewport final : public IEditorViewportRenderer {
+        public:
+            Result<void> ExecutePreparedFrame(Render::RenderFrameScope &, std::span<const Render::RenderPassDescriptor>) override {
+                return Result<void>::Success();
+            }
+
+            Result<void> ExecuteStaticMeshPass(const Render::StaticMeshPassDescriptor &) override {
+                return Result<void>::Success();
+            }
+
+            void RequestExtent(EditorViewportExtent) noexcept override {}
+
+            void RequestGrid(const EditorViewportGridOptions &) noexcept override {}
+
+            void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &) noexcept override {}
+
+            EditorViewportExtent RequestedExtent() const noexcept override {
+                return {};
+            }
+
+            Math::ClipDepthRange ClipDepthRange() const noexcept override {
+                return Math::ClipDepthRange::ZeroToOne;
+            }
+
+            EditorViewportTextureView TextureView() const noexcept override {
+                return {};
+            }
+
+            bool IsReady() const noexcept override {
+                return true;
+            }
+
+            Result<void> RequestColorAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &requested) override {
+                preview = requested;
+                ++requests;
+                return Result<void>::Success();
+            }
+
+            std::optional<Accessibility::ColorblindSettings> preview;
+            unsigned requests{};
+        };
+    }  // namespace
+
+    TEST_CASE("Contrast tool applies a transient viewport preview and withdraws it when hidden", "[editor][accessibility][contrast]") {
+        Tests::EditorGuiContextFixture fixture;
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        REQUIRE(fixture.localization.LoadCatalogFile(root / "en-US.json"));
+        REQUIRE(fixture.localization.Prepare({"en-US"}));
+        REQUIRE(fixture.localization.ActivatePrepared());
+        ColorPreviewViewport viewport;
+        AccessibilityContrastPanel panel;
+        PanelContext context{.dataBus = fixture.editorEvents, .viewportRenderer = &viewport};
+        panel.OnAttach(context);
+        EditorWorkspaceViewModel model;
+        EditorWorkspaceViewCommandData command;
+        const auto draw = [&] {
+            fixture.imgui.BeginFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({640, 620});
+            ImGui::Begin("Contrast tool preview test");
+            panel.DrawPanel({}, ImGui::GetContentRegionAvail(), model, command, fixture.context);
+            ImGui::End();
+            fixture.imgui.EndFrame();
+        };
+        draw();
+        auto &ui = *ImGui::GetCurrentContext();
+        const auto child = std::ranges::find_if(ui.Windows, [](const ImGuiWindow *window) {
+            return window->Active && std::string_view{window->Name}.find("##ContrastInspection") != std::string_view::npos;
+        });
+        REQUIRE(child != ui.Windows.end());
+        ImGui::FocusWindow(*child);
+        const auto seed = ImHashStr("##ColorVisionPreview", 0, (*child)->IDStack.back());
+        ImGui::ActivateItemByID(ImHashStr("Combo#####ColorVisionPreview", 0, seed));
+        draw();
+        draw();
+        const auto popup = std::ranges::find_if(ui.Windows, [](const ImGuiWindow *window) {
+            return window->Active && (window->Flags & ImGuiWindowFlags_Popup);
+        });
+        REQUIRE(popup != ui.Windows.end());
+        const float row = (*popup)->ContentSize.y / 5.0F;
+        auto &io = ImGui::GetIO();
+        io.AddMousePosEvent((*popup)->InnerRect.GetCenter().x, (*popup)->DC.CursorStartPos.y + 2.5F * row);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        draw();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        draw();
+        REQUIRE(viewport.preview);
+        CHECK(viewport.preview->mode == Accessibility::ColorblindMode::Deuteranopia);
+        CHECK(viewport.requests == 1);
+        panel.OnPresentationHidden(command);
+        CHECK_FALSE(viewport.preview);
+        CHECK(viewport.requests == 2);
+        panel.OnDetach();
+        CHECK(viewport.requests == 2);
+    }
+
     TEST_CASE("Contrast tool rejects intermediate drafts and never reports a previous valid result", "[editor][accessibility][contrast]") {
         ContrastInspectionDraft draft;
         REQUIRE(draft.Evaluate().Value().ratio == Catch::Approx(21));

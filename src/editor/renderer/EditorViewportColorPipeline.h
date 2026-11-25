@@ -37,6 +37,8 @@ namespace Horo::Editor {
         /** @brief Selects authored settings without mutating an in-flight candidate. @param settings Exact next settings.
          * @return Validated admission or original failure; unchanged settings preserve history. */
         [[nodiscard]] Result<void> RequestSettings(const Render::ExposureSettings &settings);
+        /** @brief Validates a preview for subsequent candidates without changing a prepared frame. */
+        [[nodiscard]] Result<void> RequestAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview);
         /** @brief Prepares one next submitted-view candidate without advancing acceptance. @param view Frontend-issued view.
          * @param extent Exact unexposed scene shape. @param deltaSeconds Host-selected clock delta in [0,1].
          * @return Success, typed pending/capacity or malformed input. */
@@ -255,5 +257,7 @@ namespace Horo::Editor {
         bool encoded_{};
         bool reset_{true};
         bool resetQueued_{};
+        std::optional<Accessibility::ColorMatrix> accessibilityPreview_;
+        Accessibility::ColorMatrix candidateAccessibility_;
     };
 }  // namespace Horo::Editor

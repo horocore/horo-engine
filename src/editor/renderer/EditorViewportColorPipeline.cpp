@@ -63,6 +63,22 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportColorPipeline::RequestAccessibilityPreview */
+    Result<void> EditorViewportColorPipeline::RequestAccessibilityPreview(
+        const std::optional<Accessibility::ColorblindSettings> &preview) {
+        if (!preview) {
+            accessibilityPreview_.reset();
+            return Result<void>::Success();
+        }
+        if (!accessibilityEncoder_ || !selection_)
+            return Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput));
+        const auto matrix = Accessibility::PrepareColorAccessibilityTransform(*preview);
+        if (matrix.HasError())
+            return Result<void>::Failure(matrix.ErrorValue());
+        accessibilityPreview_ = matrix.Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportColorPipeline::SelectSlot */
     Result<std::size_t> EditorViewportColorPipeline::SelectSlot() {
         using Selection = Result<std::size_t>;
@@ -163,6 +179,7 @@ namespace Horo::Editor {
             return identity;
         view_ = view;
         extent_ = extent;
+        candidateAccessibility_ = accessibilityPreview_.value_or(displayAccessibility_);
         candidate_ = true;
         encoded_ = false;
         status_ = EditorViewportColorStatus::Prepared;

@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "editor/renderer/EditorViewportRenderer.h"
 
 #include <charconv>
 #include <optional>
@@ -99,10 +100,54 @@ namespace Horo::Editor {
     }
 
     /** @copydoc AccessibilityContrastPanel::OnAttach */
-    void AccessibilityContrastPanel::OnAttach(PanelContext &) {}
+    void AccessibilityContrastPanel::OnAttach(PanelContext &context) {
+        viewport_ = context.viewportRenderer;
+    }
 
     /** @copydoc AccessibilityContrastPanel::OnDetach */
-    void AccessibilityContrastPanel::OnDetach() {}
+    void AccessibilityContrastPanel::OnDetach() {
+        ResetColorPreview();
+        viewport_ = nullptr;
+    }
+
+    /** @copydoc AccessibilityContrastPanel::OnPresentationHidden */
+    void AccessibilityContrastPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
+        ResetColorPreview();
+    }
+
+    /** @copydoc AccessibilityContrastPanel::ResetColorPreview */
+    void AccessibilityContrastPanel::ResetColorPreview() {
+        if (viewport_ && previewSelection_ != 0)
+            static_cast<void>(viewport_->RequestColorAccessibilityPreview(std::nullopt));
+        previewSelection_ = 0;
+        previewRejected_ = false;
+    }
+
+    /** @copydoc AccessibilityContrastPanel::DrawColorPreview */
+    void AccessibilityContrastPanel::DrawColorPreview(const EditorGuiContext &context) {
+        if (!viewport_)
+            return;
+        using enum Accessibility::ColorblindMode;
+        constexpr std::array modes{None, Protanopia, Deuteranopia, Tritanopia, Achromatopsia};
+        const auto &localization = context.localization;
+        const std::array labels{LocalizedText(localization, "preview_off").c_str(),
+                                LocalizedText(localization, "preview_protanopia").c_str(),
+                                LocalizedText(localization, "preview_deuteranopia").c_str(),
+                                LocalizedText(localization, "preview_tritanopia").c_str(),
+                                LocalizedText(localization, "preview_achromatopsia").c_str()};
+        static_assert(labels.size() == modes.size());
+        auto selection = previewSelection_;
+        if (Ui::DrawComboPropRow(LocalizedText(localization, "preview_label").c_str(), "##ColorVisionPreview", selection, labels,
+                                 context.theme.fonts)) {
+            const auto mode = modes[static_cast<std::size_t>(selection)];
+            const auto preview = mode == None ? std::nullopt : std::optional{Accessibility::ColorblindSettings{.mode = mode}};
+            previewRejected_ = viewport_->RequestColorAccessibilityPreview(preview).HasError();
+            if (!previewRejected_)
+                previewSelection_ = selection;
+        }
+        if (previewRejected_)
+            ImGui::TextWrapped("%s", LocalizedText(localization, "preview_unavailable").c_str());
+    }
 
     /** @copydoc AccessibilityContrastPanel::DrawIcon */
     void AccessibilityContrastPanel::DrawIcon(ImDrawList *drawList, const ImVec2 &position, const ImVec2 &size, const ImU32 color) {
@@ -160,6 +205,7 @@ namespace Horo::Editor {
             ImGui::Text("AA: %s", LocalizedText(context.localization, result.Value().meetsAA ? "pass" : "fail").c_str());
             ImGui::Text("AAA: %s", LocalizedText(context.localization, result.Value().meetsAAA ? "pass" : "fail").c_str());
         }
+        DrawColorPreview(context);
         ImGui::EndChild();
     }
 }  // namespace Horo::Editor

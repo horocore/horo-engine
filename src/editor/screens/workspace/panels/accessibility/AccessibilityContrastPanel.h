@@ -77,6 +77,8 @@ namespace Horo::Editor {
         void OnAttach(PanelContext &context) override;
         /** @copydoc IWorkspacePanel::OnDetach */
         void OnDetach() override;
+        /** @copydoc IWorkspacePanel::OnPresentationHidden */
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
         /** @copydoc IWorkspacePanel::DrawIcon */
         void DrawIcon(ImDrawList *drawList, const ImVec2 &position, const ImVec2 &size, ImU32 color) override;
         /** @copydoc IWorkspacePanel::DrawPanel */
@@ -84,8 +86,15 @@ namespace Horo::Editor {
                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
 
     private:
+        /** @brief Lets the developer inspect the live viewport with a selected color-vision transform. */
+        void DrawColorPreview(const EditorGuiContext &context);
+        /** @brief Withdraws this panel's transient preview when it leaves presentation. */
+        void ResetColorPreview();
         ContrastInspectionDraft draft_;
         bool inspectTheme_{};
         ThemeContrastPair themePair_{ThemeContrastPair::PrimaryRoot};
+        IEditorViewportRenderer *viewport_{};
+        int previewSelection_{};
+        bool previewRejected_{};
     };
 }  // namespace Horo::Editor

@@ -367,6 +367,8 @@ namespace Horo::Editor {
         manualOnly_ = false;
         accessibilityEncoder_ = false;
         displayAccessibility_ = {};
+        accessibilityPreview_.reset();
+        candidateAccessibility_ = {};
         selection_.reset();
         previous_ = {};
         creationCount_ = 0;

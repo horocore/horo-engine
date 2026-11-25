@@ -253,6 +253,14 @@ namespace Horo::Editor {
         return color_->RequestSettings(settings);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::RequestColorAccessibilityPreview */
+    Result<void> EditorViewportRendererVulkan::RequestColorAccessibilityPreview(
+        const std::optional<Accessibility::ColorblindSettings> &preview) {
+        if (owner_ != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput));
+        return color_ ? color_->RequestAccessibilityPreview(preview) : IEditorViewportRenderer::RequestColorAccessibilityPreview(preview);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::SetColorFrameDelta */
     void EditorViewportRendererVulkan::SetColorFrameDelta(float deltaSeconds) noexcept {
         colorFrameDelta_ = deltaSeconds;
