@@ -1795,6 +1795,9 @@ the built-in Team/Team and Hearing/Sound identities. Committed Gameplay team and
 sound deliveries use `RouteGameplayPerceptionEvent`, which alone accesses the
 private `ObserveAdmitted` boundary after validating its captured delivery proof.
 A copied observation or an Audio playback event cannot supply that proof.
+For each hearing source and listener at one simulation tick, the captured batch
+selects the newest admissible emission. Later producer entries break ties.
+Delivery order and rejected or expired entries do not change the selected sound.
 Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without

@@ -69,6 +69,8 @@ namespace Horo::Gameplay {
          * @param index Producer record index in this bounded batch.
          * @param memory Exact recipient's Scene-owned transient memory.
          * @return Success or typed invalid, revoked, stale, filtered or descriptor failure, with no publication on denial.
+         * @details Valid hearing deliveries for the same recipient, listener, source and simulation tick coalesce to the
+         * newest emission in the captured window. Producer order breaks ties. Rejected deliveries never participate.
          */
         [[nodiscard]] Result<void> Deliver(std::size_t index, AI::AIPerceptionMemory &memory) const;
 

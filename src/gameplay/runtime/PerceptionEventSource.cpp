@@ -3,9 +3,21 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <cmath>
+#include <utility>
 
 namespace Horo::Gameplay {
     namespace {
+        /** @brief Checks acoustic metadata before evaluating radius or timing. */
+        [[nodiscard]] bool ValidHearing(const AI::HearingPerceptionEvent &event) noexcept {
+            return std::isfinite(event.intensity) && event.intensity > 0 && event.intensity <= 1 && std::isfinite(event.radiusMeters) &&
+                   event.radiusMeters > 0 && event.lifetimeTicks != 0;
+        }
+
+        /** @brief Checks the exclusive upper bound without overflowing on long lifetimes. */
+        [[nodiscard]] bool HearingActiveAt(const AI::HearingPerceptionEvent &event, std::uint64_t tick) noexcept {
+            return tick >= event.emittedTick && tick - event.emittedTick < event.lifetimeTicks;
+        }
+
         /** @brief Validates source generations against the current scene without granting a mutation capability. */
         struct EventValidation final {
             Runtime::RuntimeSceneView scene;
@@ -38,10 +50,9 @@ namespace Horo::Gameplay {
             }
 
             [[nodiscard]] Result<void> operator()(const AI::HearingPerceptionEvent &event) const {
-                if (!std::isfinite(event.intensity) || event.intensity <= 0 || event.intensity > 1 || !std::isfinite(event.radiusMeters) ||
-                    event.radiusMeters <= 0 || event.lifetimeTicks == 0 || tick < event.emittedTick)
+                if (!ValidHearing(event) || tick < event.emittedTick)
                     return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
-                if (tick - event.emittedTick >= event.lifetimeTicks)
+                if (!HearingActiveAt(event, tick))
                     return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
                 return Source(event.source);
             }
@@ -86,6 +97,38 @@ namespace Horo::Gameplay {
                        DistanceMeters(event.location, position.Value()) <= event.radiusMeters;
             }
         };
+
+        /** @brief Keeps coalescing inside one producer-authorized listener and simulation window. */
+        [[nodiscard]] bool SharesAdmittedWindow(const AI::PerceptionEventDelivery &requested,
+                                                 const CommittedPerceptionDelivery &candidate) noexcept {
+            const auto &delivery = candidate.delivery;
+            return candidate.filter == PerceptionFilterDecision::Accept && delivery.recipient == requested.recipient &&
+                   delivery.listener == requested.listener && delivery.simulationTick == requested.simulationTick;
+        }
+
+        /** @brief Selects the newest admissible sound for the requested source, breaking ties by producer order. */
+        [[nodiscard]] const CommittedPerceptionDelivery &CoalesceHearing(const std::span<const CommittedPerceptionDelivery> records,
+                                                                         const std::size_t requested, const EventFilter &filter) {
+            const auto &delivery = records[requested].delivery;
+            const auto *sound = std::get_if<AI::HearingPerceptionEvent>(&delivery.event);
+            if (!sound)
+                return records[requested];
+            auto selected = requested;
+            auto emitted = sound->emittedTick;
+            for (std::size_t index = 0; index < records.size(); ++index) {
+                const auto &candidate = records[index];
+                if (!SharesAdmittedWindow(delivery, candidate))
+                    continue;
+                const auto *next = std::get_if<AI::HearingPerceptionEvent>(&candidate.delivery.event);
+                if (!next || next->source != sound->source || std::pair{next->emittedTick, index} <= std::pair{emitted, selected})
+                    continue;
+                if (!ValidHearing(*next) || !HearingActiveAt(*next, delivery.simulationTick) || !filter(*next))
+                    continue;
+                selected = index;
+                emitted = next->emittedTick;
+            }
+            return records[selected];
+        }
 
         /** @brief Private AI knowledge is admitted only in the host's current authoritative world. */
         [[nodiscard]] bool Authoritative(const Network::NetworkModeRoleView &role) noexcept {
@@ -160,16 +203,18 @@ namespace Horo::Gameplay {
         const auto &record = deliveries_[index];
         if (const auto recipient = ValidateRecipient(record.delivery, memory); recipient.HasError())
             return recipient;
-        if (const auto event = std::visit(EventValidation{scene_->View(), record.delivery.simulationTick}, record.delivery.event);
-            event.HasError())
+        const EventValidation validate{scene_->View(), record.delivery.simulationTick};
+        if (const auto event = std::visit(validate, record.delivery.event); event.HasError())
             return event;
         if (record.filter != PerceptionFilterDecision::Accept)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
         const auto listener = ai_->Find(record.delivery.recipient).Value().owner;
-        if (!std::visit(EventFilter{*filterSnapshot_, listener}, record.delivery.event))
+        const EventFilter filter{*filterSnapshot_, listener};
+        if (!std::visit(filter, record.delivery.event))
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
-        const AI::PerceptionEventAdmission admission{record.delivery, memory};
-        return AI::RouteGameplayPerceptionEvent(record.delivery, *registry_, admission, memory);
+        const auto &selected = CoalesceHearing(deliveries_, index, filter).delivery;
+        const AI::PerceptionEventAdmission admission{selected, memory};
+        return AI::RouteGameplayPerceptionEvent(selected, *registry_, admission, memory);
     }
 
     /** @copydoc PerceptionEventSource::Close */

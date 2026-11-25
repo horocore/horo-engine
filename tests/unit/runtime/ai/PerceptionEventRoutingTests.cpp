@@ -295,6 +295,7 @@ namespace Horo::AI {
             REQUIRE(source.HasValue());
             REQUIRE(source.Value().Deliver(0, memory).HasValue());
             REQUIRE(source.Value().Deliver(1, memory).HasValue());
+            REQUIRE(source.Value().Deliver(0, memory).HasValue());
             ExpectError(source.Value().Deliver(1, other), AIErrors::PerceptionEventInvalid);
             const auto snapshot = memory.Snapshot(4, PerceptionSceneLiveness(*server.scene)).Value();
             REQUIRE(snapshot.count == 1);
@@ -303,6 +304,40 @@ namespace Horo::AI {
             CHECK(snapshot.entries[0].lastKnownPosition == latest.location);
             ExpectError(other.Observe({.key = snapshot.entries[0].key}, 4), AIErrors::PerceptionEventUnauthorized);
             CHECK(other.StoredCount() == 0);
+        }
+
+        TEST_CASE("Hearing coalesces by emission tick before producer order and only among admitted sounds",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            std::array records{fixture.Sound(), fixture.Sound(), fixture.Sound()};
+            auto &newest = std::get<HearingPerceptionEvent>(records[0].delivery.event);
+            newest.emittedTick = 2;
+            newest.lifetimeTicks = 3;
+            newest.location = Math::WorldCoordinate64::FromMillimeters(700, 0, 0);
+            auto &older = std::get<HearingPerceptionEvent>(records[1].delivery.event);
+            older.emittedTick = 1;
+            older.lifetimeTicks = 4;
+            auto &unavailable = std::get<HearingPerceptionEvent>(records[2].delivery.event);
+            SECTION("producer rejects the newest candidate") {
+                records[2].filter = PerceptionFilterDecision::Reject;
+            }
+            SECTION("newest candidate is expired") {
+                unavailable.lifetimeTicks = 1;
+            }
+            SECTION("newest candidate is outside the listener radius") {
+                unavailable.radiusMeters = 0.1;
+            }
+            SECTION("newest candidate has malformed metadata") {
+                unavailable.intensity = std::numeric_limits<double>::quiet_NaN();
+            }
+            const auto source = fixture.Capture(records);
+            REQUIRE(source.Deliver(0, memory).HasValue());
+            REQUIRE(source.Deliver(1, memory).HasValue());
+            const auto snapshot = memory.Snapshot(4, PerceptionSceneLiveness(*fixture.scene));
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().count == 1);
+            CHECK(snapshot.Value().entries[0].lastKnownPosition == newest.location);
         }
 
         TEST_CASE("A full Gameplay sensing window bounds noise and ages mixed stimuli deterministically",
