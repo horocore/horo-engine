@@ -392,7 +392,8 @@ namespace Horo::AI {
         Deterministic,
         BestEffortExternalFeedback,
         BestEffortReactive,
-        BestEffortQueries
+        BestEffortQueries,
+        BestEffortRelevance /**< Explicit host profile owns dynamic cadence and simulation-tier transitions. */
     };
 
     /** @brief Immutable host selection of signed integer Blackboard inputs in model feature order. */
@@ -420,6 +421,7 @@ namespace Horo::AI {
                 return scheduler.mode == AiSchedulingMode::Deterministic;
             return scheduler.mode == AiSchedulingMode::BestEffort &&
                    (timing == AiCookedDecisionTiming::BestEffortReactive ||
+                    (timing == AiCookedDecisionTiming::BestEffortRelevance && scheduler.simulationProfile) ||
                     (timing == AiCookedDecisionTiming::BestEffortQueries && queryTasks) ||
                     (timing == AiCookedDecisionTiming::BestEffortExternalFeedback && intents));
         }

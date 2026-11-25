@@ -391,7 +391,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto &configured = settings.Value();
         const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : configured.scheduler.mode;
         if ((reactive && configured.schedulerModeAuthored && configured.scheduler.mode != mode) ||
-            (!reactive && queries.empty() && mode == AI::AiSchedulingMode::BestEffort))
+            (!reactive && queries.empty() && !configured.scheduler.simulationProfile && mode == AI::AiSchedulingMode::BestEffort))
             return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                    "Editor Decision Play scheduler mode must match the authored Perception watches."));
         AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
@@ -402,6 +402,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         execution.scheduler.mode = mode;
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+        else if (execution.scheduler.simulationProfile)
+            execution.timing = AI::AiCookedDecisionTiming::BestEffortRelevance;
         if (!queries.empty()) {
             auto driver =
                 SceneDecisionQueries::Create(std::move(queries), std::move(queryTests.schema), execution.scheduler,

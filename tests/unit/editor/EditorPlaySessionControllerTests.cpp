@@ -36,6 +36,7 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <fstream>
 #include <functional>
@@ -1466,6 +1467,7 @@ TEST_CASE("Editor Play applies the authored model from its committed Scene gener
     namespace Decision = AI::DecisionGraphTestSupport;
     namespace Cook = Application::PrefabCookTestSupport;
     namespace Output = Assets::OutputTestSupport;
+    const bool profile = GENERATE(false, true);
     bool outOfRange{};
     SECTION("valid integer prefers the learned task") {}
     SECTION("out of range leaves the authored task in charge") {
@@ -1525,7 +1527,12 @@ TEST_CASE("Editor Play applies the authored model from its committed Scene gener
     const auto scene = SceneCook::EncodeCookedSceneDefinition(definition.Value());
     REQUIRE(scene.HasValue());
 
-    project.WriteProjectMetadata(R"({"schemaVersion":1,"localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+    const std::string_view simulation = profile
+                                            ? R"("scheduler":{"mode":"bestEffort","simulationProfile":{"fullDistanceMillimeters":10000,
+        "reducedDistanceMillimeters":20000,"suspensionDistanceMillimeters":30000,"reducedIntervalTicks":2,"demotionDelayTicks":1}},)"
+                                            : "";
+    project.WriteProjectMetadata(std::string{R"({"schemaVersion":1,)"} + std::string{simulation} +
+                                 R"("localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
         "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"blackboardSchema":100,"tasks":[21],
         "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[102]}]}})");
     AiCapabilityDescriptorRegistry declarations;
@@ -1634,12 +1641,19 @@ TEST_CASE("Editor Play applies the authored model from its committed Scene gener
     play.RefreshAgentInspection(entity);
     REQUIRE_FALSE(play.AgentInspectionHistory().empty());
     const auto &latest = play.AgentInspectionHistory().back();
-    REQUIRE(latest.decisionTrace);
-    CHECK(latest.decisionTrace->Header().tick == 1);
-    CHECK(latest.decisionTrace->Header().root == graph.asset);
-    CHECK(std::ranges::any_of(latest.decisionTrace->Records(), [expected](const DecisionStepRecord &record) {
-        return record.kind == DecisionStepRecordKind::BehaviorNode && record.task == expected;
-    }));
+    REQUIRE(latest.policy);
+    CHECK(latest.policy->scheduler.simulationProfile.has_value() == profile);
+    CHECK(latest.policy->scheduler.mode == (profile ? AiSchedulingMode::BestEffort : AiSchedulingMode::Deterministic));
+    if (profile) {
+        CHECK_FALSE(latest.decisionTrace);
+    } else {
+        REQUIRE(latest.decisionTrace);
+        CHECK(latest.decisionTrace->Header().tick == 1);
+        CHECK(latest.decisionTrace->Header().root == graph.asset);
+        CHECK(std::ranges::any_of(latest.decisionTrace->Records(), [expected](const DecisionStepRecord &record) {
+            return record.kind == DecisionStepRecordKind::BehaviorNode && record.task == expected;
+        }));
+    }
     REQUIRE(latest.snapshot);
     const auto observed = std::ranges::find(latest.snapshot->keys, feature, &AiInspectionBlackboardRow::key);
     REQUIRE(observed != latest.snapshot->keys.end());

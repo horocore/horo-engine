@@ -670,6 +670,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (execution.scheduler.mode == AI::AiSchedulingMode::BestEffort)
                     execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
             }
+            if (execution.timing == AI::AiCookedDecisionTiming::Deterministic && execution.scheduler.simulationProfile)
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortRelevance;
             return execution;
         }
 

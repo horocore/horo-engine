@@ -754,9 +754,11 @@ namespace Horo::Application::Internal {
             if (input.decisionReplay && (!input.decisionReplay->Selection().IsValid() || !decisions || !decisions->execution))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "AI replay requires an exact agent, tick and configured cooked execution."));
+            if (input.decisionReplay && decisions->execution->scheduler.simulationProfile)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                       "Deterministic AI replay cannot use a best-effort simulation profile."));
             if (decisions && decisions->relevance &&
-                (input.decisionReplay || !decisions->execution ||
-                 decisions->execution->scheduler.mode != AI::AiSchedulingMode::BestEffort ||
+                (!decisions->execution || decisions->execution->scheduler.mode != AI::AiSchedulingMode::BestEffort ||
                  !decisions->execution->scheduler.simulationProfile ||
                  decisions->execution->scheduler.maximumAgents > AI::AiTaskSchedulerSettings::HardAgents))
                 return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,

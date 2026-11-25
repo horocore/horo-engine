@@ -4094,6 +4094,12 @@ grant development access. Its terminal surface has no live mutation command.
 
 ### Scene decision scheduling tiers
 
+An authored best-effort simulation profile enables this scheduling mode for
+cooked decisions in headless authority and Editor Play, including Scenes with
+no reactive Perception watches, query work, or external feedback. Deterministic
+headless replay rejects the profile. Without gameplay relevance observations
+the scheduler keeps the full cadence.
+
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through

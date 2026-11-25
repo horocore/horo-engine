@@ -540,7 +540,6 @@ namespace {
         if (withRelevance) {
             execution.scheduler.mode = AiSchedulingMode::BestEffort;
             execution.scheduler.simulationProfile = AiDecisionSimulationProfile{10'000, 20'000, 30'000, 2, 1};
-            execution.timing = AiCookedDecisionTiming::BestEffortReactive;
             relevance = [&](const Runtime::RuntimeSceneView &scene, const std::uint64_t tick) {
                 CHECK(scene.IsCurrent());
                 CHECK(scene.RuntimeId() == Runtime::SceneRuntimeId{7});
