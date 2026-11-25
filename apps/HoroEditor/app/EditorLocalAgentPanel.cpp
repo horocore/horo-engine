@@ -447,8 +447,14 @@ namespace Horo::Editor {
             static const char *ListeningFailureKey(const SpeechTranscriptionStatus reason) noexcept {
                 using enum SpeechTranscriptionStatus;
                 switch (reason) {
-                    case LimitExceeded:
+                    case CaptureLimitExceeded:
                         return "xr_listening_limit";
+                    case ProviderTimedOut:
+                        return "xr_listening_provider_timeout";
+                    case HypothesisLimitExceeded:
+                        return "xr_listening_update_limit";
+                    case ResourceUnavailable:
+                        return "xr_listening_resources_unavailable";
                     case ProviderUnavailable:
                         return "xr_listening_provider_unavailable";
                     case LowConfidence:

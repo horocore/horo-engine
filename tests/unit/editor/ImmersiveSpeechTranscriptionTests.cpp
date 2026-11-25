@@ -175,10 +175,12 @@ namespace Horo::Editor {
             auto prepared = ImmersiveSpeechTranscription::Prepare(fixture.owner, context, fixture.source, "tr-TR", 0.5F,
                                                                   fixture.stop.get_token(), std::chrono::milliseconds(20));
             REQUIRE(prepared.stream);
-            CHECK(prepared.stream->Start(provider) == Status::LimitExceeded);
+            CHECK(prepared.stream->Start(provider) == Status::ProviderTimedOut);
             CHECK(provider.observedStop);
             CHECK_FALSE(fixture.stop.stop_requested());
-            CHECK_FALSE(prepared.stream->Poll().evidence);
+            const auto expired = prepared.stream->Poll();
+            CHECK(expired.status == Status::ProviderTimedOut);
+            CHECK_FALSE(expired.evidence);
         }
 
         TEST_CASE("Immersive evidence clears the transcript bytes it owns on release", "[agent][immersive][speech]") {
@@ -727,12 +729,16 @@ namespace Horo::Editor {
                 fixture.provider.next = Transcript();
                 for (unsigned update = 0; update < 64; ++update)
                     REQUIRE(fixture.stream->Poll().evidence.has_value());
-                CHECK(fixture.stream->Poll().status == Status::LimitExceeded);
+                const auto exhausted = fixture.stream->Poll();
+                CHECK(exhausted.status == Status::HypothesisLimitExceeded);
+                CHECK_FALSE(exhausted.evidence);
+                CHECK(fixture.stream->Start(fixture.provider) == Status::HypothesisLimitExceeded);
+                CHECK(fixture.provider.opens == 1);
             }
             SECTION("PCM window exceeded") {
                 fixture.StartWithAudio();
                 const Capture::AudioCapturedBlock late{.start = {5, 16'000'000'000}, .firstFrame = 2, .sequence = 2, .frames = 2};
-                CHECK(fixture.stream->Append(fixture.source, late, fixture.Samples) == Status::LimitExceeded);
+                CHECK(fixture.stream->Append(fixture.source, late, fixture.Samples) == Status::CaptureLimitExceeded);
                 CHECK(fixture.provider.blocks == 1);
             }
         }
@@ -749,7 +755,7 @@ namespace Horo::Editor {
             SECTION("PCM ends exactly at the deadline") {}
             SECTION("PCM ends one nanosecond after the deadline") {
                 ++last.start.nanoseconds;
-                expected = Status::LimitExceeded;
+                expected = Status::CaptureLimitExceeded;
             }
             CHECK(fixture.stream->Append(fixture.source, last, fixture.Samples) == expected);
             CHECK(fixture.provider.blocks == (expected == Status::Accepted ? 2 : 1));

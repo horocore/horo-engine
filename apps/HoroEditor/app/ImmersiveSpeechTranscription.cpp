@@ -168,7 +168,7 @@ namespace Horo::Editor {
             return CloseWith(InvalidRequest);
         const auto end = BlockEnd(block, source_.format.sampleRate);
         if (!end || !FitsWindow(block, *end))
-            return CloseWith(LimitExceeded);
+            return CloseWith(CaptureLimitExceeded);
         const auto accepted = stream_->Append(block, pcm, providerWindow_->providerStop.get_token());
         if (const auto status = CheckProvider(accepted); status != Accepted)
             return status;
@@ -225,7 +225,7 @@ namespace Horo::Editor {
         if (!evidence_.context_.IsCurrent())
             return CloseWith(StaleContext);
         if (status_ == Accepted && Clock::now() >= deadline_)
-            return CloseWith(LimitExceeded);
+            return CloseWith(ProviderTimedOut);
         return status_;
     }
 
@@ -250,7 +250,7 @@ namespace Horo::Editor {
         using enum SpeechHypothesisKind;
         const bool isFinal = hypothesis.kind == Final;
         if (++hypotheses_ > MaximumHypotheses)
-            return {CloseWith(LimitExceeded), {}};
+            return {CloseWith(HypothesisLimitExceeded), {}};
         if (!ValidHypothesis(hypothesis))
             return {CloseWith(InvalidTranscript), {}};
         if (hypothesis.confidence < minimumConfidence_)

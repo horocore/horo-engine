@@ -19,7 +19,7 @@ namespace Horo::Editor {
         /** @brief Preserves expiration as a user-visible limit across the native capture boundary. */
         SpeechTranscriptionStatus CaptureFailure(const Error &error) noexcept {
             const auto &limit = EditorSpeechCaptureDurationLimit;
-            return ErrorChainContains(error, limit.domain, limit.code) ? LimitExceeded : CaptureInterrupted;
+            return ErrorChainContains(error, limit.domain, limit.code) ? CaptureLimitExceeded : CaptureInterrupted;
         }
     }  // namespace
 
@@ -55,7 +55,7 @@ namespace Horo::Editor {
             return status;
         } catch (const std::bad_alloc &) {
             Cancel();
-            return LimitExceeded;
+            return ResourceUnavailable;
         }
     }
 

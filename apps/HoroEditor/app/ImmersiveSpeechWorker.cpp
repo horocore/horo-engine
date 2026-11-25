@@ -180,7 +180,7 @@ namespace Horo::Editor {
             state_ = std::move(shared);
             return Accepted;
         } catch (const std::bad_alloc &) {
-            return LimitExceeded;
+            return ResourceUnavailable;
         }
     }
 
