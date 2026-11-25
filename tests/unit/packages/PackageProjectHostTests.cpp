@@ -1027,6 +1027,18 @@ namespace {
                 .descriptorPath = "extensions/native/extension.json"};
     }
 
+    /** @brief Confirms that the two independent review blockers identify their exact roles. */
+    void CheckIncompleteRuntimeCoverage(const Error &error,
+                                        const std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> roles) {
+        const auto &diagnostics = error.diagnostics;
+        REQUIRE(diagnostics.size() == 2);
+        CHECK(diagnostics[0].code.Value() == "packages.host.removal_reference_coverage_unavailable");
+        CHECK(diagnostics[0].path == roles.front().moduleId);
+        CHECK(diagnostics[0].location.source == roles.front().descriptorPath);
+        CHECK(diagnostics[1].code.Value() == "packages.host.runtime_registration_unobserved");
+        CHECK(diagnostics[1].path == roles.back().moduleId);
+    }
+
     TEST_CASE("Package removal needs coverage of retained users of a service or component",
               "[packages][application][host][removal-coverage]") {
         using namespace Packages;
@@ -1061,6 +1073,14 @@ namespace {
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
 
+        roles.front().hasAdditionalReferenceClasses = true;
+        const auto incomplete = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        REQUIRE(incomplete.HasError());
+        CheckIncompleteRuntimeCoverage(incomplete.ErrorValue(), roles);
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+
+        roles.front().hasAdditionalReferenceClasses = false;
         sources.registrations = roles;
         REQUIRE(PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources).HasValue());
         const auto locked = ValidatedPackageLockfileV1::Parse(fixture.Read("packages.lock"));

@@ -456,25 +456,26 @@ namespace Horo::Application::Internal {
             return roles;
         }
 
-        /** @brief Checks exact role identity and records a missing observation without hiding other missing roles. */
-        Result<void> ObserveRuntimeRole(const PackageRemovalSources &sources, const Packages::LockedPackage &locked,
-                                        const Packages::PackageRuntimeRoleDeclaration &role, std::vector<Diagnostic> &missing) {
+        /** @brief Identifies an exact locked role with missing or insufficient registration evidence. */
+        void ObserveRuntimeRole(const PackageRemovalSources &sources, const Packages::LockedPackage &locked,
+                                const Packages::PackageRuntimeRoleDeclaration &role, std::vector<Diagnostic> &blockers) {
             const auto observed = std::ranges::find_if(sources.registrations, [&](const auto &entry) {
                 return MatchesLockedArtifact(entry, locked) && entry.moduleId == role.moduleId &&
                        entry.descriptorPath == role.descriptor.Value();
             });
-            if (observed == sources.registrations.end())
-                missing.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"}, DiagnosticSeverity::Error,
-                                     locked.package.Value(), SourceLocation{role.descriptor.Value()}, role.moduleId);
-            else if (sources.requireGameplayOwner && observed->hasAdditionalReferenceClasses)
-                return Result<void>::Failure(ReferenceError("packages.host.removal_reference_coverage_unavailable", locked.package.Value()));
-            return Result<void>::Success();
+            const auto unobserved = observed == sources.registrations.end();
+            if (!unobserved && (!sources.requireGameplayOwner || !observed->hasAdditionalReferenceClasses))
+                return;
+            const auto *code = unobserved ? "packages.host.runtime_registration_unobserved"
+                                          : "packages.host.removal_reference_coverage_unavailable";
+            blockers.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, locked.package.Value(),
+                                  SourceLocation{role.descriptor.Value()}, role.moduleId);
         }
 
-        /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
+        /** @brief Reads declared roles of one exact locked artifact and collects role blockers. */
         Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
                                             const Packages::VerifiedPackageInstallRecord &install, const Packages::LockedPackage &locked,
-                                            const bool departing, std::vector<Diagnostic> &missing) {
+                                            const bool departing, std::vector<Diagnostic> &blockers) {
             if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
                 return authority;
             const auto *package = FindExactArchive(graph, locked);
@@ -487,8 +488,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(WithCause(
                     ReferenceError("packages.host.runtime_registration_unavailable", locked.package.Value()), *sources.registrationFailure));
             for (const auto &role : declared.Value())
-                if (auto observed = ObserveRuntimeRole(sources, locked, role, missing); observed.HasError())
-                    return observed;
+                ObserveRuntimeRole(sources, locked, role, blockers);
             return Result<void>::Success();
         }
 
@@ -520,18 +520,23 @@ namespace Horo::Application::Internal {
             const auto graph = install->Graph();
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
-            Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
+            std::vector<Diagnostic> blockers;
             const bool inspectRetained = HasDepartingNativeDependency(sources.registrations, lock, removal);
             for (const auto &entry : lock.Packages()) {
                 const bool departing = IsDeparting(removal, entry.package);
                 if (!inspectRetained && !departing)
                     continue;
-                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, departing, missing.diagnostics);
-                    checked.HasError())
-                    return checked;
+                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, departing, blockers); checked.HasError()) {
+                    auto error = std::move(checked).ErrorValue();
+                    std::ranges::move(blockers, std::back_inserter(error.diagnostics));
+                    return Result<void>::Failure(std::move(error));
+                }
             }
-            if (!missing.diagnostics.empty())
-                return Result<void>::Failure(std::move(missing));
+            if (!blockers.empty()) {
+                auto error = ReferenceError(blockers.front().code.Value());
+                error.diagnostics = std::move(blockers);
+                return Result<void>::Failure(std::move(error));
+            }
             return Result<void>::Success();
         }
     }  // namespace

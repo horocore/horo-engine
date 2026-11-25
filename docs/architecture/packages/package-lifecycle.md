@@ -525,9 +525,10 @@ a service owned by a departing package. When a departing package provides a
 gameplay service or component, every retained runtime role needs a registration
 observation from its exact locked archive, including roles declared by packages
 with additional extension contributions. The gameplay-only withdrawal rule
-applies to departing packages. An unobserved consumer blocks removal and reports
-the missing role. The saved request and lock stay intact until coverage and
-reference checks pass.
+applies to departing packages. The review reports unobserved roles and roles
+with unsupported reference classes together, with the package, module ID and
+descriptor path for each. The saved request and lock stay intact until coverage
+and reference checks pass.
 
 Removal checks also use Decision node IDs observed from the exact native
 gameplay registry. Saved Behavior Tree, State Machine, and Utility sources
