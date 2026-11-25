@@ -1414,6 +1414,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
+        audio/api/AudioStreamPcm.cpp
         audio/api/AudioStreamRenderPort.cpp
         audio/api/AudioStreamPosition.cpp
         audio/api/AudioStreamState.h

@@ -887,6 +887,13 @@ generation. It returns interleaved PCM with the capture clock and overrun
 evidence. Withdrawing the grant retires the generation and drops its queued
 samples. Recording and speech readers cannot consume that generation.
 
+After peer and playback admission, the host can submit decoded PCM to a
+nonseekable live stream. Audio charges its ring against the normal streaming
+budget and renders it through an ordinary scene-bound voice and mixer bus.
+The host supplies PCM in playout order. Audio rejects an entire block when
+space runs out, renders silence when the ring runs dry, and retires queued
+samples when the host stops the stream, including on mute or disconnect.
+
 Delivery policies:
 
 - **UnreliableUnordered**: Fast state updates (e.g. high-frequency physics/transform telemetry); latest packet overwrites previous.

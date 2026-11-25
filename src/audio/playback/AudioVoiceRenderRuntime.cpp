@@ -67,10 +67,10 @@ namespace Horo::Audio {
         if (!registry || !service || conversion.quality != AudioResamplerQuality::Linear ||
             !State::Valid(descriptor, conversion, maximumCoefficientBytes))
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
-        const auto facts = service->DecoderSpec(stream);
+        const auto facts = service->PlaybackFacts(stream);
         if (facts.HasError())
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(facts.ErrorValue());
-        if (!State::ValidStreamFormat(conversion, facts.Value()))
+        if (!State::ValidStreamFormat(conversion, facts.Value().format))
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::ResamplerInvalid));
         try {
             auto state = std::make_unique<State>();
@@ -92,10 +92,10 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::ValidStreamFormat */
     bool AudioVoiceRenderRuntime::State::ValidStreamFormat(const AudioResamplerDescriptor &conversion,
-                                                           const AudioStreamDecoderSpec &facts) noexcept {
-        return conversion.inputRate == facts.outputFormat.sampleRate &&
-               conversion.channels == facts.outputFormat.layout.orderedChannels.size() &&
-               facts.outputFormat.layout ==
+                                                           const AudioProcessingFormat &format) noexcept {
+        return conversion.inputRate == format.sampleRate &&
+               conversion.channels == format.layout.orderedChannels.size() &&
+               format.layout ==
                    MakeAudioSpeakerLayout(conversion.channels == 1 ? AudioSpeakerPreset::Mono : AudioSpeakerPreset::Stereo);
     }
 

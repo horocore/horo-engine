@@ -22,8 +22,10 @@ namespace Horo::Tests::VoiceRenderFixture {
             CapturingOutput *output{};
             std::unique_ptr<AudioFrontend> frontend;
 
-            StreamFrontendRig() {
-                auto admitted = host->service->Admit(Audio::StreamingTests::Request());
+            explicit StreamFrontendRig(const bool live = false) {
+                const auto request = Audio::StreamingTests::Request();
+                auto admitted = live ? host->service->AdmitLivePcm({request.decoder.outputFormat, request.ringFrames})
+                                     : host->service->Admit(request);
                 REQUIRE(admitted.HasValue());
                 stream = admitted.Value();
                 auto conversion = Playback().plan.Descriptor();
@@ -42,6 +44,22 @@ namespace Horo::Tests::VoiceRenderFixture {
                 frontend = std::move(created).Value();
             }
         };
+
+        TEST_CASE("AudioFrontend mixes live PCM without opening a media package", "[audio][frontend][stream][live-pcm]") {
+            StreamFrontendRig rig{true};
+            auto &[host, registry, stream, output, frontend] = rig;
+            RetireOnExit retirement{*frontend, *output, AudioFrontendPhase::Closed};
+            constexpr std::array samples{0.5F, 0.25F, 0.5F, 0.25F, 0.5F, 0.25F, 0.5F, 0.25F};
+            REQUIRE(host->service->SubmitLivePcm(stream, samples).HasValue());
+            REQUIRE(frontend->Start({1, 1'000'000'000}).HasValue());
+            CompleteOutputStart(*frontend, *output);
+            REQUIRE(frontend->Transport({frontend->Snapshot().voice, AudioVoiceControl::Start}).Value().status ==
+                    AudioCommandStagingStatus::Ok);
+            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
+            REQUIRE(output->null->AdvanceCallback().HasValue());
+            CHECK(std::ranges::any_of(output->left, [](const float sample) { return sample > 0.0F; }));
+            CHECK(host->package.opens.load() == 0);
+        }
 
         /** @brief Preserve the original device failure during every asynchronous teardown step. */
         void PumpStreamClose(AudioFrontend &frontend, const bool deviceLost) {

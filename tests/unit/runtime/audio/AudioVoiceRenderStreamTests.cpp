@@ -87,6 +87,48 @@ namespace Horo::Tests::VoiceRenderFixture {
         }
     };
 
+    TEST_CASE("Live PCM uses an ordinary scene-bound voice with spatial routing", "[audio][voice_render][stream][live-pcm]") {
+        JobSystem jobs({.workerCount = 1});
+        auto created = AudioStreamingService::CreateLive(jobs);
+        REQUIRE(created.HasValue());
+        std::shared_ptr<AudioStreamingService> service{std::move(created).Value()};
+        const auto format = Audio::StreamingTests::Request().decoder.outputFormat;
+        const auto admitted = service->AdmitLivePcm({format, 8});
+        REQUIRE(admitted.HasValue());
+        const auto stream = admitted.Value();
+        auto prepared = AudioVoiceRenderRuntime::CreateStream(Registry(), service, stream, StreamRig::Conversion(), CoefficientBytes,
+                                                               Descriptor());
+        REQUIRE(prepared.HasValue());
+        auto runtime = std::move(prepared).Value();
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto request = Request();
+        request.source.playback.spatialMode = AudioSpatialMode::ThreeD;
+        request.source.motion.current.position = {2.0F, 0.0F, 0.0F};
+        request.listener.emplace();
+        request.listener->identity = {Scope.scene, 2, 1};
+        REQUIRE(runtime->Publish(request, *plan, staging).Value().status == AudioCommandStagingStatus::Ok);
+        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        StreamRig::Start(*runtime, staging);
+        const auto silent = runtime->Render(2);
+        REQUIRE(silent.error == nullptr);
+        CHECK(silent.input.samples.planes[0][0] == 0.0F);
+        CHECK_FALSE(silent.terminal);
+
+        const std::array samples{1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+        REQUIRE(service->SubmitLivePcm(stream, samples).HasValue());
+        const auto spatial = runtime->Render(2);
+        REQUIRE(spatial.error == nullptr);
+        CHECK(spatial.input.samples.planes[1][0] > spatial.input.samples.planes[0][0]);
+        CHECK(spatial.input.samples.planes[1][0] > 0.0F);
+        CHECK(runtime->Cursor().frame > 0);
+        REQUIRE(service->Stop(stream).HasValue());
+        CHECK(runtime->Render(2).terminal);
+        runtime->Close();
+        REQUIRE(runtime->CompleteShutdown(true));
+        REQUIRE(service->Retire(stream).HasValue());
+    }
+
     TEST_CASE("Active stream voice retains old media while replacement prepares or fails", "[audio][stream][reload]") {
         StreamRig rig;
         auto plan = Plan(Asset());

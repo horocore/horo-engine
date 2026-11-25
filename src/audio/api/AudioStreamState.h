@@ -88,6 +88,18 @@ namespace Horo::Audio {
                            request.decoder.outputFormat.layout.orderedChannels.size()),
               scratch(request.decoder.requiredWorkingBytes), chargedBytes(bytes) {}
 
+        /** @brief A live PCM slot has a host producer and no worker-side opener. */
+        [[nodiscard]] bool IsLivePcm() const noexcept {
+            return source.open == nullptr;
+        }
+
+        /** @brief Rejects nonfinite samples before a producer modifies the ring. */
+        [[nodiscard]] static bool ValidSamples(std::span<const AudioSample> samples) noexcept;
+        /** @brief Publishes a validated bounded block from the slot's sole producer. */
+        void PublishBlock(std::uint64_t written, AudioStreamDecodedBlock progress, std::span<const AudioSample> samples) noexcept;
+        /** @brief Scrubs queued live PCM after the callback and producer have detached. */
+        void ScrubLivePcm() noexcept;
+
         /** @brief Control-only eligibility: terminal, cancelled or virtually idle streams do not admit future jobs. */
         bool FillAdmitted() const noexcept {
             return !failed && !cancelled && !stopped.load() && !cancellation.Token().IsCancellationRequested() &&

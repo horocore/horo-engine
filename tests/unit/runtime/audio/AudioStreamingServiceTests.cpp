@@ -1,6 +1,8 @@
 #include "AllocationProbe.h"
 #include "AudioStreamingTestFixture.h"
 
+#include <limits>
+
 namespace Horo::Audio::StreamingTests {
     namespace {
         /** @brief Checks ordered stereo output while the control lane concurrently reuses the ring. */
@@ -27,6 +29,52 @@ namespace Horo::Audio::StreamingTests {
             }
         }
     }  // namespace
+
+    TEST_CASE("Live PCM shares bounded slots and never publishes a rejected block", "[unit][audio][streaming][live-pcm]") {
+        JobSystem jobs({.workerCount = 1});
+        auto created = AudioStreamingService::CreateLive(jobs, {.maximumStreams = 1, .maximumConcurrentFills = 1, .maximumBytes = 32});
+        REQUIRE(created.HasValue());
+        auto service = std::move(created).Value();
+        const auto format = Request().decoder.outputFormat;
+        CHECK(service->Admit(Request()).HasError());
+        CHECK(service->AdmitLivePcm({format, 5}).HasError());
+        const auto admitted = service->AdmitLivePcm({format, 4});
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        CHECK(service->Snapshot().reservedBytes == 32);
+        CHECK(service->DecoderSpec(handle).HasError());
+        CHECK(service->PlaybackFacts(handle).Value().format == format);
+        CHECK_FALSE(service->PlaybackFacts(handle).Value().frameCount);
+        service->Pump();
+        CHECK(service->Snapshot(handle).Value().starvationCause == AudioStreamStarvationCause::AwaitingLiveInput);
+
+        CallbackBlock output;
+        auto port = std::move(service->RenderPort(handle)).Value();
+        const std::array initial{1.0F, -1.0F, 2.0F, -2.0F, 3.0F, -3.0F};
+        REQUIRE(service->SubmitLivePcm(handle, initial).HasValue());
+        CHECK(service->SubmitLivePcm(handle, initial).HasError());
+        CHECK(service->SubmitLivePcm(handle, std::array{4.0F}).HasError());
+        CHECK(service->SubmitLivePcm(handle, std::array{4.0F, std::numeric_limits<float>::infinity()}).HasError());
+        REQUIRE(output.Render(port, 2).availableFrames == 2);
+        CHECK(output.left[1] == 2.0F);
+        CHECK(output.right[1] == -2.0F);
+        REQUIRE(service->SubmitLivePcm(handle, std::array{4.0F, -4.0F, 5.0F, -5.0F}).HasValue());
+        REQUIRE(output.Render(port, 4).availableFrames == 3);
+        CHECK((output.left == std::array{3.0F, 4.0F, 5.0F, 0.0F}));
+        CHECK((output.right == std::array{-3.0F, -4.0F, -5.0F, 0.0F}));
+        REQUIRE(service->SubmitLivePcm(handle, initial).HasValue());
+        REQUIRE(service->Stop(handle).HasValue());
+        CHECK(output.Render(port, 4).stopped);
+        CHECK((output.left == std::array{0.0F, 0.0F, 0.0F, 0.0F}));
+        CHECK(service->SubmitLivePcm(handle, initial).HasError());
+        REQUIRE(service->Retire(handle).HasValue());
+        CHECK(service->Snapshot().reservedBytes == 0);
+        const auto replacement = service->AdmitLivePcm({format, 4});
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value() != handle);
+        CHECK(service->SubmitLivePcm(handle, initial).HasError());
+        CHECK(service->Snapshot(replacement.Value()).Value().bufferedFrames == 0);
+    }
 
     TEST_CASE("Streaming service fills from a package worker and callback consumes a bounded wraparound ring", "[unit][audio][streaming]") {
         JobSystem jobs({.workerCount = 1});
