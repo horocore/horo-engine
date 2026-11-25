@@ -60,7 +60,8 @@ namespace Horo::Tests::OpenXR {
             f.images.complete = true;
             REQUIRE(f.color.PollRelease().Value());
             REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
-            const NativePassthroughProjection receipt{frame, scope};
+            const NativePassthroughProjection receipt{
+                .frame = frame, .scope = scope, .authorization = {nullptr, [](void *, const XRPassthroughScope &) { return true; }}};
             if (maximumLayers == 1) {
                 RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt), XRErrors::CapacityExceeded);
                 CHECK(f.script.ends == 0);
@@ -150,24 +151,32 @@ namespace Horo::Tests::OpenXR {
             f.images.complete = true;
             REQUIRE(f.color.PollRelease().Value());
             REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
-            const NativePassthroughProjection receipt{frame, scope};
+            bool permitted = true;
+            const NativePassthroughProjection receipt{
+                .frame = frame,
+                .scope = scope,
+                .authorization = {&permitted, [](void *context, const XRPassthroughScope &) { return *static_cast<const bool *>(context); }}};
 
             auto unrelated = scope;
             unrelated.grant = IdentityValue<XRPassthroughGrant>(2);
+            const bool platform = GENERATE(false, true);
             bool withdrawn = false;
-            f.native.fence.onValidate = [&f, &scope, &unrelated, &withdrawn] {
+            f.native.fence.onValidate = [&f, &scope, &unrelated, &withdrawn, &permitted, platform] {
                 // Only the final borrow holds the passthrough dispatch guard.
                 const auto probe = f.native.owner.StopPassthrough(unrelated);
                 REQUIRE(probe.HasError());
                 if (probe.ErrorValue().code.Value() != XRErrors::OperationIncompatible.code.Value())
                     return;
-                f.native.owner.RevokePassthrough(scope);
+                if (platform)
+                    permitted = false;
+                else
+                    f.native.owner.RevokePassthrough(scope);
                 withdrawn = true;
             };
             const auto ended = f.compositor.EndPassthroughProjection(frame, plan, targets, receipt);
             f.native.fence.onValidate = {};
             REQUIRE(withdrawn);
-            RequireFailureIdentity(ended, XRErrors::OperationUnavailable);
+            RequireFailureIdentity(ended, platform ? XRErrors::PermissionDenied : XRErrors::OperationUnavailable);
             CHECK(f.script.ends == 0);
             CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
             CHECK_FALSE(f.passthrough.running);

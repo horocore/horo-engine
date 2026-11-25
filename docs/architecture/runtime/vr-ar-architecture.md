@@ -1192,6 +1192,9 @@ If the grant is withdrawn during the final native session validation, the
 owner rejects the layer and attempts to pause the provider before returning
 control to the application. When cleanup fails during activation rollback,
 the cleanup error includes the original activation failure as its cause.
+The compositor rechecks platform authorization after its last native session
+validation and before submitting the reconstruction layer. If the platform
+withdraws permission at that point, Editor Play ends the frame without layers.
 
 The signed Editor Play composition accepts this permission from an explicit
 installed platform authority. Its next-Play operator grant is consumed once.

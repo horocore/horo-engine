@@ -1279,9 +1279,26 @@ namespace Horo::Application::Internal {
             const auto receipt =
                 Editor::EditorVulkanXrViewportAccess::TakePremultipliedProjection(host.composition_.viewport, passthrough->publication,
                                                                                   acquisition->texture);
-            if (receipt)
-                return compositor.EndPassthroughProjection(frame, *plan, targets,
-                                                           {frame, passthrough->scope, passthrough->referenceToWorld});
+            if (receipt) {
+                struct FrameConsent final {
+                    FrameState &frame;
+                    bool withdrawn{};
+                } consent{*this};
+                const NativePassthroughAuthorization authorization{&consent, [](void *context, const XRPassthroughScope &scope) {
+                    auto &current = *static_cast<FrameConsent *>(context);
+                    auto &host = current.frame.host;
+                    current.withdrawn = !host.AuthorizePassthroughFrame(scope) || !host.FrameLightingAuthorized() ||
+                                        !current.frame.GazeProfileCurrent();
+                    return !current.withdrawn;
+                }};
+                auto ended = compositor.EndPassthroughProjection(
+                    frame, *plan, targets, {frame, passthrough->scope, passthrough->referenceToWorld, authorization});
+                if (!consent.withdrawn)
+                    return ended;
+                if (auto aborted = host.AbortRenderFrame(); aborted.HasError())
+                    return aborted;
+                return compositor.EndEmpty(frame);
+            }
         }
         if (writer && writer->nativeSubmitted)
             return EndSynthesis(frame, targets);

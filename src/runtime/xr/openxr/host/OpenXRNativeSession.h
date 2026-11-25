@@ -19,6 +19,11 @@
 #include <utility>
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Synchronous caller-owned authorization for the exact native passthrough submission. */
+    struct NativePassthroughAuthorization final {
+        void *context{};
+        bool (*allows)(void *, const XRPassthroughScope &){};
+    };
     class OpenXRSwapchain;
 
     /** @brief Fixed native discovery limits; oversized publications fail, never truncate. */
@@ -568,7 +573,8 @@ namespace Horo::XR::OpenXRInternal {
         void RevokePassthrough() noexcept;
         /** @brief Calls native frame end with the exact live reconstruction underlay and prevalidated projection. */
         [[nodiscard]] Result<XrResult> EndPassthroughFrame(const XRPassthroughScope &scope, XrSession session,
-                                                           const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch);
+                                                           const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch,
+                                                           const NativePassthroughAuthorization &authorization);
         /** @brief Preserves the existing native phase/result-to-Horo mapping across split retirement implementation. */
         [[nodiscard]] static Error NativeFailure(const char *operation, XrResult result);
 

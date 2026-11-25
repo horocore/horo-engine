@@ -284,7 +284,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::EndPassthroughFrame */
     Result<XrResult> OpenXRNativeSession::EndPassthroughFrame(const XRPassthroughScope &scope, XrSession session,
-                                                              const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch) {
+                                                              const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch,
+                                                              const NativePassthroughAuthorization &authorization) {
         using Outcome = Result<XrResult>;
         if (controlThread_ != std::this_thread::get_id() || passthroughCall_ || lightCall_ || retirementCall_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
@@ -297,6 +298,10 @@ namespace Horo::XR::OpenXRInternal {
         if (native.HasError() || native.Value().session != session) {
             RevokePassthrough();
             return Outcome::Failure(native.HasError() ? native.ErrorValue() : MakeError(XRErrors::IdentityStale));
+        }
+        if (!authorization.allows || !authorization.allows(authorization.context, scope)) {
+            RevokePassthrough();
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         }
         if (!passthrough_.admitted) {
             // The composition fence can revoke admission during Borrow. The dispatch guard deferred the native pause.

@@ -37,7 +37,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::EndPassthroughFrame */
     Result<XrResult> OpenXRNativeSession::EndPassthroughFrame(const XRPassthroughScope &, XrSession, const XrFrameEndInfo &,
-                                                              PFN_xrEndFrame) {
+                                                              PFN_xrEndFrame, const NativePassthroughAuthorization &) {
         return Result<XrResult>::Failure(MakeError(XRErrors::OperationUnsupported));
     }
 }  // namespace Horo::XR::OpenXRInternal

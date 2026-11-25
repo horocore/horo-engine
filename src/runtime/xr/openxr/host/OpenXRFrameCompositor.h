@@ -110,6 +110,7 @@ namespace Horo::XR::OpenXRInternal {
         XRFrameId frame;
         XRPassthroughScope scope;
         std::optional<XRPoseSample> referenceToWorld{}; /**< Same prediction's native-reference calibration, when eyes use that space. */
+        NativePassthroughAuthorization authorization; /**< Rechecked after the final native session borrow. */
     };
 
     /** @brief Explicit normalized depth range and matching metric clip planes used to render every submitted view. */
@@ -218,7 +219,7 @@ namespace Horo::XR::OpenXRInternal {
 
         [[nodiscard]] Result<bool> EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
                                                         const NativeReprojectionSubmission *synthesis,
-                                                        const XRPassthroughScope *passthrough = nullptr);
+                                                        const NativePassthroughProjection *passthrough = nullptr);
         [[nodiscard]] std::optional<ReprojectionEncoding> EncodeReprojection(const NativeReprojectionSubmission &synthesis) const;
         /** @brief Preflights the exact complete frame, profile and owner set without native work. */
         [[nodiscard]] Result<void> ValidateProjection(const XRFrameId &frame, const ProjectionEncoding &encoding) const;
@@ -234,7 +235,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> ValidateFrame(const XRFrameId &frame) const;
         [[nodiscard]] Result<void> EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
                                              const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
-                                             PFN_xrEndFrame dispatch, const XRPassthroughScope *passthrough = nullptr);
+                                             PFN_xrEndFrame dispatch, const NativePassthroughProjection *passthrough = nullptr);
         [[nodiscard]] Result<XrSwapchainSubImage> SubImage(const XRExternalRenderTargetDescriptor &target,
                                                            std::span<const NativeProjectionTarget> owners) const;
 

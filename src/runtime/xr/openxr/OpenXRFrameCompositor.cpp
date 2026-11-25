@@ -595,14 +595,14 @@ namespace Horo::XR::OpenXRInternal {
         if (capacity != XRFrameStatus::Ok)
             return Result<void>::Failure(
                 MakeError(capacity == XRFrameStatus::CapacityExceeded ? XRErrors::CapacityExceeded : XRErrors::OperationIncompatible));
-        const auto ended = EndEncodedProjection(frame, encoding, nullptr, &passthrough.scope);
+        const auto ended = EndEncodedProjection(frame, encoding, nullptr, &passthrough);
         return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc OpenXRFrameCompositor::EndEncodedProjection */
     Result<bool> OpenXRFrameCompositor::EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
                                                              const NativeReprojectionSubmission *synthesis,
-                                                             const XRPassthroughScope *passthrough) {
+                                                             const NativePassthroughProjection *passthrough) {
         const auto &plan = encoding.plan;
         // PERF: fixed bounded native encoding storage; no frame allocation or native discovery.
         std::array<XrCompositionLayerProjectionView, XRHardLimits::MaximumViews> views{};
@@ -650,10 +650,10 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRFrameCompositor::EndNative */
     Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
                                                   const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
-                                                  PFN_xrEndFrame dispatch, const XRPassthroughScope *passthrough) {
+                                                  PFN_xrEndFrame dispatch, const NativePassthroughProjection *passthrough) {
         // SYNC: cleanup must echo the completed native wait even when its prediction could not enter Horo's time contract.
         const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
-        const auto dispatched = passthrough ? session_->EndPassthroughFrame(*passthrough, session, info, dispatch)
+        const auto dispatched = passthrough ? session_->EndPassthroughFrame(passthrough->scope, session, info, dispatch, passthrough->authorization)
                                             : Result<XrResult>::Success(dispatch(session, &info));
         if (dispatched.HasError())
             return Result<void>::Failure(dispatched.ErrorValue());
