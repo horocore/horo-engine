@@ -19,6 +19,8 @@ def test_contrast_tool_copy_is_paired_and_covers_rendered_states() -> None:
     assert {"title", "invalid", "needs_composition", "pass", "fail", "custom", "theme", "large_hint"} <= keys
     assert {"preview_label", "preview_off", "preview_protanopia", "preview_deuteranopia", "preview_tritanopia",
             "preview_achromatopsia", "preview_unavailable"} <= keys
+    assert {"controls_start", "controls_stop", "controls_unavailable", "controls_waiting", "controls_incomplete",
+            "controls_observed", "controls_missing", "controls_focus", "controls_focus_unnamed"} <= keys
     assert {"pair_primary_root", "pair_primary_window", "pair_primary_panel", "pair_primary_raised",
             "pair_muted_root", "pair_muted_panel", "pair_dim_raised", "pair_native_window",
             "pair_native_popup", "pair_native_frame", "pair_native_disabled"} <= keys

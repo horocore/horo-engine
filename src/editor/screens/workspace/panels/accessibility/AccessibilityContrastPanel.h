@@ -5,9 +5,11 @@
  */
 #include "Horo/Accessibility/Contrast.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "editor/accessibility/EditorControlMetadata.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 struct ImVec4;
 
@@ -86,15 +88,27 @@ namespace Horo::Editor {
                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
 
     private:
+        /** @brief Selects the token or native style colors to evaluate. */
+        void DrawThemePairSelection(const EditorGuiContext &context);
         /** @brief Lets the developer inspect the live viewport with a selected color-vision transform. */
         void DrawColorPreview(const EditorGuiContext &context);
         /** @brief Withdraws this panel's transient preview when it leaves presentation. */
         void ResetColorPreview();
+        /** @brief Shows opt-in observations from the last full editor control frame. */
+        void DrawControlInspection(const EditorGuiContext &context);
+        /** @brief Displays a completed control frame or its capture status. */
+        void DrawControlInspectionFrame(const EditorGuiContext &context, const Detail::EditorControlMetadataFrame &frame) const;
+        /** @brief Starts the context-local capture, or reports that its owner is unavailable. */
+        void StartControlInspection();
+        /** @brief Releases captured frame data when the tool stops being presented. */
+        void ResetControlInspection() noexcept;
         ContrastInspectionDraft draft_;
         bool inspectTheme_{};
         ThemeContrastPair themePair_{ThemeContrastPair::PrimaryRoot};
         IEditorViewportRenderer *viewport_{};
         int previewSelection_{};
         bool previewRejected_{};
+        std::unique_ptr<Detail::EditorControlMetadataCapture> controlCapture_;
+        bool controlCaptureUnavailable_{};
     };
 }  // namespace Horo::Editor

@@ -4,8 +4,11 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
+#include <algorithm>
 #include <charconv>
+#include <new>
 #include <optional>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -107,12 +110,14 @@ namespace Horo::Editor {
     /** @copydoc AccessibilityContrastPanel::OnDetach */
     void AccessibilityContrastPanel::OnDetach() {
         ResetColorPreview();
+        ResetControlInspection();
         viewport_ = nullptr;
     }
 
     /** @copydoc AccessibilityContrastPanel::OnPresentationHidden */
     void AccessibilityContrastPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
         ResetColorPreview();
+        ResetControlInspection();
     }
 
     /** @copydoc AccessibilityContrastPanel::ResetColorPreview */
@@ -149,11 +154,98 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s", LocalizedText(localization, "preview_unavailable").c_str());
     }
 
+    /** @copydoc AccessibilityContrastPanel::StartControlInspection */
+    void AccessibilityContrastPanel::StartControlInspection() {
+        controlCaptureUnavailable_ = true;
+        try {
+            auto capture = std::make_unique<Detail::EditorControlMetadataCapture>();
+            if (!capture->Bind(ImGui::GetCurrentContext()))
+                return;
+            controlCapture_ = std::move(capture);
+            controlCaptureUnavailable_ = false;
+        } catch (const std::bad_alloc &) {
+            // The inspection is optional; allocation failure must leave the workspace usable.
+        }
+    }
+
+    /** @copydoc AccessibilityContrastPanel::ResetControlInspection */
+    void AccessibilityContrastPanel::ResetControlInspection() noexcept {
+        controlCapture_.reset();
+        controlCaptureUnavailable_ = false;
+    }
+
+    /** @copydoc AccessibilityContrastPanel::DrawControlInspection */
+    void AccessibilityContrastPanel::DrawControlInspection(const EditorGuiContext &context) {
+        const auto &localization = context.localization;
+        const auto label = std::string{LocalizedText(localization, controlCapture_ ? "controls_stop" : "controls_start").c_str()} +
+                           "###ControlInspectionToggle";
+        if (Ui::Button({.label = label.c_str(), .font = context.theme.fonts.sans})) {
+            if (controlCapture_)
+                ResetControlInspection();
+            else
+                StartControlInspection();
+        }
+        if (controlCaptureUnavailable_)
+            ImGui::TextWrapped("%s", LocalizedText(localization, "controls_unavailable").c_str());
+        if (controlCapture_)
+            DrawControlInspectionFrame(context, controlCapture_->Frame());
+    }
+
+    /** @copydoc AccessibilityContrastPanel::DrawControlInspectionFrame */
+    void AccessibilityContrastPanel::DrawControlInspectionFrame(const EditorGuiContext &context,
+                                                                const Detail::EditorControlMetadataFrame &frame) const {
+        const auto &localization = context.localization;
+        using enum Detail::EditorControlMetadataStatus;
+        // Binding starts during this panel's draw. The first frame missed controls drawn before it.
+        if (frame.status == NoFrame || frame.sequence == 1) {
+            ImGui::TextWrapped("%s", LocalizedText(localization, "controls_waiting").c_str());
+            return;
+        }
+        if (frame.status != Complete) {
+            ImGui::TextWrapped("%s", LocalizedText(localization, "controls_incomplete").c_str());
+            return;
+        }
+
+        ImGui::TextWrapped("%s %zu", LocalizedText(localization, "controls_observed").c_str(), frame.controls.size());
+        ImGui::TextWrapped("%s %u", LocalizedText(localization, "controls_missing").c_str(), frame.missingNames);
+        const auto focused = std::ranges::find_if(frame.controls, [](const Detail::EditorControlMetadataRecord &control) {
+            return !control.clipped && control.state.Has(Runtime::Ui::UiAccessibilityStateFlag::Focused);
+        });
+        if (focused == frame.controls.end())
+            return;
+        const auto name = frame.Text(focused->name);
+        if (name.empty())
+            ImGui::TextWrapped("%s", LocalizedText(localization, "controls_focus_unnamed").c_str());
+        else
+            ImGui::TextWrapped("%s %.*s", LocalizedText(localization, "controls_focus").c_str(), static_cast<int>(name.size()), name.data());
+    }
+
     /** @copydoc AccessibilityContrastPanel::DrawIcon */
     void AccessibilityContrastPanel::DrawIcon(ImDrawList *drawList, const ImVec2 &position, const ImVec2 &size, const ImU32 color) {
         const ImVec2 center{position.x + size.x * 0.5F, position.y + size.y * 0.5F};
         drawList->AddCircle(center, size.x * 0.3F, color, 20, 2.0F);
         drawList->AddLine({center.x, center.y - size.y * 0.3F}, {center.x, center.y + size.y * 0.3F}, color, 2.0F);
+    }
+
+    /** @copydoc AccessibilityContrastPanel::DrawThemePairSelection */
+    void AccessibilityContrastPanel::DrawThemePairSelection(const EditorGuiContext &context) {
+        const auto &localization = context.localization;
+        ImGui::TextWrapped("%s", LocalizedText(localization, "theme_hint").c_str());
+        const std::array labels{LocalizedText(localization, "pair_primary_root").c_str(),
+                                LocalizedText(localization, "pair_primary_window").c_str(),
+                                LocalizedText(localization, "pair_primary_panel").c_str(),
+                                LocalizedText(localization, "pair_primary_raised").c_str(),
+                                LocalizedText(localization, "pair_muted_root").c_str(),
+                                LocalizedText(localization, "pair_muted_panel").c_str(),
+                                LocalizedText(localization, "pair_dim_raised").c_str(),
+                                LocalizedText(localization, "pair_native_window").c_str(),
+                                LocalizedText(localization, "pair_native_popup").c_str(),
+                                LocalizedText(localization, "pair_native_frame").c_str(),
+                                LocalizedText(localization, "pair_native_disabled").c_str()};
+        static_assert(labels.size() == static_cast<std::size_t>(ThemeContrastPair::Count));
+        int selection = static_cast<int>(themePair_);
+        if (Ui::ComboControl("##ContrastThemePair", &selection, labels.data(), static_cast<int>(labels.size()), context.theme.fonts))
+            themePair_ = static_cast<ThemeContrastPair>(selection);
     }
 
     /** @copydoc AccessibilityContrastPanel::DrawPanel */
@@ -174,22 +266,7 @@ namespace Horo::Editor {
             static_cast<void>(
                 Ui::ColorHexControl("##ContrastBackground", draft_.background.data(), draft_.background.size(), context.theme.fonts));
         } else {
-            ImGui::TextWrapped("%s", LocalizedText(context.localization, "theme_hint").c_str());
-            const std::array pairLabels{LocalizedText(context.localization, "pair_primary_root").c_str(),
-                                        LocalizedText(context.localization, "pair_primary_window").c_str(),
-                                        LocalizedText(context.localization, "pair_primary_panel").c_str(),
-                                        LocalizedText(context.localization, "pair_primary_raised").c_str(),
-                                        LocalizedText(context.localization, "pair_muted_root").c_str(),
-                                        LocalizedText(context.localization, "pair_muted_panel").c_str(),
-                                        LocalizedText(context.localization, "pair_dim_raised").c_str(),
-                                        LocalizedText(context.localization, "pair_native_window").c_str(),
-                                        LocalizedText(context.localization, "pair_native_popup").c_str(),
-                                        LocalizedText(context.localization, "pair_native_frame").c_str(),
-                                        LocalizedText(context.localization, "pair_native_disabled").c_str()};
-            static_assert(pairLabels.size() == static_cast<std::size_t>(ThemeContrastPair::Count));
-            int pair = static_cast<int>(themePair_);
-            if (Ui::ComboControl("##ContrastThemePair", &pair, pairLabels.data(), static_cast<int>(pairLabels.size()), context.theme.fonts))
-                themePair_ = static_cast<ThemeContrastPair>(pair);
+            DrawThemePairSelection(context);
         }
         const std::array labels{LocalizedText(context.localization, "standard").c_str(),
                                 LocalizedText(context.localization, "large").c_str()};
@@ -206,6 +283,8 @@ namespace Horo::Editor {
             ImGui::Text("AAA: %s", LocalizedText(context.localization, result.Value().meetsAAA ? "pass" : "fail").c_str());
         }
         DrawColorPreview(context);
+        ImGui::Separator();
+        DrawControlInspection(context);
         ImGui::EndChild();
     }
 }  // namespace Horo::Editor

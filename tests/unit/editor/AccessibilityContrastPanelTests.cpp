@@ -1,4 +1,5 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
@@ -215,6 +216,58 @@ namespace Horo::Editor {
                 REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
             }
         }
+    }
+
+    TEST_CASE("Control inspection observes complete editor frames only while enabled", "[editor][accessibility][contrast][headless]") {
+        Tests::EditorGuiContextFixture fixture;
+        const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/en-US.json";
+        REQUIRE(fixture.localization.LoadCatalogFile(catalog));
+        REQUIRE(fixture.localization.Prepare({"en-US"}));
+        REQUIRE(fixture.localization.ActivatePrepared());
+        AccessibilityContrastPanel panel;
+        EditorWorkspaceViewModel model;
+        EditorWorkspaceViewCommandData command;
+        const auto draw = [&](const bool focusControl = false) {
+            fixture.imgui.BeginFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({640, 650});
+            ImGui::Begin("Control inspection test");
+            if (focusControl)
+                ImGui::SetFocusID(ImGui::GetID("QA control"), ImGui::GetCurrentWindow());
+            static_cast<void>(Ui::Button({.label = "QA control"}));
+            ImGui::LogToBuffer();
+            panel.DrawPanel({}, ImGui::GetContentRegionAvail(), model, command, fixture.context);
+            const std::string output{ImGui::GetCurrentContext()->LogBuffer.c_str()};
+            ImGui::LogFinish();
+            ImGui::End();
+            fixture.imgui.EndFrame();
+            return output;
+        };
+
+        using enum Detail::EditorControlMetadataStatus;
+        CHECK(draw().find("Inspect editor controls") != std::string::npos);
+        CHECK(Detail::CurrentEditorControlMetadata().status == NoFrame);
+        auto &windows = ImGui::GetCurrentContext()->Windows;
+        const auto child = std::ranges::find_if(windows, [](const ImGuiWindow *window) {
+            return window->Active && std::string_view{window->Name}.find("##ContrastInspection") != std::string_view::npos;
+        });
+        REQUIRE(child != windows.end());
+        ImGui::FocusWindow(*child);
+        ImGui::ActivateItemByID(ImHashStr("###ControlInspectionToggle", 0, (*child)->IDStack.back()));
+        CHECK(draw().find("Waiting for a complete editor frame") != std::string::npos);
+        CHECK(draw(true).find("Shared controls observed") == std::string::npos);
+        const auto frame = Detail::CurrentEditorControlMetadata();
+        REQUIRE(frame.status == Complete);
+        CHECK(std::ranges::any_of(frame.controls, [&frame](const auto &control) {
+            return frame.Text(control.name) == "QA control";
+        }));
+        const auto inspection = draw();
+        CHECK(inspection.find("Shared controls observed") != std::string::npos);
+        CHECK(inspection.find("Focused control QA control") != std::string::npos);
+
+        panel.OnPresentationHidden(command);
+        CHECK(Detail::CurrentEditorControlMetadata().status == NoFrame);
+        CHECK(draw().find("Inspect editor controls") != std::string::npos);
     }
 
     TEST_CASE("Built-in primary text on opaque editor panels meets standard AA in both theme layers",
