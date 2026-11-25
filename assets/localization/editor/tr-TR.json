@@ -4635,6 +4635,9 @@
     "workspace.packages.reference_unreadable": {
       "text": "Kaynak, algı incelemesi için okunamadı"
     },
+    "workspace.packages.reference_saved_source_unreadable": {
+      "text": "Kayıtlı kaynak doğrulanamadı"
+    },
     "workspace.packages.reference_registration": {
       "text": "Çalışma zamanı modülünün sahipliği doğrulanmalı"
     },

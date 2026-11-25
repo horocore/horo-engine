@@ -3,6 +3,8 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 
+#include <optional>
+
 namespace Horo::Assets {
     class IAssetRegistrySource;
 }
@@ -12,6 +14,25 @@ namespace Horo::Packages {
 }
 
 namespace Horo::Application::Internal {
+    /** @brief Bounded saved-source failures retained alongside confirmed reference findings. */
+    class PackageSourceReviewFailures final {
+    public:
+        /** @brief Records a canonical project-relative source failure while keeping the first typed cause.
+         * @param path Path from the admitted asset registry. @param failure Exact failure for that source.
+         * @return Success to continue the scan or a resource-limit error.
+         */
+        [[nodiscard]] Result<void> Record(std::string_view path, Error failure);
+
+        /** @brief Releases the first failure with the combined source and reference diagnostics.
+         * @param references Confirmed references from successfully decoded sources.
+         * @return Failure with combined findings, or the original references on a complete scan.
+         */
+        [[nodiscard]] Result<std::vector<Diagnostic>> Finish(std::vector<Diagnostic> references) &&;
+
+    private:
+        std::optional<Error> first_;
+    };
+
     /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
      * @details Retains observed behavior and decision IDs and the latest service and system descriptors per exact artifact and role. */
     struct PackageRemovalRegistrationEvidence final {

@@ -52,6 +52,7 @@ namespace Horo::Application::Internal {
             References behaviors;
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
+            PackageSourceReviewFailures failures;
         };
 
         Error ReferenceError(std::string code, std::string_view path = {}) {
@@ -244,10 +245,10 @@ namespace Horo::Application::Internal {
         Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceOwners &owners, std::string_view path, std::string_view text) {
             const auto scene = SceneSource::DecodeSceneSourceWithChildReferences(text);
             if (scene.HasError())
-                return Result<void>::Failure(
+                return scan.failures.Record(path,
                     WithCause(ReferenceError("packages.host.scene_reference_unreadable", path), scene.ErrorValue()));
             if (!scene.Value().unsupportedComponentOwners.empty())
-                return Result<void>::Failure(ReferenceError("packages.host.scene_reference_unsupported", path));
+                return scan.failures.Record(path, ReferenceError("packages.host.scene_reference_unsupported", path));
             if (auto found = InspectSceneObjects(scene.Value(), scan, owners, path); found.HasError())
                 return found;
             return !owners.senses.empty() && RequiresSenseReview(scene.Value()) ? CollectSenseReview(scan, owners, path)
@@ -275,15 +276,28 @@ namespace Horo::Application::Internal {
             const auto path = record.sourcePath.String();
             const auto prefab = Prefab::PrefabDocument::Parse(text, limits);
             if (prefab.HasError())
-                return Result<void>::Failure(
+                return scan.failures.Record(path,
                     WithCause(ReferenceError("packages.host.prefab_reference_unreadable", path), prefab.ErrorValue()));
             if (prefab.Value().Data().assetId != record.id)
-                return Result<void>::Failure(ReferenceError("packages.host.prefab_reference_identity_mismatch", path));
+                return scan.failures.Record(path, ReferenceError("packages.host.prefab_reference_identity_mismatch", path));
             const auto &data = prefab.Value().Data();
             if (auto found = InspectPrefabObjects(data, scan, owners, path); found.HasError())
                 return found;
             return !owners.senses.empty() && RequiresSenseReview(data) ? CollectSenseReview(scan, owners, path)
                                                                        : Result<void>::Success();
+        }
+
+        /** @brief Reads a canonical source or records its path while the registry scan can still continue. */
+        Result<void> InspectAsset(const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context,
+                                  const Assets::AssetRecord &record, const Prefab::PrefabLimitProfile &limits,
+                                  const SavedReferenceOwners &owners, SavedReferenceScan &scan) {
+            const auto path = record.sourcePath.String();
+            const auto source = files.SourceText(path, context, {});
+            if (source.HasError())
+                return scan.failures.Record(path, WithCause(ReferenceError("packages.host.behavior_reference_unreadable", path),
+                                                             source.ErrorValue()));
+            return record.type.Value() == "core.scene" ? InspectScene(scan, owners, path, *source.Value().text)
+                                                      : InspectPrefab(scan, owners, record, *source.Value().text, limits);
         }
 
         /** @brief Shares the original deadline across bounded descendant reads and the resulting observations. */
@@ -298,14 +312,9 @@ namespace Horo::Application::Internal {
                 const auto type = record.type.Value();
                 if (type != "core.scene" && type != "core.prefab")
                     continue;
-                const auto source = files.SourceText(record.sourcePath.String(), context, {});
-                if (source.HasError())
-                    return Inspection::Failure(
-                        WithCause(ReferenceError("packages.host.behavior_reference_unreadable", record.sourcePath.String()),
-                                  source.ErrorValue()));
-                const auto inspected = type == "core.scene"
-                                           ? InspectScene(scan, owners, record.sourcePath.String(), *source.Value().text)
-                                           : InspectPrefab(scan, owners, record, *source.Value().text, limits.Value());
+                if (auto current = Platform::CheckProjectReadContext(context); current.HasError())
+                    return Inspection::Failure(current.ErrorValue());
+                const auto inspected = InspectAsset(files, context, record, limits.Value(), owners, scan);
                 if (inspected.HasError())
                     return Inspection::Failure(inspected.ErrorValue());
             }
@@ -483,6 +492,28 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc PackageSourceReviewFailures::Record */
+    Result<void> PackageSourceReviewFailures::Record(const std::string_view path, Error failure) {
+        constexpr std::size_t maximumFailures = 16'384;
+        auto reason = failure.code.Value();
+        if (!first_)
+            first_.emplace(std::move(failure));
+        if (first_->diagnostics.size() >= maximumFailures)
+            return Result<void>::Failure(ReferenceError("packages.host.saved_reference_source_limit", path));
+        first_->diagnostics.emplace_back(DiagnosticCode{"packages.host.saved_reference_source_unreadable"}, DiagnosticSeverity::Error,
+                                         std::move(reason), SourceLocation{std::string{path}}, "");
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PackageSourceReviewFailures::Finish */
+    Result<std::vector<Diagnostic>> PackageSourceReviewFailures::Finish(std::vector<Diagnostic> references) && {
+        using Review = Result<std::vector<Diagnostic>>;
+        if (!first_)
+            return Review::Success(std::move(references));
+        std::ranges::move(references, std::back_inserter(first_->diagnostics));
+        return Review::Failure(std::move(*first_));
+    }
+
     /** @copydoc OfflineRemovalContributionBlocker */
     std::optional<Diagnostic> OfflineRemovalContributionBlocker(const Packages::LockedPackage &package) {
         if (std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"}))
@@ -575,7 +606,7 @@ namespace Horo::Application::Internal {
                                      std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
         std::ranges::move(scan.senses, std::back_inserter(diagnostics));
         std::ranges::move(scan.components, std::back_inserter(diagnostics));
-        return Inspection::Success(std::move(diagnostics));
+        return std::move(scan.failures).Finish(std::move(diagnostics));
     }
 
     /** @copydoc InspectPackageBehaviorMigrations */
@@ -589,11 +620,14 @@ namespace Horo::Application::Internal {
             assertedOwners.behaviors[claim.previous].insert(claim.package);
             targets.emplace(std::pair{claim.package, claim.previous}, &claim.candidate);
         }
-        const auto matches = ScanSavedReferences(assets, files, std::move(context), assertedOwners);
+        auto matches = ScanSavedReferences(assets, files, std::move(context), assertedOwners);
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
+        auto scan = std::move(matches).Value();
+        if (auto complete = std::move(scan.failures).Finish({}); complete.HasError())
+            return complete;
         std::vector<Diagnostic> diagnostics;
-        for (const auto &match : matches.Value().behaviors | std::views::take(diagnosticLimit)) {
+        for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit)) {
             const auto *target = targets.at({match.package, match.type});
             auto message = match.package.Value() + ": " + match.type.Value() + " -> " + target->Value() +
                            " (object " + std::to_string(match.object) + ", attachment " + std::to_string(match.instance.value) + ')';

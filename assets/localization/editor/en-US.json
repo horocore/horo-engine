@@ -4635,6 +4635,9 @@
     "workspace.packages.reference_unreadable": {
       "text": "Source could not be read for Perception review"
     },
+    "workspace.packages.reference_saved_source_unreadable": {
+      "text": "Saved source could not be verified"
+    },
     "workspace.packages.reference_registration": {
       "text": "Runtime module ownership needs verification"
     },

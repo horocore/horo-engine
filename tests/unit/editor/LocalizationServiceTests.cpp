@@ -410,6 +410,7 @@ namespace {
                                   "workspace.packages.reference_decision",
                                   "workspace.packages.reference_perception",
                                   "workspace.packages.reference_unreadable",
+                                  "workspace.packages.reference_saved_source_unreadable",
                                   "workspace.packages.reference_registration"};
         RequireCatalogKeys(service, keys);
     }

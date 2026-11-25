@@ -492,7 +492,9 @@ still require review, including disabled attachments. An EQS source is independe
 departing sense when its complete source is admitted against the engine-owned
 point-query schema. Perception queries and queries with unresolved stages still
 require review. Unreadable queries are reported with their project-relative
-paths and block the operation. The application package project host borrows the
+paths and block the operation. An unreadable Scene, Prefab or Decision source
+also blocks removal. The review reports its path alongside references from the
+other readable documents. The application package project host borrows the
 inert EQS descriptor schema and authoring validator from AI Scene integration.
 The review does not compose a live Scene or execute queries.
 

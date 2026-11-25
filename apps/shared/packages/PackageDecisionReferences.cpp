@@ -150,34 +150,35 @@ namespace Horo::Application::Internal {
 
         /** @brief Uses the bounded codec for the registered source, without loading gameplay factories. */
         Result<void> InspectGraph(const PackageRemovalSources &sources, const Assets::AssetRecord &record,
-                                  const DecisionReferences &references) {
+                                  const DecisionReferences &references, PackageSourceReviewFailures &failures) {
             const auto captured = sources.files.SourceText(record.sourcePath.String(), sources.context, {});
             if (captured.HasError())
-                return Result<void>::Failure(
+                return failures.Record(references.assetPath,
                     WithCause(ReferenceError("packages.host.decision_reference_unreadable", references.assetPath), captured.ErrorValue()));
             const auto &bytes = *captured.Value().text;
             AI::DecisionGraphAssetId root;
             const auto decoded = AI::DecisionPlanCodec::DecodeSource(
                 {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()}, root);
             if (decoded.HasError())
-                return Result<void>::Failure(
+                return failures.Record(references.assetPath,
                     WithCause(ReferenceError("packages.host.decision_reference_unreadable", references.assetPath), decoded.ErrorValue()));
             const auto &graphs = decoded.Value();
             if (graphs.size() != 1 || graphs.front().asset != root || DecisionTypes[graphs.front().body.index()] != record.type.Value())
-                return Result<void>::Failure(ReferenceError("packages.host.decision_reference_identity_mismatch", references.assetPath));
+                return failures.Record(references.assetPath,
+                                       ReferenceError("packages.host.decision_reference_identity_mismatch", references.assetPath));
             return std::visit(references, graphs.front().body);
         }
 
         /** @brief Reviews the provider surfaces relevant to this one registered asset. */
         Result<void> InspectProviderSource(const PackageRemovalSources &sources, const ProviderOwners &owners,
                                            const Assets::AssetRecord &record, const AI::QuerySchemaRegistry *pointSchema,
-                                           std::vector<Diagnostic> &diagnostics) {
+                                           std::vector<Diagnostic> &diagnostics, PackageSourceReviewFailures &failures) {
             const bool decision = std::ranges::find(DecisionTypes, record.type.Value()) != DecisionTypes.end();
             if (auto reviewed = ReviewSenseUse(sources, owners, record, pointSchema, decision, diagnostics); reviewed.HasError())
                 return reviewed;
             if (!decision || owners.decisions.empty())
                 return Result<void>::Success();
-            return InspectGraph(sources, record, {owners.decisions, record.sourcePath.String(), diagnostics});
+            return InspectGraph(sources, record, {owners.decisions, record.sourcePath.String(), diagnostics}, failures);
         }
 
         /** @brief Uses one immutable schema for the scan and keeps the original command authority for all reads. */
@@ -192,12 +193,16 @@ namespace Horo::Application::Internal {
             }
             const auto *schema = pointSchema ? &*pointSchema : nullptr;
             std::vector<Diagnostic> diagnostics;
-            for (const auto &record : records)
-                if (auto inspected = InspectProviderSource(sources, owners, record, schema, diagnostics); inspected.HasError())
+            PackageSourceReviewFailures failures;
+            for (const auto &record : records) {
+                if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
+                    return ReferenceScan::Failure(admitted.ErrorValue());
+                if (auto inspected = InspectProviderSource(sources, owners, record, schema, diagnostics, failures); inspected.HasError())
                     return ReferenceScan::Failure(inspected.ErrorValue());
+            }
             if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                 return ReferenceScan::Failure(admitted.ErrorValue());
-            return ReferenceScan::Success(std::move(diagnostics));
+            return std::move(failures).Finish(std::move(diagnostics));
         }
     }  // namespace
 

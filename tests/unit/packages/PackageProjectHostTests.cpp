@@ -741,10 +741,22 @@ namespace {
         CHECK(blocked.ErrorValue().diagnostics.front().location.source == relative);
         CHECK(blocked.ErrorValue().diagnostics.front().path == (kind == StateMachine ? "1/entry" : "2"));
 
-        std::ofstream{file, std::ios::binary | std::ios::trunc} << "broken";
+        const auto broken = file.parent_path() / ("Broken" + file.extension().string());
+        auto brokenSidecar = broken;
+        brokenSidecar += ".horo";
+        std::ofstream{broken, std::ios::binary} << "broken";
+        std::ofstream{brokenSidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                       {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff80"},
+                                                       {"assetType", AI::DecisionAssetType(kind)}};
         const auto unreadable = publish();
         REQUIRE(unreadable.HasError());
-        CHECK(unreadable.ErrorValue().code.Value() == "packages.host.decision_reference_unreadable");
+        const auto &failure = unreadable.ErrorValue();
+        CHECK(failure.code.Value() == "packages.host.decision_reference_unreadable");
+        REQUIRE(failure.diagnostics.size() == 2);
+        CHECK(failure.diagnostics[0].code.Value() == "packages.host.saved_reference_source_unreadable");
+        CHECK(failure.diagnostics[0].location.source == "Assets/" + broken.filename().string());
+        CHECK(failure.diagnostics[1].code.Value() == "packages.host.decision_node_in_use");
+        CHECK(failure.diagnostics[1].location.source == relative);
         CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
@@ -860,6 +872,12 @@ namespace {
         const auto unreadable = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(unreadable.HasError());
         CHECK(unreadable.ErrorValue().code.Value() == "packages.host.scene_reference_unreadable");
+        const auto &unreadableDetails = unreadable.ErrorValue().diagnostics;
+        REQUIRE(unreadableDetails.size() == 3);
+        CHECK(unreadableDetails.front().code.Value() == "packages.host.saved_reference_source_unreadable");
+        CHECK(unreadableDetails.front().location.source == "Assets/Scene.horoasset");
+        CHECK(unreadableDetails[1].code.Value() == "packages.host.behavior_in_use");
+        CHECK(unreadableDetails[1].location.source == "Assets/Example.prefab");
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
 
