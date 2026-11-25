@@ -9,6 +9,7 @@
 #include <chrono>
 #include <new>
 #include <system_error>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -154,6 +155,13 @@ namespace Horo::Editor {
             cancellation_->RequestCancellation();
     }
 
+    /** @copydoc EditorRecordingPublication::Detach */
+    void EditorRecordingPublication::Detach() noexcept {
+        if (Busy())
+            detached_ = true;
+        Cancel();
+    }
+
     /** @copydoc EditorRecordingPublication::Busy */
     bool EditorRecordingPublication::Busy() const noexcept {
         return job_.valid();
@@ -163,11 +171,11 @@ namespace Horo::Editor {
     std::optional<SaveResult> EditorRecordingPublication::Poll() {
         if (!Busy() || job_.wait_for(std::chrono::seconds::zero()) != std::future_status::ready)
             return std::nullopt;
-        const auto stop = cancellation_->Token();
+        const bool detached = std::exchange(detached_, false);
         cancellation_.reset();
         try {
             auto saved = job_.get();
-            if (stop.IsCancellationRequested())
+            if (detached)
                 return SaveResult::Failure(MakeError(Audio::AudioErrors::OperationCancelled));
             if (saved.HasError())
                 return SaveResult::Failure(saved.ErrorValue());

@@ -3,6 +3,7 @@
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
+#include "Horo/Foundation/Paths.h"
 #include "NativePublicationFiles.h"
 #include "OwnedTestDirectory.h"
 
@@ -45,6 +46,8 @@ namespace Horo::Application::Internal {
             unsigned writes_{};
         };
 
+        constexpr std::array<AudioSample, 2> StereoFrame{0.25F, -0.5F};
+
         /** @brief Owns a temporary project, ordinary asset writer, and simulated capture source. */
         struct RecordingFixture final {
             Tests::OwnedTestDirectory temporary{"audio-recording"};
@@ -76,43 +79,84 @@ namespace Horo::Application::Internal {
                 REQUIRE(prepared.HasValue());
                 return std::move(prepared).Value();
             }
+
+            /** @brief Starts a real editor save with one unread frame from the detached input. */
+            void StartEditorSave(Editor::EditorRecordingPublication &publication) const {
+                auto take = Editor::EditorRecordingTake::Prepare(source, destination);
+                REQUIRE(take.HasValue());
+                auto buffer = Buffer();
+                REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
+                REQUIRE(publication.Start(std::move(take).Value(), std::move(buffer)));
+            }
         };
 
-        constexpr std::array<AudioSample, 2> StereoFrame{0.25F, -0.5F};
+        /** @brief Waits for the real background publication to reach its atomic index write or to finish. */
+        template <class Condition> bool WaitFor(Condition complete) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!complete()) {
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            return true;
+        }
+
+        /** @brief Pumps the completed worker receipt through the editor adoption boundary. */
+        Result<Editor::EditorPublishedRecording> WaitForSave(Editor::EditorRecordingPublication &publication) {
+            std::optional<Result<Editor::EditorPublishedRecording>> result;
+            REQUIRE(WaitFor([&] {
+                result = publication.Poll();
+                return result.has_value();
+            }));
+            return std::move(*result);
+        }
 
         TEST_CASE("The editor adopts a background recording only while its project still owns the result", "[audio][recording][editor]") {
             RecordingFixture fixture;
             Editor::EditorRecordingPublication publication{fixture.mutations, fixture.files, fixture.registry};
-            auto take = Editor::EditorRecordingTake::Prepare(fixture.source, fixture.destination);
-            REQUIRE(take.HasValue());
-            auto buffer = fixture.Buffer();
-            REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
-            REQUIRE(publication.Start(std::move(take).Value(), std::move(buffer)));
+            fixture.StartEditorSave(publication);
 
             bool cancelled = false;
             SECTION("the project stays open") {}
             SECTION("the project stops owning the result") {
-                publication.Cancel();
+                publication.Detach();
                 cancelled = true;
             }
 
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            auto result = publication.Poll();
-            while (!result && std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                result = publication.Poll();
-            }
-            REQUIRE(result.has_value());
+            const auto result = WaitForSave(publication);
             const auto snapshot = fixture.registry.Snapshot();
             if (cancelled) {
-                CHECK(result->HasError());
+                CHECK(result.HasError());
                 CHECK_FALSE(snapshot.Find(fixture.destination.id));
             } else {
-                REQUIRE(result->HasValue());
-                CHECK(result->Value().id == fixture.destination.id);
-                CHECK(result->Value().path == "assets/take.wav");
+                REQUIRE(result.HasValue());
+                CHECK(result.Value().id == fixture.destination.id);
+                CHECK(result.Value().path == "assets/take.wav");
                 REQUIRE(snapshot.Find(fixture.destination.id));
-                CHECK(std::filesystem::exists(fixture.root / result->Value().path));
+                CHECK(std::filesystem::exists(fixture.root / result.Value().path));
+            }
+        }
+
+        TEST_CASE("The originating project can adopt a recording after its durable commit", "[audio][recording][editor]") {
+            RecordingFixture fixture;
+            Editor::EditorRecordingPublication publication{fixture.mutations, fixture.files, fixture.registry};
+            fixture.StartEditorSave(publication);
+
+            REQUIRE(WaitFor([&] { return std::filesystem::exists(fixture.root / ProjectLayout::AssetIndexPath); }));
+            SECTION("a late cancel retains the completed save") {
+                publication.Cancel();
+                const auto result = WaitForSave(publication);
+                REQUIRE(result.HasValue());
+                CHECK(result.Value().id == fixture.destination.id);
+                CHECK(fixture.registry.Snapshot().Find(fixture.destination.id));
+            }
+            SECTION("a retired project leaves its saved file on disk without altering the live registry") {
+                publication.Detach();
+                const auto result = WaitForSave(publication);
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == AudioErrors::OperationCancelled.code.Value());
+                CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
+                CHECK(std::filesystem::exists(fixture.root / fixture.destination.path.String()));
             }
         }
 

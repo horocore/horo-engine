@@ -50,8 +50,10 @@ namespace Horo::Editor {
 
         /** @brief Starts one background save under the normal project mutation lease. */
         [[nodiscard]] bool Start(EditorRecordingTake take, Audio::Backend::AudioCaptureBuffer tail);
-        /** @brief Cancels pending work and suppresses adoption after project retirement. */
+        /** @brief Requests cancellation before publication. A committed result still belongs to this project. */
         void Cancel() noexcept;
+        /** @brief Withdraws the retiring project's right to adopt the result and requests cancellation. */
+        void Detach() noexcept;
         /** @brief Returns whether a previous save still occupies the worker slot. */
         [[nodiscard]] bool Busy() const noexcept;
         /** @brief Adopts a finished asset in the live registry on its owner lane. Empty while still busy. */
@@ -63,6 +65,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry &registry_;
         std::optional<CancellationSource> cancellation_;
         std::future<Result<Assets::AssetRecord>> job_;
+        bool detached_{};
         std::jthread worker_;
     };
 }  // namespace Horo::Editor

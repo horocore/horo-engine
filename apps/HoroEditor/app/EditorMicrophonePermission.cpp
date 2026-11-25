@@ -1,6 +1,7 @@
 #include "EditorMicrophonePermission.h"
 
 #include "EditorMicrophoneRecording.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Security/SecureMemory.h"
@@ -32,6 +33,8 @@ namespace Horo::Editor {
                 return DeviceLost;
             if (code == FileStorageErrors::Capacity.code.Value())
                 return InsufficientSpace;
+            if (code == Audio::AudioErrors::OperationCancelled.code.Value() || code == Assets::AssetSourceErrors::Cancelled.code.Value())
+                return Idle;
             return Failed;
         }
 
@@ -604,6 +607,8 @@ namespace Horo::Editor {
             return;
         CancelSpeechCapture(check_->generation);
         CancelRecording();
+        check_->publication.Detach();
+        check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
         check_->savedRecording.path.clear();
         check_->project = root;
     }
@@ -646,7 +651,8 @@ namespace Horo::Editor {
             check_->stopping = true;
         check_->publication.Cancel();
         check_->savedRecording.asset.reset();
-        check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
+        if (check_->recordingStatus != EditorMicrophoneRecordingStatus::Saving)
+            check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
     }
 
     /** @copydoc IEditorMicrophoneRecorder::RecordingStatus */
