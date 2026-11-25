@@ -13,6 +13,7 @@
 #include "EnvironmentQueryPreviewNavigation.h"
 #include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Prefab/PrefabMetrics.h"
 #include "MountedWorldHost.h"
 #include "NpcDialogueProjectActivation.h"
@@ -99,6 +100,7 @@ namespace Horo::Application::Internal {
         bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
         std::optional<EditorPlayNpcDialogueSelection> npcDialogue; /**< Explicit host override for a pre-admitted caption catalog. */
         std::optional<EditorPlayAuthoredNpcDialogue> authoredNpcDialogue;
+        Gameplay::PerceptionEventSourceFactory perceptionEvents; /**< Optional approved Gameplay producer for Play sensing. */
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

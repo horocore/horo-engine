@@ -38,7 +38,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost HoroEngine::WorldStreaming HoroMountedWorldHostInternal)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroSceneDecisionQueriesInternal)
-target_link_libraries(HoroNetworkProductHost PUBLIC HoroProjectScenePerceptionInternal)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroProjectScenePerceptionInternal HoroEngine::GameplayPerceptionIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE horo-engine/composition/network/NetworkProductGnsSelection.cpp)

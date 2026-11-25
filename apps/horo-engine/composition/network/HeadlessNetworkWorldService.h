@@ -986,8 +986,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
-            const auto polled =
-                record_->ai->PollPerceptionAtSensePoll(*scene, record_->perception, context.simulationTick, context.fixedDelta);
+            const auto polled = Gameplay::PollPerceptionWithGameplay(*record_->ai, *scene, record_->perception, context.simulationTick,
+                                                                    context.fixedDelta, owners_->configured->perceptionEvents);
             if (polled.HasError())
                 return polled;
             auto projected = record_->ai->PublishPerceptionBlackboardsAtBlackboardSync(*scene, record_->perception, context.simulationTick);

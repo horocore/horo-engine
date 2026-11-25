@@ -145,12 +145,12 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
-    PerceptionEventSource::PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai,
+    PerceptionEventSource::PerceptionEventSource(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
                                                  const Network::NetworkModeComposition &host, const CapturedAuthority &authority,
                                                  const AI::PerceptionDescriptorRegistry &registry,
                                                  const AI::PerceptionSpatialBroadphase &filtering,
                                                  const std::span<const CommittedPerceptionDelivery> deliveries)
-        : scene_(&scene), ai_(&ai), host_(&host), role_(authority.role), binding_(authority.binding), registry_(&registry),
+        : capturedScene_(scene), ai_(&ai), host_(&host), role_(authority.role), binding_(authority.binding), registry_(&registry),
           filtering_(&filtering), filterSnapshot_(filtering.Current()), deliveries_(deliveries.begin(), deliveries.end()) {}
 
     /** @copydoc PerceptionEventSource::Capture */
@@ -160,18 +160,38 @@ namespace Horo::Gameplay {
                                                                  const AI::PerceptionDescriptorRegistry &registry,
                                                                  const AI::PerceptionSpatialBroadphase &filtering,
                                                                  const std::span<const CommittedPerceptionDelivery> deliveries) {
+        auto captured = Capture(scene.View(), ai, host, world, registry, filtering, deliveries);
+        if (captured.HasError())
+            return captured;
+        auto retained = std::move(captured).Value();
+        retained.scene_ = &scene;
+        return Result<PerceptionEventSource>::Success(std::move(retained));
+    }
+
+    /** @copydoc PerceptionEventSource::Capture */
+    Result<PerceptionEventSource> PerceptionEventSource::Capture(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
+                                                                 const Network::NetworkModeComposition &host,
+                                                                 const Network::NetworkModeWorldKind world,
+                                                                 const AI::PerceptionDescriptorRegistry &registry,
+                                                                 const AI::PerceptionSpatialBroadphase &filtering,
+                                                                 const std::span<const CommittedPerceptionDelivery> deliveries) {
         if (deliveries.size() > MaximumDeliveries)
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
-        const auto role = host.Role(world, scene.View().RuntimeId());
+        const auto role = host.Role(world, scene.RuntimeId());
         if (role.HasError() || !Authoritative(role.Value()))
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
         const auto binding = ai.ActiveBinding();
         if (binding.HasError() || binding.Value().scene != role.Value().scene)
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
-        if (!filtering.Current() || filtering.Current()->Scene() != binding.Value().scene)
+        if (!filtering.CurrentFor(scene))
             return Result<PerceptionEventSource>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         return Result<PerceptionEventSource>::Success(
             PerceptionEventSource{scene, ai, host, {role.Value(), binding.Value()}, registry, filtering, deliveries});
+    }
+
+    /** @copydoc PerceptionEventSource::CurrentScene */
+    Runtime::RuntimeSceneView PerceptionEventSource::CurrentScene() const noexcept {
+        return scene_ ? scene_->View() : capturedScene_;
     }
 
     /** @copydoc PerceptionEventSource::ValidateCurrent */
@@ -180,8 +200,9 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
         if (filtering_->Current() != filterSnapshot_)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
+        const auto scene = CurrentScene();
         if (const auto binding = ai_->ActiveBinding();
-            binding.HasError() || binding.Value() != binding_ || scene_->View().RuntimeId() != binding_.scene)
+            binding.HasError() || binding.Value() != binding_ || !scene.IsCurrent() || scene.RuntimeId() != binding_.scene)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         return Result<void>::Success();
     }
@@ -197,7 +218,7 @@ namespace Horo::Gameplay {
         if (recipient.Value().state != AI::AiAgentActivationState::Active ||
             !recipient.Value().stagedCapabilities.Contains(AI::AiCapability::Perception))
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
-        if (scene_->View().Get(recipient.Value().owner).HasError())
+        if (CurrentScene().Get(recipient.Value().owner).HasError())
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         return Result<void>::Success();
     }
@@ -211,7 +232,7 @@ namespace Horo::Gameplay {
         const auto &record = deliveries_[index];
         if (const auto recipient = ValidateRecipient(record.delivery, memory); recipient.HasError())
             return recipient;
-        const EventValidation validate{scene_->View(), record.delivery.simulationTick};
+        const EventValidation validate{CurrentScene(), record.delivery.simulationTick};
         if (const auto event = std::visit(validate, record.delivery.event); event.HasError())
             return event;
         if (record.filter != PerceptionFilterDecision::Accept)
@@ -257,5 +278,19 @@ namespace Horo::Gameplay {
     /** @copydoc PerceptionEventSource::Close */
     void PerceptionEventSource::Close() noexcept {
         closed_ = true;
+    }
+
+    /** @copydoc PollPerceptionWithGameplay */
+    Result<void> PollPerceptionWithGameplay(AI::AiSceneRuntime &ai, const Runtime::RuntimeSceneView &scene,
+                                            const AI::PerceptionSpatialBroadphase &spatial, std::uint64_t tick, Duration fixedStep,
+                                            const PerceptionEventSourceFactory &producer) {
+        if (!producer)
+            return ai.PollPerceptionAtSensePoll(scene, spatial, tick, fixedStep);
+        const auto captured = producer(scene, ai, spatial, tick);
+        if (captured.HasError())
+            return Result<void>::Failure(captured.ErrorValue());
+        if (const auto &window = captured.Value())
+            return ai.PollPerceptionAtSensePoll(scene, spatial, tick, fixedStep, window->Feed());
+        return ai.PollPerceptionAtSensePoll(scene, spatial, tick, fixedStep);
     }
 }  // namespace Horo::Gameplay

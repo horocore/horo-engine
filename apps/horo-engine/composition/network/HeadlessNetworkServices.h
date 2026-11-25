@@ -7,6 +7,7 @@
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionQueryTask.h"
+#include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 #include "Horo/Navigation/NavigationCrowdBatch.h"
@@ -401,6 +402,7 @@ namespace Horo::Application::Internal {
         std::optional<Runtime::SceneAnimationParallelEvaluation> animationParallel;
         std::vector<HeadlessNavigationActorPolicy> navigationActors;            /**< Explicit authoritative AI movement population. */
         std::shared_ptr<const HeadlessNavigationMotionPolicy> navigationMotion; /**< Bounded owner-lane movement policy, when selected. */
+        Gameplay::PerceptionEventSourceFactory perceptionEvents; /**< Optional approved Gameplay producer for authoritative sensing. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

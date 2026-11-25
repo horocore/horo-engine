@@ -363,9 +363,6 @@ namespace Horo::AI {
             const CommittedPerceptionDelivery sound{
                 {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(source), soundPosition, 0.5, 1, 77, 1, 1}, 1},
                 PerceptionFilterDecision::Accept};
-            auto captured = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
-                                                            *registry, spatial, std::span{&sound, 1});
-            REQUIRE(captured.HasValue());
             const auto quantum = Duration::FromNanoseconds(execution.memory.fixedStep.count());
             PerceptionSpatialBroadphase foreignSpatial;
             const auto inputs = spatial.Current()->Inputs();
@@ -382,7 +379,18 @@ namespace Horo::AI {
             const auto expiredFeed = closedWindow.Feed();
             closedWindow.Close();
             ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, expiredFeed), AIErrors::PerceptionEventUnauthorized);
-            REQUIRE(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, captured.Value().Feed()).HasValue());
+            using Window = Result<std::optional<PerceptionEventSource>>;
+            const Gameplay::PerceptionEventSourceFactory producer =
+                [&](const Runtime::RuntimeSceneView &current, const AiSceneRuntime &owner, const PerceptionSpatialBroadphase &filter,
+                    const std::uint64_t tick) -> Window {
+                CHECK(tick == sound.delivery.simulationTick);
+                auto captured = PerceptionEventSource::Capture(current, owner, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                                *registry, filter, std::span{&sound, 1});
+                if (captured.HasError())
+                    return Window::Failure(captured.ErrorValue());
+                return Window::Success(std::move(captured).Value());
+            };
+            REQUIRE(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 1, quantum, producer).HasValue());
             REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, 1).HasValue());
             const auto perceived = runtime.ReadPerceptionAtSafePoint(view, listener);
             REQUIRE(perceived.HasValue());
@@ -396,6 +404,22 @@ namespace Horo::AI {
             REQUIRE(positionsValue.count == 1);
             CHECK(std::get<Math::WorldCoordinate64>(positionsValue.elements[0]) == soundPosition);
             runtime.BeginShutdown();
+        }
+
+        TEST_CASE("Gameplay sensing windows acquired from a Scene view expire after structural publication",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            const auto sound = fixture.Sound();
+            const auto captured =
+                PerceptionEventSource::Capture(fixture.scene->View(), fixture.ai, fixture.host, Network::NetworkModeWorldKind::Standalone,
+                                               fixture.registry, fixture.filtering, std::span{&sound, 1});
+            REQUIRE(captured.HasValue());
+            Runtime::SceneCommandBuffer addUnrelatedEntity;
+            (void)addUnrelatedEntity.Create({});
+            REQUIRE(fixture.scene->Commit(addUnrelatedEntity).HasValue());
+            ExpectError(captured.Value().Deliver(0, memory), AIErrors::PerceptionEventStale);
+            CHECK(memory.StoredCount() == 0);
         }
 
         TEST_CASE("Hearing coalesces by emission tick before producer order and only among admitted sounds",

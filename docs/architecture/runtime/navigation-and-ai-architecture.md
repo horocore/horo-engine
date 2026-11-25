@@ -3720,6 +3720,7 @@ following variable-rate presentation bridge.
 1. **`PerceptionSensePoll`**:
    - Gathers bounded spatial candidates and admitted Gameplay hearing, damage, touch/proximity and team deliveries into staged per-agent stimulus buffers. Team topology and relay selection remain Gameplay-owned.
    - Operates as a read-only pass over current spatial/Physics evidence and captured Gameplay event batches; Audio-renderer queues do not authorize hearing or team observations.
+   - Editor Play and authoritative headless composition can supply an explicit Gameplay producer on the sensing lane. It captures admitted deliveries against the current Scene view and the spatial snapshot published for that tick. The view-bound batch expires on structural publication, and an absent producer or batch leaves native sensing active.
    - A native provider fault in a current Scene suspends its exact listener instance until activation is replaced. The sensing owner withdraws that listener's observations and publishes the corresponding decision wake. Healthy listeners and other recipients continue within their budgets. Queries return the original provider fault when the recipient has no healthy listener. Scene or policy failures still fail the poll.
    - Invariant: Does NOT mutate agent blackboard state, behavior tree node states, or world transforms.
 2. **`BlackboardSync`**:

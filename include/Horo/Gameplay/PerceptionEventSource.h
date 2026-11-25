@@ -10,6 +10,8 @@
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Network/NetworkModeComposition.h"
 
+#include <functional>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -59,6 +61,20 @@ namespace Horo::Gameplay {
                                                                    const AI::PerceptionSpatialBroadphase &filtering,
                                                                    std::span<const CommittedPerceptionDelivery> deliveries);
 
+        /** @brief Captures the same authoritative batch from an immutable view instead of borrowing the Scene owner.
+         * @param scene Exact current structural publication. Any subsequent structural change revokes the window.
+         * @param ai Live AI owner. @param host Active network authority. @param world Exact selected hosted world.
+         * @param registry Frozen perception descriptors. @param filtering Exact spatial owner for this Scene.
+         * @param deliveries Committed producer deliveries with their original disclosure decisions.
+         * @return Owned bounded batch or typed refusal.
+         */
+        [[nodiscard]] static Result<PerceptionEventSource> Capture(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
+                                                                   const Network::NetworkModeComposition &host,
+                                                                   Network::NetworkModeWorldKind world,
+                                                                   const AI::PerceptionDescriptorRegistry &registry,
+                                                                   const AI::PerceptionSpatialBroadphase &filtering,
+                                                                   std::span<const CommittedPerceptionDelivery> deliveries);
+
         PerceptionEventSource(const PerceptionEventSource &) = delete;
         PerceptionEventSource &operator=(const PerceptionEventSource &) = delete;
         PerceptionEventSource(PerceptionEventSource &&) noexcept = default;
@@ -90,9 +106,12 @@ namespace Horo::Gameplay {
             AI::AiSceneActivationBinding binding;
         };
 
-        PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai, const Network::NetworkModeComposition &host,
+        PerceptionEventSource(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
+                              const Network::NetworkModeComposition &host,
                               const CapturedAuthority &authority, const AI::PerceptionDescriptorRegistry &registry,
                               const AI::PerceptionSpatialBroadphase &filtering, std::span<const CommittedPerceptionDelivery> deliveries);
+        /** @brief Returns live structural evidence for the owner overload, or the exact captured view. */
+        [[nodiscard]] Runtime::RuntimeSceneView CurrentScene() const noexcept;
         /** @brief Rejects retained windows after authority revocation, travel, AI replacement or source closure. */
         [[nodiscard]] Result<void> ValidateCurrent() const;
         /** @brief Binds a declared recipient to the current active AI owner and exact memory. */
@@ -102,7 +121,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> DeliverSensingWindow(std::uint64_t tick, const AI::AiControllerPerceptionEndpoints &endpoints,
                                                         AI::AIPerceptionMemory &memory) const;
 
-        const Runtime::RuntimeScene *scene_;
+        Runtime::RuntimeSceneView capturedScene_;
+        const Runtime::RuntimeScene *scene_{};
         const AI::AiSceneRuntime *ai_;
         const Network::NetworkModeComposition *host_;
         Network::NetworkModeRoleView role_;
@@ -113,4 +133,18 @@ namespace Horo::Gameplay {
         std::vector<CommittedPerceptionDelivery> deliveries_;
         bool closed_{};
     };
+
+    /** @brief Explicit host-selected producer of a committed Gameplay window. An empty result supplies no events for the tick. */
+    using PerceptionEventSourceFactory = std::function<Result<std::optional<PerceptionEventSource>>(
+        const Runtime::RuntimeSceneView &, const AI::AiSceneRuntime &, const AI::PerceptionSpatialBroadphase &, std::uint64_t)>;
+
+    /** @brief Polls native senses and committed Gameplay events together before the host publishes Blackboard values.
+     * @param ai Current Scene runtime. @param scene Current structural view. @param spatial Current Spatial publication owner.
+     * @param tick Exact simulation tick. @param fixedStep Host simulation quantum.
+     * @param producer Optional explicit producer. Its captures stay owned until the synchronous poll returns.
+     * @return Success or original producer or sensing failure. An absent producer retains the existing native path.
+     */
+    [[nodiscard]] Result<void> PollPerceptionWithGameplay(AI::AiSceneRuntime &ai, const Runtime::RuntimeSceneView &scene,
+                                                           const AI::PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
+                                                           Duration fixedStep, const PerceptionEventSourceFactory &producer);
 }  // namespace Horo::Gameplay

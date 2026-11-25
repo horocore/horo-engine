@@ -56,6 +56,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                    .visibleLayers = native->visibleLayers,
                                    .workUnitsPerTick = native->workUnitsPerTick,
                                    .scheduling = native->scheduling};
+            prepared->eventSource = policy.perceptionEvents;
             playPerception_ = std::move(prepared);
             policy.aiSettings.requirePerceptionEndpoints = true;
             policy.aiControllers = std::move(controllers).Value();
@@ -83,7 +84,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             ai_->PublishPerceptionAtSafePoint(*scene, current->Revision() + 1, positions.Value(), capture.spatial, capture.filtering);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
-        if (const auto sensed = ai_->PollPerceptionAtSensePoll(*scene, capture.spatial, tick, fixedStep); sensed.HasError())
+        if (const auto sensed = Gameplay::PollPerceptionWithGameplay(*ai_, *scene, capture.spatial, tick, fixedStep, capture.eventSource);
+            sensed.HasError())
             return sensed;
         return ai_->PublishPerceptionBlackboardsAtBlackboardSync(*scene, capture.spatial, tick);
     }

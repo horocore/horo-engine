@@ -762,6 +762,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             ProjectPerceptionPositionSources positions;
             AI::PerceptionFilteringPolicy filtering;
             AI::AiScenePerceptionExecution execution;
+            Gameplay::PerceptionEventSourceFactory eventSource;
         };
 
         /** @brief Admits project-authored sensing from the same active provider generation as the Play project. */
