@@ -225,6 +225,15 @@ namespace Horo::AI {
     struct SymbolicHierarchy::Decomposition final {
         static_assert(MaximumDepth < SymbolicPlan::MaximumStates);
 
+        /** @brief Structural bounds apply to one branch. Work exhaustion ends the whole search. */
+        enum class Outcome : std::uint8_t {
+            Solved,
+            NoPlan,
+            BranchBound,
+            WorkExhausted,
+            Cancelled
+        };
+
         struct Pending final {
             std::array<SymbolicSubtask, MaximumDepth> tasks{};
             std::size_t count{};
@@ -236,22 +245,39 @@ namespace Horo::AI {
         const AiTaskOperationContext *operation;
         SymbolicPlan &plan;
 
-        SymbolicPlanStatus Solve(Pending pending, const std::uint64_t state, const std::size_t depth) noexcept {
-            using enum SymbolicPlanStatus;
+        static SymbolicPlanStatus ResultStatus(const Outcome outcome) noexcept {
+            switch (outcome) {
+                case Outcome::Solved:
+                    return SymbolicPlanStatus::Solved;
+                case Outcome::NoPlan:
+                    return SymbolicPlanStatus::NoPlan;
+                case Outcome::BranchBound:
+                case Outcome::WorkExhausted:
+                    return SymbolicPlanStatus::BudgetExhausted;
+                case Outcome::Cancelled:
+                    return SymbolicPlanStatus::Cancelled;
+            }
+            return SymbolicPlanStatus::InvalidInput;
+        }
+
+        Outcome Solve(Pending pending, const std::uint64_t state, const std::size_t depth) noexcept {
+            using enum Outcome;
             if (PlanningCancelled(cancellation, operation))
                 return Cancelled;
             if (pending.count == 0)
                 return Solved;
-            if (depth == MaximumDepth || !budget.Consume(1))
-                return BudgetExhausted;
+            if (depth == MaximumDepth)
+                return BranchBound;
+            if (!budget.Consume(1))
+                return WorkExhausted;
             const auto &next = pending.tasks[--pending.count];
             if (const auto *action = std::get_if<SymbolicActionId>(&next))
                 return Primitive(*action, pending, state, depth + 1);
             return Compound(std::get<SymbolicCompoundId>(next), pending, state, depth + 1);
         }
 
-        SymbolicPlanStatus Primitive(SymbolicActionId id, const Pending &pending, std::uint64_t state, const std::size_t depth) noexcept {
-            using enum SymbolicPlanStatus;
+        Outcome Primitive(SymbolicActionId id, const Pending &pending, std::uint64_t state, const std::size_t depth) noexcept {
+            using enum Outcome;
             const auto *action = hierarchy.FindAction(id);
             if (!action || !action->preconditions.Matches(state))
                 return NoPlan;
@@ -266,28 +292,38 @@ namespace Horo::AI {
             return outcome;
         }
 
-        SymbolicPlanStatus Compound(SymbolicCompoundId compound, const Pending &pending, const std::uint64_t state,
-                                    const std::size_t depth) noexcept {
-            using enum SymbolicPlanStatus;
+        /** @brief Expands one admitted method while preserving the caller's pending stack for backtracking. */
+        Outcome ExpandMethod(const Method &method, const Pending &pending, const std::uint64_t state, const std::size_t depth) noexcept {
+            if (method.childCount > pending.tasks.size() - pending.count)
+                return Outcome::BranchBound;
+            if (!budget.Consume(method.childCount))
+                return Outcome::WorkExhausted;
+            auto expanded = pending;
+            for (auto index = method.childCount; index > 0; --index)
+                expanded.tasks[expanded.count++] = method.children[index - 1];
+            return Solve(expanded, state, depth);
+        }
+
+        Outcome Compound(SymbolicCompoundId compound, const Pending &pending, const std::uint64_t state,
+                         const std::size_t depth) noexcept {
+            using enum Outcome;
             const auto methods = std::span{hierarchy.methods_}.first(hierarchy.methodCount_);
             const auto first = std::ranges::lower_bound(methods, compound, {}, &Method::compound);
+            auto incomplete = NoPlan;
             for (auto method = first; method != methods.end() && method->compound == compound; ++method) {
                 if (PlanningCancelled(cancellation, operation))
                     return Cancelled;
                 if (!budget.Consume(1))
-                    return BudgetExhausted;
+                    return WorkExhausted;
                 if (!method->preconditions.Matches(state))
                     continue;
-                if (method->childCount > pending.tasks.size() - pending.count || !budget.Consume(method->childCount))
-                    return BudgetExhausted;
-                auto expanded = pending;
-                for (auto index = method->childCount; index > 0; --index)
-                    expanded.tasks[expanded.count++] = method->children[index - 1];
-                const auto outcome = Solve(expanded, state, depth);
-                if (outcome != NoPlan)
+                const auto outcome = ExpandMethod(*method, pending, state, depth);
+                if (outcome == BranchBound)
+                    incomplete = BranchBound;
+                else if (outcome != NoPlan)
                     return outcome;
             }
-            return NoPlan;
+            return incomplete;
         }
     };
 
@@ -309,7 +345,7 @@ namespace Horo::AI {
         AiWorkBudget budget{work};
         Decomposition search{*this, budget, cancellation, operation, plan};
         const auto outcome = search.Solve({{root}, 1}, facts->values, 0);
-        plan.status_ = PlanningCancelled(cancellation, operation) ? Cancelled : outcome;
+        plan.status_ = PlanningCancelled(cancellation, operation) ? Cancelled : Decomposition::ResultStatus(outcome);
         if (plan.status_ != Solved) {
             plan.count_ = 0;
             plan.cost_ = 0;

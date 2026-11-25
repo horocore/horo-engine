@@ -2871,6 +2871,9 @@ transitions against frozen task declarations. Search owns only copied values
 and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. A host can submit
 the same detached computation through the existing AI task job service.
+HTN depth and pending-task limits discard only the affected branch. Search tries
+later admitted methods in stable order while shared work remains. If every
+alternative fails and any branch was truncated, the outcome is budget exhaustion.
 At its normal safe point, the decision owner rechecks the world revision and
 supplies the exact compiled asset and primitive node occurrences. The symbolic
 sequence adapter re-admits the task identities against the current declarations

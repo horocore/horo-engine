@@ -192,6 +192,42 @@ namespace Horo::AI {
             CHECK(revoked.Steps().empty());
         }
 
+        TEST_CASE("HTN tries a later method when an earlier branch reaches a structural limit", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 1> first{nested};
+            const std::array<SymbolicSubtask, 1> fallback{Id<SymbolicActionId>(30)};
+            const std::array<SymbolicLiteral, 1> withoutKey{{{input.key, false}}};
+            std::array<SymbolicSubtask, SymbolicHierarchy::MaximumChildren> recursive;
+            recursive.fill(nested);
+            auto children = std::span<const SymbolicSubtask>{recursive};
+            SECTION("recursion exhausts depth") {
+                children = children.first(1);
+            }
+            SECTION("recursion fills the pending task stack") {}
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), root, withoutKey, fallback},
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, first},
+                SymbolicMethodSource{Id<SymbolicMethodId>(3), nested, {}, children},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto solved = hierarchy.Value().Search({}, root, 1024);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            CHECK(solved.Cost() == 10);
+            CHECK(solved.Steps().size() == 1);
+            if (!solved.Steps().empty())
+                CHECK(solved.Steps().front().task == input.forceTask);
+            const auto capped = hierarchy.Value().Search(input.picked, root, 1024);
+            CHECK(capped.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(capped.Steps().empty());
+            const auto exhausted = hierarchy.Value().Search({}, root, 3);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+        }
+
         TEST_CASE("HTN jobs retain a nested method and publish ordered registered primitives", "[ai][planning][htn][jobs]") {
             DomainFixture input;
             auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
