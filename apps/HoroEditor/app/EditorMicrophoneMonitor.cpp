@@ -3,29 +3,39 @@
 #include "EditorAudioPreviewHost.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Horo/Foundation/JobSystem.h"
 
 #include <algorithm>
 #include <chrono>
 #include <new>
+#include <system_error>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
         using namespace Audio;
         using namespace Audio::Backend;
         using Clock = std::chrono::steady_clock;
+        using ListeningStatus = EditorMicrophoneMonitorStatus;
 
         constexpr std::uint64_t ClockDomain = 1;
         constexpr std::uint64_t Generation = 1;  // The host assigns each one-shot session an independent runtime identity.
         constexpr auto StartupTimeout = std::chrono::seconds(2);
         constexpr std::uint64_t MaximumQueueAgeNs = 200'000'000;
 
+        /** @brief Excludes migrating or unsupported inputs before showing them in Settings. */
+        bool SelectableMonitorInput(const AudioDiscoveredCaptureDevice &device) noexcept {
+            return device.deviceClass != AudioDeviceClass::Virtual && device.preferredFormat.has_value();
+        }
+
         /** @brief Keeps the selected input and its advertised processing format in the same discovery revision. */
         Result<AudioCaptureBufferDescriptor> PrepareInput(const AudioCaptureDeviceSnapshot &catalog, const AudioCaptureDeviceId input) {
             using Output = Result<AudioCaptureBufferDescriptor>;
             const auto device = std::ranges::find(catalog.devices, input, &AudioDiscoveredCaptureDevice::id);
-            if (device == catalog.devices.end() || device->deviceClass == AudioDeviceClass::Virtual || !device->preferredFormat)
+            if (device == catalog.devices.end() || !SelectableMonitorInput(*device))
                 return Output::Failure(MakeError(AudioErrors::DeviceUnavailable));
-            const auto frames = std::min<std::uint32_t>(4096, device->preferredFormat->sampleRate / 5);
+            const auto ageFrames = device->preferredFormat->sampleRate * MaximumQueueAgeNs / 1'000'000'000;
+            const auto frames = static_cast<std::uint32_t>(std::min<std::uint64_t>(4096, ageFrames));
             return Output::Success({input, Generation, ClockDomain, *device->preferredFormat, 4, frames, 256U << 10U});
         }
     }  // namespace
@@ -147,6 +157,11 @@ namespace Horo::Editor {
         return state_->output->Outputs();
     }
 
+    /** @copydoc EditorMicrophoneMonitor::CanSelectOutput */
+    bool EditorMicrophoneMonitor::CanSelectOutput(const AudioDeviceId output) const noexcept {
+        return state_->output->CanSelect(output);
+    }
+
     /** @copydoc EditorMicrophoneMonitor::Start */
     Result<void> EditorMicrophoneMonitor::Start(const AudioCaptureDeviceId input, const AudioDeviceId output, const bool privateListening,
                                                std::shared_ptr<JobSystem> jobs) {
@@ -220,5 +235,157 @@ namespace Horo::Editor {
     /** @copydoc EditorMicrophoneMonitor::Phase */
     EditorMicrophoneMonitorPhase EditorMicrophoneMonitor::Phase() const noexcept {
         return state_->phase;
+    }
+
+    EditorMicrophoneMonitorControls::EditorMicrophoneMonitorControls(std::function<bool()> inputAvailable)
+        : inputAvailable_(std::move(inputAvailable)) {}
+
+    /** @copydoc EditorMicrophoneMonitorControls::CanConfigure */
+    bool EditorMicrophoneMonitorControls::CanConfigure() const noexcept {
+        return !OccupiesInput() && inputAvailable_();
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::OccupiesInput */
+    bool EditorMicrophoneMonitorControls::OccupiesInput() const noexcept {
+        using enum ListeningStatus;
+        return status_ == Scanning || status_ == Starting || status_ == Listening || status_ == Stopping;
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::Scan */
+    void EditorMicrophoneMonitorControls::Scan() noexcept {
+        if (CanConfigure())
+            status_ = ListeningStatus::Scanning;
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::InputOptions */
+    std::span<const EditorMicrophoneMonitorOption> EditorMicrophoneMonitorControls::InputOptions() const noexcept {
+        return inputs_;
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::OutputOptions */
+    std::span<const EditorMicrophoneMonitorOption> EditorMicrophoneMonitorControls::OutputOptions() const noexcept {
+        return outputs_;
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::StartListening */
+    void EditorMicrophoneMonitorControls::StartListening(const std::size_t input, const std::size_t output,
+                                                           const bool privateListening) noexcept {
+        if (!privateListening || status_ != ListeningStatus::Ready || !CanConfigure() || input >= inputs_.size() || output >= outputs_.size())
+            return;
+        selection_ = Selection{session_->Inputs()[inputs_[input].discoveryIndex].id, session_->Outputs()[outputs_[output].discoveryIndex].id};
+        status_ = ListeningStatus::Starting;
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::StopListening */
+    void EditorMicrophoneMonitorControls::StopListening() noexcept {
+        if (status_ == ListeningStatus::Starting || status_ == ListeningStatus::Listening) {
+            retirementResult_ = ListeningStatus::Idle;
+            status_ = ListeningStatus::Stopping;
+        }
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::MonitorStatus */
+    EditorMicrophoneMonitorStatus EditorMicrophoneMonitorControls::MonitorStatus() const noexcept {
+        return status_;
+    }
+
+    /** @brief Builds the Settings choices on control, retaining each original discovery position. */
+    void EditorMicrophoneMonitorControls::Discover() {
+        Withdraw(ListeningStatus::Failed);
+        if (nextRuntime_ < FirstEditorMonitorRuntime)
+            return;
+        auto discovered = EditorMicrophoneMonitor::Discover(AudioRuntimeId::Create(nextRuntime_--).Value());
+        if (discovered.HasError())
+            return;
+        session_ = std::move(discovered).Value();
+        const auto inputs = session_->Inputs();
+        for (std::size_t index = 0; index < inputs.size(); ++index)
+            if (SelectableMonitorInput(inputs[index]))
+                inputs_.emplace_back(index, inputs[index].displayName);
+        const auto outputs = session_->Outputs();
+        for (std::size_t index = 0; index < outputs.size(); ++index)
+            if (session_->CanSelectOutput(outputs[index].id))
+                outputs_.emplace_back(index, outputs[index].displayName);
+        if (!inputs_.empty() && !outputs_.empty())
+            status_ = ListeningStatus::Ready;
+        else
+            Withdraw(ListeningStatus::Failed);
+    }
+
+    /** @brief Transfers the queued endpoint identities to one native session. */
+    void EditorMicrophoneMonitorControls::StartSelected() {
+        const auto selected = std::exchange(selection_, std::nullopt);
+        auto jobs = std::make_shared<JobSystem>(JobSystemConfig{.workerCount = 1});
+        if (auto started = session_->Start(selected->input, selected->output, true, std::move(jobs)); started.HasError())
+            Withdraw(ListeningStatus::Failed);
+    }
+
+    /** @brief Projects native permission loss and other terminal failures into the Settings state. */
+    void EditorMicrophoneMonitorControls::Pump() {
+        const auto result = session_->Pump(true);
+        if (result.HasError()) {
+            const auto denied = result.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value();
+            Withdraw(denied ? ListeningStatus::PermissionDenied : ListeningStatus::Failed);
+        } else if (session_->Phase() == EditorMicrophoneMonitorPhase::Listening) {
+            status_ = ListeningStatus::Listening;
+        }
+    }
+
+    /** @brief Revokes the old selections and releases the session only after output detachment. */
+    void EditorMicrophoneMonitorControls::Withdraw(const ListeningStatus result) noexcept {
+        selection_.reset();
+        inputs_.clear();
+        outputs_.clear();
+        if (session_) {
+            session_->Stop();
+            if (session_->Phase() != EditorMicrophoneMonitorPhase::Closed) {
+                status_ = ListeningStatus::Stopping;
+                retirementResult_ = result;
+                return;
+            }
+            session_.reset();
+        }
+        status_ = result;
+    }
+
+    /** @brief Keeps driving a revoked output until retirement is proven, regardless of Settings focus. */
+    void EditorMicrophoneMonitorControls::DriveRetirement() {
+        if (session_) {
+            session_->Stop();
+            static_cast<void>(session_->Pump(false));
+            if (session_->Phase() != EditorMicrophoneMonitorPhase::Closed)
+                return;
+        }
+        Withdraw(retirementResult_);
+    }
+
+    /** @brief Drives discovery or capture commands only while the Settings scope remains authorized. */
+    void EditorMicrophoneMonitorControls::AdvanceForeground() {
+        using enum ListeningStatus;
+        if (status_ == Scanning)
+            Discover();
+        else if (selection_)
+            StartSelected();
+        else if (status_ == Starting || status_ == Listening)
+            Pump();
+    }
+
+    /** @copydoc EditorMicrophoneMonitorControls::Advance */
+    void EditorMicrophoneMonitorControls::Advance(const bool foreground, const bool authorized) noexcept {
+        using enum ListeningStatus;
+        try {
+            if (status_ == Stopping) {
+                DriveRetirement();
+            } else if (!foreground || !authorized) {
+                if (session_ || OccupiesInput())
+                    Withdraw(foreground ? PermissionDenied : Idle);
+            } else {
+                AdvanceForeground();
+            }
+        } catch (const std::bad_alloc &) {
+            Withdraw(Failed);
+        } catch (const std::system_error &) {
+            Withdraw(Failed);
+        }
     }
 }  // namespace Horo::Editor

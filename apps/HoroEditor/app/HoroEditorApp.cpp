@@ -4575,6 +4575,7 @@ namespace Horo::Editor {
             EditorMicrophonePermission microphonePermission{mutationCoordinator, durableFiles, assetRegistry};
             guiContext.microphonePermission = &microphonePermission;
             guiContext.microphoneRecorder = &microphonePermission;
+            guiContext.microphoneMonitor = &microphonePermission.MonitorControls();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             EditorMicrophoneSpeechSession immersiveSpeech{microphonePermission};
             const XrSpeechClockScope immersiveSpeechClock{xrComposition.xrPlay.get(), immersiveSpeech};

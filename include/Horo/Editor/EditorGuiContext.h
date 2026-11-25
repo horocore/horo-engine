@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Editor/EditorMicrophoneMonitorSettings.h"
 #include "Horo/Editor/GuiLiveReload.h"
 
 #include <cstddef>
@@ -141,5 +142,6 @@ namespace Horo::Editor {
         IEditorMicrophonePermission *microphonePermission = nullptr; /**< Optional host-owned microphone permission controls. */
         IEditorMicrophoneRecorder *microphoneRecorder = nullptr;     /**< Optional host-owned project recording controls. */
         const EditorPlayCaptionPreview *playCaptions = nullptr; /**< Owner-lane desktop Play HUD preview. */
+        IEditorMicrophoneMonitor *microphoneMonitor = nullptr; /**< Optional host-owned local listening controls. */
     };
 }  // namespace Horo::Editor

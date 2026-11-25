@@ -9,6 +9,9 @@
 #include <string_view>
 
 namespace Horo::Editor::SettingsModalInternal {
+    /** @brief Draws explicit local listening controls backed by the optional editor host. */
+    void DrawMicrophoneMonitor(SettingsAudioTab &audio, const EditorGuiContext &context);
+
     namespace Layout {
         constexpr float ModalW = 960.0F;
         constexpr float ModalH = 680.0F;

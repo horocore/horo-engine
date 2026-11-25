@@ -443,7 +443,7 @@ namespace Horo::Editor {
 
         /** @brief Publishes a newly prepared lane; only the native owner can later activate it. */
         Result<void> Open(Audio::AudioDefaultDeviceRole role, std::optional<Audio::AudioBackendKind> expectedBackend) {
-            if (!factory || nextRuntime == std::numeric_limits<std::uint64_t>::max())
+            if (!factory || nextRuntime == FirstEditorMonitorRuntime)
                 return Result<void>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
             const auto owner = Audio::AudioRuntimeId::Create(nextRuntime++).Value();
             auto prepared = PrepareLane(*source, owner, factory, role, expectedBackend);

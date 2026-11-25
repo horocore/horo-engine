@@ -60,5 +60,47 @@ namespace Horo::Editor {
             REQUIRE(monitor->Phase() == Phase::Closing);
             AdvanceUntil(*monitor, Phase::Closed, false);
         }
+
+        /** @brief Drives Settings commands until the corresponding native lifecycle is visible. */
+        void AdvanceControlsUntil(EditorMicrophoneMonitorControls &controls, const EditorMicrophoneMonitorStatus status,
+                                  const bool focused) {
+            const auto deadline = Clock::now() + std::chrono::seconds(3);
+            while (controls.MonitorStatus() != status && Clock::now() < deadline) {
+                controls.Advance(focused, true);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            REQUIRE(controls.MonitorStatus() == status);
+        }
+
+        TEST_CASE("Settings reserves local listening only for a confirmed device pair", "[audio][editor][monitor][settings]") {
+            using enum EditorMicrophoneMonitorStatus;
+            bool available = false;
+            EditorMicrophoneMonitorControls controls{[&available] { return available; }};
+            controls.Scan();
+            CHECK(controls.MonitorStatus() == Idle);
+            available = true;
+            controls.Scan();
+            CHECK(controls.OccupiesInput());
+            controls.Advance(true, true);
+            REQUIRE(controls.MonitorStatus() == Ready);
+            REQUIRE_FALSE(controls.InputOptions().empty());
+            REQUIRE(controls.OutputOptions().size() == 1);
+            CHECK(controls.OutputOptions().front().discoveryIndex != 0);
+            controls.StartListening(0, 0, false);
+            CHECK_FALSE(controls.OccupiesInput());
+            available = false;
+            controls.StartListening(0, 0, true);
+            CHECK(controls.MonitorStatus() == Ready);
+            available = true;
+            controls.StartListening(0, 0, true);
+            REQUIRE(controls.OccupiesInput());
+            SECTION("leaving before control processes start withdraws the intent") {}
+            SECTION("leaving during listening retires the native route") {
+                AdvanceControlsUntil(controls, Listening, true);
+            }
+            AdvanceControlsUntil(controls, Idle, false);
+            CHECK_FALSE(controls.OccupiesInput());
+            CHECK(controls.OutputOptions().empty());
+        }
     }  // namespace
 }  // namespace Horo::Editor

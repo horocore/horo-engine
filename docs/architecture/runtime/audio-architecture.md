@@ -2417,6 +2417,11 @@ Settings modal to have foreground focus. Leaving the audio page cancels the
 test. The live indicator reflects actual callback activity. Test PCM stays in
 the bounded capture buffer and is scrubbed on teardown without creating assets
 or writing recording data to disk.
+The macOS Audio Settings page also offers local monitoring through the optional
+`IEditorMicrophoneMonitor` port in `EditorGuiContext`. The host owns device
+discovery and capture. A user selects both endpoints and confirms headphone use
+before starting. Leaving the page or losing foreground focus or permission
+withdraws capture, and output retirement continues on the control lane.
 The macOS SDL3 editor bundle carries the usage description. Xcode uses the
 editor capture entitlements file when signing. Packaging with other generators
 must apply the equivalent entitlements when signing the executable.

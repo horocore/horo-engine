@@ -62,6 +62,8 @@ namespace Horo::Editor {
         [[nodiscard]] float RecordingPeakLevel() const noexcept override;
         [[nodiscard]] std::string_view SavedRecordingPath() const noexcept override;
         [[nodiscard]] std::optional<Assets::AssetId> TakeSavedRecording() noexcept override;
+        /** @brief Returns the local listening controls sharing this owner's input admission. */
+        [[nodiscard]] IEditorMicrophoneMonitor &MonitorControls() noexcept;
 
         /** @brief Starts a selected input for speech after an explicit foreground action on Audio control.
          * @param input Stable ID selected from the input snapshot. @param foreground Current immersive focus.

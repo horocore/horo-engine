@@ -647,6 +647,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (ctx.microphonePermission && !RecordingBusy(ctx.microphoneRecorder))
             DrawMicrophoneTest(st.audio, ctx, *ctx.microphonePermission);
         DrawMicrophoneRecording(st.audio, ctx);
+        DrawMicrophoneMonitor(st.audio, ctx);
     }
 
     void DrawNetwork(SettingsState &st, const EditorGuiContext &ctx) {

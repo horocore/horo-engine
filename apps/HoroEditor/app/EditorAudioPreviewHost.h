@@ -7,6 +7,9 @@
 #include <functional>
 
 namespace Horo::Editor {
+    /** @brief Separates transient monitoring runtimes from inspector previews. The terminal identity belongs to capture. */
+    inline constexpr std::uint64_t FirstEditorMonitorRuntime = std::uint64_t{1} << 63;
+
     /** @brief One explicitly selected private output peer and its owning control driver. */
     struct EditorAudioPreviewBackend final {
         std::unique_ptr<Audio::Backend::AudioBackend> output;

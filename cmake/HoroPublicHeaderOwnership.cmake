@@ -1536,6 +1536,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/PrefabProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/AudioComponentPreview.h
+    Horo/Editor/EditorMicrophoneMonitorSettings.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/AnimationGraphDocument.h
     Horo/Editor/BlackboardSchemaDocument.h

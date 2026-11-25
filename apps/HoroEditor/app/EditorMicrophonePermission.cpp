@@ -1,5 +1,6 @@
 #include "EditorMicrophonePermission.h"
 
+#include "EditorMicrophoneMonitor.h"
 #include "EditorMicrophoneRecording.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
@@ -81,6 +82,7 @@ namespace Horo::Editor {
         std::optional<EditorRecordingTake> take;
         EditorRecordingPublication publication;
         EditorMicrophoneRecordingStatus recordingStatus{EditorMicrophoneRecordingStatus::Idle};
+        EditorMicrophoneMonitorControls monitor{[this] { return !NativeInputBusy(); }};
 
         struct SavedRecording final {
             std::string path;
@@ -99,7 +101,19 @@ namespace Horo::Editor {
 
         /** @brief A live or sealed speech lease reserves the microphone owner until the host retires it. */
         [[nodiscard]] bool InputBusy() const noexcept {
+            return NativeInputBusy() || monitor.OccupiesInput();
+        }
+
+        /** @brief Reports whether the shared input is reserved by a test, recording or speech. */
+        [[nodiscard]] bool NativeInputBusy() const noexcept {
             return grant || pending || scanning || speech;
+        }
+
+        /** @brief Revalidates native consent on the same owner tick that processes listening commands. */
+        void AdvanceMonitor(const bool foreground) noexcept {
+            const bool authorized = foreground && monitor.MonitorStatus() != EditorMicrophoneMonitorStatus::Idle &&
+                                    Audio::Backend::ObserveSdl3MacCapturePermission().permission == Audio::AudioCapturePermission::Granted;
+            monitor.Advance(foreground, authorized);
         }
 
         /** @brief Tests the exact generation, including a detached lease awaiting worker completion. */
@@ -571,6 +585,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorMicrophonePermission::AdvanceTest */
     void EditorMicrophonePermission::AdvanceTest(const bool foreground) noexcept {
+        check_->AdvanceMonitor(foreground);
         try {
             check_->PollPublication();
             if (check_->speech) {
@@ -606,6 +621,7 @@ namespace Horo::Editor {
         if (root == check_->project)
             return;
         CancelSpeechCapture(check_->generation);
+        check_->monitor.Advance(false, false);
         CancelRecording();
         check_->publication.Detach();
         check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
@@ -673,5 +689,10 @@ namespace Horo::Editor {
     /** @copydoc IEditorMicrophoneRecorder::TakeSavedRecording */
     std::optional<Assets::AssetId> EditorMicrophonePermission::TakeSavedRecording() noexcept {
         return std::exchange(check_->savedRecording.asset, std::nullopt);
+    }
+
+    /** @copydoc EditorMicrophonePermission::MonitorControls */
+    IEditorMicrophoneMonitor &EditorMicrophonePermission::MonitorControls() noexcept {
+        return check_->monitor;
     }
 }  // namespace Horo::Editor

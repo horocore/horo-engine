@@ -4416,6 +4416,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalCollisionDefinitions.cpp
             editor/modals/settings/SettingsModalCollisionFiltering.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalMicrophoneMonitor.cpp
             editor/modals/settings/SettingsModalNavigationProject.cpp
             editor/modals/settings/SettingsModalNavigationPolicy.cpp
             editor/modals/settings/SettingsModalPrefab.cpp

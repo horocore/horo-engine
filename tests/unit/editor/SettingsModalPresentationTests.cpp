@@ -64,6 +64,39 @@ namespace {
         }
     };
 
+    /** @brief Supplies deterministic device labels while the headless test draws the real Settings controls. */
+    struct MonitorControlsFixture final : Horo::Editor::IEditorMicrophoneMonitor {
+        using Status = Horo::Editor::EditorMicrophoneMonitorStatus;
+        using Option = Horo::Editor::EditorMicrophoneMonitorOption;
+        Status state{Status::Ready};
+        const std::array<Option, 1> input{{{1, "Test microphone"}}};
+        const std::array<Option, 1> output{{{2, "Private headphones"}}};
+        mutable unsigned outputReads{};
+
+        bool CanConfigure() const noexcept override {
+            return state == Status::Ready;
+        }
+        void Scan() noexcept override {
+            state = Status::Scanning;
+        }
+        std::span<const Option> InputOptions() const noexcept override {
+            return input;
+        }
+        std::span<const Option> OutputOptions() const noexcept override {
+            ++outputReads;
+            return output;
+        }
+        void StartListening(std::size_t, std::size_t, bool) noexcept override {
+            state = Status::Starting;
+        }
+        void StopListening() noexcept override {
+            state = Status::Stopping;
+        }
+        Status MonitorStatus() const noexcept override {
+            return state;
+        }
+    };
+
     /** @brief Restores the shared theme after each generated presentation case. */
     struct RestoreTheme {
         ~RestoreTheme() {
@@ -354,6 +387,39 @@ TEST_CASE("Audio settings show the localized microphone meter only while capturi
     microphone.state = EditorMicrophoneTestStatus::Failed;
     draw();
     CHECK(microphone.levelReads == 1);
+}
+
+TEST_CASE("Audio settings discard headphone confirmation when listening choices are withdrawn", "[unit][editor][gui][audio]") {
+    using namespace Horo::Editor;
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    MicrophoneLevelFixture permission;
+    MonitorControlsFixture monitor;
+    Tests::EditorGuiContextFixture gui{{450.0F, 760.0F}};
+    gui.context.microphonePermission = &permission;
+    gui.context.microphoneMonitor = &monitor;
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(gui.localization.ActivatePrepared(&error));
+    SettingsAudioTab audio{.monitorInput = 0, .monitorOutput = 0, .monitorPrivateListening = true};
+    const auto draw = [&] {
+        gui.imgui.BeginFrame();
+        ImGui::SetNextWindowSize({390.0F, 560.0F}, ImGuiCond_Always);
+        ImGui::Begin("Microphone monitor test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        SettingsModalInternal::DrawMicrophoneMonitor(audio, gui.context);
+        ImGui::End();
+        gui.imgui.EndFrame();
+    };
+    draw();
+    CHECK(monitor.outputReads > 0);
+    CHECK(audio.monitorPrivateListening);
+
+    monitor.state = EditorMicrophoneMonitorStatus::Stopping;
+    draw();
+    CHECK(audio.monitorInput == -1);
+    CHECK(audio.monitorOutput == -1);
+    CHECK_FALSE(audio.monitorPrivateListening);
 }
 
 TEST_CASE("Gameplay accessibility settings share the user draft and Apply transaction", "[unit][editor][gui][accessibility]") {
