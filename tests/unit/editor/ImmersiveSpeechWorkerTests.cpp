@@ -132,7 +132,8 @@ namespace Horo::Editor {
             first.front() = 0;
             const auto partial = WaitForUpdate(fixture.worker);
             REQUIRE(partial.evidence);
-            CHECK(partial.evidence->Hypothesis().text == "First block");
+            CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Partial) == "First block");
+            CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Final).empty());
             REQUIRE(fixture.worker.Seal(std::move(tail)) == Accepted);
             const auto completed = WaitForUpdate(fixture.worker);
             CHECK_FALSE(fixture.worker.Busy());
@@ -140,11 +141,13 @@ namespace Horo::Editor {
                 CHECK(completed.status == LowConfidence);
                 CHECK_FALSE(completed.evidence);
                 CHECK_FALSE(partial.evidence->IsCurrent());
+                CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
                 return;
             }
             REQUIRE(completed.status == Finished);
             REQUIRE(completed.evidence);
-            CHECK(completed.evidence->Hypothesis().text == "Both blocks");
+            CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Final) == "Both blocks");
+            CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
             CHECK(fixture.worker.OwnsEvidence(*completed.evidence));
             const ImmersiveSpeechWorker foreign;
             CHECK_FALSE(foreign.OwnsEvidence(*completed.evidence));
@@ -152,6 +155,8 @@ namespace Horo::Editor {
             CHECK_FALSE(fixture.worker.OwnsEvidence(*completed.evidence));
             CHECK_FALSE(completed.evidence->IsCurrent());
             CHECK_FALSE(partial.evidence->IsCurrent());
+            CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
+            CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Final).empty());
         }
 
         TEST_CASE("Speech worker cancels when live PCM misses its original source sequence", "[agent][immersive][speech]") {

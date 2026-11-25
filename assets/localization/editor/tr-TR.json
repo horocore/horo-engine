@@ -148,6 +148,7 @@
     "workspace.local_agent.xr_listening_idle": {"text": "XR Play ses tanılaması"},
     "workspace.local_agent.xr_listening_active": {"text": "Bu cihazda dinleniyor…"},
     "workspace.local_agent.xr_listening_finishing": {"text": "Konuşma metne dönüştürülüyor…"},
+    "workspace.local_agent.xr_listening_draft": {"text": "Canlı konuşma metni (taslak)"},
     "workspace.local_agent.xr_listening_speech_only": {"text": "Konuşma metni hazır. Eşleşen XR gözlemi bulunamadı."},
     "workspace.local_agent.xr_listening_spatial_rejected": {"text": "Konuşma metni hazır. XR gözlemleri kullanılamadı."},
     "workspace.local_agent.xr_listening_spatial": {"text": "Konuşma metni ve eşleşen XR gözlemleri hazır."},

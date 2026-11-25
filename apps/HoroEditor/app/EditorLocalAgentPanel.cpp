@@ -556,6 +556,9 @@ namespace Horo::Editor {
                     Ui::WrappedText(width, transcript, Theme::Text(), fonts);
                     DrawListeningReferences(context);
                     DrawListeningContacts(context);
+                } else if (const auto draft = listening_->PartialTranscript(); !draft.empty()) {
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_listening_draft"), Theme::Muted(), fonts);
+                    Ui::WrappedText(width, draft, Theme::Text(), fonts);
                 }
             }
 

@@ -53,7 +53,16 @@ namespace Horo::Editor {
     }
 
     std::string_view EditorImmersiveListening::Transcript() const & noexcept {
-        return preview_ ? preview_->Speech().Hypothesis().text : std::string_view{};
+        if (!preview_ || selectionLifetime_.IsCancellationRequested())
+            return {};
+        return preview_->Speech().PreviewText(SpeechHypothesisKind::Final);
+    }
+
+    /** @copydoc EditorImmersiveListening::PartialTranscript */
+    std::string_view EditorImmersiveListening::PartialTranscript() const & noexcept {
+        if (!partial_ || selectionLifetime_.IsCancellationRequested())
+            return {};
+        return partial_->PreviewText(SpeechHypothesisKind::Partial);
     }
 
     /** @copydoc EditorImmersiveListening::ReviewReferences */
@@ -190,15 +199,26 @@ namespace Horo::Editor {
             Fail();
             return;
         }
-        const auto update = speech_.Advance(true);
+        auto update = speech_.Advance(true);
         using enum SpeechTranscriptionStatus;
-        if (update.status == Pending || update.status == Accepted)
+        if (update.status == Accepted) {
+            if (update.evidence && !update.evidence->PreviewText(SpeechHypothesisKind::Partial).empty())
+                partial_ = std::move(update.evidence);
             return;
+        }
+        if (update.status == Pending)
+            return;
+        partial_.reset();
         if (update.status != Finished || !update.evidence) {
             Fail(update.status);
             return;
         }
-        auto result = speech_.AssembleCommand(true, *update.evidence, current->interaction.cutoff);
+        AdoptFinalSpeech(*update.evidence, current->interaction.cutoff);
+    }
+
+    /** @copydoc EditorImmersiveListening::AdoptFinalSpeech */
+    void EditorImmersiveListening::AdoptFinalSpeech(const ImmersiveSpeechEvidence &evidence, const XR::XRInteractionCutoff &cutoff) {
+        auto result = speech_.AssembleCommand(true, evidence, cutoff);
         if (!result.envelope) {
             Fail();
             return;
@@ -235,6 +255,7 @@ namespace Horo::Editor {
     }
 
     void EditorImmersiveListening::Cancel() noexcept {
+        partial_.reset();
         preview_.reset();
         scope_.reset();
         selectionLifetime_ = {};

@@ -97,6 +97,11 @@ namespace Horo::Editor {
         return {kind_, start_, end_, confidence_, {text_.data(), textSize_}};
     }
 
+    /** @copydoc ImmersiveSpeechEvidence::PreviewText */
+    std::string_view ImmersiveSpeechEvidence::PreviewText(const SpeechHypothesisKind kind) const & noexcept {
+        return kind_ == kind && IsCurrent() ? std::string_view{text_.data(), textSize_} : std::string_view{};
+    }
+
     ImmersiveSpeechTranscription::ImmersiveSpeechTranscription(ConstructionKey, const ImmersivePlanningContext &context,
                                                                const Audio::Backend::AudioCaptureBufferDescriptor &source,
                                                                const std::string_view locale, const float minimumConfidence,

@@ -29,6 +29,8 @@ namespace Horo::Editor {
         /** @brief Returns the current UI state and a transient preview, if the captured context remains valid. */
         [[nodiscard]] State Status() const noexcept;
         [[nodiscard]] std::string_view Transcript() const & noexcept;
+        /** @brief Borrows the latest live draft for display while final recognition is pending. */
+        [[nodiscard]] std::string_view PartialTranscript() const & noexcept;
 
         /** @brief Returns the terminal capture reason while Status is Interrupted. */
         [[nodiscard]] SpeechTranscriptionStatus FailureReason() const noexcept {
@@ -65,6 +67,8 @@ namespace Horo::Editor {
     private:
         using Scope = Application::Internal::OpenXRPlayListeningScope;
         [[nodiscard]] std::optional<Scope> Current() const;
+        /** @brief Assembles the final local preview after recognition finishes. */
+        void AdoptFinalSpeech(const ImmersiveSpeechEvidence &evidence, const XR::XRInteractionCutoff &cutoff);
         /** @brief Releases the capture and preserves its user-visible terminal reason. */
         void Fail(SpeechTranscriptionStatus reason = SpeechTranscriptionStatus::CaptureInterrupted) noexcept;
 
@@ -75,6 +79,7 @@ namespace Horo::Editor {
         ImmersiveAuthoringContext owner_;
         std::optional<Scope> scope_;
         CancellationToken selectionLifetime_;
+        std::optional<ImmersiveSpeechEvidence> partial_;
         std::optional<ImmersiveCommandEnvelope> preview_;
         State state_{State::Idle};
         SpeechTranscriptionStatus failureReason_{SpeechTranscriptionStatus::CaptureInterrupted};

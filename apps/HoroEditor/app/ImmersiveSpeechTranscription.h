@@ -104,6 +104,9 @@ namespace Horo::Editor {
         [[nodiscard]] std::string_view Locale() const && = delete;
         [[nodiscard]] SpeechHypothesisView Hypothesis() const & noexcept;
         [[nodiscard]] SpeechHypothesisView Hypothesis() const && = delete;
+        /** @brief Borrows local display text only while the evidence is live and of the requested kind. */
+        [[nodiscard]] std::string_view PreviewText(SpeechHypothesisKind kind) const & noexcept;
+        [[nodiscard]] std::string_view PreviewText(SpeechHypothesisKind kind) const && = delete;
 
     private:
         friend class ImmersiveSpeechTranscription;

@@ -148,6 +148,7 @@
     "workspace.local_agent.xr_listening_idle": {"text": "XR Play voice diagnostics"},
     "workspace.local_agent.xr_listening_active": {"text": "Listening on this device…"},
     "workspace.local_agent.xr_listening_finishing": {"text": "Finishing transcription…"},
+    "workspace.local_agent.xr_listening_draft": {"text": "Live transcript (draft)"},
     "workspace.local_agent.xr_listening_speech_only": {"text": "Transcript ready. No aligned XR observations."},
     "workspace.local_agent.xr_listening_spatial_rejected": {"text": "Transcript ready. The XR observations could not be used."},
     "workspace.local_agent.xr_listening_spatial": {"text": "Transcript ready with aligned XR observations."},
