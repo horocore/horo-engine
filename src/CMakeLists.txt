@@ -1998,7 +1998,7 @@ target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AISceneInte
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)
 target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
+target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime HoroEngine::Runtime)
 
 add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationActionValidation.cpp

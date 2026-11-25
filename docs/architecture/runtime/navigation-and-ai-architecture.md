@@ -1803,6 +1803,11 @@ source's `Feed()` to `PollPerceptionAtSensePoll`. The same Scene and spatial
 owner admit only addressed, registered hearing listeners. The feed is borrowed
 for that poll, before Blackboard publication and the Decision phase. Hearing
 listeners use this event path without a per-agent native provider instance.
+An application-owned `GameplayHearingPublisher` stages a bounded batch of
+producer-approved listener deliveries during the actual fixed attempt. Only the
+same scheduler's commit evidence promotes the batch. The immediately following
+sensing tick can borrow it without draining or exposing uncommitted Gameplay
+outcomes. Producer filtering remains explicit and Audio is not required.
 An authored project can select built-in Hearing (`sense` 2) in its existing
 Perception listener declarations. The shared Editor Play and headless project
 registry supply the Hearing/Sound descriptors whenever a listener selects them.

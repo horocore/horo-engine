@@ -3159,6 +3159,7 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/PrefabAtomicOwnerTests.cpp
     integration/gameplay/HeadlessDecisionReplayProductProof.cpp
+    integration/gameplay/HeadlessGameplayHearingTests.cpp
     integration/gameplay/PrefabNetworkPublicationTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp

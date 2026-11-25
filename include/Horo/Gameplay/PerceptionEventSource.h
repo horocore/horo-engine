@@ -9,7 +9,9 @@
 #include "Horo/AI/PerceptionEventRouting.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Runtime/RuntimeDispatchEvidence.h"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <span>
@@ -29,6 +31,14 @@ namespace Horo::Gameplay {
      */
     struct CommittedPerceptionDelivery final {
         AI::PerceptionEventDelivery delivery;
+        PerceptionFilterDecision filter{PerceptionFilterDecision::Reject};
+    };
+
+    /** @brief Gameplay's proposed sound and exact disclosure decision for one listener. */
+    struct GameplayHearingDelivery final {
+        AI::AgentHandle recipient;
+        AI::PerceptionListenerTypeId listener;
+        AI::HearingPerceptionEvent sound; /**< The publisher assigns the first eligible sensing tick. */
         PerceptionFilterDecision filter{PerceptionFilterDecision::Reject};
     };
 
@@ -132,6 +142,64 @@ namespace Horo::Gameplay {
         std::shared_ptr<const AI::PerceptionSpatialSnapshot> filterSnapshot_;
         std::vector<CommittedPerceptionDelivery> deliveries_;
         bool closed_{};
+    };
+
+    /** @brief Bounded Gameplay publisher for one Scene incarnation and one actual scheduler.
+     * @details A trusted application owner prepares one complete batch before fixed commitment and promotes it only with
+     * actual scheduler proof. The next sensing tick can borrow the committed batch. Audio owns no part of the handoff.
+     */
+    class GameplayHearingPublisher final {
+    public:
+        /** @brief Binds an explicit scheduler and Scene identity without opening a publication.
+         * @param source The application's authoritative fixed scheduler.
+         * @param scene View identifying the exact Scene incarnation. Later structural publications in that Scene are supported.
+         */
+        GameplayHearingPublisher(Runtime::RuntimeDispatchSource source, const Runtime::RuntimeSceneView &scene) noexcept;
+        GameplayHearingPublisher(const GameplayHearingPublisher &) = delete;
+        GameplayHearingPublisher &operator=(const GameplayHearingPublisher &) = delete;
+
+        /** @brief Validates and stages one complete Gameplay batch for the current fixed attempt.
+         * @param scene Current view from the bound Scene incarnation.
+         * @param evidence The active fixed callback's scheduler-issued attempt evidence.
+         * @param deliveries Already selected recipients and disclosure outcomes. An empty batch clears the previous output.
+         * @return Success or typed authority, Scene, tick, or payload refusal. The committed batch is unchanged.
+         */
+        [[nodiscard]] Result<void> Prepare(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeDispatchEvidence &evidence,
+                                           std::span<const GameplayHearingDelivery> deliveries);
+
+        /** @brief Promotes prepared storage without allocation or user callbacks during actual scheduler commitment.
+         * @param evidence Active fixed callback evidence for the prepared attempt.
+         * @return True when the batch was promoted. Invalid, duplicate and uncommitted attempts leave it unchanged.
+         */
+        [[nodiscard]] bool Commit(const Runtime::RuntimeDispatchEvidence &evidence) noexcept;
+
+        /** @brief Discards an uncommitted candidate during rollback of the matching attempt.
+         * @param evidence Active fixed callback evidence for the aborted attempt.
+         */
+        void Abort(const Runtime::RuntimeDispatchEvidence &evidence) noexcept;
+
+        /** @brief Borrows the committed records for the immediately following sensing tick.
+         * @param scene Current view from the bound Scene incarnation.
+         * @param tick Tick for which the host is opening sensing.
+         * @return Empty when there is no batch for that tick, or a typed authority or stale Scene error.
+         * The values may be borrowed until the next publication.
+         */
+        [[nodiscard]] Result<std::span<const CommittedPerceptionDelivery>> Read(const Runtime::RuntimeSceneView &scene,
+                                                                               std::uint64_t tick) const;
+
+    private:
+        /** @brief One bounded candidate or committed sensing batch. */
+        struct Batch final {
+            std::array<CommittedPerceptionDelivery, PerceptionEventSource::MaximumDeliveries> records{};
+            std::size_t count{};
+            std::uint64_t sensingTick{};
+        };
+
+        Runtime::RuntimeDispatchSource source_;
+        Runtime::RuntimeSceneView scene_;
+        std::array<Batch, 2> batches_{};
+        std::size_t published_{};
+        Runtime::RuntimeDispatchEvidence prepared_;
     };
 
     /** @brief Explicit host-selected producer of a committed Gameplay window. An empty result supplies no events for the tick. */

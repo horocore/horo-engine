@@ -3,6 +3,7 @@
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Network/NetworkWorldBinding.h"
+#include "Horo/Runtime/RuntimeHost.h"
 
 #include <algorithm>
 #include <array>
@@ -293,6 +294,116 @@ namespace Horo::AI {
                         PerceptionFilterDecision::Accept};
             }
         };
+
+        /** @brief Drives an approved Gameplay batch through the real scheduler's prepare and publication callbacks. */
+        class HearingFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
+        public:
+            HearingFixedParticipant(Gameplay::GameplayHearingPublisher &publisher, const Runtime::RuntimeSceneView &scene,
+                                    std::span<const Gameplay::GameplayHearingDelivery> deliveries)
+                : publisher_(publisher), scene_(scene), deliveries_(deliveries) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+            Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+                return Result<void>::Success();
+            }
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+                attempted = context.dispatchEvidence;
+                auto result = publisher_.Prepare(scene_, attempted, deliveries_);
+                premature = publisher_.Commit(attempted);
+                return result;
+            }
+            Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &) override {
+                return reject ? Result<void>::Failure(MakeError(AIErrors::PerceptionEventInvalid)) : Result<void>::Success();
+            }
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                committed = publisher_.Commit(context.dispatchEvidence);
+                duplicate = publisher_.Commit(context.dispatchEvidence);
+            }
+            void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                publisher_.Abort(context.dispatchEvidence);
+            }
+            void Shutdown() noexcept override {}
+
+            Runtime::RuntimeDispatchEvidence attempted;
+            bool reject{};
+            bool premature{};
+            bool committed{};
+            bool duplicate{};
+
+        private:
+            Gameplay::GameplayHearingPublisher &publisher_;
+            Runtime::RuntimeSceneView scene_;
+            std::span<const Gameplay::GameplayHearingDelivery> deliveries_;
+        };
+
+        /** @brief Checks the publisher's tick stamp and the ordinary committed hearing admission path. */
+        void RequireCommittedHearing(const Fixture &fixture, const Gameplay::GameplayHearingPublisher &publisher, const bool committed) {
+            const auto view = fixture.scene->View();
+            CHECK(publisher.Read(view, 1).Value().empty());
+            CHECK(publisher.Read(view, 3).Value().empty());
+            const auto records = publisher.Read(view, 2).Value();
+            REQUIRE(records.size() == (committed ? 1 : 0));
+            if (records.empty())
+                return;
+            const auto &record = records.front();
+            CHECK(record.delivery.simulationTick == 2);
+            CHECK(std::get<HearingPerceptionEvent>(record.delivery.event).emittedTick == 2);
+            auto memory = fixture.Memory(fixture.recipient);
+            REQUIRE(fixture.Capture(std::span{&record, 1}).Deliver(0, memory).HasValue());
+            CHECK(memory.StoredCount() == 1);
+        }
+
+        TEST_CASE("Gameplay hearing publishes only a committed fixed attempt to its next sensing tick", "[unit][ai][perception][hearing]") {
+            Fixture fixture;
+            const auto view = fixture.scene->View();
+            const auto sound = fixture.Sound();
+            const Gameplay::GameplayHearingDelivery proposal{sound.delivery.recipient, sound.delivery.listener,
+                                                             std::get<HearingPerceptionEvent>(sound.delivery.event), sound.filter};
+            std::array<Gameplay::GameplayHearingDelivery, PerceptionEventSource::MaximumDeliveries + 1> proposals;
+            proposals.fill(proposal);
+            struct TestClock final : Clock {
+                Duration now{};
+                Duration MonotonicNow() const override {
+                    return now;
+                }
+            } clock;
+            const auto quantum = Duration::FromMilliseconds(10);
+            auto created = Runtime::FrameScheduler::Create(clock, {.fixedStep = quantum});
+            REQUIRE(created.HasValue());
+            auto scheduler = std::move(created).Value();
+            Gameplay::GameplayHearingPublisher publisher{scheduler->DispatchSource(), view};
+            Runtime::RuntimeLifecycle lifecycle;
+            CancellationSource cancellation;
+            std::size_t count = 1;
+            bool rejectCommit{};
+            SECTION("successful commitment stamps an exact next-tick delivery") {}
+            SECTION("a failed fixed preparation never publishes its staged hearing") {
+                rejectCommit = true;
+            }
+            SECTION("an oversized producer batch fails before partial publication") {
+                count = proposals.size();
+            }
+            const bool rejected = rejectCommit || count > PerceptionEventSource::MaximumDeliveries;
+            auto callback = std::make_unique<HearingFixedParticipant>(publisher, view, std::span{proposals}.first(count));
+            auto &participant = *callback;
+            participant.reject = rejectCommit;
+            REQUIRE(lifecycle.AddParticipant(std::move(callback)).HasValue());
+            REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+            REQUIRE(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+            clock.now = quantum;
+            CHECK(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasError() == rejected);
+            CHECK_FALSE(participant.premature);
+            CHECK_FALSE(participant.duplicate);
+            CHECK(participant.committed == !rejected);
+            CHECK_FALSE(publisher.Commit(participant.attempted));
+            RequireCommittedHearing(fixture, publisher, !rejected);
+            scheduler->RetireDispatch();
+            const auto retired = publisher.Read(view, 2);
+            REQUIRE(retired.HasError());
+            CHECK(retired.ErrorValue().code.Value() == AIErrors::PerceptionEventUnauthorized.code.Value());
+        }
 
         TEST_CASE("headless committed hearing coalesces sound facts for the same source and listener",
                   "[unit][ai][perception][events][hearing]") {

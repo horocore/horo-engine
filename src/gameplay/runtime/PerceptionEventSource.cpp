@@ -1,9 +1,11 @@
 #include "Horo/Gameplay/PerceptionEventSource.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/Runtime/FrameScheduler.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace Horo::Gameplay {
@@ -58,6 +60,19 @@ namespace Horo::Gameplay {
                 return Source(event.source);
             }
         };
+
+        /** @brief Rejects malformed or stale proposals before touching the inactive batch. */
+        [[nodiscard]] Result<void> ValidateHearingBatch(const Runtime::RuntimeSceneView &scene, const std::uint64_t tick,
+                                                       const std::span<const GameplayHearingDelivery> deliveries) {
+            const EventValidation validation{scene, tick};
+            for (const auto &delivery : deliveries) {
+                if (!delivery.recipient.IsValid() || !delivery.listener.IsValid() || !ValidHearing(delivery.sound))
+                    return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
+                if (const auto source = validation.Source(delivery.sound.source); source.HasError())
+                    return source;
+            }
+            return Result<void>::Success();
+        }
 
         /** @brief Computes a distance from exact global positions, preserving nearby differences at extreme coordinates. */
         [[nodiscard]] double DistanceMeters(const Math::WorldCoordinate64 &left, const Math::WorldCoordinate64 &right) {
@@ -278,6 +293,75 @@ namespace Horo::Gameplay {
     /** @copydoc PerceptionEventSource::Close */
     void PerceptionEventSource::Close() noexcept {
         closed_ = true;
+    }
+
+    /** @copydoc GameplayHearingPublisher::GameplayHearingPublisher */
+    GameplayHearingPublisher::GameplayHearingPublisher(Runtime::RuntimeDispatchSource source,
+                                                       const Runtime::RuntimeSceneView &scene) noexcept
+        : source_(std::move(source)), scene_(scene) {}
+
+    /** @copydoc GameplayHearingPublisher::Prepare */
+    Result<void> GameplayHearingPublisher::Prepare(const Runtime::RuntimeSceneView &scene,
+                                                    const Runtime::RuntimeDispatchEvidence &evidence,
+                                                    const std::span<const GameplayHearingDelivery> deliveries) {
+        Runtime::RuntimeDispatchFacts facts;
+        if (evidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts) != Runtime::RuntimeDispatchStatus::Valid ||
+            facts.committedAttempt == facts.fixedAttempt)
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
+        if (!scene.IsCurrent() || !scene_.SameIncarnation(scene) || prepared_.RefersToSameDispatch(evidence))
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
+        auto &pending = batches_[1 - published_];
+        if (facts.fixedTick == std::numeric_limits<std::uint64_t>::max() || deliveries.size() > pending.records.size())
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
+
+        const auto nextTick = facts.fixedTick + 1;
+        if (auto valid = ValidateHearingBatch(scene, nextTick, deliveries); valid.HasError())
+            return valid;
+        std::ranges::transform(deliveries, pending.records.begin(), [nextTick](const GameplayHearingDelivery &delivery) {
+            auto sound = delivery.sound;
+            sound.emittedTick = nextTick;
+            return CommittedPerceptionDelivery{{delivery.recipient, delivery.listener, sound, nextTick}, delivery.filter};
+        });
+        pending.count = deliveries.size();
+        pending.sensingTick = nextTick;
+        prepared_ = evidence;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayHearingPublisher::Commit */
+    bool GameplayHearingPublisher::Commit(const Runtime::RuntimeDispatchEvidence &evidence) noexcept {
+        Runtime::RuntimeDispatchFacts facts;
+        if (evidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts) != Runtime::RuntimeDispatchStatus::Valid ||
+            facts.committedAttempt != facts.fixedAttempt || !prepared_.RefersToSameDispatch(evidence))
+            return false;
+        published_ = 1 - published_;
+        prepared_ = {};
+        return true;
+    }
+
+    /** @copydoc GameplayHearingPublisher::Abort */
+    void GameplayHearingPublisher::Abort(const Runtime::RuntimeDispatchEvidence &evidence) noexcept {
+        Runtime::RuntimeDispatchFacts facts;
+        const auto status = evidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts);
+        const bool abortable = status == Runtime::RuntimeDispatchStatus::Retired ||
+                               (status == Runtime::RuntimeDispatchStatus::Valid && facts.committedAttempt != facts.fixedAttempt);
+        if (abortable && prepared_.RefersToSameDispatch(evidence))
+            prepared_ = {};
+    }
+
+    /** @copydoc GameplayHearingPublisher::Read */
+    Result<std::span<const CommittedPerceptionDelivery>> GameplayHearingPublisher::Read(const Runtime::RuntimeSceneView &scene,
+                                                                                       const std::uint64_t tick) const {
+        using Batch = Result<std::span<const CommittedPerceptionDelivery>>;
+        const auto status = source_.BindingStatus();
+        if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Reentrant)
+            return Batch::Failure(MakeError(AI::AIErrors::PerceptionEventUnauthorized));
+        if (!scene.IsCurrent() || !scene_.SameIncarnation(scene))
+            return Batch::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
+        const auto &current = batches_[published_];
+        if (tick != current.sensingTick)
+            return Batch::Success({});
+        return Batch::Success(std::span{current.records}.first(current.count));
     }
 
     /** @copydoc PollPerceptionWithGameplay */
