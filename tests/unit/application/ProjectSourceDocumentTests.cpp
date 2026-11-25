@@ -184,6 +184,42 @@ namespace {
         CHECK(ResolveProjectAiSettings(source.Value()).HasError());
     }
 
+    TEST_CASE("NPC dialogue presentation requires an authored trigger and fallback cue", "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        auto &dialogue = document["settings"]["ai"];
+        dialogue = Json::parse(R"({"schemaVersion":1,"npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[],
+          "triggers":[{"id":5,"agent":7,"facts":[]}],
+          "presentation":{"trigger":5,"fallback":4,"deadlineTicks":10,"workerMilliseconds":250,
+            "captions":[{"id":9,"namespace":"game.dialogue","key":"welcome","text":"Welcome","durationTicks":5},
+                        {"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":10}]}}})");
+        auto &presentation = dialogue["npcDialogue"]["presentation"];
+        const auto resolve = [&] {
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            return ResolveProjectAiSettings(source.Value());
+        };
+        SECTION("valid captions are ordered by stable cue ID") {
+            const auto parsed = resolve();
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value());
+            REQUIRE(parsed.Value()->NpcDialogue());
+            REQUIRE(parsed.Value()->NpcDialogue()->presentation);
+            const auto &plan = *parsed.Value()->NpcDialogue()->presentation;
+            REQUIRE(plan.captions.size() == 2);
+            CHECK(plan.captions.front().cue == plan.fallback);
+            CHECK(plan.captions.front().fallbackText == "Come back later.");
+            CHECK(plan.captions.front().durationTicks == 10);
+            return;
+        }
+        SECTION("missing trigger is rejected") { presentation["trigger"] = 6; }
+        SECTION("missing fallback is rejected") { presentation["fallback"] = 8; }
+        SECTION("duplicate cues are rejected") { presentation["captions"][1]["id"] = 9; }
+        SECTION("zero budget is rejected") { presentation["workerMilliseconds"] = 0; }
+        SECTION("zero caption duration is rejected") { presentation["captions"][0]["durationTicks"] = 0; }
+        SECTION("caption destinations do not belong to the local catalog") { presentation["captions"][0]["destination"] = "https://example.invalid/"; }
+        CHECK(resolve().HasError());
+    }
+
     TEST_CASE("Project AI admits only typed local-policy targets and controller bindings", "[unit][application][source-profile][ai]") {
         auto document = RegisteredSource();
         auto &ai = document["settings"]["ai"];

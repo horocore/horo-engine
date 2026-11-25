@@ -282,22 +282,82 @@ namespace Horo::Application {
             return std::ranges::adjacent_find(output, {}, &ProjectNpcDialogueTrigger::id) == output.end();
         }
 
-        /** @brief Reads typed dialogue config without admitting a URL, credential or arbitrary text field. */
+        /** @brief Decodes one local-only caption. The application UI owner admits localization keys before publication. */
+        bool ReadDialogueCaption(const Json &entry, ProjectNpcDialogueCaption &caption) {
+            constexpr std::array<std::string_view, 5> keys{"id", "namespace", "key", "text", "durationTicks"};
+            if (!HasOnly(entry, keys) || entry.size() != keys.size())
+                return false;
+            caption.cue = ReadIdentity<AI::NpcDialogueCueId>(entry["id"]);
+            if (!caption.cue.IsValid() || !ReadUnsigned(entry, "durationTicks", caption.durationTicks) || caption.durationTicks == 0)
+                return false;
+            constexpr std::array names{"namespace", "key", "text"};
+            constexpr std::array members{&ProjectNpcDialogueCaption::messageNamespace, &ProjectNpcDialogueCaption::messageKey,
+                                         &ProjectNpcDialogueCaption::fallbackText};
+            for (std::size_t index = 0; index < names.size(); ++index) {
+                const auto &field = entry[names[index]];
+                if (!field.is_string())
+                    return false;
+                caption.*members[index] = field.get_ref<const std::string &>();
+            }
+            return true;
+        }
+
+        /** @brief Bounds the catalog and proves the offline fallback resolves to exactly one authored caption. */
+        bool ReadDialogueCaptionCatalog(const Json &entries, ProjectNpcDialoguePresentation &presentation) {
+            if (!entries.is_array() || entries.empty() || entries.size() > AI::NpcDialogueTurn::MaximumCues)
+                return false;
+            auto &captions = presentation.captions;
+            captions.reserve(entries.size());
+            for (const auto &entry : entries) {
+                if (!ReadDialogueCaption(entry, captions.emplace_back()))
+                    return false;
+            }
+            constexpr auto cue = &ProjectNpcDialogueCaption::cue;
+            std::ranges::sort(captions, {}, cue);
+            return std::ranges::adjacent_find(captions, {}, cue) == captions.end() &&
+                   std::ranges::binary_search(captions, presentation.fallback, {}, cue);
+        }
+
+        /** @brief Admits the optional complete local presentation plan and its exact authored trigger. */
+        bool ReadDialoguePresentation(const Json &object, ProjectNpcDialogueSettings &dialogue) {
+            const auto entry = object.find("presentation");
+            if (entry == object.end())
+                return true;
+            constexpr std::array<std::string_view, 5> keys{"trigger", "fallback", "deadlineTicks", "workerMilliseconds", "captions"};
+            if (!HasOnly(*entry, keys) || entry->size() != keys.size())
+                return false;
+            auto &presentation = dialogue.presentation.emplace();
+            presentation.trigger = ReadIdentity<NpcDialogueTriggerId>((*entry)["trigger"]);
+            presentation.fallback = ReadIdentity<AI::NpcDialogueCueId>((*entry)["fallback"]);
+            if (!std::ranges::binary_search(dialogue.triggers, presentation.trigger, {}, &ProjectNpcDialogueTrigger::id))
+                return false;
+            return ReadUnsigned(*entry, "deadlineTicks", presentation.deadlineTicks) && presentation.deadlineTicks > 0 &&
+                   ReadUnsigned(*entry, "workerMilliseconds", presentation.workerMilliseconds) && presentation.workerMilliseconds > 0 &&
+                   ReadDialogueCaptionCatalog((*entry)["captions"], presentation);
+        }
+
+        /** @brief Reads the exact provider route and independent request disclosure field set. */
+        bool ReadDialogueRoute(const Json &object, ProjectNpcDialogueSettings &dialogue) {
+            auto &route = dialogue.route;
+            route.provider = ReadIdentity<AI::DecisionProviderId>(object["provider"]);
+            route.destination = ReadIdentity<AI::NpcDialogueDestinationId>(object["destination"]);
+            return route.provider.IsValid() && route.destination.IsValid() && ReadUnsigned(object, "version", route.version) &&
+                   route.version == AI::NpcDialogueWireVersion && ReadDialogueFields(object["fields"], dialogue.fields);
+        }
+
+        /** @brief Reads the versioned dialogue policy, including local presentation when explicitly authored. */
         bool ReadNpcDialogue(const Json &root, std::optional<ProjectNpcDialogueSettings> &output) {
             const auto object = root.find("npcDialogue");
             if (object == root.end())
                 return true;
-            constexpr std::array<std::string_view, 5> keys{"provider", "destination", "version", "fields", "triggers"};
-            const std::size_t expectedKeys = object->contains("triggers") ? keys.size() : keys.size() - 1;
+            constexpr std::array<std::string_view, 6> keys{"provider", "destination", "version", "fields", "triggers", "presentation"};
+            const std::size_t expectedKeys = 4 + static_cast<std::size_t>(object->contains("triggers")) +
+                                             static_cast<std::size_t>(object->contains("presentation"));
             if (!HasOnly(*object, keys) || object->size() != expectedKeys)
                 return false;
             auto &dialogue = output.emplace();
-            auto &route = dialogue.route;
-            route.provider = ReadIdentity<AI::DecisionProviderId>((*object)["provider"]);
-            route.destination = ReadIdentity<AI::NpcDialogueDestinationId>((*object)["destination"]);
-            return route.provider.IsValid() && route.destination.IsValid() && ReadUnsigned(*object, "version", route.version) &&
-                   route.version == AI::NpcDialogueWireVersion && ReadDialogueFields((*object)["fields"], dialogue.fields) &&
-                   ReadDialogueTriggers(*object, dialogue.triggers);
+            return ReadDialogueRoute(*object, dialogue) && ReadDialogueTriggers(*object, dialogue.triggers) &&
+                   ReadDialoguePresentation(*object, dialogue);
         }
 
         /** @brief Reads and validates budgets under their owning scheduler, Perception and query rules. */

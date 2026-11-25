@@ -49,6 +49,24 @@ namespace Horo::Application {
         std::vector<AI::NpcDialogueFact> facts; /**< Canonical increasing list of distinct fields. */
     };
 
+    /** @brief Authored local text identity and duration for one provider-selectable caption. */
+    struct ProjectNpcDialogueCaption final {
+        AI::NpcDialogueCueId cue;
+        std::string messageNamespace;
+        std::string messageKey;
+        std::string fallbackText;
+        std::uint32_t durationTicks{};
+    };
+
+    /** @brief Complete caption catalog and timing policy for one project-selected interaction. */
+    struct ProjectNpcDialoguePresentation final {
+        NpcDialogueTriggerId trigger;
+        AI::NpcDialogueCueId fallback;
+        std::uint32_t deadlineTicks{};
+        std::uint32_t workerMilliseconds{};
+        std::vector<ProjectNpcDialogueCaption> captions; /**< Canonical increasing list of distinct cue IDs. */
+    };
+
     /** @brief Project-authored NPC dialogue request. The host owns endpoint and disclosure approval. */
     struct ProjectNpcDialogueSettings final {
         static constexpr std::size_t MaximumTriggers = 256;
@@ -56,6 +74,7 @@ namespace Horo::Application {
         AI::NpcDialogueRoute route;
         std::vector<AI::NpcDialogueFactId> fields; /**< Canonical increasing set of requested context fields. */
         std::vector<ProjectNpcDialogueTrigger> triggers; /**< Canonical increasing list of distinct trigger IDs. */
+        std::optional<ProjectNpcDialoguePresentation> presentation;
     };
 
     /** @brief Validated authoritative project settings with no renderer or local visualization inputs. */

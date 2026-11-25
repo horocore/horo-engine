@@ -2355,13 +2355,22 @@ fixed commit releases it to the Scene cutoff, where the host resolves the
 live authored NPC and starts the turn. An aborted tick releases no interaction.
 Retiring or replacing the Scene revokes its channel and clears its captions.
 
+When the host selects project-authored presentation, `settings.ai.npcDialogue.presentation`
+provides `trigger`, `fallback`, `deadlineTicks`, `workerMilliseconds` and
+`captions`. The trigger must resolve to an authored interaction. The fallback
+must resolve to one caption. Each caption has an `id`, a localization
+`namespace` and `key`, local fallback `text`, and a positive `durationTicks`.
+The application validates the localized message references before binding its
+HUD timeline. The project can omit this presentation object, and caption text
+stays in the presentation owner.
+
 The application binds a remote provider only when its separate approval matches
 the authorized project source fingerprint, route, and provider generation.
 Only the intersection of the project and host field lists is disclosed. An
 absent policy leaves dialogue inactive. A policy without matching approval
 can use the authored offline fallback. The project document has no URL,
-certificate, or credentials fields. Gameplay triggers, executable host wiring,
-and production provider qualification remain open. See
+certificate, or credentials fields. Default executable HUD wiring and
+production provider qualification remain open. See
 [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 
 ### AI Runtime Ownership And Scene Generation Safety

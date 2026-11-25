@@ -293,7 +293,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         /** @brief Captures the approved project route and verifies the input references an authored interaction. */
         [[nodiscard]] Result<void> PrepareNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
-                                                      const EditorPlayNpcDialogueSelection &selection);
+                                                      const EditorProjectScenePolicy &policy);
 
         Result<void> PrepareAnimation(const EditorProjectScenePolicy &policy) {
             if (!policy.animation)
@@ -840,6 +840,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             std::optional<std::uint64_t> committed;
         };
         std::optional<NpcDialogueState> dialogue_;
+        /** @brief Converts the opted-in project source to the normal timeline composition on the cold Play path. */
+        [[nodiscard]] Result<void> PrepareAuthoredNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
+                                                              const EditorPlayAuthoredNpcDialogue &port);
         /** @brief Binds a semantic caption queue to the exact newly published Scene. */
         [[nodiscard]] Result<void> BindNpcDialogueScene(NpcDialogueState &state, const AI::AiSceneActivationBinding &binding);
         /** @brief Starts committed interactions and publishes completed turns outside simulation callbacks. */

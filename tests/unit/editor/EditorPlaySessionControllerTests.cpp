@@ -924,28 +924,10 @@ namespace {
         metadata << R"({"horoVersion":"0.2.0","persistentContract":")" << contract
                  << R"(","projectId":"dialogue-play","name":"Play","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",)"
                     R"("settings":{"renderBackend":"null","ai":{"schemaVersion":1,"npcDialogue":{"provider":1,"destination":2,)"
-                    R"("version":1,"fields":[],"triggers":[{"id":3,"agent":10,"facts":[]}]}}}})";
+                    R"("version":1,"fields":[],"triggers":[{"id":3,"agent":10,"facts":[]}],)"
+                    R"("presentation":{"trigger":3,"fallback":4,"deadlineTicks":10,"workerMilliseconds":100,)"
+                    R"("captions":[{"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":20}]}}}}})";
         REQUIRE(metadata.good());
-    }
-
-    /** @brief Supplies the actual product factory with one author-owned localized fallback. */
-    auto MakeDialoguePlayFactory(JobSystem &jobs, const AI::AiControllerDescriptor &controller,
-                                 const Gameplay::GameplayActionId &action, std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline) {
-        using namespace Application::Internal;
-        auto key = Runtime::Ui::UiMessageKey::Create("game.dialogue", "offline");
-        REQUIRE(key.HasValue());
-        auto message = Runtime::Ui::LocalizedMessageRef::Create(std::move(key).Value(), {}, "Come back later.");
-        REQUIRE(message.HasValue());
-        const auto cue = AI::NpcDialogueCueId::Create(4).Value();
-        EditorPlayNpcDialogueSelection dialogue{.action = action,
-                                                .trigger = Application::NpcDialogueTriggerId::Create(3).Value(),
-                                                .messages = {std::move(message).Value()},
-                                                .captions = {{cue, 0, 0, 20}},
-                                                .fallback = cue,
-                                                .timeline = std::move(timeline),
-                                                .workerBudget = Duration::FromMilliseconds(100),
-                                                .tickBudget = 10};
-        return MakeEditorProjectSceneFactory(jobs, {.aiControllers = {controller}, .npcDialogue = std::move(dialogue)});
     }
 
     /** @brief Rejects the staged press and verifies that retrying the tick cannot replay it. */
@@ -965,6 +947,7 @@ namespace {
 }  // namespace
 
 TEST_CASE("Editor Play starts authored NPC dialogue only after the fixed commit", "[editor][play][ai][product][dialogue]") {
+    using namespace Application::Internal;
     const Tests::OwnedTestDirectory project{"npc-dialogue-play"};
     WriteDialogueProject(project.Path());
     JobSystem jobs({.workerCount = 1});
@@ -975,7 +958,8 @@ TEST_CASE("Editor Play starts authored NPC dialogue only after the fixed commit"
     authoring.objects.back().components.aiController = npc.agent.controller;
     auto timeline = std::make_shared<Runtime::Ui::CaptionTimeline>();
     Gameplay::GameplayInputAction input{Gameplay::GameplayActionId{"gameplay.interact"}, 1.0F};
-    const auto product = MakeDialoguePlayFactory(jobs, npc.descriptor, input.action, timeline);
+    const auto product = MakeEditorProjectSceneFactory(
+        jobs, {.aiControllers = {npc.descriptor}, .authoredNpcDialogue = EditorPlayAuthoredNpcDialogue{input.action, timeline}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return product(project.Path(), id, definition);
     };

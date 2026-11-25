@@ -69,6 +69,12 @@ namespace Horo::Application::Internal {
         std::optional<App::NpcDialogueEndpointApproval> approval; /**< Absence selects the authored offline fallback. */
     };
 
+    /** @brief Binds project-authored captions to an application-selected Play action and a dedicated HUD timeline. */
+    struct EditorPlayAuthoredNpcDialogue final {
+        Gameplay::GameplayActionId action;
+        std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline;
+    };
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
@@ -91,7 +97,8 @@ namespace Horo::Application::Internal {
         std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion;
         std::function<void()> cancelXrLocomotion;
         bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
-        std::optional<EditorPlayNpcDialogueSelection> npcDialogue;
+        std::optional<EditorPlayNpcDialogueSelection> npcDialogue; /**< Explicit host override for a pre-admitted caption catalog. */
+        std::optional<EditorPlayAuthoredNpcDialogue> authoredNpcDialogue;
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

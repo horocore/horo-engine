@@ -172,9 +172,8 @@ namespace Horo::Application::Internal {
                 auto host = std::make_unique<ProjectPlaySceneHost>(identity, range);
                 if (auto prepared = host->Prepare(root, jobs, policy, &definition); prepared.HasError())
                     return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(prepared.ErrorValue());
-                if (policy.npcDialogue)
-                    if (auto prepared = host->PrepareNpcDialogue(root, jobs, *policy.npcDialogue); prepared.HasError())
-                        return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(prepared.ErrorValue());
+                if (auto prepared = host->PrepareNpcDialogue(root, jobs, policy); prepared.HasError())
+                    return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(prepared.ErrorValue());
                 return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(std::move(host));
             };
         }
@@ -354,6 +353,7 @@ namespace Horo::Application::Internal {
         policy.world.reset();
         policy.decisions.reset();
         policy.npcDialogue.reset();
+        policy.authoredNpcDialogue.reset();
         return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
     }
 

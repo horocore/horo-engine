@@ -36,6 +36,7 @@ namespace Horo::App {
         activation.route_ = policy.route;
         activation.generation_ = generation;
         activation.triggers_ = policy.triggers;
+        activation.presentation_ = policy.presentation;
         if (!Matches(project, policy.route, generation, approval))
             return Activation::Success(std::move(activation));
         if (!ValidFields(approval->fields))
@@ -63,5 +64,10 @@ namespace Horo::App {
     /** @copydoc NpcDialogueProjectActivation::Triggers */
     std::span<const Application::ProjectNpcDialogueTrigger> NpcDialogueProjectActivation::Triggers() const noexcept {
         return triggers_;
+    }
+
+    /** @copydoc NpcDialogueProjectActivation::Presentation */
+    const std::optional<Application::ProjectNpcDialoguePresentation> &NpcDialogueProjectActivation::Presentation() const noexcept {
+        return presentation_;
     }
 }  // namespace Horo::App

@@ -31,6 +31,8 @@ namespace Horo::App {
         [[nodiscard]] const std::optional<AI::NpcDialogueProviderBinding> &Binding() const noexcept;
         /** @brief Borrows the admitted interaction catalog until the activation is moved or retired. */
         [[nodiscard]] std::span<const Application::ProjectNpcDialogueTrigger> Triggers() const noexcept;
+        /** @brief Borrows the authored local presentation plan, if the project supplies one. */
+        [[nodiscard]] const std::optional<Application::ProjectNpcDialoguePresentation> &Presentation() const noexcept;
 
     private:
         AI::NpcDialogueRoute route_;
@@ -39,5 +41,6 @@ namespace Horo::App {
         std::size_t count_{};
         std::optional<AI::NpcDialogueProviderBinding> binding_;
         std::vector<Application::ProjectNpcDialogueTrigger> triggers_;
+        std::optional<Application::ProjectNpcDialoguePresentation> presentation_;
     };
 }  // namespace Horo::App
