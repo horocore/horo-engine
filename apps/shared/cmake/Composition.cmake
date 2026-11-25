@@ -1,4 +1,12 @@
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
+set(HORO_NPC_DIALOGUE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/npc_dialogue_host_headers")
+file(MAKE_DIRECTORY "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
+configure_file(shared/ai/NpcDialogueHttpsProvider.h "${HORO_NPC_DIALOGUE_HOST_HEADERS}/NpcDialogueHttpsProvider.h" COPYONLY)
+add_library(HoroNpcDialogueHttpsHostInternal STATIC shared/ai/NpcDialogueHttpsProvider.cpp)
+target_compile_features(HoroNpcDialogueHttpsHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNpcDialogueHttpsHostInternal PUBLIC "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
+target_link_libraries(HoroNpcDialogueHttpsHostInternal PUBLIC HoroEngine::AI PRIVATE CURL::libcurl)
+
 # Explicit non-installed package composition contract; stage only its owning host header.
 set(HORO_PACKAGE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/package_host_headers")
 file(MAKE_DIRECTORY "${HORO_PACKAGE_HOST_HEADERS}")

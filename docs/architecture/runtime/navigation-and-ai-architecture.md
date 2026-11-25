@@ -2322,9 +2322,17 @@ responses select a deterministic authored fallback, while cancelled or stale
 turns publish no cue. `NpcDialogueJob` dispatches a detached copy on a dedicated
 Foundation I/O worker with an explicit provider image pin and a monotonic
 deadline. The presentation owner polls with the current grant and cancels queued
-work upon revocation before it can disclose data. Concrete transport, moderation,
-and game host composition remain separate delivery work. See
-[ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
+work upon revocation before it can disclose data.
+
+The host-only HTTPS adapter binds a catalog-selected version-one route to an
+exact endpoint and verifies its TLS certificate. A POST with media type
+`application/vnd.horo.npc-dialogue.v1` contains one `field,value` line per
+approved fact, with unsigned decimal IDs. The response must use the same media
+type and contain `allow`, one nonzero decimal cue ID, and line endings after both
+lines. Any other response fails closed. The approved endpoint supplies the
+moderation decision and the local turn still requires the cue to be authored.
+Game host composition and production provider qualification remain separate
+delivery work. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 
 ### AI Runtime Ownership And Scene Generation Safety
 
