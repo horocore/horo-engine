@@ -127,7 +127,7 @@ namespace Horo::Editor {
             error_ = package.ErrorValue();
             return;
         }
-        auto preview = session_->PreviewRemoval(generation_, package.Value());
+        auto preview = session_->InspectRemoval(generation_, package.Value());
         if (preview.HasError()) {
             error_ = preview.ErrorValue();
             return;
@@ -140,11 +140,16 @@ namespace Horo::Editor {
     void PackageModal::DrawRemovalPreview() const {
         if (!removalPreview_)
             return;
-        const auto &removed = removalPreview_->removed;
+        const auto &removed = removalPreview_->graph.removed;
         const auto *label = removed.empty() ? "removal_kept" : "removal_candidates";
         Ui::Hint(Text(label).c_str(), context_.theme.fonts);
         for (const auto &package : removed)
             Ui::Hint(package.package.Value().c_str(), context_.theme.fonts);
+        if (!removalPreview_->activeOrRetiring.empty()) {
+            Ui::Hint(Text("removal_native_in_use").c_str(), context_.theme.fonts);
+            for (const auto &package : removalPreview_->activeOrRetiring)
+                Ui::Hint(package.Value().c_str(), context_.theme.fonts);
+        }
     }
 
     /** @brief Keeps the original typed cause for structured diagnostics; visible copy remains localized. */
@@ -153,6 +158,7 @@ namespace Horo::Editor {
             error_ = result.ErrorValue();
         else {
             error_.reset();
+            removalPreview_.reset();
             static_cast<void>(session_->Refresh(generation_));
         }
     }

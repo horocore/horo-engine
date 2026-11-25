@@ -161,6 +161,12 @@ namespace Horo::Packages {
          * @details This read does not finalize owners or inspect project asset and service references. The application serializes
          * replacement commits with activation operations on the composition lane. */
         [[nodiscard]] Result<std::vector<HoroPackageId>> MissingRetainedPackages(const PackageRestoreGraph &replacement) const;
+        /** @brief Identifies departing packages still held by active or retiring native modules.
+         * @param departing Exact IDs and versions from the locked removal preview.
+         * @return Sorted unique package IDs or an owner-lane failure.
+         * @details Native ownership is matched by package ID. A generation from a different version of the same package can
+         * still be draining. This inspection has no side effects. */
+        [[nodiscard]] Result<std::vector<HoroPackageId>> RetainedRemovalPackages(std::span<const LockedPackageReference> departing) const;
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */
         [[nodiscard]] PackageLifecycleState State() const;
         /** @brief Finalizes reverse-order retirement after outstanding importer/callback leases are released. */

@@ -4602,6 +4602,9 @@
     "workspace.packages.removal_candidates": {
       "text": "Packages the locked graph would drop. Project references still need review."
     },
+    "workspace.packages.removal_native_in_use": {
+      "text": "These packages still own active or closing modules. Disable the modules, let them finish closing, and preview again."
+    },
     "workspace.packages.descriptor": {
       "text": "Declared extension descriptor path"
     },

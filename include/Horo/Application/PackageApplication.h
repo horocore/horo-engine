@@ -81,6 +81,12 @@ namespace Horo::Application {
         std::vector<PackagePlanEntry> packages;
     };
 
+    /** @brief Exact graph effects and live native ownership observed in one removal preview. */
+    struct PackageRemovalPreview final {
+        Packages::PackageRemovalGraphPreview graph;
+        std::vector<Packages::HoroPackageId> activeOrRetiring; /**< Departing packages whose native owners have not drained. */
+    };
+
     /** @brief Exact host policy; no portable package request can approve execution or select a native loader. */
     struct PackageApplicationConfiguration final {
         Packages::PackageRestoreRequest restore;
@@ -171,6 +177,11 @@ namespace Horo::Application {
         /** @brief Previews withdrawal of one package from the current exact locked graph.
          * @param package Package from the displayed lock. @return Read-only graph impacts or a stale/missing evidence failure. */
         [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(const Packages::HoroPackageId &package) const;
+        /** @brief Previews withdrawal from the locked graph and reports native owners observed on the composition lane.
+         * @param package Package from the displayed lock.
+         * @return Read-only graph and lifetime evidence or a stale/missing evidence failure.
+         * @details The preview is a point-in-time observation. A mutation must independently recheck native owners and project references. */
+        [[nodiscard]] Result<PackageRemovalPreview> InspectRemoval(const Packages::HoroPackageId &package) const;
         /**
          * @brief Previews an explicitly resolved candidate against the current project package plan.
          * @param candidate Portable intent for the candidate.

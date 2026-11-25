@@ -53,7 +53,7 @@ namespace Horo::Editor {
 
         std::shared_ptr<const Application::PackagePlanSnapshot> displayedPlan_;
         std::vector<PlanRow> planRows_;
-        std::optional<Packages::PackageRemovalGraphPreview> removalPreview_;
+        std::optional<Application::PackageRemovalPreview> removalPreview_;
         std::string package_;
         std::string descriptor_;
         std::string module_;

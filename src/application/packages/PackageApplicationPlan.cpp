@@ -108,6 +108,18 @@ namespace Horo::Application {
         return Output::Success(std::move(replacement).Value().graph);
     }
 
+    /** @copydoc PackageApplication::InspectRemoval */
+    Result<PackageRemovalPreview> PackageApplication::InspectRemoval(const Packages::HoroPackageId &package) const {
+        using Output = Result<PackageRemovalPreview>;
+        auto graph = PreviewRemoval(package);
+        if (graph.HasError())
+            return Output::Failure(graph.ErrorValue());
+        auto retained = impl_->lifecycle.RetainedRemovalPackages(graph.Value().removed);
+        if (retained.HasError())
+            return Output::Failure(retained.ErrorValue());
+        return Output::Success({std::move(graph).Value(), std::move(retained).Value()});
+    }
+
     /** @copydoc PackageApplication::PreviewUpdate */
     Result<Packages::PackageUpdatePreview> PackageApplication::PreviewUpdate(
         const Packages::ValidatedPackageRequest &candidate, const Packages::ValidatedPackageLockfileV1 &candidateLock) const {

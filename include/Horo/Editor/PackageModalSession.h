@@ -49,7 +49,11 @@ namespace Horo::Editor {
         /** @brief Reads graph-only removal effects for the current opening.
          * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
         [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(PackageModalGeneration generation,
-                                                                                  const Packages::HoroPackageId &package) const;
+                                                                                   const Packages::HoroPackageId &package) const;
+        /** @brief Reads graph effects and native lifetime blockers for the current opening.
+         * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
+        [[nodiscard]] Result<Application::PackageRemovalPreview> InspectRemoval(PackageModalGeneration generation,
+                                                                               const Packages::HoroPackageId &package) const;
 
     private:
         /** @brief Rejects controls from a closed or replaced modal opening before application access. */

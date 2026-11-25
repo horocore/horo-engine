@@ -121,4 +121,12 @@ namespace Horo::Editor {
             return Result<Packages::PackageRemovalGraphPreview>::Failure(valid.ErrorValue());
         return application_->PreviewRemoval(package);
     }
+
+    /** @copydoc PackageModalSession::InspectRemoval */
+    Result<Application::PackageRemovalPreview> PackageModalSession::InspectRemoval(const PackageModalGeneration generation,
+                                                                                   const Packages::HoroPackageId &package) const {
+        if (auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageRemovalPreview>::Failure(valid.ErrorValue());
+        return application_->InspectRemoval(package);
+    }
 }  // namespace Horo::Editor

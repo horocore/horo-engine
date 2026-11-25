@@ -37,6 +37,27 @@ namespace Horo::Packages {
         Impl(PackageInstallService &installation, const IPackageExtensionTrust &approval, PackageLifecycleConfiguration policy)
             : install(installation), trust(approval), configuration(std::move(policy)) {}
 
+        /** @brief Collects exact package names from all native lifetime owners on the composition lane. */
+        Result<std::vector<HoroPackageId>> RetainedPackages() const {
+            using Output = Result<std::vector<HoroPackageId>>;
+            if (std::this_thread::get_id() != owner || preparing)
+                return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+            std::vector<HoroPackageId> retained;
+            if (current)
+                current->AppendRetainedPackages(retained);
+            for (const auto &composition : retired)
+                if (composition)
+                    composition->AppendRetainedPackages(retained);
+            if (const auto &queue = configuration.moduleRetirements) {
+                if (const auto read = queue->AppendRetainedPackages(retained); read.HasError())
+                    return Output::Failure(read.ErrorValue());
+            }
+            std::ranges::sort(retained);
+            const auto duplicates = std::ranges::unique(retained);
+            retained.erase(duplicates.begin(), duplicates.end());
+            return Output::Success(std::move(retained));
+        }
+
         /** @brief Keeps the primary typed error and the previous published graph when preparation fails. */
         Result<void> Fail(Error error) {
             journal.outcome = error.code.Value() == PackageLifecycleErrors::Cancelled.code.Value() ? PackageActivationOutcome::Cancelled
@@ -293,32 +314,33 @@ namespace Horo::Packages {
 
     /** @copydoc PackageLifecycleService::MissingRetainedPackages */
     Result<std::vector<HoroPackageId>> PackageLifecycleService::MissingRetainedPackages(const PackageRestoreGraph &replacement) const {
-        using Output = Result<std::vector<HoroPackageId>>;
-        if (std::this_thread::get_id() != impl_->owner || impl_->preparing)
-            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
-        std::vector<HoroPackageId> retained;
-        if (impl_->current)
-            impl_->current->AppendRetainedPackages(retained);
-        for (const auto &composition : impl_->retired)
-            if (composition)
-                composition->AppendRetainedPackages(retained);
-        if (const auto &queue = impl_->configuration.moduleRetirements) {
-            if (const auto read = queue->AppendRetainedPackages(retained); read.HasError())
-                return Output::Failure(read.ErrorValue());
-        }
-        if (retained.empty())
-            return Output::Success(std::move(retained));
-
+        auto retained = impl_->RetainedPackages();
+        if (retained.HasError() || retained.Value().empty())
+            return retained;
         std::set<std::string_view, std::less<>> available;
         for (const auto &package : replacement.packages)
             available.insert(package.lock.package.Value());
-        std::erase_if(retained, [&available](const auto &package) {
+        auto packages = std::move(retained).Value();
+        std::erase_if(packages, [&available](const auto &package) {
             return available.contains(package.Value());
         });
-        std::ranges::sort(retained);
-        const auto duplicates = std::ranges::unique(retained);
-        retained.erase(duplicates.begin(), duplicates.end());
-        return Output::Success(std::move(retained));
+        return Result<std::vector<HoroPackageId>>::Success(std::move(packages));
+    }
+
+    /** @copydoc PackageLifecycleService::RetainedRemovalPackages */
+    Result<std::vector<HoroPackageId>> PackageLifecycleService::RetainedRemovalPackages(
+        const std::span<const LockedPackageReference> departing) const {
+        auto retained = impl_->RetainedPackages();
+        if (retained.HasError())
+            return retained;
+        std::set<std::string_view, std::less<>> removed;
+        for (const auto &package : departing)
+            removed.insert(package.package.Value());
+        auto packages = std::move(retained).Value();
+        std::erase_if(packages, [&removed](const auto &package) {
+            return !removed.contains(package.Value());
+        });
+        return Result<std::vector<HoroPackageId>>::Success(std::move(packages));
     }
 
     /** @copydoc PackageLifecycleService::State */

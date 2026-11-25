@@ -71,6 +71,13 @@ namespace Horo::Tests::PackageApplicationService {
             };
         };
 
+        /** @brief Lets fixture teardown drain even after a fatal check interrupts a test. */
+        struct AllowDrainOnExit {
+            TestRoleHost &host;
+
+            ~AllowDrainOnExit() { host.drainAllowed = true; }
+        };
+
         /** @brief Selects a role explicitly declared in the same verified fixture archive. */
         EnabledPackageModule SelectedRole(const Fixture &fixture) {
             return {fixture.graph.package, Parse<PackagePath>("extensions/native/extension.json"), "com.horo.application-fixture.native",
@@ -343,19 +350,48 @@ namespace Horo::Tests::PackageApplicationService {
             CHECK(host->finalized == 1);
         }
 
+        TEST_CASE("Package removal previews track native owners through retirement", "[packages][application][removal]") {
+            ExactRoleTrust trust;
+            auto host = std::make_shared<TestRoleHost>();
+            Fixture fixture{true, host, &trust};
+            const AllowDrainOnExit allowDrain{*host};
+            const auto &package = fixture.graph.package;
+            const auto check = [&](const std::vector<HoroPackageId> &expected) {
+                const auto preview = fixture.application->InspectRemoval(package);
+                REQUIRE(preview.HasValue());
+                CHECK(preview.Value().graph.removed == std::vector<LockedPackageReference>{{package, fixture.graph.version}});
+                CHECK(preview.Value().activeOrRetiring == expected);
+            };
+
+            check({});
+            const auto selected = SelectedRole(fixture);
+            const auto activated = fixture.application->ActivateModules(std::span{&selected, 1});
+            REQUIRE(activated.HasValue());
+            REQUIRE(WaitForTerminal(fixture, activated.Value()).outcome == PackageOperationOutcome::Succeeded);
+            check({package});
+            CHECK(host->retired == 0);
+
+            host->drainAllowed = false;
+            const auto disabled = fixture.application->Disable();
+            REQUIRE(disabled.HasValue());
+            REQUIRE(WaitForTerminal(fixture, disabled.Value()).outcome == PackageOperationOutcome::Succeeded);
+            check({package});
+            CHECK(host->retired == 1);
+            CHECK(host->finalized == 0);
+
+            host->drainAllowed = true;
+            fixture.lifecycle->FinalizeRetirements();
+            check({});
+            CHECK(host->finalized == 1);
+        }
+
         TEST_CASE("Package installation keeps active and draining package owners in the committed graph",
                   "[packages][application][removal]") {
             ExactRoleTrust trust;
             auto host = std::make_shared<TestRoleHost>();
             Fixture fixture{true, host, &trust};
 
-            struct AllowDrainOnExit {
-                TestRoleHost &host;
-
-                ~AllowDrainOnExit() {
-                    host.drainAllowed = true;
-                }
-            } allowDrain{*host};
+            const AllowDrainOnExit allowDrain{*host};
 
             const auto selected = SelectedRole(fixture);
             const auto activated = fixture.application->ActivateModules(std::span{&selected, 1});

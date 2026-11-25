@@ -431,6 +431,7 @@ namespace {
                                          "workspace.packages.preview_removal",
                                          "workspace.packages.removal_kept",
                                          "workspace.packages.removal_candidates",
+                                         "workspace.packages.removal_native_in_use",
                                          "workspace.packages.descriptor",
                                          "workspace.packages.activate",
                                          "workspace.packages.gameplay_module",

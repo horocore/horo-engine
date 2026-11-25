@@ -446,6 +446,14 @@ failed removal attempts to restore the prior pair before releasing the
 mutation lease. If repair cannot finish, the journal remains for the next
 project preparation.
 
+The editor's application-level preview reports which departing packages still
+have active or retiring native modules. It samples the same composition owners
+that guard installation, including the retirement queue. It reports native
+ownership at preview time. The uninstall transaction still owns the reference
+checks and mutation. Application and editor consumers can call `InspectRemoval`
+for both graph effects and blockers. `PreviewRemoval` continues to provide the
+graph effects alone.
+
 `horo-engine package preview-remove --project /path/to/project --package-id
 com.vendor.pack` checks saved asset importer references and reports any locked
 contributions that require a live lifecycle owner. When those checks pass, it
