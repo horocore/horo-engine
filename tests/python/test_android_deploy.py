@@ -352,6 +352,8 @@ class AndroidDeployTests(unittest.TestCase):
             {DEVICE_BUILD_QUERY: [DEVICE_BUILD, "example/changed:14/build"], LOGCAT: log_line(OPENXR)}, OPENXR_OPTIONS, name)
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "device_build_changed"))
         self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
         self.assertEqual(commands.count(DEVICE_BUILD_QUERY), 2)
 
     def test_openxr_image_evidence_uses_the_verified_native_entries_for_each_abi(self):
@@ -528,6 +530,7 @@ class AndroidDeployTests(unittest.TestCase):
         status, report, commands = self.execute({checksum: [admitted, replacement, replacement]})
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "installed_artifact_stale"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "installed_artifact_stale"})
+        self.assertNotIn("observed", report)
         self.assertIn(checksum, commands[commands.index(LOGCAT) + 1:])
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
@@ -536,10 +539,17 @@ class AndroidDeployTests(unittest.TestCase):
         checksum = ("shell", "toybox", "sha256sum", PACKAGE)
         admitted = f"{DIGEST}  {PACKAGE}"
         replacement = f"{'b' * 64}  {PACKAGE}"
-        status, report, commands = self.execute(
-            {LOGCAT: log_line(OPENXR), checksum: [admitted, admitted, replacement]}, OPENXR_OPTIONS, name)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory).resolve() / "failure.zip"
+            options = (*OPENXR_OPTIONS, "--diagnostic-bundle", str(destination))
+            status, report, commands = self.execute(
+                {LOGCAT: log_line(OPENXR), checksum: [admitted, admitted, replacement]}, options, name)
+            with zipfile.ZipFile(destination) as bundle:
+                self.assertEqual(json.loads(bundle.read(project.DEPLOY_REPORT_ENTRY)), report)
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "installed_artifact_stale"))
         self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
         self.assertEqual(commands[-1], checksum)
 
@@ -636,6 +646,17 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertNotIn("private-foreign-device", json.dumps(report))
+
+    def test_openxr_discards_discovery_when_process_retirement_cannot_be_confirmed(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        stop = ("shell", "am", "force-stop", "--user", "10", profile["applicationId"])
+        status, report, commands = self.execute({LOGCAT: log_line(OPENXR), stop: (1, "stop failed")}, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_stop_unconfirmed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_command_failed"})
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+        self.assertEqual(commands.count(stop), 1)
 
     def test_buffered_records_with_reused_pid_or_foreign_uid_cannot_supply_evidence(self):
         stale = log_line(ENTRY, stamp=START)

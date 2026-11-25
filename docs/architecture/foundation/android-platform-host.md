@@ -408,7 +408,10 @@ and the matching deadline receipt. The receipt timestamps and launch nonce stay
 out of the report. An APK without the deadline receipt cannot supply a successful
 OpenXR diagnostic.
 Before reporting completion, the host also rechecks the installed APK digest.
-For OpenXR, that final check follows diagnostic process retirement.
+For OpenXR, that final check follows diagnostic process retirement. A successful
+capture is published only after final checks confirm the installed APK, selected
+device and OpenXR system build. A failed check leaves the corresponding failure
+reason in the JSON report and diagnostic bundle.
 Only closed, profile-specific facts leave the tool. The input-only package
 records entry after the GameActivity callback and input bridge are ready.
 The Vulkan qualification package must report both lifecycle and renderer

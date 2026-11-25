@@ -1902,7 +1902,20 @@ def check_openxr_discovery(runtime: dict, observation: dict, abi: str) -> None:
     if "expectedVersion" in runtime and observation["runtimeVersion"] != runtime["expectedVersion"]:
         runtime["status"] = "version_mismatch"
         raise AndroidDeployError("openxr_runtime_version_mismatch")
-    runtime["status"] = "cold_system_discovered"
+
+
+def check_deploy_capture(observed: dict, applicable: bool, observe_seconds: int) -> None:
+    """Require complete profile evidence or return the reason it cannot qualify."""
+    if observed["crashObserved"]:
+        raise AndroidDeployError("application_crashed")
+    if applicable:
+        return
+    window = observed.get("observationWindow", {})
+    if window.get("truncated"):
+        raise AndroidDeployError("observation_window_truncated")
+    if observe_seconds and not window["complete"]:
+        raise AndroidDeployError("observation_window_incomplete")
+    raise AndroidDeployError("application_evidence_unavailable")
 
 
 def android_deploy_main(argv=None) -> int:
@@ -2021,36 +2034,34 @@ def android_deploy_main(argv=None) -> int:
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, openxr_diagnostic=openxr)
             process, window = launch.start()
             report["stage"] = "diagnostics"
-            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, arguments.observe_seconds or 0)
-            report["observed"] = observed
-            if observed["crashObserved"]:
-                raise AndroidDeployError("application_crashed")
+            observe_seconds = arguments.observe_seconds or 0
+            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
+            try:
+                check_deploy_capture(observed, applicable, observe_seconds)
+                if openxr:
+                    check_openxr_discovery(runtime, observed["openxr"], abi)
+            except AndroidDeployError:
+                # Preserve the typed facts that explain a failure of the capture itself.
+                report["observed"] = observed
+                raise
             if openxr:
-                check_openxr_discovery(runtime, observed["openxr"], abi)
                 report["cleanup"] = launch.rollback()
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
-            elif not applicable:
-                if observed.get("observationWindow", {}).get("truncated"):
-                    raise AndroidDeployError("observation_window_truncated")
-                if arguments.observe_seconds and not observed["observationWindow"]["complete"]:
-                    raise AndroidDeployError("observation_window_incomplete")
-                raise AndroidDeployError("application_evidence_unavailable")
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             if openxr and deploy_device_build_digest(device) != device_build:
                 raise AndroidDeployError("device_build_changed")
             device.require_identity()
-            report["status"] = "diagnostic_complete" if openxr else "complete"
-            exit_code = 0
+        report["observed"] = observed
+        if openxr:
+            runtime["status"] = "cold_system_discovered"
+        report["status"] = "diagnostic_complete" if openxr else "complete"
+        exit_code = 0
     except KeyboardInterrupt:
         report["error"] = "cancelled"
         exit_code = 130
     except AndroidDeployError as error:
         report["error"] = error.code
-        if error.code == "device_transport_changed":
-            report.pop("observed", None)
-            if runtime["status"] == "cold_system_discovered":
-                runtime["status"] = "not_observed"
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
     if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
