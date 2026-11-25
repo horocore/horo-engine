@@ -141,9 +141,14 @@ namespace Horo::Editor {
         for (const auto &observation : aligned) {
             if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
                 continue;
-            if (!observation.controllerPress || !observation.pointing || observation.pointing->worldGeneration != worldGeneration ||
-                !AppendPointingHits(result, *observation.pointing, kind))
+            const auto &hits = observation.pointing;
+            if (!observation.controllerPress || !hits || hits->worldGeneration != worldGeneration)
                 return std::nullopt;
+            if (queried && result.mountedStructuralRevision != hits->mountedStructuralRevision)
+                return std::nullopt;
+            if (!AppendPointingHits(result, *hits, kind))
+                return std::nullopt;
+            result.mountedStructuralRevision = hits->mountedStructuralRevision;
             queried = true;
         }
         return queried ? std::optional{result} : std::nullopt;

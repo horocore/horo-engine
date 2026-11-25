@@ -175,6 +175,7 @@
     "workspace.local_agent.xr_pointing_empty": {"text": "Kaydedilen işaretleme ışını sahnede tanımlı hiçbir mesh’e vurmadı."},
     "workspace.local_agent.xr_reference_stale": {"text": "Kaydedilen seçim veya Play sahnesi artık güncel değil."},
     "workspace.local_agent.xr_reference_revision": {"text": "İncelenen sahne sürümü"},
+    "workspace.local_agent.xr_reference_mounted": {"text": "Salt okunur yüklü hücre. Konumlar etkin dünya kökenine göredir."},
     "workspace.local_agent.xr_reference_empty": {"text": "Bu kayıt sırasında hiçbir sahne nesnesi seçili değildi."},
     "workspace.local_agent.xr_reference_ambiguous": {"text": "Birden fazla referans kaydedildi. Hangisini kastettiğini belirt."},
     "workspace.local_agent.xr_reference_available": {"text": "Kullanılabilir"},

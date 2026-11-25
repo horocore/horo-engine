@@ -99,6 +99,7 @@ namespace Horo::Editor {
         std::span<const std::uint64_t> objects;
         AgentSceneReferenceSource source{AgentSceneReferenceSource::Selection};
         std::span<const AgentSceneReferencePoint> locations;
+        std::uint64_t mountedStructuralRevision{}; /**< Nonzero only for a press captured from mounted XR draws. */
     };
 
     /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */
@@ -112,6 +113,7 @@ namespace Horo::Editor {
         std::uint64_t documentRevision{};
         std::array<Candidate, AgentSceneSelectionSnapshot::MaximumObjects> candidates{};
         std::size_t count{};
+        bool mounted{};
 
         /** @brief Indicates that the captured evidence admits multiple distinct referents. */
         [[nodiscard]] bool RequiresClarification() const noexcept {

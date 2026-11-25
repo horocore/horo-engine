@@ -228,6 +228,10 @@ Ownership rules:
   controller press copies bounded hit coordinates and plane identities from
   the admitted publication. Each preview checks that the same grant and all
   referenced plane identities are still live.
+  Mounted XR Play resolves hits against the prepared origin-relative cell
+  geometry. The review carries the exact Scene structural revision and uses
+  runtime membership for read-only cell references. Cell or origin retirement
+  withdraws the captured review.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

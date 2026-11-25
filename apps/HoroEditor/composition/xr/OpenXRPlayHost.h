@@ -192,6 +192,12 @@ namespace Horo::Application::Internal {
         OpenXRInputCaptureWindows captureTime;
     };
 
+    /** @brief Complete bounded Play hits with their optional mounted Scene structural revision. */
+    struct OpenXRPlayPointingResult final {
+        std::size_t count{};
+        std::uint64_t mountedStructuralRevision{};
+    };
+
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
     class OpenXRPlayInteractionSources final {
     public:
@@ -499,12 +505,12 @@ namespace Horo::Application::Internal {
          * @param player Current Play assignment. @return Empty when disabled, blocked or no current ray/selection is available.
          */
         [[nodiscard]] std::optional<OpenXRWorldUiPointerFrame> ReadWorldUiPointer(Input::PlayerId player) const;
-        /** @brief Resolves the exact current controller press against the authored Play draws.
+        /** @brief Resolves the exact controller press against the current Play draws.
          * @param frame Pointer observation issued at the current Input cutoff.
          * @param hits Caller-owned candidate storage.
          * @return Complete scoped hits, or an explicit stale, unavailable or capacity failure. */
-        [[nodiscard]] Result<std::size_t> QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
-                                                                std::span<Editor::EditorXrGeometryHit> hits) const;
+        [[nodiscard]] Result<OpenXRPlayPointingResult> QueryPlayPointing(const OpenXRWorldUiPointerFrame &frame,
+                                                                         std::span<Editor::EditorXrGeometryHit> hits) const;
         /** @brief Intersects the exact admitted pointer with the current consented plane publication.
          * @param frame Pointer observation issued at the current Input cutoff.
          * @param maximumHits Maximum complete hit count to return.
@@ -657,6 +663,7 @@ namespace Horo::Application::Internal {
             std::unique_ptr<Editor::PreparedEditorXrGeometry> authored;
             std::shared_ptr<const Render::RenderOriginLocalScene> mounted;
             Runtime::RuntimeSceneView mountedScene; /**< Captured structural occurrence, checked while borrowing mounted geometry. */
+            std::array<Render::RenderMotionObjectId, Editor::PreparedEditorXrGeometry::MaximumInstances> mountedObjects{};
             bool revoked{};
 
             /** @brief Checks the selected source and its retained structural and origin lifetimes. */
@@ -671,6 +678,9 @@ namespace Horo::Application::Internal {
             [[nodiscard]] std::span<const Render::RenderStaticMeshInstance> Instances() const noexcept;
             /** @brief Borrows only issued canonical per-draw motion identities. */
             [[nodiscard]] std::span<const Render::RenderMotionObjectId> MotionObjects() const noexcept;
+            /** @brief Runs one press-time query against the selected live draw source. */
+            [[nodiscard]] Result<OpenXRPlayPointingResult> QueryPointing(const Math::Ray &ray,
+                                                                         std::span<Editor::EditorXrGeometryHit> hits) const;
             /** @brief Closes admission without dropping resources retained for native retirement. */
             void Revoke() noexcept;
         };

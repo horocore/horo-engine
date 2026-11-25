@@ -13,24 +13,31 @@ namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
-    /** @copydoc OpenXRPlayHost::QueryAuthoredPointing */
-    Result<std::size_t> OpenXRPlayHost::QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
-                                                              const std::span<Editor::EditorXrGeometryHit> hits) const {
+    /** @copydoc OpenXRPlayHost::QueryPlayPointing */
+    Result<OpenXRPlayPointingResult> OpenXRPlayHost::QueryPlayPointing(const OpenXRWorldUiPointerFrame &frame,
+                                                                       const std::span<Editor::EditorXrGeometryHit> hits) const {
+        using Hits = Result<OpenXRPlayPointingResult>;
         const auto active = ReadPressedPointer(frame);
         if (!active)
-            return Result<std::size_t>::Failure(MakeError(XRErrors::IdentityStale));
-        if (!scene_ || !scene_->geometry || !scene_->geometry->authored)
-            return Result<std::size_t>::Failure(MakeError(XRErrors::OperationUnavailable));
-        return scene_->geometry->authored->QueryPointing(active->sample.ray, hits);
+            return Hits::Failure(MakeError(XRErrors::IdentityStale));
+        if (!scene_ || !scene_->geometry)
+            return Hits::Failure(MakeError(XRErrors::OperationUnavailable));
+        return scene_->geometry->QueryPointing(active->sample.ray, hits);
     }
 
     namespace {
         /** @brief Checks that each mounted draw has an exact live entity and an authored object identity. */
-        bool MountedDrawOwnersAreCurrent(const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::EntityRef> owners) {
-            return std::ranges::all_of(owners, [&](const Runtime::EntityRef owner) {
-                const auto entity = scene.Get(owner);
-                return entity.HasValue() && entity.Value().authoredObject.has_value();
-            });
+        bool ResolveMountedDrawOwners(const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::EntityRef> owners,
+                                      const std::span<Render::RenderMotionObjectId> objects) {
+            if (owners.size() != objects.size())
+                return false;
+            for (std::size_t index = 0; index < owners.size(); ++index) {
+                const auto entity = scene.Get(owners[index]);
+                if (entity.HasError() || !entity.Value().authoredObject)
+                    return false;
+                objects[index] = {entity.Value().authoredObject->value};
+            }
+            return true;
         }
 
         /** @brief Describes the exact selected queue's acquired/released color tuple from existing renderer policy. */
@@ -211,6 +218,22 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::SceneGeometry::MotionObjects */
     std::span<const Render::RenderMotionObjectId> OpenXRPlayHost::SceneGeometry::MotionObjects() const noexcept {
         return authored ? authored->MotionObjects() : std::span<const Render::RenderMotionObjectId>{};
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::QueryPointing */
+    Result<OpenXRPlayPointingResult> OpenXRPlayHost::SceneGeometry::QueryPointing(const Math::Ray &ray,
+                                                                                  const std::span<Editor::EditorXrGeometryHit> hits) const {
+        using Hits = Result<OpenXRPlayPointingResult>;
+        if (const auto valid = ValidateSource(); valid.HasError())
+            return Hits::Failure(valid.ErrorValue());
+        const auto instances = Instances();
+        const auto count =
+            authored ? authored->QueryPointing(ray, hits)
+                     : Editor::XrSceneDetail::QueryPointingDraws(ray, instances, std::span{mountedObjects}.first(instances.size()),
+                                                                 Resources(), hits);
+        if (count.HasError())
+            return Hits::Failure(count.ErrorValue());
+        return Hits::Success({count.Value(), mounted ? mountedScene.StructuralRevision() : 0});
     }
 
     /** @copydoc OpenXRPlayHost::SceneGeometry::Revoke */
@@ -414,8 +437,6 @@ namespace Horo::Application::Internal {
         constexpr auto maximum = Editor::PreparedEditorXrGeometry::MaximumInstances;
         if (geometry->scene.instances.size() > maximum || geometry->scene.meshResources.size() > maximum)
             return Output::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (drawEntities.size() != geometry->scene.instances.size() || !MountedDrawOwnersAreCurrent(candidate, drawEntities))
-            return Output::Failure(MakeError(XRErrors::IdentityStale, "Mounted XR draw owners do not match the candidate Scene."));
         if (!geometry->scene.IsValid())
             return Output::Failure(MakeError(XRErrors::OperationInvalid));
         const auto origin = geometry->origin.Get();
@@ -431,7 +452,9 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(XRErrors::PoseInvalid, "Mounted World tracking placement must be finite and rigid."));
         auto state = std::make_shared<SceneState>();
         state->scene = candidate.RuntimeId();
-        state->geometry.emplace(SceneGeometry{.mounted = geometry, .mountedScene = candidate});
+        auto &source = state->geometry.emplace(SceneGeometry{.mounted = geometry, .mountedScene = candidate});
+        if (!ResolveMountedDrawOwners(candidate, drawEntities, std::span{source.mountedObjects}.first(geometry->scene.instances.size())))
+            return Output::Failure(MakeError(XRErrors::IdentityStale, "Mounted XR draw owners do not match the candidate Scene."));
         return PrepareState(std::move(state), {revision.Value(), XRSpaceKind::Local, originFromLocal});
     }
 

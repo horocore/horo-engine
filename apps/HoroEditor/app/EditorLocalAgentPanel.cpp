@@ -594,6 +594,8 @@ namespace Horo::Editor {
                     return;
                 }
                 const auto &review = *listeningReferences_;
+                if (review.mounted)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mounted"), Theme::Muted(), fonts);
                 Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
                                 Theme::Muted(), fonts);
                 if (review.Candidates().empty())

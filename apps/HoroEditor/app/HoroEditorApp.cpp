@@ -2099,7 +2099,7 @@ namespace Horo::Editor {
                                                               {time.earliest.clockDomain, time.earliest.nanoseconds},
                                                               {time.latest.clockDomain, time.latest.nanoseconds},
                                                               press,
-                                                              press ? QueryAuthoredHits(xr, *frame) : std::nullopt,
+                                                              press ? QueryPlayHits(xr, *frame) : std::nullopt,
                                                               press ? QuerySurfaceHits(xr, *frame) : std::nullopt};
                 static_cast<void>(speech.RecordPointing(observation, capture));
             }
@@ -2127,13 +2127,15 @@ namespace Horo::Editor {
             }
 
             /** @brief Captures copied Scene identities at the press cutoff while both owners are live. */
-            static std::optional<ImmersivePointingHits> QueryAuthoredHits(const Application::Internal::OpenXRPlayHost &xr,
-                                                                          const PointerFrame &frame) {
+            static std::optional<ImmersivePointingHits> QueryPlayHits(const Application::Internal::OpenXRPlayHost &xr,
+                                                                      const PointerFrame &frame) {
                 std::array<EditorXrGeometryHit, ImmersivePointingHits::MaximumObjects> hits;
-                const auto result = xr.QueryAuthoredPointing(frame, hits);
+                const auto result = xr.QueryPlayPointing(frame, hits);
                 if (result.HasError())
                     return std::nullopt;
-                ImmersivePointingHits copied{.worldGeneration = frame.source.scene.value, .count = result.Value()};
+                ImmersivePointingHits copied{.worldGeneration = frame.source.scene.value,
+                                             .mountedStructuralRevision = result.Value().mountedStructuralRevision,
+                                             .count = result.Value().count};
                 for (std::size_t index = 0; index < copied.count; ++index)
                     copied.hits[index] = {{hits[index].object.value}, hits[index].distanceMeters, hits[index].worldPosition};
                 return copied;
@@ -4724,7 +4726,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             const EditorMountedWorldPlaySelected mountedPlaySelected;
-            if (mountedViewport && !SelectedEditorPlayHost(p.presentation.composition))
+            if (mountedViewport)
                 screenHost.Services().RegisterConst<EditorMountedWorldPlaySelected>(mountedPlaySelected);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);

@@ -589,16 +589,21 @@ namespace Horo::Editor {
     std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection(
         const AgentSceneSelectionPurpose purpose) {
         const auto &selection = m_selection.Current();
-        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid())
+        if (m_viewModel.projectRoot.empty() || !m_document.State().IsValid())
             return std::nullopt;
         if (purpose == AgentSceneSelectionPurpose::ImmersivePlay) {
-            if (!ReadAgentReferenceScene())
+            if ((m_viewModel.worldDocument && !m_mountedWorldPlaySelected) || !ReadAgentReferenceScene())
                 return std::nullopt;
-        } else if (!selection.revision.value || selection.objects.empty())
+        } else if (m_viewModel.worldDocument || !selection.revision.value || selection.objects.empty())
             return std::nullopt;
         if (!m_agentSceneSelectionLifetime)
             m_agentSceneSelectionLifetime.emplace();
-        return CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
+        auto captured = CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
+        if (purpose == AgentSceneSelectionPurpose::ImmersivePlay && m_mountedWorldPlaySelected) {
+            captured.objectCount = 0;
+            captured.truncated = false;
+        }
+        return captured;
     }
 
     /** @copydoc EditorWorkspaceController::ReadAgentReferenceScene */
@@ -628,24 +633,50 @@ namespace Horo::Editor {
                 return Locked;
             return play.Find({object.value}) ? Available : OutOfScope;
         }
-    }  // namespace
 
-    namespace {
+        /** @brief Mounted references come from committed runtime content under an exact structural revision. */
+        AgentSceneReferenceState ClassifyMountedReference(const Runtime::RuntimeSceneView &play, const SceneObjectId object) {
+            return play.Find({object.value}) ? AgentSceneReferenceState::Available : AgentSceneReferenceState::OutOfScope;
+        }
+
         /** @brief Projects press-time coordinates only for objects still eligible in this Play scene. */
         std::optional<AgentSceneReferenceReview> ReviewAgentReferenceLocations(const AgentSceneReferenceRequest &request,
                                                                                const std::span<const SceneObjectSnapshot> objects,
                                                                                const Runtime::RuntimeSceneView &play) {
             if (!request.objects.empty() || request.locations.size() > AgentSceneSelectionSnapshot::MaximumObjects)
                 return std::nullopt;
-            AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
+            AgentSceneReferenceReview review{.documentRevision = request.documentRevision,
+                                             .mounted = request.mountedStructuralRevision != 0};
             for (const auto &location : request.locations) {
                 if (!Math::IsFinite(location.worldPosition))
                     return std::nullopt;
-                const auto state = ClassifyAgentReference(objects, true, play, {location.object});
+                const SceneObjectId object{location.object};
+                const auto state =
+                    review.mounted ? ClassifyMountedReference(play, object) : ClassifyAgentReference(objects, true, play, object);
                 auto &candidate = review.candidates[review.count++];
                 candidate = {location.object, state};
                 if (state == AgentSceneReferenceState::Available)
                     candidate.worldPosition = location.worldPosition;
+            }
+            return review;
+        }
+
+        /** @brief Projects object candidates through the appropriate authored or committed cell owner. */
+        std::optional<AgentSceneReferenceReview> ReviewAgentReferenceObjects(const AgentSceneReferenceRequest &request,
+                                                                             const std::span<const SceneObjectSnapshot> objects,
+                                                                             const std::span<const SceneObjectId> selection,
+                                                                             const Runtime::RuntimeSceneView &play) {
+            if (!request.locations.empty() || request.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects)
+                return std::nullopt;
+            AgentSceneReferenceReview review{.documentRevision = request.documentRevision,
+                                             .mounted = request.mountedStructuralRevision != 0};
+            for (const auto object : request.objects) {
+                const SceneObjectId id{object};
+                const bool admitted =
+                    request.source == AgentSceneReferenceSource::Pointing || std::ranges::find(selection, id) != selection.end();
+                const auto state =
+                    review.mounted ? ClassifyMountedReference(play, id) : ClassifyAgentReference(objects, admitted, play, id);
+                review.candidates[review.count++] = {object, state};
             }
             return review;
         }
@@ -657,24 +688,17 @@ namespace Horo::Editor {
         const auto play = ReadAgentReferenceScene();
         if (!play || play->RuntimeId().value != request.worldGeneration)
             return std::nullopt;
-        if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value ||
-            request.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects)
+        if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value)
             return std::nullopt;
 
+        const bool mounted = request.mountedStructuralRevision != 0;
+        if (mounted && (!m_mountedWorldPlaySelected || request.source == AgentSceneReferenceSource::Selection ||
+                        request.mountedStructuralRevision != play->StructuralRevision()))
+            return std::nullopt;
         const auto objects = m_document.Objects();
         if (request.source == AgentSceneReferenceSource::Location)
             return ReviewAgentReferenceLocations(request, objects, *play);
-        if (!request.locations.empty())
-            return std::nullopt;
-        const auto &selection = m_selection.Current().objects;
-        AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
-        for (const auto object : request.objects) {
-            const SceneObjectId id{object};
-            const bool admitted =
-                request.source == AgentSceneReferenceSource::Pointing || std::ranges::find(selection, id) != selection.end();
-            review.candidates[review.count++] = {object, ClassifyAgentReference(objects, admitted, *play, id)};
-        }
-        return review;
+        return ReviewAgentReferenceObjects(request, objects, m_selection.Current().objects, *play);
     }
 
     /** @copydoc EditorWorkspaceController::CaptureAgentViewport */

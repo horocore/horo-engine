@@ -20,7 +20,8 @@ namespace Horo::Editor {
             AgentSceneReferenceRequest request{.documentEpoch = identity.documentOpening,
                                                .documentRevision = identity.documentRevision,
                                                .worldGeneration = identity.worldGeneration,
-                                               .source = source};
+                                               .source = source,
+                                               .mountedStructuralRevision = pointing->mountedStructuralRevision};
             if (kind == ImmersivePointingReviewKind::Locations) {
                 std::array<AgentSceneReferencePoint, ImmersivePointingHits::MaximumObjects> locations;
                 auto captured = std::span{locations}.first(pointing->count);

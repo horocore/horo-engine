@@ -226,6 +226,14 @@ namespace Horo::Editor {
             CHECK(locations->hits[1].worldPosition == second.pointing->hits[0].worldPosition);
             ++observations[1].pointing->worldGeneration;
             CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
+            observations[1].pointing->worldGeneration = World;
+            observations[1].pointing->mountedStructuralRevision = 2;
+            CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
+            observations[0].pointing->mountedStructuralRevision = 2;
+            observations[2].pointing->mountedStructuralRevision = 2;
+            const auto mounted = CollectImmersivePointingHits(observations, World, Locations);
+            REQUIRE(mounted);
+            CHECK(mounted->mountedStructuralRevision == 2);
         }
 
         TEST_CASE("Physical surface review requires its original grant and complete live plane identities", "[agent][immersive][speech]") {

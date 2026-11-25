@@ -28,6 +28,7 @@ namespace Horo::Editor {
         };
 
         std::uint64_t worldGeneration{};
+        std::uint64_t mountedStructuralRevision{};
         std::array<Hit, MaximumObjects> hits{};
         std::size_t count{};
     };

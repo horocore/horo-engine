@@ -222,6 +222,7 @@ namespace {
             "workspace.local_agent.xr_pointing_empty",
             "workspace.local_agent.xr_reference_stale",
             "workspace.local_agent.xr_reference_revision",
+            "workspace.local_agent.xr_reference_mounted",
             "workspace.local_agent.xr_reference_empty",
             "workspace.local_agent.xr_reference_ambiguous",
             "workspace.local_agent.xr_reference_available",

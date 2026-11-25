@@ -411,7 +411,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::ReadListeningScope */
     std::optional<OpenXRPlayListeningScope> OpenXRPlayHost::ReadListeningScope(const Input::PlayerId player) const {
         const auto tracking = CurrentInteractionTracking(player);
-        if (tracking.HasError())
+        if (tracking.HasError() || (scene_->geometry && !scene_->geometry->IsMountedSourceCurrent()))
             return std::nullopt;
         const auto &snapshot = *tracking.Value();
         return OpenXRPlayListeningScope{{DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment},

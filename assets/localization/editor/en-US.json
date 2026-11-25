@@ -175,6 +175,7 @@
     "workspace.local_agent.xr_pointing_empty": {"text": "The recorded pointing ray hit no authored meshes."},
     "workspace.local_agent.xr_reference_stale": {"text": "The captured selection or Play scene is no longer current."},
     "workspace.local_agent.xr_reference_revision": {"text": "Reviewed scene revision"},
+    "workspace.local_agent.xr_reference_mounted": {"text": "Read-only mounted cell. Positions use the active World origin."},
     "workspace.local_agent.xr_reference_empty": {"text": "No scene objects were selected during this recording."},
     "workspace.local_agent.xr_reference_ambiguous": {"text": "Multiple references were captured. Clarify which one you mean."},
     "workspace.local_agent.xr_reference_available": {"text": "Available"},
