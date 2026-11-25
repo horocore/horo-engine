@@ -514,6 +514,11 @@ namespace Horo::WorldCook {
         REQUIRE(cellReadiness.HasValue());
         CHECK(cellReadiness.Value().geometryVisible);
         CHECK(cellReadiness.Value().navigation == MountedWorldCellNavigationReadiness::NotDeclared);
+        const auto originalScene = scene.ActiveScene();
+        REQUIRE(originalScene);
+        const auto originalFence = cellReadiness.Value().fence;
+        CHECK(mount->IsLiveRegionPublished(*originalScene, request.occurrence, originalFence));
+        CHECK_FALSE(mount->IsLiveRegionPublished(*originalScene, sibling.occurrence, originalFence));
         const auto originalPolicy = originalSpatial->ReadPolicyAuthorization();
         REQUIRE(originalPolicy->IsCurrent());
         const auto originalLifetime = capability.CaptureAgentLifetime(original.Value());
@@ -562,6 +567,7 @@ namespace Horo::WorldCook {
         CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());
         REQUIRE(scene.ActiveScene());
         CHECK(scene.ActiveScene()->Get(originalOwner.Value()).HasError());
+        CHECK_FALSE(mount->IsLiveRegionPublished(*scene.ActiveScene(), request.occurrence, originalFence));
         frame();
         stage(Stage::Active);
         REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasError());
@@ -580,6 +586,12 @@ namespace Horo::WorldCook {
         });
         stage(Stage::Active);
         REQUIRE(attached());
+        const auto freshRegion = mount->InspectLiveCell(request.occurrence);
+        REQUIRE(freshRegion.HasValue());
+        REQUIRE(scene.ActiveScene());
+        CHECK(mount->IsLiveRegionPublished(*scene.ActiveScene(), request.occurrence, freshRegion.Value().fence));
+        CHECK_FALSE(mount->IsLiveRegionPublished(*scene.ActiveScene(), request.occurrence, originalFence));
+        CHECK_FALSE(mount->IsLiveRegionPublished(*originalScene, request.occurrence, freshRegion.Value().fence));
         const auto replacement = capability.ResolveAgent(authoredAgent);
         REQUIRE(replacement.HasValue());
         CHECK(replacement.Value() != original.Value());

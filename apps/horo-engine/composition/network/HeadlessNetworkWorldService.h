@@ -629,7 +629,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
             if (OwnsCookedDecisionExecution() && input.cookedDecisions->relevance)
-                record_->decisionRelevance.reserve(input.cookedDecisions->execution->scheduler.maximumAgents);
+                record_->decisionRelevance.Reserve(input.cookedDecisions->execution->scheduler.maximumAgents);
             std::optional<AI::AiScenePerceptionActivationInput> activation;
             std::optional<AI::AiScenePerceptionGroupInput> structural;
             if (OwnsPerception()) {
@@ -961,27 +961,68 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return JobCancelled();
             if (!scene->IsCurrent())
                 return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
-            return ApplyDecisionRelevance(observed.Value(), selection.execution->scheduler.maximumAgents);
+            return ApplyDecisionRelevance(*scene, observed.Value(), selection.execution->scheduler.maximumAgents);
         }
 
         /** @brief Resolves and orders the bounded snapshot without mutating the scheduler during staging. */
-        Result<void> ApplyDecisionRelevance(std::span<const HeadlessDecisionRelevance> observed, std::size_t maximumAgents) const {
+        Result<void> ApplyDecisionRelevance(const Runtime::RuntimeSceneView &scene, std::span<const HeadlessDecisionRelevance> observed,
+                                            std::size_t maximumAgents) const {
             if (observed.size() > maximumAgents)
                 return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
-            auto &updates = record_->decisionRelevance;
-            updates.clear();
+            auto &buffer = record_->decisionRelevance;
+            buffer.updates.clear();
+            buffer.staged.clear();
             const auto capability = record_->ai->CapabilityAtSafePoint();
             for (const auto &fact : observed) {
                 const auto handle = capability.ResolveAgent(fact.agent);
                 if (handle.HasError())
                     return Result<void>::Failure(handle.ErrorValue());
-                updates.push_back({handle.Value(), fact.relevance});
+                buffer.updates.push_back({handle.Value(), ProjectDecisionRelevance(scene, fact)});
+                if (fact.streamingRegion)
+                    buffer.staged.push_back({handle.Value(), fact});
             }
-            std::ranges::sort(updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            std::ranges::sort(buffer.updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            if (const auto refreshed = RefreshRetainedRegions(scene, capability, maximumAgents); refreshed.HasError())
+                return refreshed;
             const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
             if (scheduler.HasError())
                 return Result<void>::Failure(scheduler.ErrorValue());
-            return scheduler.Value()->SetRelevanceBatchAtSafePoint(updates);
+            auto applied = scheduler.Value()->SetRelevanceBatchAtSafePoint(buffer.updates);
+            if (applied.HasValue())
+                buffer.retained.swap(buffer.staged);
+            return applied;
+        }
+
+        /** @brief Rechecks omitted observations while preserving only exact live agent generations. */
+        Result<void> RefreshRetainedRegions(const Runtime::RuntimeSceneView &scene, const AI::AiRuntimeCapability &capability,
+                                           const std::size_t maximumAgents) const {
+            auto &buffer = record_->decisionRelevance;
+            if (buffer.retained.empty())
+                return Result<void>::Success();
+            const std::span<const AI::AiDecisionRelevanceUpdate> supplied{buffer.updates};
+            for (const auto &region : buffer.retained) {
+                if (std::ranges::binary_search(supplied, region.agent, {}, &AI::AiDecisionRelevanceUpdate::agent))
+                    continue;
+                const auto live = capability.ResolveAgent(region.fact.agent);
+                if (live.HasError() || live.Value() != region.agent)
+                    continue;
+                if (buffer.updates.size() == maximumAgents)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+                buffer.updates.push_back({region.agent, ProjectDecisionRelevance(scene, region.fact)});
+                buffer.staged.push_back(region);
+            }
+            std::ranges::sort(buffer.updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            return Result<void>::Success();
+        }
+
+        /** @brief Combines observed gameplay relevance with exact committed streaming membership. */
+        AI::AiDecisionRelevance ProjectDecisionRelevance(const Runtime::RuntimeSceneView &scene,
+                                                         const HeadlessDecisionRelevance &fact) const noexcept {
+            auto relevance = fact.relevance;
+            if (const auto &region = fact.streamingRegion; region && record_->mountedWorld &&
+                record_->mountedWorld->IsLiveRegionPublished(scene, region->occurrence, region->fence))
+                relevance.activeSimulationRegion = true;
+            return relevance;
         }
 
         /** @brief Drives the exact Scene and its current origin through all query phases. */

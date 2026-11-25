@@ -295,6 +295,15 @@ namespace Horo::Application::Internal {
         /** @brief Reads Scene visibility and Navigation separately for one live occurrence on the owner lane. */
         [[nodiscard]] Result<MountedWorldCellReadiness> InspectLiveCell(Runtime::SceneInstanceId occurrence) const;
 
+        /** @brief Checks whether an exact live cell occurrence is published in the supplied Scene.
+         * @param parent Current Scene view on the owner lane.
+         * @param occurrence Scene instance selected by the authoritative simulation.
+         * @param fence The observed partition, cell and residency generation.
+         * @return True only while that occurrence and generation are structurally visible.
+         */
+        [[nodiscard]] bool IsLiveRegionPublished(const Runtime::RuntimeSceneView &parent, Runtime::SceneInstanceId occurrence,
+                                                 const WorldStreaming::StreamingFence &fence) const noexcept;
+
         /** @brief Advances at most one bounded unit during an exact, previously unused structural dispatch.
          * @param evidence Live CommitDeferredLifecycleChanges evidence from the bound scheduler.
          * @return Current state or preserved typed error. The caller still owns the ordinary Scene phase cutoff.

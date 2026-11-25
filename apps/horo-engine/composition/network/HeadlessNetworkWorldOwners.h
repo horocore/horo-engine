@@ -55,6 +55,25 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
     };
 
     /** @brief One generation-owned Scene/Physics pair; equal Scene IDs never imply shared storage. */
+    /** @brief The unprojected streaming fact for one exact agent generation. */
+    struct StreamedDecisionRelevance final {
+        AI::AgentHandle agent;
+        HeadlessDecisionRelevance fact;
+    };
+
+    /** @brief Keeps the last accepted streaming facts separate from the next candidate batch. */
+    struct DecisionRelevanceBuffer final {
+        std::vector<AI::AiDecisionRelevanceUpdate> updates;
+        std::vector<StreamedDecisionRelevance> retained;
+        std::vector<StreamedDecisionRelevance> staged;
+
+        void Reserve(const std::size_t maximumAgents) {
+            updates.reserve(maximumAgents);
+            retained.reserve(maximumAgents);
+            staged.reserve(maximumAgents);
+        }
+    };
+
     struct WorldRecord final {
         explicit WorldRecord(const Network::NetworkModeServiceRequest &input) : request(input), native({input.scene, input.scene}) {}
 
@@ -78,7 +97,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<InitialTransformCapture> initialTransformCapture;
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<SceneDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
-        std::vector<AI::AiDecisionRelevanceUpdate> decisionRelevance; /**< Reserved scratch for exact-generation world observations. */
+        DecisionRelevanceBuffer decisionRelevance;
         CookedSceneLocalPolicyCatalog localPolicies;
         std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;

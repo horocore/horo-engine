@@ -4105,6 +4105,13 @@ from the nearest simulation anchor, active gameplay or streaming region membersh
 pins, and committed urgent stimuli. Missing distance evidence preserves full
 cadence. The camera and renderer are outside the input contract.
 
+The headless authority may associate an agent's relevance observation with an
+exact mounted cell occurrence and residency fence. The host checks that the cell
+is structurally published in the current Scene before counting it as an active
+simulation region. It rechecks that evidence even when the source omits the
+agent on subsequent ticks. Detachment removes the region's contribution, and a
+replacement cell or agent generation cannot inherit the old observation.
+
 | Admitted tier | Work and retained state |
 | --- | --- |
 | Full | Runs the registered cadence and accepts owner wakes. Gameplay pins and urgent stimuli select this tier regardless of distance. |

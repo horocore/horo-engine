@@ -4,6 +4,7 @@
  */
 #include "CookedDecisionSceneAdmission.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/WorldStreaming/WorldStreamingIdentity.h"
 
 #include <functional>
 
@@ -15,15 +16,23 @@ namespace Horo::Application::Internal {
     using HeadlessQueryPlanCatalog = CookedSceneQueryPlanCatalog;
     using HeadlessCookedDecisionBinding = CookedDecisionSceneBinding;
 
+    /** @brief Exact streaming observation retained by the authoritative simulation. */
+    struct HeadlessDecisionStreamingRegion final {
+        Runtime::SceneInstanceId occurrence;
+        WorldStreaming::StreamingFence fence;
+    };
+
     /** @brief One authority-owned observation keyed by a persistent Scene agent identity. */
     struct HeadlessDecisionRelevance final {
         AI::AgentId agent;
         AI::AiDecisionRelevance relevance;
+        std::optional<HeadlessDecisionStreamingRegion> streamingRegion; /**< Counts only while the exact cell remains published. */
     };
 
     /** @brief Samples gameplay facts from the committed Scene on the fixed-step owner lane.
      * @details The bounded result is borrowed until the next invocation. Each identity may appear
-     * once. Omitting an agent preserves its last observation. The source must not mutate the Scene.
+     * once. Omitting a live agent preserves its last observation, with streaming residency
+     * checked again against the current Scene. The source must not mutate the Scene.
      */
     using HeadlessDecisionRelevanceSource =
         std::function<Result<std::span<const HeadlessDecisionRelevance>>(const Runtime::RuntimeSceneView &, std::uint64_t)>;

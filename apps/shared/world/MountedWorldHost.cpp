@@ -880,6 +880,14 @@ namespace Horo::Application::Internal {
                 });
             }
 
+            /** @brief Looks up a tracked occurrence, including a candidate awaiting its Scene receipt. */
+            [[nodiscard]] const ActiveCell *FindCell(Runtime::SceneInstanceId occurrence) noexcept {
+                const auto found = FindResident(occurrence);
+                if (found != residents.end())
+                    return &found->cell;
+                return candidate && candidate->address.instance == occurrence ? &*candidate : nullptr;
+            }
+
             /** @brief Returns the in-flight retirement or the next withdrawn live occurrence. */
             [[nodiscard]] std::optional<std::size_t> RetirementCandidate() const noexcept {
                 if (retiring.has_value())
@@ -1797,11 +1805,7 @@ namespace Horo::Application::Internal {
         using Output = Result<MountedWorldCellReadiness>;
         if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-        auto &live = *state_->live;
-        const auto found = live.FindResident(occurrence);
-        const State::ActiveCell *cell = found == live.residents.end() ? nullptr : &found->cell;
-        if (!cell && live.candidate && live.candidate->address.instance == occurrence)
-            cell = &*live.candidate;
+        const auto *cell = state_->live->FindCell(occurrence);
         if (!cell)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         const auto parent = state_->scene.ActiveScene();
@@ -1813,6 +1817,18 @@ namespace Horo::Application::Internal {
         if (state_->NavigationCell(cell->fence.cell))
             readiness = visible && cell->navigationHasCoverage ? Ready : Unavailable;
         return Output::Success({cell->fence, visible, readiness});
+    }
+
+    /** @copydoc MountedWorld::IsLiveRegionPublished */
+    bool MountedWorld::IsLiveRegionPublished(const Runtime::RuntimeSceneView &parent, const Runtime::SceneInstanceId occurrence,
+                                             const WS::StreamingFence &fence) const noexcept {
+        if (!parent.IsCurrent() || std::this_thread::get_id() != state_->ownerThread || !state_->live)
+            return false;
+        const auto *cell = state_->live->FindCell(occurrence);
+        if (!cell || cell->fence != fence)
+            return false;
+        const auto attached = state_->AttachedParent(*cell);
+        return attached && parent.SameIncarnation(*attached);
     }
 
     /** @copydoc MountedWorld::InspectLiveAssetBytes */
