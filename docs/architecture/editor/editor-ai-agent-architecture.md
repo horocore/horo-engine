@@ -198,6 +198,9 @@ Ownership rules:
   host supplies an admitted Audio capture clock. It publishes that interval
   only with the matching committed pose cutoff. Controller action reads occur
   later and require their own time evidence.
+- The macOS listening owner lends that clock only while its exact microphone
+  lease accepts input. A pose batch must match both the measured XR cutoff
+  and the listening generation before the editor retains it.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

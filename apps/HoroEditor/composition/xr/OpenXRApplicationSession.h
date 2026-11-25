@@ -427,6 +427,8 @@ namespace Horo::Application::Internal {
                                                const Input::InputCollectionFrame &frame, OpenXRInputFrameOptions options = {});
         /** @brief Copies the Audio clock interval of the exact current pose cutoff, if measured. */
         [[nodiscard]] std::optional<OpenXRInputCaptureInterval> ReadPoseCaptureTime(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Withdraws the previously published capture interval before the borrowed clock is replaced. */
+        void RevokePoseCaptureTime() noexcept;
         /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
          * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
          * @return Bounded hand gesture candidates with source ownership.

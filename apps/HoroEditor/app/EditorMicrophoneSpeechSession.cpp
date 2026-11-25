@@ -53,10 +53,29 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc EditorMicrophoneSpeechSession::RecordSpatial */
-    ImmersiveSpatialCaptureStatus EditorMicrophoneSpeechSession::RecordSpatial(
-        const ImmersivePlanningContext &context, const std::span<const ImmersiveSpatialObservation> observations) noexcept {
-        return spatial_.Record(context, observations);
+    /** @copydoc EditorMicrophoneSpeechSession::RecordPoseEvidence */
+    ImmersiveSpatialCaptureStatus EditorMicrophoneSpeechSession::RecordPoseEvidence(const ImmersivePlanningContext &context,
+                                                                                    const XR::XRInteractionCandidates &candidates,
+                                                                                    const XR::XRInteractionCutoff &measuredAt,
+                                                                                    const EditorSpeechClockSample earliest,
+                                                                                    const EditorSpeechClockSample latest) noexcept {
+        if (generation_ == 0 || sealed_)
+            return ImmersiveSpatialCaptureStatus::Closed;
+        if (earliest.generation != generation_ || latest.generation != generation_ || candidates.Cutoff() != measuredAt)
+            return ImmersiveSpatialCaptureStatus::StaleContext;
+
+        std::array<ImmersiveSpatialObservation, XR::XRInteractionCandidates::MaximumProbes> observations;
+        const auto geometry = candidates.Candidates();
+        for (std::size_t index = 0; index < geometry.size(); ++index)
+            observations[index] = {measuredAt, geometry[index], earliest.timestamp, latest.timestamp};
+        return spatial_.Record(context, std::span{observations}.first(geometry.size()));
+    }
+
+    /** @copydoc EditorMicrophoneSpeechSession::ReadCaptureClock */
+    std::optional<EditorSpeechClockSample> EditorMicrophoneSpeechSession::ReadCaptureClock() const noexcept {
+        if (const auto timestamp = microphone_.ReadSpeechClock(generation_))
+            return EditorSpeechClockSample{*timestamp, generation_};
+        return std::nullopt;
     }
 
     /** @copydoc EditorMicrophoneSpeechSession::Seal */

@@ -62,7 +62,8 @@ namespace Horo::Tests::OpenXR {
             const ClockScript &xr;
             mutable std::size_t reads{};
             mutable std::array<std::size_t, 2> conversions{};
-            std::array<std::optional<OpenXRInputCaptureStamp>, 2> samples{OpenXRInputCaptureStamp{7, 100}, OpenXRInputCaptureStamp{7, 115}};
+            std::array<std::optional<OpenXRInputCaptureStamp>, 2> samples{OpenXRInputCaptureStamp{7, 100, 1},
+                                                                          OpenXRInputCaptureStamp{7, 115, 1}};
 
             static std::optional<OpenXRInputCaptureStamp> Read(const void *owner) noexcept {
                 const auto &probe = *static_cast<const CaptureClockProbe *>(owner);
@@ -149,6 +150,9 @@ namespace Horo::Tests::OpenXR {
         }
         SECTION("the capture clock changed domains") {
             ++probe.samples.back()->clockDomain;
+        }
+        SECTION("the listening generation changed") {
+            ++probe.samples.back()->captureGeneration;
         }
         SECTION("the capture clock regressed") {
             probe.samples.back()->nanoseconds = 99;

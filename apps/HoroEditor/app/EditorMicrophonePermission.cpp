@@ -6,6 +6,7 @@
 #include "ImmersiveAuthoringContext.h"
 #include "MacOnDeviceSpeechProvider.h"
 
+#include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <limits>
 #include <new>
@@ -441,6 +442,14 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(Audio::AudioErrors::OperationCancelled));
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorMicrophonePermission::ReadSpeechClock */
+    std::optional<Audio::AudioMonotonicTimestamp> EditorMicrophonePermission::ReadSpeechClock(
+        const std::uint64_t generation) const noexcept {
+        if (!check_->OwnsSpeech(generation) || !check_->grant || !check_->SpeechCurrent(CaptureCheck::Clock::now()))
+            return std::nullopt;
+        return Audio::AudioMonotonicTimestamp{CaptureCheck::ClockDomain, SDL_GetTicksNS()};
     }
 
     /** @copydoc EditorMicrophonePermission::CancelSpeechCapture */

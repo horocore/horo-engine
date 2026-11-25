@@ -2744,7 +2744,7 @@ namespace Horo::Tests::OpenXRApplication {
         constexpr Input::PlayerId player = 7;
         fixture.CreatePlay({&capture, [](const void *owner) noexcept -> std::optional<Host::OpenXRInputCaptureStamp> {
             const auto &probe = *static_cast<const CaptureProbe *>(owner);
-            return Host::OpenXRInputCaptureStamp{7, probe.now++};
+            return Host::OpenXRInputCaptureStamp{7, probe.now++, 1};
         }});
         auto scene = ActivatePlay(fixture, player);
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
@@ -2842,10 +2842,12 @@ namespace Horo::Tests::OpenXRApplication {
         }
         CHECK(fixture.play->ReadControllerPointer(sources.Scope(), pointer).HasError());
         CHECK(fixture.script.actions.syncs == syncs);
+        fixture.play->SetCaptureClock({});
         sample();
         CHECK(fixture.play->ReadWorldUiPointer(player));
 
         const auto beforeReassignment = RequireValue(fixture.play->ReadInteractionSources(player));
+        CHECK_FALSE(beforeReassignment.PoseCaptureTime());
         fixture.router.AssignKeyboardMouse(player + 1);
         const auto staleAssignment = fixture.play->ReadInteractionCandidates(beforeReassignment.Scope(), probes);
         REQUIRE(staleAssignment.HasError());

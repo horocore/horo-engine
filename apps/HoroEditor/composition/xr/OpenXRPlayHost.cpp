@@ -80,6 +80,13 @@ namespace Horo::Application::Internal {
         return Result<bool>::Success(true);
     }
 
+    /** @copydoc OpenXRPlayHost::SetCaptureClock */
+    void OpenXRPlayHost::SetCaptureClock(const OpenXRInputCaptureClock captureClock) noexcept {
+        HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_ && !busy_, "XR capture clock binding requires the idle owner lane");
+        composition_.session.RevokePoseCaptureTime();
+        composition_.captureClock = captureClock;
+    }
+
     /** @copydoc OpenXRPlayHost::Lane */
     Result<void> OpenXRPlayHost::Lane() const {
         if (std::this_thread::get_id() != lane_ || busy_)

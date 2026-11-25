@@ -237,6 +237,9 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] static Result<std::unique_ptr<OpenXRPlayHost>> Create(OpenXRPlayHostComposition composition);
         ~OpenXRPlayHost() override;
+
+        /** @brief Replaces the borrowed capture clock on the owner lane between input dispatches. */
+        void SetCaptureClock(OpenXRInputCaptureClock captureClock) noexcept;
         /** @brief Closes producers and makes one finite physical retirement poll in the App's existing recovery owner.
          * @return True only after actual frame/image/GUI/native retirement; false/error retains every parent for retry.
          * @pre Owner lane outside callbacks. No normal-frame wait or guessed completion; explicit App teardown

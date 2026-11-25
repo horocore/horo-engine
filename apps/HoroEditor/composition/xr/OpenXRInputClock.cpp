@@ -47,6 +47,7 @@ namespace Horo::Application::Internal {
         std::optional<OpenXRInputCaptureInterval> CaptureInterval(const std::optional<OpenXRInputCaptureStamp> &earliest,
                                                                   const std::optional<OpenXRInputCaptureStamp> &latest) noexcept {
             if (!earliest || !latest || !earliest->clockDomain || earliest->clockDomain != latest->clockDomain ||
+                !earliest->captureGeneration || earliest->captureGeneration != latest->captureGeneration ||
                 earliest->nanoseconds > latest->nanoseconds)
                 return std::nullopt;
             return OpenXRInputCaptureInterval{*earliest, *latest};

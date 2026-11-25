@@ -271,7 +271,7 @@ namespace Horo::Application::Internal {
         const auto *worldPlacement = options.worldPlacement;
         // Revoke prior evidence before foreign calls; a failed cutoff must not revive it.
         publication.Revoke();
-        input_.poseCaptureTime.reset();
+        RevokePoseCaptureTime();
         input_.stageBoundary.reset();
         input_.gaze.reset();
         input_.gazeRevision = {};
@@ -397,6 +397,12 @@ namespace Horo::Application::Internal {
                                                           const std::optional<OpenXRInputCaptureInterval> &interval) noexcept {
         if (interval)
             input_.poseCaptureTime = PoseCaptureTime{DescribeXRInteractionCutoff(snapshot), *interval};
+    }
+
+    /** @copydoc OpenXRApplicationSession::RevokePoseCaptureTime */
+    void OpenXRApplicationSession::RevokePoseCaptureTime() noexcept {
+        HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR pose time withdrawal requires the owner lane");
+        input_.poseCaptureTime.reset();
     }
 
     /** @copydoc OpenXRApplicationSession::ReadStageBoundary */
@@ -757,7 +763,7 @@ namespace Horo::Application::Internal {
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         input_.stageBoundary.reset();
-        input_.poseCaptureTime.reset();
+        RevokePoseCaptureTime();
         RequestHapticCancellation();
         RevokeEyeGaze();
         RevokePlaneCapture();

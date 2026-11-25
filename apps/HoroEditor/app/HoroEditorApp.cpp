@@ -40,6 +40,9 @@
 #include "EditorAudioPreviewHost.h"
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
 #include "EditorMicrophonePermission.h"
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+#include "EditorMicrophoneSpeechSession.h"
+#endif
 #endif
 #include "EditorFrameAdmission.h"
 #include "EditorGuiLiveReload.h"
@@ -4261,6 +4264,37 @@ namespace Horo::Editor {
             }
         };
 
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        /** @brief Gives XR a read-only clock while the borrowed listening owner is alive. */
+        class XrSpeechClockScope final {
+        public:
+            XrSpeechClockScope(Application::Internal::OpenXRPlayHost *xr, const EditorMicrophoneSpeechSession &speech) noexcept : xr_(xr) {
+                if (xr_)
+                    xr_->SetCaptureClock({&speech, &Read});
+            }
+
+            ~XrSpeechClockScope() {
+                if (xr_)
+                    xr_->SetCaptureClock({});
+            }
+
+            XrSpeechClockScope(const XrSpeechClockScope &) = delete;
+            XrSpeechClockScope &operator=(const XrSpeechClockScope &) = delete;
+
+        private:
+            /** @brief Converts the Audio owner's clock reading to the XR application's borrowed port type. */
+            static std::optional<Application::Internal::OpenXRInputCaptureStamp> Read(const void *owner) noexcept {
+                const auto &speech = *static_cast<const EditorMicrophoneSpeechSession *>(owner);
+                if (const auto sample = speech.ReadCaptureClock())
+                    return Application::Internal::OpenXRInputCaptureStamp{sample->timestamp.clockDomain, sample->timestamp.nanoseconds,
+                                                                          sample->generation};
+                return std::nullopt;
+            }
+
+            Application::Internal::OpenXRPlayHost *xr_;
+        };
+#endif
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             EditorGuiLiveReload liveGui;
@@ -4414,6 +4448,10 @@ namespace Horo::Editor {
             EditorMicrophonePermission microphonePermission{mutationCoordinator, durableFiles, assetRegistry};
             guiContext.microphonePermission = &microphonePermission;
             guiContext.microphoneRecorder = &microphonePermission;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            EditorMicrophoneSpeechSession immersiveSpeech{microphonePermission};
+            const XrSpeechClockScope immersiveSpeechClock{xrComposition.xrPlay.get(), immersiveSpeech};
+#endif
 #endif
             CollisionInventoryEvidence collisionInventory;
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
@@ -4562,6 +4600,10 @@ namespace Horo::Editor {
             }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+            if (xrComposition.xrPlay)
+                screenHost.Services().Register<EditorMicrophoneSpeechSession>(immersiveSpeech);
+#endif
 #endif
             RegisterEditorSimulator(screenHost, p.presentation.composition);
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);

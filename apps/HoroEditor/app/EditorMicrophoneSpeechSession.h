@@ -10,6 +10,12 @@
 namespace Horo::Editor {
     class EditorMicrophonePermission;
 
+    /** @brief One read of the capture clock tied to a specific listening operation. */
+    struct EditorSpeechClockSample final {
+        Audio::AudioMonotonicTimestamp timestamp;
+        std::uint64_t generation{};
+    };
+
     /** @brief Bridges explicit foreground listening and sealing to an on-device worker.
      * @details Audio control owns this object outside XR and Audio callbacks. The borrowed microphone owner
      * outlives the session, including teardown. Cancel after adoption or when focus/consent is withdrawn.
@@ -23,9 +29,20 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus Start(std::size_t input, bool foreground, const ImmersiveAuthoringContext &owner,
                                                       const ImmersivePlanningContext &context, std::string_view locale,
                                                       float minimumConfidence);
-        /** @brief Records one observed batch from the XR owner while the utterance is still accepting input. */
-        [[nodiscard]] ImmersiveSpatialCaptureStatus RecordSpatial(const ImmersivePlanningContext &context,
-                                                                  std::span<const ImmersiveSpatialObservation> observations) noexcept;
+        /** @brief Records one exact XR pose batch measured during the current listening generation.
+         * @param context Owner-issued planning generation.
+         * @param candidates Geometry from the XR owner for the measured cutoff.
+         * @param measuredAt Exact cutoff bound to the supplied clock interval.
+         * @param earliest First capture clock observation. @param latest Second capture clock observation.
+         * @return Recorded, stale, closed or over-capacity without partially retaining the batch.
+         */
+        [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPoseEvidence(const ImmersivePlanningContext &context,
+                                                                       const XR::XRInteractionCandidates &candidates,
+                                                                       const XR::XRInteractionCutoff &measuredAt,
+                                                                       EditorSpeechClockSample earliest,
+                                                                       EditorSpeechClockSample latest) noexcept;
+        /** @brief Returns clock evidence only while the active speech lease is accepting input. */
+        [[nodiscard]] std::optional<EditorSpeechClockSample> ReadCaptureClock() const noexcept;
         /** @brief Detaches the microphone before letting the worker finalize the utterance. */
         [[nodiscard]] SpeechTranscriptionStatus Seal(bool foreground);
         /** @brief Relays a bounded batch of PCM and polls at most one recognition result. */

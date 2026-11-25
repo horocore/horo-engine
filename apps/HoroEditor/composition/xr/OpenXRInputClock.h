@@ -11,6 +11,7 @@ namespace Horo::Application::Internal {
     struct OpenXRInputCaptureStamp final {
         std::uint64_t clockDomain{};
         std::uint64_t nanoseconds{};
+        std::uint64_t captureGeneration{};
     };
 
     /** @brief Optional read-only capture-clock port supplied by the application. */
@@ -86,7 +87,7 @@ namespace Horo::Application::Internal {
          * @param context Actual BuildInputSnapshot dispatch on the owner lane.
          * @param capture Borrowed clock port. Reads must be bounded and non-blocking.
          * @return Native cutoff with a measured interval when both observations belong to the same ordered Audio clock.
-         * @details Missing, switched or regressing Audio clocks leave the interval absent and preserve native XR input.
+         * @details Missing, switched or regressing clocks and replaced capture generations leave the interval absent.
          * The interval applies to poses located at this cutoff. It does not timestamp actions queried later.
          */
         [[nodiscard]] Result<OpenXRInputClockObservation> ReadWithCaptureClock(const Runtime::FrameContext &context,

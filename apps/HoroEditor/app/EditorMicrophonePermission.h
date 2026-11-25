@@ -86,6 +86,11 @@ namespace Horo::Editor {
          * @return Success while the lease is current, or an error that withdraws its evidence.
          */
         [[nodiscard]] Result<void> ReconcileSpeechLease(std::uint64_t generation, bool foreground);
+        /** @brief Reads the live lease's capture clock without querying native permissions or touching PCM.
+         * @param generation Exact active lease generation, on the editor owner lane.
+         * @return Current timestamp in the same SDL clock as microphone PCM, or empty after detachment or expiry.
+         */
+        [[nodiscard]] std::optional<Audio::AudioMonotonicTimestamp> ReadSpeechClock(std::uint64_t generation) const noexcept;
         /** @brief Releases the exact lease and invalidates any pending transcription evidence. */
         void CancelSpeechCapture(std::uint64_t generation) noexcept;
 
