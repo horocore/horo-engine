@@ -201,6 +201,10 @@ namespace Horo::Editor {
         }
         auto update = speech_.Advance(true);
         using enum SpeechTranscriptionStatus;
+        if (update.status == DraftWithdrawn) {
+            partial_.reset();
+            return;
+        }
         if (update.status == Accepted) {
             if (update.evidence && !update.evidence->PreviewText(SpeechHypothesisKind::Partial).empty())
                 partial_ = std::move(update.evidence);

@@ -689,9 +689,9 @@ namespace Horo::Editor {
             SECTION("missing confidence") {
                 transcript.confidence = std::numeric_limits<float>::quiet_NaN();
             }
-            SECTION("low confidence") {
+            SECTION("low confidence partial") {
                 transcript.confidence = 0.2F;
-                expected = Status::LowConfidence;
+                expected = Status::DraftWithdrawn;
             }
             SECTION("revoked while provider was polling") {
                 fixture.provider.stopDuringPoll = &fixture.stop;

@@ -79,7 +79,8 @@ namespace Horo::Editor {
         LimitExceeded,
         ProviderUnavailable,
         InvalidTranscript,
-        LowConfidence
+        LowConfidence,
+        DraftWithdrawn /**< A newer partial fell below threshold. Recognition can continue. */
     };
 
     class ImmersiveSpeechTranscription;

@@ -254,7 +254,7 @@ namespace Horo::Editor {
         if (!ValidHypothesis(hypothesis))
             return {CloseWith(InvalidTranscript), {}};
         if (hypothesis.confidence < minimumConfidence_)
-            return {isFinal ? CloseWith(LowConfidence) : LowConfidence, {}};
+            return {isFinal ? CloseWith(LowConfidence) : DraftWithdrawn, {}};
 
         auto owned = evidence_;
         owned.kind_ = hypothesis.kind;

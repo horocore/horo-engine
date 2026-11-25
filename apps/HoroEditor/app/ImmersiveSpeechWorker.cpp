@@ -57,7 +57,7 @@ namespace Horo::Editor {
         std::atomic<bool> sealed{};
         std::uint64_t liveSequence{};
         std::mutex partialMutex;
-        std::optional<ImmersiveSpeechEvidence> partial;
+        std::optional<SpeechTranscriptionUpdate> partial;
 
         State(Capture::AudioCaptureBuffer queue, const std::stop_token captureRevoked)
             : live(std::move(queue)), revoke(captureRevoked, RevokeWorker{cancel}) {}
@@ -82,10 +82,10 @@ namespace Horo::Editor {
             return stop.stop_requested() ? Cancelled : Accepted;
         }
 
-        /** @brief Keeps only the latest accepted partial. Terminals use the separate one-shot future. */
-        void Publish(ImmersiveSpeechEvidence evidence) {
+        /** @brief Retains the latest draft or its withdrawal. Terminals use the separate one-shot future. */
+        void Publish(SpeechTranscriptionUpdate update) {
             const std::lock_guard lock{partialMutex};
-            partial = std::move(evidence);
+            partial = std::move(update);
         }
 
         /** @brief Retires captured samples after the worker has exited and before completion is delivered. */
@@ -140,8 +140,8 @@ namespace Horo::Editor {
                 auto update = stream.Poll();
                 if (!stream.IsActive())
                     return update;
-                if (update.evidence)
-                    Publish(std::move(*update.evidence));
+                if (update.evidence || update.status == DraftWithdrawn)
+                    Publish(std::move(update));
                 if (fed == Pending)
                     std::this_thread::sleep_for(IdlePollInterval);
             }
@@ -227,9 +227,10 @@ namespace Horo::Editor {
         const std::unique_lock lock{state_->partialMutex, std::try_to_lock};
         if (!lock || !state_->partial)
             return {Pending, {}};
-        auto evidence = std::exchange(state_->partial, std::nullopt);
-        return evidence->IsCurrent() ? SpeechTranscriptionUpdate{Accepted, std::move(evidence)}
-                                     : SpeechTranscriptionUpdate{StaleContext, {}};
+        auto update = std::exchange(state_->partial, std::nullopt);
+        if (update->evidence && !update->evidence->IsCurrent())
+            return {StaleContext, {}};
+        return std::move(*update);
     }
 
     /** @copydoc ImmersiveSpeechWorker::OwnsEvidence */

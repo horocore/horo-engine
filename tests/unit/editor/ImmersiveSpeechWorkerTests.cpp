@@ -11,7 +11,8 @@ namespace Horo::Editor {
         /** @brief Worker-only fixture checks sample provenance and every sequence it receives. */
         class OrderedSpeechStream final : public ISpeechProviderStream {
         public:
-            explicit OrderedSpeechStream(const float confidence) noexcept : confidence_(confidence) {}
+            OrderedSpeechStream(const float confidence, const bool reviseDraft) noexcept
+                : confidence_(confidence), reviseDraft_(reviseDraft) {}
 
             bool Append(const Capture::AudioCapturedBlock &block, const std::span<const Audio::AudioSample> pcm,
                         std::stop_token) noexcept override {
@@ -28,8 +29,14 @@ namespace Horo::Editor {
                 using enum SpeechHypothesisKind;
                 if (finished_)
                     return SpeechHypothesisView{Final, {5, 1'000'000}, {5, 1'040'000}, confidence_, "Both blocks"};
-                if (received_ != 0 && !std::exchange(partial_, true))
+                if (received_ != 0 && drafted_ == 0) {
+                    drafted_ = 1;
                     return SpeechHypothesisView{Partial, {5, 1'000'000}, {5, 1'010'000}, 0.9F, "First block"};
+                }
+                if (reviseDraft_ && received_ == 2 && drafted_ == 1) {
+                    drafted_ = 2;
+                    return SpeechHypothesisView{Partial, {5, 1'000'000}, {5, 1'040'000}, 0.2F, "Unsure"};
+                }
                 return {};
             }
 
@@ -41,17 +48,19 @@ namespace Horo::Editor {
             std::uint64_t received_{};
             float confidence_{};
             bool finished_{};
-            bool partial_{};
+            bool reviseDraft_{};
+            unsigned drafted_{};
         };
 
         class OrderedSpeechProvider final : public ISpeechProvider {
         public:
-            explicit OrderedSpeechProvider(const float confidence) noexcept : confidence_(confidence) {}
+            OrderedSpeechProvider(const float confidence, const bool reviseDraft) noexcept
+                : confidence_(confidence), reviseDraft_(reviseDraft) {}
 
             std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
                                                         std::stop_token) noexcept override {
                 try {
-                    return std::make_unique<OrderedSpeechStream>(confidence_);
+                    return std::make_unique<OrderedSpeechStream>(confidence_, reviseDraft_);
                 } catch (const std::bad_alloc &) {
                     return {};
                 }
@@ -59,6 +68,7 @@ namespace Horo::Editor {
 
         private:
             float confidence_{};
+            bool reviseDraft_{};
         };
 
         struct SpeechWorkerFixture final {
@@ -74,7 +84,7 @@ namespace Horo::Editor {
             std::stop_source capture;
             ImmersiveSpeechWorker worker;
 
-            void Start(const float confidence = 0.9F) {
+            void Start(const float confidence = 0.9F, const bool reviseDraft = false) {
                 const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
                 const ImmersiveContextIdentity identity{1,
                                                         1,
@@ -91,8 +101,8 @@ namespace Horo::Editor {
                                                         true};
                 const auto context = owner.Publish(identity, {});
                 REQUIRE(context);
-                REQUIRE(worker.Start(owner, *context, source, capture.get_token(), std::make_shared<OrderedSpeechProvider>(confidence),
-                                     "en-US", 0.5F) == Accepted);
+                REQUIRE(worker.Start(owner, *context, source, capture.get_token(),
+                                     std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft), "en-US", 0.5F) == Accepted);
             }
         };
 
@@ -168,6 +178,33 @@ namespace Horo::Editor {
             const auto completed = WaitForUpdate(fixture.worker);
             CHECK(completed.status == Cancelled);
             CHECK_FALSE(completed.evidence);
+        }
+
+        TEST_CASE("Speech worker withdraws a superseded draft and can still finish", "[agent][immersive][speech]") {
+            SpeechWorkerFixture fixture;
+            fixture.Start(0.9F, true);
+            const std::array<Audio::AudioSample, 1> firstPcm{0.25F};
+            const Capture::AudioCapturedBlock first{.start = {5, 1'000'000}, .firstFrame = 0, .sequence = 1, .frames = 1};
+            REQUIRE(fixture.worker.Submit(first, firstPcm) == Accepted);
+            const auto draft = WaitForUpdate(fixture.worker);
+            REQUIRE(draft.evidence);
+            CHECK(draft.evidence->PreviewText(SpeechHypothesisKind::Partial) == "First block");
+
+            const std::array<Audio::AudioSample, 1> secondPcm{0.5F};
+            const Capture::AudioCapturedBlock second{.start = {5, 1'020'833}, .firstFrame = 1, .sequence = 2, .frames = 1};
+            REQUIRE(fixture.worker.Submit(second, secondPcm) == Accepted);
+            const auto withdrawn = WaitForUpdate(fixture.worker);
+            CHECK(withdrawn.status == DraftWithdrawn);
+            CHECK_FALSE(withdrawn.evidence);
+            CHECK(fixture.worker.Busy());
+
+            auto emptyTail = Capture::AudioCaptureBuffer::Create(fixture.source);
+            REQUIRE(emptyTail.HasValue());
+            REQUIRE(fixture.worker.Seal(std::move(emptyTail).Value()) == Accepted);
+            const auto final = WaitForUpdate(fixture.worker);
+            REQUIRE(final.status == Finished);
+            REQUIRE(final.evidence);
+            CHECK(final.evidence->PreviewText(SpeechHypothesisKind::Final) == "Both blocks");
         }
     }  // namespace
 }  // namespace Horo::Editor

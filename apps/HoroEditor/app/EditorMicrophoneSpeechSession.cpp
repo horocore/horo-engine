@@ -13,7 +13,7 @@ namespace Horo::Editor {
 
         /** @brief Failures revoke the lease. A finished result retains authority until the caller adopts it. */
         bool IsFailure(const SpeechTranscriptionStatus status) noexcept {
-            return status != Accepted && status != Pending && status != Finished;
+            return status != Accepted && status != Pending && status != DraftWithdrawn && status != Finished;
         }
     }  // namespace
 
