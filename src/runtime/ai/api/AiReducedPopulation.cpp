@@ -127,6 +127,11 @@ namespace Horo::AI {
         return Output::Success(written);
     }
 
+    /** @copydoc AiReducedPopulation::Tracks */
+    bool AiReducedPopulation::Tracks(const AgentId agent) const noexcept {
+        return state_ && state_->owner == std::this_thread::get_id() && state_->Find(agent).has_value();
+    }
+
     /** @copydoc AiReducedPopulation::PrepareTransition */
     Result<AiReducedPopulation::Transition> AiReducedPopulation::PrepareTransition(const std::span<const AgentId> promotions,
                                                                                    const std::span<const AiReducedAgent> demotions) const {

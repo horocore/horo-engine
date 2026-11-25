@@ -1,6 +1,7 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/AiReducedPopulation.h"
 
 #include <algorithm>
 #include <limits>
@@ -37,6 +38,8 @@ namespace Horo::AI::Detail {
             return Result<T>::Failure(MakeError(AIErrors::SceneActivationInvalid, message));
         }
 
+        using ReducedPositionSource = std::function<Result<Math::WorldCoordinate64>(const Runtime::RuntimeSceneView &, Runtime::EntityRef)>;
+
         /** @brief Detached additions and preallocated indexes; existing tasks never move during preparation. */
         class StructuralCandidate final : public Runtime::SceneStructuralCandidate {
         public:
@@ -60,6 +63,7 @@ namespace Horo::AI::Detail {
             std::vector<PerceptionSourceRef> retiredPerceptionSources;
             AiTaskScheduler *scheduler{};
             std::unique_ptr<AiTaskScheduler::PopulationChange> decisions;
+            std::optional<AiReducedPopulation::Transition> reducedTransition;
             bool published{};
 
             ~StructuralCandidate() override {
@@ -85,6 +89,9 @@ namespace Horo::AI::Detail {
                     return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
                 if (auto current = ValidateCurrentCookedDecisions(additions); current.HasError())
                     return current;
+                if (reducedTransition)
+                    if (auto current = reducedTransition->ValidatePublication(); current.HasError())
+                        return current;
                 return decisions ? decisions->ValidatePublication() : Result<void>::Success();
             }
 
@@ -112,6 +119,8 @@ namespace Horo::AI::Detail {
                     state->RetirePerceptionSources(retiredPerceptionSources);
                 if (decisions)
                     decisions->Publish();
+                if (reducedTransition)
+                    HORO_INVARIANT(reducedTransition->Publish().HasValue());
                 state->lastAgentIdentity = lastAgentIdentity;
                 state->nextTaskSlot = nextTaskSlot;
                 ++state->revision;
@@ -130,14 +139,58 @@ namespace Horo::AI::Detail {
                 return Result<void>::Success();
             }
         };
+
+        /** @brief Prepares reduced ownership changes from the same admitted AI additions and exact Scene retirements. */
+        Result<void> PrepareReducedTransfer(StructuralCandidate &candidate, const AiReducedPopulation &population,
+                                            const ReducedPositionSource &positions) {
+            for (const auto &identity : candidate.identities)
+                if (population.Tracks(identity.resolved))
+                    return Failure<void>("A generated prefab AI identity conflicts with the reduced population manifest.");
+            std::vector<AgentId> promotions;
+            for (const auto &addition : candidate.additions) {
+                const auto &record = addition.record;
+                if (!population.Tracks(record.agent.agent))
+                    continue;
+                if (record.state != AiAgentActivationState::Active || !record.controller || !record.hasBlackboard)
+                    return Failure<void>("A reduced agent requires an active canonical controller and Blackboard.");
+                promotions.push_back(record.agent.agent);
+            }
+            std::ranges::sort(promotions);
+            std::vector<AiReducedAgent> demotions;
+            for (const auto index : candidate.removals) {
+                const auto &record = candidate.state->agents[index].record;
+                const auto identity = record.agent.agent;
+                if (!population.Tracks(identity))
+                    continue;
+                const auto replacement = std::ranges::lower_bound(promotions, identity);
+                if (replacement != promotions.end() && *replacement == identity) {
+                    promotions.erase(replacement);
+                    continue;
+                }
+                const auto position = positions(candidate.scene, record.owner);
+                if (position.HasError())
+                    return Result<void>::Failure(position.ErrorValue());
+                demotions.push_back({identity, position.Value().Millimeters()});
+            }
+            if (promotions.empty() && demotions.empty())
+                return Result<void>::Success();
+            std::ranges::sort(demotions, {}, &AiReducedAgent::agent);
+            auto prepared = population.PrepareTransition(promotions, demotions);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            candidate.reducedTransition.emplace(std::move(prepared).Value());
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @brief Explicit runtime borrow resolved at preparation, allowing registration before initial Scene activation. */
     class AiSceneStructuralParticipant final : public Runtime::SceneStructuralParticipant {
     public:
         AiSceneStructuralParticipant(AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors,
-                                     std::optional<AiScenePerceptionGroupInput> perception)
-            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()), perception_(std::move(perception)) {}
+                                     std::optional<AiScenePerceptionGroupInput> perception,
+                                     std::shared_ptr<AiReducedPopulation> reduced = {}, ReducedPositionSource positions = {})
+            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()), perception_(std::move(perception)),
+              reduced_(std::move(reduced)), positions_(std::move(positions)) {}
 
         Runtime::SceneStructuralOwner Owner() const noexcept override {
             return Runtime::SceneStructuralOwner::AI;
@@ -220,6 +273,9 @@ namespace Horo::AI::Detail {
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             candidate->additions = std::move(prepared).Value();
+            if (reduced_)
+                if (auto transfer = PrepareReducedTransfer(*candidate, *reduced_, positions_); transfer.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(transfer.ErrorValue());
             if (auto capacity = ValidatePerceptionCapacity(state.agents, candidate->additions, candidate->removals); capacity.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(capacity.ErrorValue());
             if (perception_) {
@@ -340,6 +396,8 @@ namespace Horo::AI::Detail {
         AiSceneRuntime *runtime_;
         std::vector<AiControllerDescriptor> descriptors_;
         std::optional<AiScenePerceptionGroupInput> perception_;
+        std::shared_ptr<AiReducedPopulation> reduced_;
+        ReducedPositionSource positions_;
     };
 
     /** @copydoc MakeStructuralParticipant */
@@ -349,3 +407,17 @@ namespace Horo::AI::Detail {
         return std::make_unique<AiSceneStructuralParticipant>(runtime, descriptors, std::move(perception));
     }
 }  // namespace Horo::AI::Detail
+
+namespace Horo::AI {
+    /** @copydoc AiSceneRuntime::MakeReducedPopulationStructuralParticipant */
+    Result<std::unique_ptr<Runtime::SceneStructuralParticipant>> AiSceneRuntime::MakeReducedPopulationStructuralParticipant(
+        const std::span<const AiControllerDescriptor> descriptors, std::shared_ptr<AiReducedPopulation> population,
+        std::function<Result<Math::WorldCoordinate64>(const Runtime::RuntimeSceneView &, Runtime::EntityRef)> positions,
+        std::optional<AiScenePerceptionGroupInput> perception) {
+        using Output = Result<std::unique_ptr<Runtime::SceneStructuralParticipant>>;
+        if (!population || !positions)
+            return Output::Failure(MakeError(AIErrors::SceneActivationInvalid, "Reduced transfers require a population and world poses."));
+        return Output::Success(std::make_unique<Detail::AiSceneStructuralParticipant>(
+            *this, descriptors, std::move(perception), std::move(population), std::move(positions)));
+    }
+}  // namespace Horo::AI

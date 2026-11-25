@@ -85,6 +85,11 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::size_t> EvaluatePromotions(const std::array<std::int64_t, 3> &anchor,
                                                              std::span<AiReducedAgent> output) const;
 
+        /** @brief Checks membership in the immutable manifest, regardless of the current representation.
+         * @param agent Persistent identity to look up. @return True for a manifest member on the owner lane.
+         */
+        [[nodiscard]] bool Tracks(AgentId agent) const noexcept;
+
         /** @brief Prepares an all-or-nothing change of representation using the same persistent identities.
          * @param promotions Strictly increasing reduced identities with a separately prepared canonical admission.
          * @param demotions Strictly increasing full identities and their final authoritative Scene positions.

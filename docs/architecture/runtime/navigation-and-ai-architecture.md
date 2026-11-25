@@ -4115,8 +4115,12 @@ positions in signed world millimetres and proposes promotion when a reduced
 agent enters the inclusive axis-aligned radius around the supplied anchor.
 Proposals are produced in stable identity order into caller-owned storage. The
 provider neither constructs canonical agents nor runs their graphs or tasks.
-An integration must validate and publish the prepared transfer and the matching
-canonical Scene change at the same authority cutoff. The reduced population
+Hosts install `MakeReducedPopulationStructuralParticipant` to transfer a
+manifest identity through the existing AI and Scene publication fence. Promoted
+agents require an active canonical controller and Blackboard, and demotion
+captures the last committed world position from the host's pose authority.
+A rejected Scene transaction leaves both representations unchanged, and
+re-promotion creates a fresh canonical runtime generation. The reduced population
 ceiling is 1,048,576 identities and the transfer limit is at most 65,536 per
 batch. Full agents have their own Scene and scheduler budgets.
 

@@ -1,4 +1,6 @@
 #include "Horo/AI/AiReducedPopulation.h"
+#include "Horo/Assets/AssetProvider.h"
+#include "AiSceneTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -70,6 +72,106 @@ namespace Horo::AI {
             CHECK(population.EvaluatePromotions({0, 0, 0}, output).Value() == 1);
             CHECK(output.front().agent == first);
             CHECK(output.front().positionMillimeters == demoted.positionMillimeters);
+        }
+
+        TEST_CASE("Scene structural publication transfers a reduced identity with its canonical AI", "[ai][reduced-population][scene]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            const auto fixture = TestSupport::MakeFixture(10, 20, 30, 0);
+            const auto identity = fixture.agent.agent.agent;
+            const std::array manifest{AiReducedAgent{identity, {1000, 0, 0}}};
+            auto created = AiReducedPopulation::Create({1, 1, 5000}, manifest);
+            REQUIRE(created.HasValue());
+            auto population = std::make_shared<AiReducedPopulation>(std::move(created).Value());
+            bool allowDemotion = false;
+            JobSystem jobs{{1, 4}};
+            Assets::AssetRegistry registry;
+            REQUIRE(registry.Publish(std::vector<Assets::AssetRecord>{}).status == Assets::AssetRegistryBuildStatus::Complete);
+            Assets::MemoryAssetProvider assets;
+            Assets::AssetLoadService loads{jobs, assets};
+            Runtime::RuntimeSceneService scenes{registry, loads, {}, {30}};
+            const std::array descriptors{fixture.descriptor};
+            REQUIRE(scenes.AddActivationParticipant(std::make_unique<AiSceneActivationParticipant>(runtime, descriptors)).HasValue());
+            auto structural = runtime.MakeReducedPopulationStructuralParticipant(
+                descriptors, population, [&](const Runtime::RuntimeSceneView &scene, const Runtime::EntityRef entity) {
+                    using Output = Result<Math::WorldCoordinate64>;
+                    if (!allowDemotion)
+                        return Output::Failure(MakeError(AIErrors::CapabilityUnavailable));
+                    const auto view = scene.Get(entity);
+                    REQUIRE(view.HasValue());
+                    REQUIRE(view.Value().localTransform);
+                    return Output::Success(
+                        Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(view.Value().localTransform->translation.x * 1000),
+                                                                 0, 0));
+                });
+            REQUIRE(structural.HasValue());
+            REQUIRE(scenes.AddStructuralParticipant(std::move(structural).Value()).HasValue());
+            const CancellationToken cancellation;
+            REQUIRE(scenes.Startup(cancellation).HasValue());
+            const auto definition = Runtime::SceneDefinitionBuilder{{30}, {1}}.Build();
+            REQUIRE(definition.HasValue());
+            REQUIRE(scenes.QueuePreparation(definition.Value()).HasValue());
+            std::uint64_t frame{};
+            const auto advance = [&] {
+                REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                       {.frameNumber = ++frame, .cancellation = cancellation}).HasValue());
+            };
+            advance();
+            const auto admission = [&] {
+                const auto view = scenes.ActiveScene();
+                REQUIRE(view);
+                return Runtime::SceneStructuralAdmission{view->RuntimeId(), registry.Snapshot().Revision(), cancellation};
+            };
+            const auto commit = [&](Runtime::SceneCommandBuffer commands) {
+                auto queued = scenes.QueueTrackedStructuralCommands(std::move(commands));
+                REQUIRE(queued.HasValue());
+                advance();
+                REQUIRE(queued.Value()->Complete());
+                return std::move(queued).Value();
+            };
+            const auto promote = [&] {
+                Runtime::SceneCommandBuffer commands;
+                Runtime::RuntimeEntityGroupEntry added{.info = {.authoredObject = Runtime::SceneObjectId{9},
+                                                                .components = {.aiAgent = fixture.agent.agent,
+                                                                               .aiController = fixture.agent.controller}}};
+                added.info.localTransform.translation.x = 2;
+                const auto queued = commands.CreateGroup({std::move(added)}, {}, admission());
+                if (queued.HasError())
+                    UNSCOPED_INFO(queued.ErrorValue().message);
+                REQUIRE(queued.HasValue());
+                return commit(std::move(commands));
+            };
+            std::array<AiReducedAgent, 1> nearby{};
+            CHECK(population->EvaluatePromotions({0, 0, 0}, nearby).Value() == 1);
+            REQUIRE(promote()->ResultValue());
+            CHECK(population->EvaluatePromotions({0, 0, 0}, nearby).Value() == 0);
+            const auto scene = scenes.ActiveScene();
+            REQUIRE(scene);
+            const auto entity = scene->Find({9});
+            REQUIRE(entity);
+            const auto capability = runtime.CapabilityAtSafePoint();
+            const auto canonical = capability.ResolveAgent(identity);
+            REQUIRE(canonical.HasValue());
+            const auto demote = [&] {
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.DestroyGroup({*entity}, admission()).HasValue());
+                return commit(std::move(commands));
+            };
+            REQUIRE(demote()->Failure());
+            CHECK(capability.ResolveAgent(identity).Value() == canonical.Value());
+            CHECK(population->EvaluatePromotions({0, 0, 0}, nearby).Value() == 0);
+            allowDemotion = true;
+            REQUIRE(demote()->ResultValue());
+            CHECK(capability.ResolveAgent(identity).HasError());
+            CHECK(population->EvaluatePromotions({0, 0, 0}, nearby).Value() == 1);
+            CHECK(nearby.front().agent == identity);
+            CHECK(nearby.front().positionMillimeters[0] == 2000);
+
+            REQUIRE(promote()->ResultValue());
+            const auto replacement = capability.ResolveAgent(identity);
+            REQUIRE(replacement.HasValue());
+            CHECK(replacement.Value() != canonical.Value());
+            CHECK(population->EvaluatePromotions({0, 0, 0}, nearby).Value() == 0);
+            scenes.Shutdown();
         }
     }  // namespace
 }  // namespace Horo::AI

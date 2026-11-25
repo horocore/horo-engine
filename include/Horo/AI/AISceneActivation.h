@@ -30,6 +30,7 @@
 #include <vector>
 
 namespace Horo::AI {
+    class AiReducedPopulation;
     class AiSceneRuntime;
     class DecisionQueryTask;
     struct DecisionQueryPublication;
@@ -759,6 +760,20 @@ namespace Horo::AI {
          */
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
             std::span<const AiControllerDescriptor> descriptors, std::optional<AiScenePerceptionGroupInput> perception = std::nullopt);
+
+        /** @brief Creates the AI structural owner with an explicit reduced population.
+         * @param descriptors Immutable controller catalog copied into the adapter.
+         * @param population Owner-lane population whose manifest is disjoint from the initial Scene's canonical agents.
+         * @param positions Read-only authority for current world poses of exact retiring entities.
+         * @param perception Optional atomic endpoint publication.
+         * @return Owned adapter or typed rejection for missing owner or position authority.
+         * @details The runtime outlives the adapter. Tracked agents use the same Scene and AI publication as ordinary
+         * structural changes. A reduced record stores a position only. Re-promotion starts a fresh canonical agent.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralParticipant>> MakeReducedPopulationStructuralParticipant(
+            std::span<const AiControllerDescriptor> descriptors, std::shared_ptr<AiReducedPopulation> population,
+            std::function<Result<Math::WorldCoordinate64>(const Runtime::RuntimeSceneView &, Runtime::EntityRef)> positions,
+            std::optional<AiScenePerceptionGroupInput> perception = std::nullopt);
 
         /** @brief Reports whether the runtime rejects new activation and safe-point operations. */
         [[nodiscard]] constexpr bool IsShutdown() const noexcept {
