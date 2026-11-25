@@ -4608,6 +4608,33 @@
     "workspace.packages.removal_reference_check": {
       "text": "Editör, kaldırmadan önce kayıtlı referansları ve paket sahipliğini denetler."
     },
+    "workspace.packages.previous_references": {
+      "text": "Önceki referanslar"
+    },
+    "workspace.packages.next_references": {
+      "text": "Sonraki referanslar"
+    },
+    "workspace.packages.reference_importer": {
+      "text": "Varlık bu paketin içe aktarıcısını kullanıyor"
+    },
+    "workspace.packages.reference_behavior": {
+      "text": "Kayıtlı davranış (nesne / örnek)"
+    },
+    "workspace.packages.reference_service": {
+      "text": "Gerekli oynanış hizmeti (kullanan paket / kayıt)"
+    },
+    "workspace.packages.reference_decision": {
+      "text": "Kayıtlı karar (düğüm veya eylem)"
+    },
+    "workspace.packages.reference_perception": {
+      "text": "Olası algı bağımlılığı"
+    },
+    "workspace.packages.reference_unreadable": {
+      "text": "Kaynak, algı incelemesi için okunamadı"
+    },
+    "workspace.packages.reference_registration": {
+      "text": "Çalışma zamanı modülünün sahipliği doğrulanmalı"
+    },
     "workspace.packages.removal_save_and_stop": {
       "text": "Paket kaldırmadan önce açık belgeleri kaydedin ve Play oturumunu durdurun."
     },

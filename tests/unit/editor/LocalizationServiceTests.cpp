@@ -399,6 +399,20 @@ namespace {
         RequireCatalogKeys(service, documentKeys);
     }
 
+    /** @brief Verifies the package removal review controls and reference labels in each loaded catalog. */
+    void RequireRemovalReviewKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{"workspace.packages.previous_references",
+                                  "workspace.packages.next_references",
+                                  "workspace.packages.reference_importer",
+                                  "workspace.packages.reference_behavior",
+                                  "workspace.packages.reference_service",
+                                  "workspace.packages.reference_decision",
+                                  "workspace.packages.reference_perception",
+                                  "workspace.packages.reference_unreadable",
+                                  "workspace.packages.reference_registration"};
+        RequireCatalogKeys(service, keys);
+    }
+
     void RequireSettingsCatalogKeys(const Horo::Editor::LocalizationService &service) {
         REQUIRE_FALSE(service.Get("editor", "settings.nav.packages").starts_with("[missing:"));
         REQUIRE_FALSE(service.Get("editor", "settings.nav.updates").starts_with("[missing:"));
@@ -714,6 +728,7 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Missing Gameplay Asset Type"));
         RequireSettingsCatalogKeys(service);
+        RequireRemovalReviewKeys(service);
         for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
                                "workspace.activity.move_earlier", "workspace.activity.move_later"})
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
@@ -734,6 +749,7 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
         RequireSettingsCatalogKeys(service);
+        RequireRemovalReviewKeys(service);
         for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
                                "workspace.activity.move_earlier", "workspace.activity.move_later"})
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);

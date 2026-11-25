@@ -4608,6 +4608,33 @@
     "workspace.packages.removal_reference_check": {
       "text": "The editor checks saved references and package ownership before removal."
     },
+    "workspace.packages.previous_references": {
+      "text": "Previous references"
+    },
+    "workspace.packages.next_references": {
+      "text": "Next references"
+    },
+    "workspace.packages.reference_importer": {
+      "text": "Asset uses this package's importer"
+    },
+    "workspace.packages.reference_behavior": {
+      "text": "Saved behavior (object / attachment)"
+    },
+    "workspace.packages.reference_service": {
+      "text": "Required gameplay service (consumer package / registration)"
+    },
+    "workspace.packages.reference_decision": {
+      "text": "Saved decision (node or action)"
+    },
+    "workspace.packages.reference_perception": {
+      "text": "Possible Perception dependency"
+    },
+    "workspace.packages.reference_unreadable": {
+      "text": "Source could not be read for Perception review"
+    },
+    "workspace.packages.reference_registration": {
+      "text": "Runtime module ownership needs verification"
+    },
     "workspace.packages.removal_save_and_stop": {
       "text": "Save open documents and stop Play before removing packages."
     },

@@ -31,6 +31,8 @@ namespace Horo::Editor {
         void DrawPlan();
         /** @brief Shows direct dependents of the package selected in the active plan. */
         void DrawPackageDependents() const;
+        /** @brief Displays the supplied locked dependents when the graph contains any. */
+        void DrawRequiredBy(std::span<const Packages::LockedPackageReference> dependents) const;
         /** @brief Reads an inert removal preview for the entered package. */
         void PreviewPackageRemoval();
         /** @brief Shows exact graph effects and an explicit confirmation for eligible packages. */
@@ -39,7 +41,14 @@ namespace Horo::Editor {
         void DrawRemovalConfirmation();
         /** @brief Checks whether a live removal must finish before normal modal exit. */
         [[nodiscard]] bool Removing() const;
-        void DrawDiagnostic(const Error &error) const;
+        /** @brief Shows the bounded cause chain and one page of recognized reference details. */
+        void DrawDiagnostic(const Error &error, std::size_t offset = 0) const;
+        /** @brief Draws one diagnostic using a localized reason and the approved identity fields. */
+        void DrawReference(const Diagnostic &diagnostic) const;
+        /** @brief Keeps reference navigation on the exact failed removal operation. */
+        void DrawOperationDiagnostic(const Application::PackageOperationSnapshot &operation);
+        /** @brief Places navigation before the reference rows so it remains near the operation summary. */
+        void DrawReferenceNavigation(std::size_t lastOffset);
         void DrawActions();
         void Activate(bool gameplayModule);
         void Record(const Result<Application::PackageOperationId> &result);
@@ -59,6 +68,8 @@ namespace Horo::Editor {
         std::shared_ptr<const Application::PackagePlanSnapshot> displayedPlan_;
         std::vector<PlanRow> planRows_;
         std::optional<Application::PackageRemovalPreview> removalPreview_;
+        Application::PackageOperationId referenceOperation_;
+        std::size_t referenceOffset_{};
         std::string package_;
         std::string descriptor_;
         std::string module_;

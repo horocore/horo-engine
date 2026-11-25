@@ -6,9 +6,32 @@
 #include "Horo/Packages/PackageLifecycleErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <ranges>
 
 namespace Horo::Editor {
+    namespace {
+        constexpr std::size_t ReferencePageSize = 32;
+
+        /** @brief Selects owned identifiers for display without exposing arbitrary error messages. */
+        struct RemovalReferenceView final {
+            std::string_view code;
+            const char *label;
+            bool showSource;
+            bool showPath;
+        };
+
+        constexpr auto RemovalReferences = std::to_array<RemovalReferenceView>({
+            {"packages.host.importer_in_use", "reference_importer", false, true},
+            {"packages.host.behavior_in_use", "reference_behavior", true, true},
+            {"packages.host.service_in_use", "reference_service", true, true},
+            {"packages.host.decision_node_in_use", "reference_decision", true, true},
+            {"packages.host.perception_reference_review", "reference_perception", true, false},
+            {"packages.host.perception_reference_unreadable", "reference_unreadable", true, false},
+            {"packages.host.runtime_registration_unobserved", "reference_registration", true, true},
+        });
+    }  // namespace
+
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
                                std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
@@ -36,6 +59,8 @@ namespace Horo::Editor {
     /** @brief Retries host preparation without creating policy or cancelling a retained application operation. */
     void PackageModal::Reconnect() {
         removalPreview_.reset();
+        referenceOperation_ = {};
+        referenceOffset_ = 0;
         if (session_) {
             static_cast<void>(session_->Close(generation_));
             session_.reset();
@@ -110,6 +135,10 @@ namespace Horo::Editor {
 
     /** @copydoc PackageModal::DrawPackageDependents */
     void PackageModal::DrawPackageDependents() const {
+        if (removalPreview_) {
+            DrawRequiredBy(removalPreview_->graph.requiredBy);
+            return;
+        }
         const auto plan = session_ ? session_->Plan() : nullptr;
         if (!plan || package_.empty())
             return;
@@ -117,10 +146,16 @@ namespace Horo::Editor {
         const auto selected = std::ranges::find_if(packages, [this](const auto &entry) {
             return entry.locked.package.Value() == package_;
         });
-        if (selected == packages.end() || selected->requiredBy.empty())
+        if (selected != packages.end())
+            DrawRequiredBy(selected->requiredBy);
+    }
+
+    /** @copydoc PackageModal::DrawRequiredBy */
+    void PackageModal::DrawRequiredBy(std::span<const Packages::LockedPackageReference> dependents) const {
+        if (dependents.empty())
             return;
         Ui::FieldLabel(Text("required_by").c_str(), context_.theme.fonts);
-        for (const auto &dependant : selected->requiredBy)
+        for (const auto &dependant : dependents)
             Ui::Hint(dependant.package.Value().c_str(), context_.theme.fonts);
     }
 
@@ -145,7 +180,8 @@ namespace Horo::Editor {
     void PackageModal::DrawRemovalPreview() {
         if (!removalPreview_)
             return;
-        const auto &removed = removalPreview_->graph.removed;
+        const auto &graph = removalPreview_->graph;
+        const auto &removed = graph.removed;
         const auto *label = removed.empty() ? "removal_kept" : "removal_candidates";
         Ui::Hint(Text(label).c_str(), context_.theme.fonts);
         for (const auto &package : removed)
@@ -156,7 +192,7 @@ namespace Horo::Editor {
                 Ui::Hint(package.Value().c_str(), context_.theme.fonts);
             return;
         }
-        if (removed.empty() || !removalPreview_->graph.directRoot || !removalAllowed_ || !removalPreview_->supportsApply)
+        if (removed.empty() || !graph.directRoot || !removalAllowed_ || !removalPreview_->supportsApply)
             return;
         DrawRemovalConfirmation();
     }
@@ -232,9 +268,9 @@ namespace Horo::Editor {
         Ui::FieldLabel(Text("package").c_str(), context_.theme.fonts);
         if (Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts))
             removalPreview_.reset();
-        DrawPackageDependents();
         if (button("preview_removal", session_ && !running && !package_.empty()))
             PreviewPackageRemoval();
+        DrawPackageDependents();
         DrawRemovalPreview();
         Ui::FieldLabel(Text("descriptor").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
@@ -258,13 +294,44 @@ namespace Horo::Editor {
             const bool removed = operation->kind == Application::PackageOperationKind::Remove &&
                                  operation->outcome == Application::PackageOperationOutcome::Succeeded;
             Ui::Hint(Text(removed ? "removal_committed" : running ? "running" : "terminal").c_str(), context_.theme.fonts);
-            if (operation->diagnostic)
-                DrawDiagnostic(*operation->diagnostic);
+            DrawOperationDiagnostic(*operation);
         }
     }
 
-    /** @brief Shows bounded machine-readable causes alongside localized guidance, without private paths or error text. */
-    void PackageModal::DrawDiagnostic(const Error &error) const {
+    /** @copydoc PackageModal::DrawOperationDiagnostic */
+    void PackageModal::DrawOperationDiagnostic(const Application::PackageOperationSnapshot &operation) {
+        if (!operation.diagnostic)
+            return;
+        const auto &error = *operation.diagnostic;
+        if (operation.kind != Application::PackageOperationKind::Remove) {
+            DrawDiagnostic(error);
+            return;
+        }
+        if (referenceOperation_ != operation.id) {
+            referenceOperation_ = operation.id;
+            referenceOffset_ = 0;
+        }
+        const auto count = error.diagnostics.size();
+        const auto lastOffset = count > 0 ? ((count - 1) / ReferencePageSize) * ReferencePageSize : 0;
+        referenceOffset_ = std::min(referenceOffset_, lastOffset);
+        if (lastOffset > 0)
+            DrawReferenceNavigation(lastOffset);
+        DrawDiagnostic(error, referenceOffset_);
+    }
+
+    /** @copydoc PackageModal::DrawReferenceNavigation */
+    void PackageModal::DrawReferenceNavigation(std::size_t lastOffset) {
+        const auto currentOffset = referenceOffset_;
+        if (Ui::Button({.label = Text("previous_references").c_str(), .enabled = currentOffset > 0,
+                        .font = context_.theme.fonts.sans}))
+            referenceOffset_ -= ReferencePageSize;
+        if (Ui::Button({.label = Text("next_references").c_str(), .enabled = currentOffset < lastOffset,
+                        .font = context_.theme.fonts.sans}))
+            referenceOffset_ += ReferencePageSize;
+    }
+
+    /** @copydoc PackageModal::DrawDiagnostic */
+    void PackageModal::DrawDiagnostic(const Error &error, std::size_t offset) const {
         Ui::ErrorText(Text("operation_failed").c_str(), context_.theme.fonts);
         const auto &required = Packages::PackageLifecycleErrors::TrustRequired;
         if (ErrorChainContains(error, required.domain, required.code))
@@ -274,14 +341,23 @@ namespace Horo::Editor {
             if (cause->code.Value().size() <= 256)
                 Ui::Hint(cause->code.Value().c_str(), context_.theme.fonts);
         }
-        for (const auto &diagnostic : error.diagnostics | std::views::take(32)) {
-            if (diagnostic.code.Value() == "packages.host.importer_in_use")
-                Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
-            if (diagnostic.code.Value() == "packages.host.decision_node_in_use" ||
-                diagnostic.code.Value() == "packages.host.perception_reference_review" ||
-                diagnostic.code.Value() == "packages.host.perception_reference_unreadable")
-                Ui::Hint(diagnostic.location.source.c_str(), context_.theme.fonts);
+        for (const auto &diagnostic : error.diagnostics | std::views::drop(offset) | std::views::take(ReferencePageSize))
+            DrawReference(diagnostic);
+    }
+
+    /** @copydoc PackageModal::DrawReference */
+    void PackageModal::DrawReference(const Diagnostic &diagnostic) const {
+        const auto view = std::ranges::find(RemovalReferences, diagnostic.code.Value(), &RemovalReferenceView::code);
+        if (view == RemovalReferences.end()) {
+            if (diagnostic.code.Value().size() <= 256)
+                Ui::Hint(diagnostic.code.Value().c_str(), context_.theme.fonts);
+            return;
         }
+        Ui::FieldLabel(Text(view->label).c_str(), context_.theme.fonts);
+        if (view->showSource)
+            Ui::Hint(diagnostic.location.source.c_str(), context_.theme.fonts);
+        if (view->showPath && !diagnostic.path.empty())
+            Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
     }
 
     ModalFrameResult PackageModal::Draw() {
