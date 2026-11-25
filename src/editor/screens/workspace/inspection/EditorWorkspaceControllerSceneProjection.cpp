@@ -606,6 +606,14 @@ namespace Horo::Editor {
         return captured;
     }
 
+    /** @copydoc EditorWorkspaceController::SelectMountedWorldPlay */
+    void EditorWorkspaceController::SelectMountedWorldPlay(const bool selected) noexcept {
+        if (m_mountedWorldPlaySelected == selected)
+            return;
+        m_mountedWorldPlaySelected = selected;
+        InvalidateAgentSceneSelection();
+    }
+
     /** @copydoc EditorWorkspaceController::ReadAgentReferenceScene */
     std::optional<Runtime::RuntimeSceneView> EditorWorkspaceController::ReadAgentReferenceScene() const {
         const auto play = m_playSession.SceneView();

@@ -928,7 +928,15 @@ namespace {
                                            .structuralRevision = play.StructuralRevision(),
                                            .mounted = true};
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        workspace.SelectMountedWorldPlay(false);
+        CHECK_FALSE(captured->lifetime.IsCancellationRequested());
         workspace.SelectMountedWorldPlay(true);
+        CHECK(captured->lifetime.IsCancellationRequested());
+        const auto mountedCapture = workspace.CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay);
+        REQUIRE(mountedCapture);
+        CHECK_FALSE(mountedCapture->lifetime.IsCancellationRequested());
+        workspace.SelectMountedWorldPlay(true);
+        CHECK_FALSE(mountedCapture->lifetime.IsCancellationRequested());
         const auto mounted = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(mounted);
         CHECK(mounted->mounted);
@@ -943,6 +951,7 @@ namespace {
         ++request.structuralRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(false);
+        CHECK(mountedCapture->lifetime.IsCancellationRequested());
     }
 
     /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */

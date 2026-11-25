@@ -203,12 +203,10 @@ namespace Horo::Editor {
             return m_xrSceneSource.Port();
         }
 
-        /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
-        /** @brief Selects the graph-owned mounted camera policy for the next Play attempt. */
-        void SelectMountedWorldPlay(bool selected) noexcept {
-            m_mountedWorldPlaySelected = selected;
-        }
+        /** @brief Selects the mounted Play source and retires receipts from the previous draw owner. */
+        void SelectMountedWorldPlay(bool selected) noexcept;
 
+        /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
         void SelectXrPlayHost(IEditorPlayXrHost *host) noexcept {
             m_selectedXrPlayHost = host;
             m_viewModel.playViewSource = host ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera;

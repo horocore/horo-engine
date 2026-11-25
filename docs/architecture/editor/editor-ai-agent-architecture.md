@@ -256,7 +256,8 @@ Ownership rules:
   Mounted XR Play resolves hits against the prepared origin-relative cell
   geometry. The review carries the exact Scene structural revision and uses
   runtime membership for read-only cell references. Cell or origin retirement
-  withdraws the captured review.
+  withdraws the captured review. Switching between authored and mounted Play
+  sources revokes the previous capture before the next preview.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial
