@@ -3668,13 +3668,14 @@ namespace Horo::Tests::OpenXRApplication {
             Math::Vec3 target{0.25F, 1.0F, 0.5F};
             unsigned queries{};
             std::optional<Character::CharacterTeleportRequest> queued;
+            bool accepts{true};
         } probe;
 
         const Host::OpenXRPlayTeleportStep teleport{&probe, [](void *context, const Math::Ray &ray) -> Result<std::optional<Math::Vec3>> {
             auto &state = *static_cast<DestinationProbe *>(context);
             CHECK(ray.maximumDistance == 6.0F);
             ++state.queries;
-            return Result<std::optional<Math::Vec3>>::Success(state.target);
+            return Result<std::optional<Math::Vec3>>::Success(state.accepts ? std::optional{state.target} : std::nullopt);
         }, [](void *context, const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime) {
             CHECK_FALSE(lifetime.IsCancellationRequested());
             static_cast<DestinationProbe *>(context)->queued = request;
@@ -3723,6 +3724,25 @@ namespace Horo::Tests::OpenXRApplication {
               (shouldTeleport ? probe.target : before.position));
         sample();
         CHECK(probe.queries == expectedQueries);
+        const auto committed = RequireValue(character.world->ControllerTransform(character.controller));
+
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        RequireValue(fixture.play->PollEvents());
+        sample();  // Commit the loss before accepting the restored session sample.
+        sample();
+        sample();
+        CHECK(probe.queries == expectedQueries);
+        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == committed.position);
+
+        probe.accepts = false;
+        fixture.script.actions.sample.boolean = XR_FALSE;
+        sample();
+        fixture.script.actions.sample.boolean = XR_TRUE;
+        sample();
+        sample();
+        CHECK(probe.queries == 2 * expectedQueries);
+        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == committed.position);
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
