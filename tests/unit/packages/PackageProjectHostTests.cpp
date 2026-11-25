@@ -1070,6 +1070,58 @@ namespace {
                 .descriptorPath = "extensions/native/extension.json"};
     }
 
+    /** @brief Writes one Decision graph and its canonical asset registry identity. */
+    void WriteRemovalDecisionGraph(std::filesystem::path path, std::string_view id, AI::DecisionPlanKind family,
+                                   const AI::DecisionGraphSource &graph) {
+        const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+        REQUIRE(encoded.HasValue());
+        std::ofstream{path, std::ios::binary}.write(reinterpret_cast<const char *>(encoded.Value().data()),
+                                                     static_cast<std::streamsize>(encoded.Value().size()));
+        path += ".horo";
+        std::ofstream{path} << nlohmann::json{{"schemaVersion", 1}, {"assetId", id}, {"assetType", AI::DecisionAssetType(family)}};
+    }
+
+    TEST_CASE("Package removal verifies authored Decision subplan targets", "[packages][application][host][removal]") {
+        using namespace AI::DecisionGraphTestSupport;
+        using enum AI::DecisionPlanKind;
+        HostFixture fixture{true, NativeArchiveContributions::ModuleOnly};
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto &locked = expected.Value().application.lockedPlan->Packages().front();
+        std::array observations{ObserveFixtureRuntime(locked)};
+        observations.front().decisionNodes = {AI::DecisionNodeTypeId::Create(201).Value()};
+        auto sources = fixture.RemovalSources(*assets);
+        sources.requireGameplayOwner = true;
+        sources.registrations = observations;
+        const auto path = policy.projectRoot / "Assets/Caller.horo_bt";
+        constexpr auto CallerId = "174ee050-f0a1-4351-89c4-04a5895bff81";
+        WriteRemovalDecisionGraph(path, CallerId, BehaviorTree, CallTree(1, 2, BehaviorTree));
+        const bool incompatible = GENERATE(false, true);
+        if (incompatible)
+            WriteRemovalDecisionGraph(path.parent_path() / "Target.horo_sm", "174ee050-f0a1-4351-89c4-04a5895bff82",
+                                      StateMachine, TerminalMachine(2));
+        const auto prior = fixture.Read("packages.lock");
+        const auto publish = [&] { return PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources); };
+        const auto blocked = publish();
+        REQUIRE(blocked.HasError());
+        const auto &diagnostics = blocked.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 1);
+        CHECK(diagnostics.front().code.Value() == (incompatible ? "packages.host.decision_subplan_incompatible"
+                                                               : "packages.host.decision_subplan_missing"));
+        CHECK(diagnostics.front().location.source == "Assets/Caller.horo_bt");
+        CHECK(diagnostics.front().path == "2");
+        CHECK(diagnostics.front().message == "2");
+        CHECK(fixture.Read("packages.lock") == prior);
+        if (incompatible)
+            WriteRemovalDecisionGraph(path, CallerId, BehaviorTree, CallTree(1, 2, StateMachine));
+        else
+            WriteRemovalDecisionGraph(path.parent_path() / "Target.horo_bt", "174ee050-f0a1-4351-89c4-04a5895bff82", BehaviorTree, TaskTree(2));
+        REQUIRE(publish().HasValue());
+    }
+
     /** @brief Confirms that the two independent review blockers identify their exact roles. */
     void CheckIncompleteRuntimeCoverage(const Error &error,
                                         const std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> roles) {

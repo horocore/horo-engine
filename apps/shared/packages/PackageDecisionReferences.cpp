@@ -98,11 +98,72 @@ namespace Horo::Application::Internal {
             return CollectSenseReview(owners, path, diagnostics);
         }
 
+        /** @brief Bounded call evidence that can be checked after all registered graph sources have been read. */
+        class DecisionSubplanReview final {
+        public:
+            /** @brief Indexes semantic identities independently of registry sidecar IDs. */
+            void Observe(const AI::DecisionGraphSource &graph) {
+                const auto [entry, inserted] = targets_.try_emplace(graph.asset, GraphTarget{graph.body.index(), graph.schemaVersion});
+                if (!inserted)
+                    entry->second.reset();
+            }
+
+            /** @brief Retains a call site without retaining graph bodies or allocating a copy of the registry path. */
+            Result<void> Add(const AI::DecisionSubplanCall &call, std::string_view path, std::uint64_t node) {
+                if (calls_.size() >= MaximumReferences)
+                    return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_limit", path));
+                calls_.emplace_back(call, path, node);
+                return Result<void>::Success();
+            }
+
+            /** @brief Reports all unresolved calls, preserving the caller, node and semantic target ID. */
+            Result<void> AppendDiagnostics(std::vector<Diagnostic> &diagnostics) const {
+                for (const auto &site : calls_) {
+                    const auto *code = Blocker(site.call);
+                    if (!code)
+                        continue;
+                    if (diagnostics.size() >= MaximumReferences)
+                        return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_limit", site.path));
+                    diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::to_string(site.call.asset.Value()),
+                                             SourceLocation{std::string{site.path}}, std::to_string(site.node));
+                }
+                return Result<void>::Success();
+            }
+
+        private:
+            struct GraphTarget final {
+                std::size_t family;
+                std::uint32_t schema;
+            };
+
+            struct CallSite final {
+                AI::DecisionSubplanCall call;
+                std::string_view path;
+                std::uint64_t node;
+            };
+
+            /** @brief Requires one target whose family and schema satisfy the caller. */
+            const char *Blocker(const AI::DecisionSubplanCall &call) const {
+                const auto target = targets_.find(call.asset);
+                if (target == targets_.end())
+                    return "packages.host.decision_subplan_missing";
+                if (!target->second)
+                    return "packages.host.decision_subplan_ambiguous";
+                if (target->second->family != static_cast<std::size_t>(call.kind) || !call.schema.Contains(target->second->schema))
+                    return "packages.host.decision_subplan_incompatible";
+                return nullptr;
+            }
+
+            std::map<AI::DecisionGraphAssetId, std::optional<GraphTarget>> targets_;
+            std::vector<CallSite> calls_;
+        };
+
         /** @brief Records each authored use, including its exact node or action phase. */
         struct DecisionReferences final {
             const Owners &owners;
             std::string_view assetPath;
             std::vector<Diagnostic> &diagnostics;
+            DecisionSubplanReview &subplans;
 
             Result<void> Collect(const std::uint64_t type, const std::uint64_t node, const std::string_view phase = {}) const {
                 const auto found = owners.find(type);
@@ -120,14 +181,35 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> operator()(const std::shared_ptr<const AI::BehaviorTreeAsset> &tree) const {
-                for (const auto &node : tree->Data().nodes)
+                for (const auto &node : tree->Data().nodes) {
                     if (auto collected = Collect(node.type.Value(), node.id.Value()); collected.HasError())
                         return collected;
+                    if (auto linked = CollectTreeCall(node); linked.HasError())
+                        return linked;
+                }
                 return Result<void>::Success();
+            }
+
+            /** @brief Projects typed and legacy subtree calls into the same reference table. */
+            Result<void> CollectTreeCall(const AI::BehaviorTreeNode &node) const {
+                if (node.call)
+                    return subplans.Add(*node.call, assetPath, node.id.Value());
+                if (!node.nestedSubtree)
+                    return Result<void>::Success();
+                const auto &legacy = *node.nestedSubtree;
+                const auto target = AI::DecisionGraphAssetId::Create(legacy.graph.Value());
+                if (target.HasError() || legacy.requiredSchemaVersion.minor != 0)
+                    return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_incompatible", assetPath));
+                const auto version = legacy.requiredSchemaVersion.major;
+                return subplans.Add({target.Value(), AI::DecisionPlanKind::BehaviorTree, {version, version}}, assetPath, node.id.Value());
             }
 
             Result<void> operator()(const AI::StateMachineAssetDescriptor &machine) const {
                 for (const auto &state : machine.states) {
+                    if (state.call) {
+                        if (auto linked = subplans.Add(*state.call, assetPath, state.id.Value()); linked.HasError())
+                            return linked;
+                    }
                     const std::array phases{std::pair{&state.entryProvider, "/entry"}, std::pair{&state.updateProvider, "/update"},
                                             std::pair{&state.exitProvider, "/exit"}};
                     for (const auto &[action, phase] : phases) {
@@ -166,19 +248,21 @@ namespace Horo::Application::Internal {
             if (graphs.size() != 1 || graphs.front().asset != root || DecisionTypes[graphs.front().body.index()] != record.type.Value())
                 return failures.Record(references.assetPath,
                                        ReferenceError("packages.host.decision_reference_identity_mismatch", references.assetPath));
+            references.subplans.Observe(graphs.front());
             return std::visit(references, graphs.front().body);
         }
 
         /** @brief Reviews the provider surfaces relevant to this one registered asset. */
         Result<void> InspectProviderSource(const PackageRemovalSources &sources, const ProviderOwners &owners,
                                            const Assets::AssetRecord &record, const AI::QuerySchemaRegistry *pointSchema,
-                                           std::vector<Diagnostic> &diagnostics, PackageSourceReviewFailures &failures) {
+                                           std::vector<Diagnostic> &diagnostics, PackageSourceReviewFailures &failures,
+                                           DecisionSubplanReview &subplans) {
             const bool decision = std::ranges::find(DecisionTypes, record.type.Value()) != DecisionTypes.end();
             if (auto reviewed = ReviewSenseUse(sources, owners, record, pointSchema, decision, diagnostics); reviewed.HasError())
                 return reviewed;
             if (!decision || owners.decisions.empty())
                 return Result<void>::Success();
-            return InspectGraph(sources, record, {owners.decisions, record.sourcePath.String(), diagnostics}, failures);
+            return InspectGraph(sources, record, {owners.decisions, record.sourcePath.String(), diagnostics, subplans}, failures);
         }
 
         /** @brief Uses one immutable schema for the scan and keeps the original command authority for all reads. */
@@ -194,14 +278,17 @@ namespace Horo::Application::Internal {
             const auto *schema = pointSchema ? &*pointSchema : nullptr;
             std::vector<Diagnostic> diagnostics;
             PackageSourceReviewFailures failures;
+            DecisionSubplanReview subplans;
             for (const auto &record : records) {
                 if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                     return ReferenceScan::Failure(admitted.ErrorValue());
-                if (auto inspected = InspectProviderSource(sources, owners, record, schema, diagnostics, failures); inspected.HasError())
+                if (auto inspected = InspectProviderSource(sources, owners, record, schema, diagnostics, failures, subplans); inspected.HasError())
                     return ReferenceScan::Failure(inspected.ErrorValue());
             }
             if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                 return ReferenceScan::Failure(admitted.ErrorValue());
+            if (auto linked = subplans.AppendDiagnostics(diagnostics); linked.HasError())
+                return ReferenceScan::Failure(linked.ErrorValue());
             return std::move(failures).Finish(std::move(diagnostics));
         }
     }  // namespace

@@ -536,8 +536,11 @@ and reference checks pass.
 Removal checks also use Decision node IDs observed from the exact native
 gameplay registry. Saved Behavior Tree, State Machine, and Utility sources
 are decoded with the bounded Decision codec. References report the source
-asset and node or action phase. An unreadable registered graph blocks removal
-when a departing package owns Decision nodes.
+asset and node or action phase. When a departing package owns Decision nodes,
+an unreadable graph blocks removal. Authored subplan calls also require an
+unambiguous semantic graph identity with a compatible family and schema version
+from the same scan. The caller path, authored node and target ID identify each
+call that requires review.
 
 ## Rollback Contract
 
