@@ -60,6 +60,12 @@ namespace Horo::Packages {
      */
     [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectPackageRuntimeRoles(const VerifiedPackageInstallRecord &install,
                                                                                                 const HoroPackageId &package);
+    /** @brief Proves that all executable contributions of an exact verified archive belong to the gameplay role owner.
+     * @param package Verified installed archive and its locked metadata.
+     * @return All declared gameplay roles or a typed error for another owner or incomplete evidence.
+     * @details Recognizes only native runtime modules and their owned resources. It never loads an artifact.
+     */
+    [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package);
 
     /** @brief Explicit portable enablement selection; it carries no execution trust or host path. */
     struct EnabledPackageExtension final {

@@ -773,6 +773,14 @@ namespace {
         REQUIRE(unobserved.ErrorValue().diagnostics.size() == 1);
         CHECK(unobserved.ErrorValue().diagnostics.front().path == "com.horo.application-fixture.native");
         sources.registrations = owners;
+        const Error observationError{ErrorCode{"fixture.registry.capture_failed"}, ErrorDomainId{"fixture.registry"}};
+        sources.registrationFailure = &observationError;
+        const auto incomplete = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(incomplete.HasError());
+        CHECK(incomplete.ErrorValue().code.Value() == "packages.host.runtime_registration_unavailable");
+        REQUIRE(incomplete.ErrorValue().cause.Get());
+        CHECK(incomplete.ErrorValue().cause.Get()->code.Value() == observationError.code.Value());
+        sources.registrationFailure = nullptr;
 
         const auto writeAsset = [&](const char *filename, const Assets::AssetId &asset, const char *kind, std::string_view bytes,
                                     std::string_view importer = {}) {

@@ -1,6 +1,8 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 
 #include "Horo/Gameplay/BehaviorRegistry.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
+#include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "Horo/Packages/PackageLifecycle.h"
@@ -332,6 +334,21 @@ namespace Horo::Packages {
         }
     }
 
+    namespace {
+        /** @brief Detects registration classes not yet covered by the saved-reference checks. */
+        Result<bool> HasAdditionalReferenceClasses(const Gameplay::LoadedGameModule &module) {
+            if (!module.Components().Descriptors().empty() || !module.AssetTypes().Registrations().empty())
+                return Result<bool>::Success(true);
+            const auto queries = module.AcquireGameplayQueryTests();
+            if (queries.HasError())
+                return Result<bool>::Failure(queries.ErrorValue());
+            const auto persistence = module.PersistenceDeclarations();
+            if (persistence.HasError())
+                return Result<bool>::Failure(persistence.ErrorValue());
+            return Result<bool>::Success(bool{queries.Value().schema} || !persistence.Value().empty());
+        }
+    }  // namespace
+
     /** @copydoc GameplayPackageModuleHost::CaptureActiveRegistrations */
     Result<std::vector<GameplayPackageModuleHost::RegistrationInventory>> GameplayPackageModuleHost::CaptureActiveRegistrations(
         const PackageLifecycleService &lifecycle) const {
@@ -365,6 +382,14 @@ namespace Horo::Packages {
                     return Inventory::Failure(decisionNodes.ErrorValue());
                 for (const auto &node : decisionNodes.Value()->Contracts())
                     inventory.decisionNodes.push_back(node.descriptor.type);
+                const auto senses = loaded.AcquirePerceptionSenses();
+                if (senses.HasError())
+                    return Inventory::Failure(senses.ErrorValue());
+                inventory.hasCustomSenses = !senses.Value()->Contracts().empty();
+                const auto additional = HasAdditionalReferenceClasses(loaded);
+                if (additional.HasError())
+                    return Inventory::Failure(additional.ErrorValue());
+                inventory.hasAdditionalReferenceClasses = additional.Value();
             }
             return Inventory::Success(std::move(registrations));
         } catch (const std::bad_alloc &) {

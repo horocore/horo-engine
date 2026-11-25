@@ -26,7 +26,8 @@ namespace Horo::Application::Internal {
         std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
         std::shared_ptr<const Packages::PackageRemovalLease> live; /**< Owner-issued native reservation and sealed archive evidence. */
         const Packages::StagedPackageRestoreRecord *offline{}; /**< Read-only staging evidence for an asset-only withdrawal. */
-        bool requireAssetOnly{}; /**< This host may withdraw only verified data-only packages. */
+        bool requireGameplayOwner{}; /**< Executable departures must be fully owned by the gameplay lifecycle. */
+        const Error *registrationFailure{}; /**< A failed capture invalidates live role evidence. */
     };
 
     /** @brief Reports when a locked contribution requires a live owner for removal.
@@ -52,7 +53,7 @@ namespace Horo::Application::Internal {
                                                                                   const Packages::ValidatedPackageLockfileV1 &lock,
                                                                                   const Packages::PackageRemovalGraphPreview &removal);
 
-    /** @brief Finds authored Decision nodes belonging to departing packages.
+    /** @brief Finds authored Decision nodes and saved sources requiring custom sense review.
      * @param sources Owned registration observations and root-bound saved source.
      * @param lock Exact current lock used to attribute registrations.
      * @param removal Validated withdrawal plan.

@@ -462,14 +462,18 @@ publishes metadata. Dropping an uncommitted reservation reopens admission.
 Once the lock commits, admission on the old session remains revoked until
 the host composes from the new lock.
 
-The desktop editor can apply a reviewed removal for verified asset-only
-packages. The workspace requires saved documents and stopped Play before
+The desktop editor can apply a reviewed removal for verified asset packages
+and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before
 confirmation. The operation binds to the displayed package plan, inspects
 saved references on its I/O job, and reopens the package session from freshly
 prepared metadata after success. The executable supplies explicit root-bound
 read and asset registry factories. Hosts without those factories expose the
-preview alone. Archives with executable contributions require a host that can
-check their runtime references and ownership.
+preview alone. The editor verifies the complete executable manifest, requires
+exact observations of every departing runtime role after retirement, and
+checks saved behavior, Decision and service references. Mixed roles, unknown
+archive paths and unreviewed component, asset, query or persistence
+contributions block removal. Custom senses block removal when saved authoring
+sources still require a binding review.
 
 `horo-engine package preview-remove --project /path/to/project --package-id
 com.vendor.pack` checks saved asset importer references and reports any locked

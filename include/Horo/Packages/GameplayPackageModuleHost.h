@@ -99,6 +99,8 @@ namespace Horo::Packages {
             std::string descriptorPath; /**< Canonical path of the declaring descriptor inside the verified archive. */
             std::vector<Gameplay::GameplaySystemDescriptor> systems; /**< Inert schedule metadata, including required service IDs. */
             std::vector<AI::DecisionNodeTypeId> decisionNodes; /**< Inert IDs from the exact native decision registry. */
+            bool hasCustomSenses{}; /**< The role has a native Perception surface requiring saved-source review. */
+            bool hasAdditionalReferenceClasses{}; /**< The role contributes assets, components, native queries, or persistent adapters. */
         };
 
         /** @brief Copies behavior and decision IDs and service and system descriptors from exact published runtime roles.

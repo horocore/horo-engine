@@ -432,7 +432,7 @@ namespace {
                                          "workspace.packages.removal_kept",
                                          "workspace.packages.removal_candidates",
                                          "workspace.packages.removal_native_in_use",
-                                         "workspace.packages.removal_assets_only",
+                                         "workspace.packages.removal_reference_check",
                                          "workspace.packages.removal_save_and_stop",
                                          "workspace.packages.confirm_removal",
                                          "workspace.packages.removal_committed",

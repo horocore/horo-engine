@@ -1,6 +1,7 @@
 #include "PackageBehaviorReferences.h"
 
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetRegistry.h"
 
 #include <algorithm>
@@ -16,26 +17,48 @@ namespace Horo::Application::Internal {
                                           AI::DecisionAssetType(AI::DecisionPlanKind::StateMachine),
                                           AI::DecisionAssetType(AI::DecisionPlanKind::Utility)};
 
+        struct ProviderOwners final {
+            Owners decisions;
+            std::set<Packages::HoroPackageId> customSenses;
+        };
+
         /** @brief Preserves the failing saved path or locked package identity. */
         Error ReferenceError(const char *code, std::string_view identity = {}) {
             return {ErrorCode{code}, ErrorDomainId{"packages.host"}, ErrorSeverity::Error, std::string{identity}};
         }
 
         /** @brief Indexes only departing providers with evidence from the exact locked artifact. */
-        Result<Owners> IndexDecisionOwners(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
-                                           const Packages::PackageRemovalGraphPreview &removal) {
-            Owners owners;
+        Result<ProviderOwners> IndexProviderOwners(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                                   const Packages::PackageRemovalGraphPreview &removal) {
+            ProviderOwners owners;
             for (const auto &role : sources.registrations) {
-                if (role.decisionNodes.empty() ||
+                if ((role.decisionNodes.empty() && !role.hasCustomSenses) ||
                     std::ranges::find(removal.removed, role.package, &Packages::LockedPackageReference::package) == removal.removed.end())
                     continue;
                 const auto entry = std::ranges::find(lock.Packages(), role.package, &Packages::LockedPackage::package);
                 if (entry == lock.Packages().end() || entry->version != role.version || entry->artifactDigest != role.artifact)
-                    return Result<Owners>::Failure(ReferenceError("packages.host.decision_ownership_stale", role.package.Value()));
+                    return Result<ProviderOwners>::Failure(ReferenceError("packages.host.decision_ownership_stale", role.package.Value()));
                 for (const auto type : role.decisionNodes)
-                    owners[type.Value()].insert(role.package);
+                    owners.decisions[type.Value()].insert(role.package);
+                if (role.hasCustomSenses)
+                    owners.customSenses.insert(role.package);
             }
-            return Result<Owners>::Success(std::move(owners));
+            return Result<ProviderOwners>::Success(std::move(owners));
+        }
+
+        /** @brief Fails closed for saved authoring surfaces whose custom sense bindings are not yet decoded by removal. */
+        Result<void> CollectSenseReview(const ProviderOwners &owners, const Assets::AssetRecord &record,
+                                         const bool decision, std::vector<Diagnostic> &diagnostics) {
+            const auto type = record.type.Value();
+            if (!decision && type != "core.scene" && type != "core.prefab" && type != AI::EnvironmentQuerySourceAssetType)
+                return Result<void>::Success();
+            const auto path = record.sourcePath.String();
+            if (owners.customSenses.size() > MaximumReferences - diagnostics.size())
+                return Result<void>::Failure(ReferenceError("packages.host.perception_reference_limit", path));
+            for (const auto &package : owners.customSenses)
+                diagnostics.emplace_back(DiagnosticCode{"packages.host.perception_reference_review"}, DiagnosticSeverity::Error,
+                                         package.Value(), SourceLocation{std::string{path}}, "");
+            return Result<void>::Success();
         }
 
         /** @brief Records each authored use, including its exact node or action phase. */
@@ -107,6 +130,17 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(ReferenceError("packages.host.decision_reference_identity_mismatch", references.assetPath));
             return std::visit(references, graphs.front().body);
         }
+
+        /** @brief Reviews the provider surfaces relevant to this one registered asset. */
+        Result<void> InspectProviderSource(const PackageRemovalSources &sources, const ProviderOwners &owners,
+                                           const Assets::AssetRecord &record, std::vector<Diagnostic> &diagnostics) {
+            const bool decision = std::ranges::find(DecisionTypes, record.type.Value()) != DecisionTypes.end();
+            if (auto reviewed = CollectSenseReview(owners, record, decision, diagnostics); reviewed.HasError())
+                return reviewed;
+            if (!decision || owners.decisions.empty())
+                return Result<void>::Success();
+            return InspectGraph(sources, record, {owners.decisions, record.sourcePath.String(), diagnostics});
+        }
     }  // namespace
 
     /** @copydoc InspectPackageDecisionReferences */
@@ -114,10 +148,10 @@ namespace Horo::Application::Internal {
                                                                    const Packages::ValidatedPackageLockfileV1 &lock,
                                                                    const Packages::PackageRemovalGraphPreview &removal) {
         using Output = Result<std::vector<Diagnostic>>;
-        const auto owners = IndexDecisionOwners(sources, lock, removal);
+        const auto owners = IndexProviderOwners(sources, lock, removal);
         if (owners.HasError())
             return Output::Failure(owners.ErrorValue());
-        if (owners.Value().empty())
+        if (owners.Value().decisions.empty() && owners.Value().customSenses.empty())
             return Output::Success({});
         const auto candidate = Assets::PrepareAssetRegistryCandidate(sources.assets);
         if (candidate.HasError())
@@ -126,9 +160,7 @@ namespace Horo::Application::Internal {
             return Output::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
         std::vector<Diagnostic> diagnostics;
         for (const auto &record : candidate.Value().records) {
-            if (std::ranges::find(DecisionTypes, record.type.Value()) == DecisionTypes.end())
-                continue;
-            if (auto inspected = InspectGraph(sources, record, {owners.Value(), record.sourcePath.String(), diagnostics}); inspected.HasError())
+            if (auto inspected = InspectProviderSource(sources, owners.Value(), record, diagnostics); inspected.HasError())
                 return Output::Failure(inspected.ErrorValue());
         }
         if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())

@@ -4605,8 +4605,8 @@
     "workspace.packages.removal_native_in_use": {
       "text": "Bu paketlerin modülleri hâlâ etkin veya kapanıyor. Modülleri devre dışı bırakıp kapanmaları tamamlandığında tekrar önizleyin."
     },
-    "workspace.packages.removal_assets_only": {
-      "text": "Editör, kayıtlı referansları denetledikten sonra yalnızca doğrulanmış varlık paketlerini kaldırabilir."
+    "workspace.packages.removal_reference_check": {
+      "text": "Editör, kaldırmadan önce kayıtlı referansları ve paket sahipliğini denetler."
     },
     "workspace.packages.removal_save_and_stop": {
       "text": "Paket kaldırmadan önce açık belgeleri kaydedin ve Play oturumunu durdurun."

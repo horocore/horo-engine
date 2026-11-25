@@ -3,6 +3,7 @@
 #include "PackageActivationComposition.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <map>
 #include <set>
@@ -230,6 +231,70 @@ namespace Horo::Packages::Detail {
 }  // namespace Horo::Packages::Detail
 
 namespace Horo::Packages {
+    namespace {
+        constexpr std::string_view GameplayRoot = "extensions/native";
+        constexpr std::string_view GameplayDescriptor = "extensions/native/extension.json";
+
+        /** @brief Identifies resources controlled by the exact native gameplay declaration. */
+        bool IsGameplayRemovalFile(const PackageFileEntry &file, const std::set<std::string, std::less<>> &artifacts) {
+            const auto &path = file.id.path.Value();
+            if (path == "horo-package.toml" || path.starts_with("assets/"))
+                return !file.executable;
+            if (!file.contributionRoot || file.contributionRoot->Value() != GameplayRoot)
+                return false;
+            if (artifacts.contains(path))
+                return true;
+            if (file.executable)
+                return false;
+            constexpr std::string_view SignatureSuffix = ".signature.json";
+            const std::string_view name{path};
+            if (name.ends_with(SignatureSuffix))
+                return artifacts.contains(name.substr(0, name.size() - SignatureSuffix.size()));
+            return name == GameplayDescriptor || name.ends_with(".horo_script");
+        }
+
+        /** @brief Collects only runtime roles and the package paths selected by their native variants. */
+        bool CollectGameplayArtifacts(const Extensions::ExtensionManifest &manifest, std::set<std::string, std::less<>> &artifacts) {
+            if (manifest.modules.empty() || !manifest.contributions.empty())
+                return false;
+            for (const auto &module : manifest.modules) {
+                if (module.kind != "native" || !module.imports.empty() || !module.exports.empty() ||
+                    !std::ranges::equal(module.roles, std::array{Extensions::ExtensionModuleRole::RuntimeParticipant}))
+                    return false;
+                if (!module.entry.empty())
+                    artifacts.emplace(std::string{GameplayRoot} + '/' + Detail::SelectedPackageNativeEntry(module.entry));
+                for (const auto &variant : module.entries)
+                    artifacts.emplace(std::string{GameplayRoot} + '/' + variant.entry);
+            }
+            return !artifacts.empty();
+        }
+    }  // namespace
+
+    /** @copydoc InspectGameplayRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
+        using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
+        const auto outsideOwner = [] { return Roles::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate)); };
+        if (!package.archive || !std::ranges::all_of(package.lock.contributions, [](const auto &type) {
+                return type == "native" || type == "assets";
+            }))
+            return outsideOwner();
+        const auto descriptor = PackagePath::Parse(GameplayDescriptor).Value();
+        auto declared = Detail::ReadDeclaredPackageDescriptor(package, descriptor);
+        if (declared.HasError())
+            return Roles::Failure(declared.ErrorValue());
+        std::set<std::string, std::less<>> artifacts;
+        const auto &manifest = declared.Value().manifest;
+        if (!CollectGameplayArtifacts(manifest, artifacts) ||
+            !std::ranges::all_of(package.archive->Manifest().Entries(), [&](const auto &file) {
+                return IsGameplayRemovalFile(file, artifacts);
+            }))
+            return outsideOwner();
+        std::vector<PackageRuntimeRoleDeclaration> roles;
+        for (const auto &module : manifest.modules)
+            roles.emplace_back(descriptor, module.id);
+        return Roles::Success(std::move(roles));
+    }
+
     /** @copydoc InspectPackageRuntimeRoles */
     Result<std::vector<PackageRuntimeRoleDeclaration>> InspectPackageRuntimeRoles(const VerifiedPackageInstallRecord &install,
                                                                                   const HoroPackageId &package) {

@@ -165,7 +165,7 @@ namespace Horo::Editor {
     void PackageModal::DrawRemovalConfirmation() {
         const bool running = session_->Operation() && session_->Operation()->outcome == Application::PackageOperationOutcome::Running;
         const bool ready = !running && removalAllowed_();
-        Ui::Hint(Text(ready ? "removal_assets_only" : "removal_save_and_stop").c_str(), context_.theme.fonts);
+        Ui::Hint(Text(ready ? "removal_reference_check" : "removal_save_and_stop").c_str(), context_.theme.fonts);
         if (Ui::Button({.label = Text("confirm_removal").c_str(), .enabled = ready,
                         .font = context_.theme.fonts.sans, .style = {.width = Ui::StyleWidth::FillAvailable}})) {
             const auto selected = Packages::HoroPackageId::Parse(package_);
@@ -277,7 +277,8 @@ namespace Horo::Editor {
         for (const auto &diagnostic : error.diagnostics | std::views::take(32)) {
             if (diagnostic.code.Value() == "packages.host.importer_in_use")
                 Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
-            if (diagnostic.code.Value() == "packages.host.decision_node_in_use")
+            if (diagnostic.code.Value() == "packages.host.decision_node_in_use" ||
+                diagnostic.code.Value() == "packages.host.perception_reference_review")
                 Ui::Hint(diagnostic.location.source.c_str(), context_.theme.fonts);
         }
     }

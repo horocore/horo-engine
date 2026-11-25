@@ -195,35 +195,58 @@ namespace Horo::Application::Internal {
             return actual != graph.packages.end() && actual->archive && actual->lock == locked ? &*actual : nullptr;
         }
 
-        /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
-        Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
-                                            const Packages::VerifiedPackageInstallRecord &install, const Packages::LockedPackage &locked,
-                                            std::vector<Diagnostic> &missing) {
-            if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
-                return authority;
-            if (!FindExactArchive(graph, locked))
-                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
-            const auto declared = Packages::InspectPackageRuntimeRoles(install, locked.package);
-            if (declared.HasError())
-                return Result<void>::Failure(declared.ErrorValue());
-            for (const auto &role : declared.Value()) {
-                const auto observed = std::ranges::any_of(sources.registrations, [&](const auto &entry) {
-                    return MatchesLockedArtifact(entry, locked) && entry.moduleId == role.moduleId &&
-                           entry.descriptorPath == role.descriptor.Value();
-                });
-                if (!observed)
-                    missing.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"}, DiagnosticSeverity::Error,
-                                         locked.package.Value(), SourceLocation{role.descriptor.Value()}, role.moduleId);
-            }
-            return Result<void>::Success();
-        }
-
         /** @brief Allows only data files in the asset namespace along with the package manifest. */
         bool IsOfflineAssetArchive(const Packages::PackageRestorePackage &package) {
             return std::ranges::all_of(package.archive->Manifest().Entries(), [](const auto &file) {
                 const auto &path = file.id.path.Value();
                 return !file.executable && (path == "horo-package.toml" || path.starts_with("assets/"));
             });
+        }
+
+        /** @brief Separates data archives from executable ones and verifies the editor's supported executable owner. */
+        Result<std::vector<Packages::PackageRuntimeRoleDeclaration>> DeclaredRemovalRoles(const Packages::VerifiedPackageInstallRecord &install,
+                                                                                       const Packages::PackageRestorePackage &package,
+                                                                                       const bool requireGameplayOwner) {
+            using Roles = Result<std::vector<Packages::PackageRuntimeRoleDeclaration>>;
+            if (!requireGameplayOwner)
+                return Packages::InspectPackageRuntimeRoles(install, package.lock.package);
+            if (!OfflineRemovalContributionBlocker(package.lock) && IsOfflineAssetArchive(package))
+                return Roles::Success({});
+            auto roles = Packages::InspectGameplayRemovalRoles(package);
+            if (roles.HasError())
+                return Roles::Failure(WithCause(ReferenceError("packages.host.removal_requires_lifecycle_owner", package.lock.package.Value()),
+                                                roles.ErrorValue()));
+            return roles;
+        }
+
+        /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
+        Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
+                                            const Packages::VerifiedPackageInstallRecord &install, const Packages::LockedPackage &locked,
+                                            const bool requireGameplayOwner, std::vector<Diagnostic> &missing) {
+            if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
+                return authority;
+            const auto *package = FindExactArchive(graph, locked);
+            if (!package)
+                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
+            const auto declared = DeclaredRemovalRoles(install, *package, requireGameplayOwner);
+            if (declared.HasError())
+                return Result<void>::Failure(declared.ErrorValue());
+            if (!declared.Value().empty() && sources.registrationFailure)
+                return Result<void>::Failure(WithCause(
+                    ReferenceError("packages.host.runtime_registration_unavailable", locked.package.Value()), *sources.registrationFailure));
+            for (const auto &role : declared.Value()) {
+                const auto observed = std::ranges::find_if(sources.registrations, [&](const auto &entry) {
+                    return MatchesLockedArtifact(entry, locked) && entry.moduleId == role.moduleId &&
+                           entry.descriptorPath == role.descriptor.Value();
+                });
+                if (observed == sources.registrations.end())
+                    missing.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unobserved"}, DiagnosticSeverity::Error,
+                                         locked.package.Value(), SourceLocation{role.descriptor.Value()}, role.moduleId);
+                else if (requireGameplayOwner && observed->hasAdditionalReferenceClasses)
+                    return Result<void>::Failure(
+                        ReferenceError("packages.host.removal_reference_coverage_unavailable", locked.package.Value()));
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Accepts only exact staged archives that contain no executable or extension contribution. */
@@ -252,16 +275,16 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             const auto install = sources.live->InstalledRecord();
             const auto graph = install->Graph();
-            if (sources.requireAssetOnly)
-                return CheckAssetOnlyRemovalCoverage(graph, lock, removal);
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
             const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
             for (const auto &entry : lock.Packages()) {
-                if (!inspectRetained && !IsDeparting(removal, entry.package))
+                const bool departing = IsDeparting(removal, entry.package);
+                if (!inspectRetained && !departing)
                     continue;
-                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, missing.diagnostics); checked.HasError())
+                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, sources.requireGameplayOwner, missing.diagnostics);
+                    checked.HasError())
                     return checked;
             }
             if (!missing.diagnostics.empty())

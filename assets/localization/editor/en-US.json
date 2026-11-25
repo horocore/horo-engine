@@ -4605,8 +4605,8 @@
     "workspace.packages.removal_native_in_use": {
       "text": "These packages still own active or closing modules. Disable the modules, let them finish closing, and preview again."
     },
-    "workspace.packages.removal_assets_only": {
-      "text": "The editor can remove verified asset-only packages after checking saved references."
+    "workspace.packages.removal_reference_check": {
+      "text": "The editor checks saved references and package ownership before removal."
     },
     "workspace.packages.removal_save_and_stop": {
       "text": "Save open documents and stop Play before removing packages."

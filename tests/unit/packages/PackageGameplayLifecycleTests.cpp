@@ -3,13 +3,16 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/PerceptionSenseScene.h"
+#include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/PackageModalSession.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "Horo/Packages/PackageCache.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
 #include "HostSignatureDocument.h"
 #include "OpenXRProductSigningTestSupport.h"
 #include "PackageApplicationServiceTestSupport.h"
@@ -243,6 +246,8 @@ TEST_CASE("Actual gameplay generations drain before repeated update and uninstal
 }
 
 TEST_CASE("Optional SDK failure preserves an actual native backend in the same verified archive", "[packages][gameplay][hybrid]") {
+    CHECK(InspectGameplayRemovalRoles(GameplayGraph(false)->packages.front()).HasValue());
+    CHECK(InspectGameplayRemovalRoles(GameplayGraph(true)->packages.front()).HasError());
     GameplayFixture fixture(true, false, true, true);
     fixture.enabled.requirement = PackageModuleRequirement::Optional;
     REQUIRE(fixture.Activate().HasValue());
@@ -419,7 +424,9 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     REQUIRE(prepared.HasValue());
     auto configuration = std::move(prepared).Value();
     auto created =
-        PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, *configuration.execution}, std::move(configuration.policy),
+        PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, *configuration.execution,
+                                    {Platform::CreateNativeProjectReadFiles, Horo::Application::CreateProjectAssetRegistrySource}},
+                                   std::move(configuration.policy),
                                    Duration::FromMilliseconds(60'000), nullptr, configuration.publishers.get());
     REQUIRE(created.HasValue());
     const auto host = std::move(created).Value();
@@ -474,6 +481,11 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     REQUIRE(publication.activeGeneration);
     CHECK(stamp->activation == *publication.activeGeneration);
     CHECK_FALSE(host->DecisionCatalog(content));
+    const auto removalPlan = application->Plan();
+    REQUIRE(removalPlan.HasValue());
+    const auto activeRemoval = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(activeRemoval.HasError());
+    CHECK(activeRemoval.ErrorValue().code.Value() == "packages.activation.package_in_use");
     CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
     {
         const auto leaves = host->AcquireDecisionNodes(root, *stamp);
@@ -498,7 +510,39 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     CHECK(registration.behaviors.front().Value() == "game.tests.package_behavior");
     REQUIRE(registration.decisionNodes.size() == 1);
     CHECK(registration.decisionNodes.front().Value() == 201);
+    CHECK(registration.hasCustomSenses);
     CHECK(host->RemovalRegistrations(root, stamp->project + 1).HasError());
+
+    REQUIRE(std::filesystem::create_directory(root / "Assets"));
+    const auto graph = AI::DecisionGraphTestSupport::TaskTree(1, registration.decisionNodes.front().Value());
+    const auto saved = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(saved.HasValue());
+    const auto graphPath = root / "Assets/Agent.horo_bt";
+    const auto graphSidecar = root / "Assets/Agent.horo_bt.horo";
+    write(graphPath, {reinterpret_cast<const char *>(saved.Value().data()), saved.Value().size()});
+    write(graphSidecar,
+          R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff81","assetType":"core.behavior_tree"})");
+    const auto blocked = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(blocked.HasValue());
+    const auto references = pump(blocked.Value());
+    REQUIRE(references.outcome == Horo::Application::PackageOperationOutcome::Failed);
+    REQUIRE(references.diagnostic);
+    for (const auto code : {"packages.host.decision_node_in_use", "packages.host.perception_reference_review"})
+        CHECK(std::ranges::any_of(references.diagnostic->diagnostics, [code](const auto &item) {
+            return item.code.Value() == code && item.location.source == "Assets/Agent.horo_bt";
+        }));
+    REQUIRE(std::filesystem::remove(graphSidecar));
+    REQUIRE(std::filesystem::remove(graphPath));
+    const auto removed = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(removed.HasValue());
+    REQUIRE(pump(removed.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    const auto refreshed = PreparePackageProject(base, fixture.base.files, {});
+    REQUIRE(refreshed.HasValue());
+    CHECK(refreshed.Value().application.lockedPlan->Packages().empty());
+    const auto rollback = ReadPackageProjectRollback(base, fixture.base.files, {});
+    REQUIRE(rollback.HasValue());
+    CHECK(rollback.Value().request == intent);
+    CHECK(rollback.Value().lock == lock.Value().SerializeCanonical());
     REQUIRE(modal.Close(generation.Value()).HasValue());
     REQUIRE(host->Close().HasValue());
 }
