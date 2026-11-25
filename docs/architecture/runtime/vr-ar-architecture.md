@@ -1176,8 +1176,9 @@ The native event owner withdraws light and spatial anchor observations alongside
 focus, origin, Play admission, or the session is lost. A later focus event
 cannot restore the withdrawn grant. Native calls already in progress may
 finish, but their results cannot become visible. The same boundary closes
-admission to the anchor store. Native handle destruction remains on the owner
-lane after any in-flight borrow completes.
+admission to the anchor store and invalidates the consent generation used by
+plane capture. Native handle destruction remains on the owner lane after any
+in-flight borrow completes.
 
 The FB reconstruction passthrough route requires an explicitly enabled
 version-3-or-newer extension, a separate operator grant, two admitted layer

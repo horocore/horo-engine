@@ -73,6 +73,7 @@ namespace Horo::XR::OpenXRInternal {
         if (!now.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const ScopedOperation guard{busy_};
+        observationRevision_ = owner_.observationRevision_;
         const auto owner = owner_.Borrow(scope.session);
         if (owner.HasError())
             return Result<void>::Failure(owner.ErrorValue());
@@ -97,6 +98,10 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (const auto activated = publication_.Activate(scope, limits); activated.HasError())
             return activated;
+        if (!ConsentCurrent()) {
+            publication_.Revoke();
+            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        }
 
         dispatch_ = functions;
         scope_ = scope;
@@ -107,6 +112,8 @@ namespace Horo::XR::OpenXRInternal {
         incarnation_ = owner.Value().incarnation;
         lastCutoff_ = now;
         auto started = BeginContext(current.Value(), now);
+        if (started.HasValue() && !ConsentCurrent())
+            started = Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         if (started.HasError()) {
             publication_.Revoke();
             if (future_ == XR_NULL_FUTURE_EXT)
@@ -153,12 +160,20 @@ namespace Horo::XR::OpenXRInternal {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         }
+        if (!ConsentCurrent()) {
+            publication_.Revoke();
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        }
         const auto active = publication_.IsDue(scope, now);
         if (active.HasError())
             return Outcome::Failure(active.ErrorValue());
         lastCutoff_ = now;
         if (const auto released = ReleaseSnapshot(); released.HasError())
             return Outcome::Failure(released.ErrorValue());
+        if (!ConsentCurrent()) {
+            publication_.Revoke();
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        }
         if (future_ != XR_NULL_FUTURE_EXT)
             return Poll(native.Value(), now);
         if (!context_ || !active.Value())
@@ -182,6 +197,10 @@ namespace Horo::XR::OpenXRInternal {
         if (result != XR_SUCCESS) {
             publication_.Revoke();
             return Outcome::Failure(CaptureError("xrPollFutureEXT", result));
+        }
+        if (!ConsentCurrent()) {
+            publication_.Revoke();
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         }
         if (response.state == XR_FUTURE_STATE_PENDING_EXT)
             return Outcome::Success(false);
@@ -249,12 +268,16 @@ namespace Horo::XR::OpenXRInternal {
         }
         const NativePlaneReadAuthorization authorization{this, [](const void *context) {
             const auto &capture = *static_cast<const OpenXRPlaneCapture *>(context);
-            return capture.publication_.IsDue(capture.scope_, capture.lastCutoff_).HasValue();
+            return capture.ConsentCurrent() && capture.publication_.IsDue(capture.scope_, capture.lastCutoff_).HasValue();
         }};
         const auto batch = ReadNativeSpatialPlanes(snapshot_, dispatch_.query, census_, limits_.maximumPlanes, authorization);
         const auto destroyed = ReleaseSnapshot();
         if (destroyed.HasError())
             return Outcome::Failure(destroyed.ErrorValue());
+        if (!ConsentCurrent()) {
+            publication_.Revoke();
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        }
         if (batch.HasError()) {
             const auto &failure = batch.ErrorValue();
             if (failure.code.Value() == XRErrors::PermissionDenied.code.Value() ||
@@ -311,7 +334,14 @@ namespace Horo::XR::OpenXRInternal {
         const auto native = owner_.Borrow(scope.session);
         if (native.HasError() || native.Value().incarnation != incarnation_)
             return Result<XRPlaneSnapshot>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!ConsentCurrent())
+            return Result<XRPlaneSnapshot>::Failure(MakeError(XRErrors::PermissionDenied));
         return publication_.Read(scope, now);
+    }
+
+    /** @copydoc OpenXRPlaneCapture::ConsentCurrent */
+    bool OpenXRPlaneCapture::ConsentCurrent() const noexcept {
+        return observationRevision_ == owner_.observationRevision_ && observationRevision_ != std::numeric_limits<std::uint64_t>::max();
     }
 
     /** @brief Keeps unfinished snapshot destruction retryable without returning unretired geometry. */

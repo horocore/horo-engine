@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -315,6 +316,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::RevokeCompositionObservations */
     void OpenXRNativeSession::RevokeCompositionObservations() {
+        if (observationRevision_ != std::numeric_limits<std::uint64_t>::max())
+            ++observationRevision_;
         RevokeLightEstimation();
         anchorStore_.admitted = false;
         anchors_.Withdraw(XRAnchorWithdrawal::AccessRevoked);

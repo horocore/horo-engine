@@ -70,6 +70,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> Publish(const NativeSpatialPlaneBatch &batch, XRRuntimeTime now);
         [[nodiscard]] Result<void> ReleaseSnapshot();
         [[nodiscard]] Result<void> Retire();
+        /** @brief Checks whether the session has withdrawn the capture's owner-lane consent. */
+        [[nodiscard]] bool ConsentCurrent() const noexcept;
 
         OpenXRNativeSession &owner_;
         const std::thread::id lane_{std::this_thread::get_id()};
@@ -81,6 +83,7 @@ namespace Horo::XR::OpenXRInternal {
         XrInstance instance_{XR_NULL_HANDLE};
         XrSpace world_{XR_NULL_HANDLE}; /**< Borrowed for the exact grant until native retirement. */
         std::uint64_t incarnation_{};
+        std::uint64_t observationRevision_{};
         XrFutureEXT future_{XR_NULL_FUTURE_EXT};
         XrSpatialContextEXT context_{XR_NULL_HANDLE};
         XrSpatialSnapshotEXT snapshot_{XR_NULL_HANDLE};

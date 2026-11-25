@@ -80,7 +80,7 @@ namespace Horo::Tests::OpenXR {
         };
 
         /** @brief Provides event admission for a native session already created by the light fixture. */
-        struct LightEventResources final : IXRSessionResources {
+        struct ObservationEventResources final : IXRSessionResources {
             Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
                 return Result<void>::Success();
             }
@@ -91,7 +91,7 @@ namespace Horo::Tests::OpenXR {
         };
 
         struct LightEvents final {
-            LightEventResources resources;
+            ObservationEventResources resources;
             XRSessionLifecycle sessions{resources};
             XRFrameLifecycle frames{sessions};
             EventScript script;
@@ -608,7 +608,11 @@ namespace Horo::Tests::OpenXR {
         fixture.census.extraProc = &SpatialCaptureScript::GetProc;
         const auto capabilities = Capabilities();
         const auto plan = Plan(capabilities);
-        const XRSessionId session{capabilities.System(), {1, 1}};
+        ObservationEventResources resources;
+        XRSessionLifecycle sessions{resources};
+        const auto active = sessions.Activate(capabilities, capabilities.System(), capabilities.Revision(), plan);
+        REQUIRE(active.HasValue());
+        const auto session = active.Value();
         const auto attempt = fixture.preflight.Attempt();
         NativeSessionRequest request{.candidate = session,
                                      .preflight = fixture.preflight,
@@ -664,6 +668,34 @@ namespace Horo::Tests::OpenXR {
             CHECK_FALSE(script.hasSnapshot);
             noPublication(121);
 
+            SECTION("focus recovery cannot authorize geometry returned by an interrupted native query") {
+                for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+                    REQUIRE(sessions.ApplyEvent(session, event).HasValue());
+                XRFrameLifecycle frames{sessions};
+                OpenXRSessionEvents events{fixture.owner, sessions, frames};
+                REQUIRE(events.Bind({&EventScript::GetProc}, {}).HasValue());
+                EventScript eventScript;
+                eventScript.session = fixture.native.lastSession;
+                eventScript.Push(XR_SESSION_STATE_VISIBLE);
+                eventScript.Push(XR_SESSION_STATE_FOCUSED);
+                geometry.onQuery = [&events, &eventScript] {
+                    EventScript::active = &eventScript;
+                    const auto observed = events.Poll(true);
+                    EventScript::active = nullptr;
+                    REQUIRE(observed.HasValue());
+                    CHECK(observed.Value().actionsInterrupted);
+                };
+                const auto labels = geometry.labelCalls;
+                const auto interrupted = advance(122);
+                geometry.onQuery = {};
+                RequireFailureIdentity(interrupted, XRErrors::PermissionDenied);
+                CHECK(sessions.Snapshot().admitsActions);
+                CHECK(geometry.labelCalls == labels);
+                CHECK_FALSE(script.hasSnapshot);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::PermissionDenied);
+                REQUIRE(capture.Close().HasValue());
+                RequireFailureIdentity(capture.Start(attempt, scope, world, limits, time(123)), XRErrors::IdentityStale);
+            }
             SECTION("paused world observations expire and recovered entities use new portable generations") {
                 geometry.noTracking = true;
                 CHECK(publish(122).Planes().empty());

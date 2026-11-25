@@ -479,6 +479,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> DiscardSpatialAnchorWrite(const XRAnchorScope &scope, std::uint64_t generation, std::string_view name);
         friend class OpenXRFrameCompositor;
         friend class OpenXRSessionEvents;
+        friend class OpenXRPlaneCapture;
         friend class OpenXRHandTracking;
         friend class OpenXRPlaneCapture;
 
@@ -740,5 +741,6 @@ namespace Horo::XR::OpenXRInternal {
         bool passthroughCall_{};
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */
+        std::uint64_t observationRevision_{1}; /**< Owner-lane revocation fence for separately owned observation providers. */
     };
 }  // namespace Horo::XR::OpenXRInternal
