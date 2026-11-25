@@ -94,6 +94,47 @@ batch preparation is allocation-free. Regression coverage checks consumption
 on successful, invalid, stale and reentrant exits, authorization release on
 rejection, and unchanged values, revisions and observer notifications.
 
+## Offline evaluation manifests
+
+Use `qualify_ai_evaluation.py` to export metadata from an existing headless
+`evidence.json` produced by an explicit `--ai-replay-output` invocation. The
+exporter reads files locally, starts no capture and makes no network requests.
+Use only authorized evidence. A reviewed local approval must bind the SHA-256
+of the exact replay bytes to the intended qualification tuple. The approval is
+an operator assertion and belongs in the same access-controlled workflow as
+the source evidence.
+
+```json
+{
+  "schemaVersion": 1,
+  "purpose": "offline-evaluation",
+  "replaySha256": "<SHA-256 of evidence.json>",
+  "expiresOnUtc": "<YYYY-MM-DD>",
+  "qualification": {
+    "provider": {"version": "1.0.0", "sha256": "<provider artifact SHA-256>"},
+    "model": null,
+    "platform": {"os": "windows", "architecture": "x64", "version": "10.0.26100"},
+    "workload": {"version": "1", "sha256": "<scenario artifact SHA-256>"}
+  }
+}
+```
+
+Set `model` to the same version/hash shape as `provider` when evaluating a
+learned model. The date is exclusive at midnight UTC and is copied to the
+export. Keep the source and export in storage whose owner expires both by that
+date. The exporter rejects expired approvals and has no authority over files
+already retained elsewhere.
+
+```bash
+python scripts/qualify_ai_evaluation.py evidence.json --approval approval.json > evaluation-manifest.json
+```
+
+This emits schema 1 with decision outcome counts and exact source, scene,
+canonical AI and plan digests. It omits IDs, paths, observation records and
+Blackboard values. The versioned provider, model, platform and workload tuple
+is marked operator-declared. Use separate reproducible qualification runs to
+establish support for failure, bias, replay and offline behavior.
+
 ## Validation
 
 Build `HoroAIFoundationQualificationTests`, then run its discovered CTests:
