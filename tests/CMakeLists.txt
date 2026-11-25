@@ -346,13 +346,15 @@ add_executable(HoroEditorAgentTurnTests
     unit/editor/EditorLocalAgentContextTests.cpp
     unit/editor/ImmersiveAuthoringContextTests.cpp
     unit/editor/ImmersiveSpeechTranscriptionTests.cpp
+    unit/editor/ImmersiveSpeechWorkerTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveAuthoringContext.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveSpeechTranscription.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveSpeechWorker.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")
 target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")
 target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController
     HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal HoroEngine::PlatformProjectReadFiles
-    HoroEngine::XRApi HoroEngine::SceneSourceModel HoroAudioCaptureBuffer)
+    HoroEngine::XRApi HoroEngine::SceneSourceModel HoroAudioCaptureBuffer HoroEngine::Security)
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(_HORO_TEST_MAC_SPEECH_SOURCE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/MacOnDeviceSpeechProvider.mm")
     set_source_files_properties("${_HORO_TEST_MAC_SPEECH_SOURCE}" PROPERTIES

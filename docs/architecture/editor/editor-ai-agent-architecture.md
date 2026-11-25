@@ -179,6 +179,11 @@ Ownership rules:
   interruption instead of delivering queued PCM after a drop. Explicit sealing
   detaches the device before handing the last PCM blocks to the worker. Project
   replacement and cancellation revoke the lease even after detachment.
+- The speech worker receives live PCM through a bounded single-producer queue.
+  After sealing, it consumes the detached tail after the live blocks and then
+  finalizes provider input. The editor polls one latest partial or the terminal
+  result without waiting. The capture lease revokes both and queued PCM is
+  cleared at worker retirement.
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.

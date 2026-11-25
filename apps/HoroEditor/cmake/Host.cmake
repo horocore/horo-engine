@@ -18,6 +18,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorLocalAgentContext.cpp
         HoroEditor/app/ImmersiveAuthoringContext.cpp
         HoroEditor/app/ImmersiveSpeechTranscription.cpp
+        HoroEditor/app/ImmersiveSpeechWorker.cpp
         HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -215,7 +216,8 @@ if(HORO_BUILD_EDITOR_GUI)
             nlohmann_json::nlohmann_json
     )
 
-    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull HoroAudioCaptureBuffer)
+    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull
+        HoroAudioCaptureBuffer HoroEngine::Security)
     if(HORO_BUILD_XR_OPENXR)
         set(HORO_EDITOR_XR_BOOTSTRAP_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_bootstrap_headers")
         file(MAKE_DIRECTORY "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
@@ -245,6 +247,7 @@ if(HORO_BUILD_EDITOR_GUI)
                 LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
             target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophoneAuthorization.cpp
                 HoroEditor/app/EditorMicrophonePermission.cpp HoroEditor/app/EditorMicrophoneRecording.cpp
+                HoroEditor/app/EditorMicrophoneSpeechSession.cpp
                 ${_HORO_EDITOR_MAC_SPEECH_SOURCE})
             target_link_libraries(HoroEditor PRIVATE HoroApplicationAudioExport "-framework Speech" "-framework AVFoundation")
             target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_MAC_MICROPHONE_PERMISSION=1)

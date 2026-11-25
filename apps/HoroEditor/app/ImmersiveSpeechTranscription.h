@@ -182,6 +182,12 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus FinishInput();
         /** @brief Takes one provider update and rejects malformed, stale, or low-confidence evidence explicitly. */
         [[nodiscard]] SpeechTranscriptionUpdate Poll();
+
+        /** @brief Reports whether polling may still produce another update on this worker lane. */
+        [[nodiscard]] bool IsActive() const noexcept {
+            return status_ == SpeechTranscriptionStatus::Accepted;
+        }
+
         /** @brief Stops the stream and revokes evidence already issued by it. Safe to repeat on the worker lane. */
         void Cancel() noexcept;
 
