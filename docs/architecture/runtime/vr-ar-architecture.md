@@ -1047,6 +1047,9 @@ The native light estimator rechecks the exact platform grant at its creation
 and sample boundaries. If the runtime returns after the grant is withdrawn,
 the owner discards the candidate and withdraws cached observations before
 returning control to the renderer.
+When physical retirement fails, Editor Play keeps the exact withdrawn grant
+and retries outside an admitted frame. Neither the retained handle nor a
+permission restoration republishes old lighting.
 
 Baseline passthrough is a runtime compositor-layer intent and exposes no raw camera
 frames. `XRSpatialAnchors` owns live anchor identity on the canonical XR session control

@@ -222,6 +222,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
         }
         ProgressPassthrough();
+        ProgressNativeLighting();
         if (auto tail = ProgressTail(); tail.HasError()) {
             RevokeEventAdmission();
             return tail;

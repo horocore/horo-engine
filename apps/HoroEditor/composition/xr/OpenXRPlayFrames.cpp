@@ -846,8 +846,11 @@ namespace Horo::Application::Internal {
             light.active = false;
             return std::nullopt;
         }
+        const auto mayPublish = [&] {
+            return light.active && !native_.NeedsLightRetirement(light.scope) && LightingCutoff(light.scope).has_value() && light.active;
+        };
         const auto advanced = native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff, LightAuthorization());
-        if (!light.active || !LightingCutoff(light.scope)) {
+        if (!mayPublish()) {
             light.active = false;
             return std::nullopt;
         }
@@ -855,7 +858,7 @@ namespace Horo::Application::Internal {
         std::optional<XRLightEstimate> estimate;
         if (advanced.HasValue()) {
             auto current = native_.ReadLightEstimation(light.scope, *cutoff, LightAuthorization());
-            if (!light.active || !LightingCutoff(light.scope)) {
+            if (!mayPublish()) {
                 light.active = false;
                 return std::nullopt;
             }

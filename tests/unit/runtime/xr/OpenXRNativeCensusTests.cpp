@@ -224,6 +224,40 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.native.owner.Close().HasValue());
     }
 
+    TEST_CASE("A withdrawn light estimator retains its exact scope until native cleanup succeeds", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        auto &owner = fixture.native.owner;
+        fixture.script.onCreate = [&fixture] { fixture.lightPermitted = false; };
+        fixture.script.failRetirement = true;
+        const auto started = fixture.Start(fixture.scope);
+        RequireFailureIdentity(started, XRErrors::OperationUnavailable);
+        REQUIRE(started.ErrorValue().cause);
+        CHECK(started.ErrorValue().cause.Get()->code.Value() == XRErrors::PermissionDenied.code.Value());
+        CHECK(owner.NeedsLightRetirement(fixture.scope));
+        CHECK(fixture.script.live);
+        CHECK(fixture.script.retireCalls == 1);
+        RequireFailureIdentity(fixture.Read(100), XRErrors::OperationUnavailable);
+        auto replacement = fixture.scope;
+        replacement.grant = IdentityValue<XRLightEstimateGrant>(2);
+        CHECK_FALSE(owner.NeedsLightRetirement(replacement));
+        RequireFailureIdentity(owner.StopLightEstimation(replacement), XRErrors::IdentityStale);
+        RequireFailureIdentity(fixture.Start(replacement), XRErrors::CapacityExceeded);
+
+        fixture.script.failRetirement = false;
+        REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
+        CHECK_FALSE(owner.NeedsLightRetirement(fixture.scope));
+        CHECK_FALSE(fixture.script.live);
+        fixture.lightPermitted = true;
+        fixture.script.onCreate = {};
+        RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::IdentityStale);
+        REQUIRE(fixture.Start(replacement).HasValue());
+        CHECK_FALSE(owner.NeedsLightRetirement(replacement));
+        RequireFailureIdentity(fixture.Read(replacement, 100), XRErrors::OperationUnavailable);
+        REQUIRE(owner.Close().HasValue());
+    }
+
     TEST_CASE("OpenXR samples bounded light lobes for an exact World grant and retires them before the session",
               "[unit][xr][native][lighting]") {
         LightFixture fixture;

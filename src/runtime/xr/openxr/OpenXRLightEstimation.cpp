@@ -298,6 +298,13 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success(*light_.current);
     }
 
+    /** @copydoc OpenXRNativeSession::NeedsLightRetirement */
+    bool OpenXRNativeSession::NeedsLightRetirement(const XRLightEstimateScope &scope) const noexcept {
+        if (controlThread_ != std::this_thread::get_id() || lightCall_ || retirementCall_)
+            return false;
+        return scope == light_.scope && !light_.active && light_.handle != XR_NULL_HANDLE;
+    }
+
     /** @copydoc OpenXRNativeSession::StopLightEstimation */
     Result<void> OpenXRNativeSession::StopLightEstimation(const XRLightEstimateScope &scope) {
         if (controlThread_ != std::this_thread::get_id() || lightCall_ || passthroughCall_ || retirementCall_)

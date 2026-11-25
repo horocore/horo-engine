@@ -29,17 +29,25 @@ namespace Horo::Application::Internal {
         if (projection.HasError())
             return Result<void>::Failure(projection.ErrorValue());
         const Operation operation{*this};
-        if (auto native = native_.StartLightEstimation(scope, limits, LightAuthorization()); native.HasError())
+        return AdoptNativeLighting(scope, limits, std::move(projection).Value());
+    }
+
+    /** @copydoc OpenXRPlayHost::AdoptNativeLighting */
+    Result<void> OpenXRPlayHost::AdoptNativeLighting(const XR::XRLightEstimateScope &scope, const XR::XRLightEstimateLimits &limits,
+                                                     XR::XRLightProjection projection) {
+        if (auto native = native_.StartLightEstimation(scope, limits, LightAuthorization()); native.HasError()) {
+            if (native_.NeedsLightRetirement(scope))
+                scene_->nativeLighting.emplace(scope, std::move(projection), false);
             return native;
-        const bool admitted = !pendingRevoke_ && LightingCutoff(scope).has_value();
-        scene_->nativeLighting.emplace(scope, std::move(projection).Value(), admitted);
-        if (!admitted) {
-            if (auto retired = native_.StopLightEstimation(scope); retired.HasError())
-                return retired;
-            scene_->nativeLighting.reset();
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         }
-        return Result<void>::Success();
+        const bool admitted = !pendingRevoke_ && LightingCutoff(scope).has_value();
+        scene_->nativeLighting.emplace(scope, std::move(projection), admitted);
+        if (admitted)
+            return Result<void>::Success();
+        auto denied = MakeError(XR::XRErrors::PermissionDenied);
+        if (auto retired = RetireNativeLighting(); retired.HasError())
+            return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), denied));
+        return Result<void>::Failure(std::move(denied));
     }
 
     /** @copydoc OpenXRPlayHost::StopNativeLighting */
@@ -48,12 +56,23 @@ namespace Horo::Application::Internal {
             return lane;
         if (!scene_ || !scene_->nativeLighting)
             return Result<void>::Success();
-        auto &light = *scene_->nativeLighting;
-        light.active = false;
+        scene_->nativeLighting->active = false;
         if (frames_.Snapshot().phase != XR::XRFramePhase::Idle)
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         const Operation operation{*this};
-        if (auto retired = native_.StopLightEstimation(light.scope); retired.HasError())
+        return RetireNativeLighting();
+    }
+
+    /** @copydoc OpenXRPlayHost::ProgressNativeLighting */
+    void OpenXRPlayHost::ProgressNativeLighting() {
+        if (scene_ && scene_->nativeLighting && !scene_->nativeLighting->active &&
+            frames_.Snapshot().phase == XR::XRFramePhase::Idle)
+            (void)RetireNativeLighting();
+    }
+
+    /** @copydoc OpenXRPlayHost::RetireNativeLighting */
+    Result<void> OpenXRPlayHost::RetireNativeLighting() {
+        if (auto retired = native_.StopLightEstimation(scene_->nativeLighting->scope); retired.HasError())
             return retired;
         scene_->nativeLighting.reset();
         return Result<void>::Success();

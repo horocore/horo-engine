@@ -468,6 +468,11 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now,
                                                                   const NativeLightAuthorization &authorization);
+        /** @brief Checks whether withdrawal left a native handle to retire for this exact scope.
+         * @param scope Exact candidate or previously active light grant.
+         * @return True only on the owner lane for an inactive estimator still retained for destruction.
+         */
+        [[nodiscard]] bool NeedsLightRetirement(const XRLightEstimateScope &scope) const noexcept;
         /** @brief Revokes exact publication and retires the native child before its parent.
          * @param scope Exact scope to revoke; stale scopes cannot revoke a current grant.
          * @return Success or a retryable typed error retaining native cleanup debt.

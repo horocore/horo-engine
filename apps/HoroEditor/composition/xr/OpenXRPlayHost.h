@@ -611,6 +611,13 @@ namespace Horo::Application::Internal {
         /** @brief Reads a consented value only for this focused frame and exact World lineage. */
         [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadFrameLighting(const XR::XRFrameSnapshot &frame,
                                                                                const XR::XRCoordinateSpace &world);
+        /** @brief Retries one withdrawn estimator's cleanup at an idle native event cutoff. */
+        void ProgressNativeLighting();
+        /** @brief Adopts the exact estimator, including an inactive handle retained for cleanup. */
+        [[nodiscard]] Result<void> AdoptNativeLighting(const XR::XRLightEstimateScope &scope, const XR::XRLightEstimateLimits &limits,
+                                                       XR::XRLightProjection projection);
+        /** @brief Retires the retained inactive light grant, leaving its exact identity on failure. */
+        [[nodiscard]] Result<void> RetireNativeLighting();
         /** @brief Samples and projects the current native grant at the admitted runtime clock cutoff. */
         [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadNativeLighting(const XR::XRCoordinateSpace &world);
         /** @brief Checks current focus, tracking and cached platform clearance for an exact World. */
