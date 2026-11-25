@@ -1173,8 +1173,10 @@ namespace Horo::Tests::OpenXRApplication {
             }
 
             Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
-                if (phase == Runtime::RuntimePhase::BuildInputSnapshot)
-                    result.emplace(play_.BuildInputSnapshot(context, raw_));
+                if (phase == Runtime::RuntimePhase::BuildInputSnapshot) {
+                    raw_.BeginFrame(context.frameNumber);
+                    result.emplace(play_.BuildInputSnapshot(context, raw_.Commit()));
+                }
                 if (phase == Runtime::RuntimePhase::RenderExecution && onRender)
                     onRender(context);
                 return Result<void>::Success();
@@ -1192,7 +1194,7 @@ namespace Horo::Tests::OpenXRApplication {
 
         private:
             Host::OpenXRPlayHost &play_;
-            Input::RawInputSnapshot raw_;
+            Input::RawInputCollector raw_;
         };
 
         Result<void> StageTestLocomotion(Host::OpenXRPlayHost &play, Runtime::SceneRuntimeId scene,
@@ -2571,6 +2573,63 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->ReadInspection().sessionGeneration != generation);
         CHECK(runCutoff("replacement session cutoff").pressed);
         replacementScene->Shutdown();
+    }
+
+    TEST_CASE("Installed XR Play retires queued controller commands before fixed update", "[xr][application][controller][fixed_input]") {
+        using enum XR::XRProjectFeaturePolicy;
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Grip)},
+                                     {"path", "/user/hand/left/input/grip/pose"},
+                                     {"label", "Grip"}});
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        constexpr Input::PlayerId player = 7;
+        auto scene = PublishPlay(fixture, player);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+
+        const Input::ActionId select{"select"};
+        Input::GameplayInputFrameBuilder commands{Input::ActionId{"move"}, Input::ActionId{"look"}, Input::ActionId{"jump"}, select};
+        std::vector<Input::GameplayInputFrame> consumed;
+        observed->onFixed = [&](const Runtime::FixedStepContext &step) {
+            commands.Capture(fixture.router, fixture.inputContext, player);
+            consumed.push_back(commands.Consume(step.simulationTick));
+        };
+        const auto runFrame = [&](const Duration elapsed = {}) {
+            fixture.schedulerClock.Advance(elapsed);
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+        };
+
+        runFrame();
+        commands.Capture(fixture.router, fixture.inputContext, player);
+        REQUIRE(commands.LastCaptureStatus() == Input::ActionReadStatus::Resolved);
+        REQUIRE(consumed.empty());
+
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        RequireValue(fixture.play->PollEvents());
+        runFrame(Duration::FromMilliseconds(10));
+        REQUIRE(consumed.size() == 1);
+        CHECK_FALSE(consumed.front().interactPressed);
+
+        fixture.script.actions.sample.boolean = XR_FALSE;
+        runFrame();
+        CHECK_FALSE(fixture.router.ReadAction(fixture.inputContext, select, player).down);
+        fixture.script.actions.sample.boolean = XR_TRUE;
+        runFrame();
+        commands.Capture(fixture.router, fixture.inputContext, player);
+        runFrame(Duration::FromMilliseconds(20));
+        REQUIRE(consumed.size() == 3);
+        CHECK(consumed[1].interactPressed);
+        CHECK_FALSE(consumed[2].interactPressed);
+        scene->Shutdown();
     }
 
     TEST_CASE("Installed Play previews vibration through the assigned controller and exact app receipt", "[xr][application][haptics]") {
