@@ -1184,8 +1184,14 @@ namespace Horo::Editor::Ui {
     // ── ComboControl ─────────────────────────────────────────────────────
 
     /** @brief Draws one wrapped option, admitting mouse or navigation activation only when enabled. */
-    static bool DrawComboRow(const int index, int *value, const ComboItemSource &source, const Theme::Fonts &fonts) {
-        ImGui::PushID(index);
+    static bool DrawComboRow(const int index, int *value, const ComboItemSource &source, const Theme::Fonts &fonts,
+                             const std::function<std::string(int)> &stableIdentity) {
+        if (stableIdentity) {
+            const auto identity = stableIdentity(index);
+            ImGui::PushID(identity.c_str());
+        } else {
+            ImGui::PushID(index);
+        }
         const bool isSelected = (*value == index);
         const bool isEnabled = !source.enabled || source.enabled(index);
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
@@ -1198,7 +1204,7 @@ namespace Horo::Editor::Ui {
         const char *const label = source.label(index);
         const float textHeight = font->CalcTextSizeA(rowFontSize, FLT_MAX, textWidth, label).y;
         const float rowH = std::max(ScaledLayoutValue(28.0F), textHeight + 2 * paddingY);
-        const std::string rowId = std::format("{}###combo_option_{}", label, index);
+        const std::string rowId = stableIdentity ? "##combo_option" : std::format("{}###combo_option_{}", label, index);
         ImGui::BeginDisabled(!isEnabled);
         const bool clicked =
             ImGui::InvisibleButton(rowId.c_str(), {rowW, rowH}, ImGuiButtonFlags_EnableNav | ImGuiButtonFlags_PressedOnClick);
@@ -1252,7 +1258,8 @@ namespace Horo::Editor::Ui {
 
     /** @brief Draws the shared dropdown and records the name provided by its caller. */
     static bool DrawComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
-                                 const ComboControlOptions options, const ComboMetadataName name) {
+                                 const ComboControlOptions options, const ComboMetadataName name,
+                                 const std::function<std::string(int)> &stableIdentity = {}) {
         IM_ASSERT(source.label);
         bool changed = false;
         ImGui::PushID(id);
@@ -1341,7 +1348,7 @@ namespace Horo::Editor::Ui {
             }
 
             for (int i = 0; i < itemCount; ++i)
-                changed = DrawComboRow(i, value, source, fonts) || changed;
+                changed = DrawComboRow(i, value, source, fonts, stableIdentity) || changed;
             ImGui::EndPopup();
         }
 
@@ -2799,18 +2806,24 @@ namespace Horo::Editor::Ui {
         ImGui::Dummy({0.0F, height * scale});
     }
 
-    /** @copydoc DrawComboPropRow */
+    /** @copydoc DrawComboPropRow(const char*,const char*,int&,std::span<const char* const>,const Theme::Fonts&) */
     bool DrawComboPropRow(const char *label, const char *id, int &value, const std::span<const char *const> entries,
                           const Theme::Fonts &fonts) {
-        const PropertyRowLayout layout = BeginPropertyRow(label, fonts);
-        ImGui::SetCursorScreenPos({layout.controlX, layout.controlY});
-        ImGui::PushItemWidth(layout.controlWidth);
         const ComboItemSource source{.label = [entries](const int index) {
             return entries[index];
         }};
-        const bool changed = DrawComboControl(id, &value, static_cast<int>(entries.size()), source, fonts,
+        return DrawComboPropRow(label, id, value, static_cast<int>(entries.size()), source, fonts);
+    }
+
+    /** @copydoc DrawComboPropRow(const char*,const char*,int&,int,const ComboItemSource&,const Theme::Fonts&,const std::function<std::string(int)>&) */
+    bool DrawComboPropRow(const char *label, const char *id, int &value, const int itemCount, const ComboItemSource &source,
+                          const Theme::Fonts &fonts, const std::function<std::string(int)> &stableIdentity) {
+        const PropertyRowLayout layout = BeginPropertyRow(label, fonts);
+        ImGui::SetCursorScreenPos({layout.controlX, layout.controlY});
+        ImGui::PushItemWidth(layout.controlWidth);
+        const bool changed = DrawComboControl(id, &value, itemCount, source, fonts,
                                               {.height = 27.0F, .componentSize = ComponentSize::Medium},
-                                              {label, Detail::EditorControlLabelKind::ResolvedText});
+                                              {label, Detail::EditorControlLabelKind::ResolvedText}, stableIdentity);
         ImGui::PopItemWidth();
         EndPropertyRow(layout);
         return changed;

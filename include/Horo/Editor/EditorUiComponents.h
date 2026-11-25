@@ -1123,6 +1123,16 @@ namespace Horo::Editor::Ui {
     [[nodiscard]] bool DrawComboPropRow(const char *label, const char *id, int &value, std::span<const char *const> entries,
                                         const Theme::Fonts &fonts);
 
+    /** @brief Draws a named property dropdown whose rows are projected from a typed model.
+     * @param label Resolved visible and accessible name. @param id Stable control identity.
+     * @param value Selected row index. @param itemCount Number of source rows.
+     * @param source Borrowed label and availability callbacks. @param fonts Editor typography handles.
+     * @param stableIdentity Optional unique row key that survives reordering and renaming.
+     * @return True when the user chooses a different enabled row.
+     */
+    [[nodiscard]] bool DrawComboPropRow(const char *label, const char *id, int &value, int itemCount, const ComboItemSource &source,
+                                        const Theme::Fonts &fonts, const std::function<std::string(int)> &stableIdentity = {});
+
     /** @brief Draws a full-width stable unsigned identity/property without float conversion.
      * @param label Localized label. @param id Stable widget key. @param value Mutable integer draft.
      * @param fonts Typography. @param error Invalid-value presentation. @return Change and commit state. */

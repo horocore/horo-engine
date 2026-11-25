@@ -84,6 +84,31 @@ namespace Horo::Editor {
                 selected = contexts[static_cast<std::size_t>(index)].id;
         }
 
+        /** @brief Keeps a retired channel visible until the author explicitly chooses an enabled replacement. */
+        void DrawQueryChannelChoice(const std::string &label, const Theme::Fonts &fonts, Physics::PhysicsQueryChannelId &channel,
+                                    const std::span<const PhysicsQueryChannelChoice> channels) {
+            if (channels.empty()) {
+                Ui::FieldLabel(label.c_str(), fonts);
+                return;
+            }
+            const auto count = static_cast<int>(channels.size());
+            const auto selected = std::ranges::find(channels, channel, &PhysicsQueryChannelChoice::id);
+            int index = static_cast<int>(selected - channels.begin());
+            const bool missing = selected == channels.end();
+            const auto missingLabel = missing ? channel.ToString() : std::string{};
+            const Ui::ComboItemSource source{.label = [&](const int entry) {
+                                                 return entry == count ? missingLabel.c_str() : channels[entry].name.c_str();
+                                             },
+                                             .enabled = [count](const int entry) {
+                                                 return entry < count;
+                                             }};
+            const auto identity = [&](const int entry) {
+                return entry == count ? missingLabel : channels[entry].id.ToString();
+            };
+            if (Ui::DrawComboPropRow(label.c_str(), "##query_channel", index, count + missing, source, fonts, identity))
+                channel = channels[index].id;
+        }
+
         /** @brief Uses the secondary selection only when it is unambiguous and distinct from the querier. */
         std::optional<SceneObjectId> PreviewSelectionTarget(std::span<const SceneObjectId> selected, SceneObjectId querier) {
             if (selected.size() != 2 || selected.front() == selected.back())
@@ -1031,19 +1056,7 @@ namespace Horo::Editor {
         const auto button = [&](std::string_view key, bool enabled = true) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
         };
-        const auto selected = std::ranges::find(channels, fields.queryChannel, &PhysicsQueryChannelChoice::id);
-        const auto current = selected == channels.end() ? fields.queryChannel.ToString() : selected->name;
-        Ui::FieldLabel(text("workspace.environment_query.query_channel").c_str(), fonts);
-        if (!channels.empty() && ImGui::BeginCombo("##query_channel", current.c_str())) {
-            for (const auto &channel : channels) {
-                const auto id = channel.id.ToString();
-                ImGui::PushID(id.c_str());
-                if (ImGui::Selectable(channel.name.c_str(), channel.id == fields.queryChannel))
-                    fields.queryChannel = channel.id;
-                ImGui::PopID();
-            }
-            ImGui::EndCombo();
-        }
+        DrawQueryChannelChoice(text("workspace.environment_query.query_channel"), fonts, fields.queryChannel, channels);
         if (fields.visibility) {
             if (button("workspace.environment_query.remove_visibility"))
                 return fields.visibility->stage;
