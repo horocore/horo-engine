@@ -94,6 +94,18 @@ connection mode as the physical evidence. Generate a new version 2 receipt for
 each connection mode. The release claim still requires the underlying
 physical qualification checks for the declared connection mode.
 
+For a standalone Android claim, an optional `androidPreflight` object can
+attach the exact JSON stdout from a successful `project.py android-deploy
+--runtime openxr` invocation. It contains `receiptSha256` for those stdout
+bytes, `apkSha256` for the independently selected diagnostic APK,
+`deviceBuildSha256` for the Android build fingerprint recorded independently
+for the physical run, the diagnostic `profile`, and `adbConnection` (`usb`
+or `tcpip`). Store the diagnostic APK and receipt in the same evidence
+directory as the physical record. The checker verifies the source revision,
+package and device build, connection, runtime version and process retirement.
+The cold-discovery APK has its own digest. The smoke record still identifies
+the exact product binary, headset, physical checks and package receipt.
+
 Store the exact tested executable, package receipt, physical smoke record,
 every referenced check observation, and each subsystem review as files in a
 local evidence directory. Name each file after the lowercase SHA-256 of its

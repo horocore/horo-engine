@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import project
+from qualify_xr_android import check_android_preflight, validate_android_preflight
 
 PROFILE = "qualification-debug"
 VULKAN_PROFILE = "qualification-vulkan-development"
@@ -72,7 +73,7 @@ def launch_command(application, *, openxr=False):
 
 
 class AndroidDeployTests(unittest.TestCase):
-    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False, launch_receipt=None):
+    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False, launch_receipt=None, serial=SERIAL):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(profile_name, ["arm64-v8a"])
         application = profile["applicationId"]
@@ -80,8 +81,8 @@ class AndroidDeployTests(unittest.TestCase):
         launch = launch_command(application, openxr=openxr)
         stop = ("shell", "am", "force-stop", "--user", "10", application)
         replies = {
-            ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
-            ("get-serialno",): SERIAL,
+            ("devices", "-l"): f"List of devices attached\n{serial} device product:probe transport_id:{TRANSPORT}",
+            ("get-serialno",): serial,
             ("get-state",): "device",
             DEVICE_CLOCK: [START] + [END] * 12,
             ("shell", "am", "get-current-user"): "10",
@@ -159,7 +160,7 @@ class AndroidDeployTests(unittest.TestCase):
                 patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000] + [109_000_000, 111_000_000] * 12), \
                 contextlib.redirect_stdout(stdout):
             status = project.main(["android-deploy", "--artifact", ".", "--profile", profile_name, "--sdk", ".",
-                                   "--device", SERIAL, "--timeout", "1", *options])
+                                   "--device", serial, "--timeout", "1", *options])
         return status, json.loads(stdout.getvalue()), commands
 
     def test_scopes_install_launch_process_and_reports_only_typed_facts(self):
@@ -327,6 +328,21 @@ class AndroidDeployTests(unittest.TestCase):
                     self.assertFalse(any(command[0] == "install" for command in commands))
                 else:
                     self.assertEqual(commands.count(DEVICE_BUILD_QUERY), 2)
+
+    def test_openxr_usb_deployment_report_matches_release_preflight_contract(self):
+        name = project.OPENXR_QUEST_DEVELOPMENT_PROFILE
+        serial = "TESTHEADSET"
+        status, report, _ = self.execute({
+            ("devices", "-l"): f"List of devices attached\n{serial} device usb:1-2 transport_id:{TRANSPORT}",
+            LOGCAT: log_line(OPENXR),
+        }, ("--host", "linux-x64", "--connection", "usb", "--runtime", "openxr"), name, serial=serial)
+        self.assertEqual(status, 0)
+        receipt = project.canonical_json(report)
+        declaration = validate_android_preflight({
+            "receiptSha256": hashlib.sha256(receipt).hexdigest(), "apkSha256": DIGEST,
+            "deviceBuildSha256": DEVICE_BUILD_DIGEST, "profile": name, "adbConnection": "usb",
+        })
+        check_android_preflight(receipt, declaration, SOURCE_REVISION, "1.1.63")
 
     def test_quest_profile_requires_openxr_intent_and_launches_its_own_application(self):
         name = project.OPENXR_QUEST_DEVELOPMENT_PROFILE

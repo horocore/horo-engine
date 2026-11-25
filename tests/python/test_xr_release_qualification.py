@@ -171,6 +171,100 @@ def update_claim_identity(row, evidence, **changes):
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
+def android_receipt(row, evidence):
+    profile = "qualification-openxr-quest-development"
+    expected = {"apkSha256": store(evidence, b"separate Android diagnostic APK"),
+                "deviceBuildSha256": "c" * 64, "profile": profile, "adbConnection": "usb"}
+    row["androidPreflight"] = expected
+    return {
+        "schema": 1, "status": "diagnostic_complete", "stage": "diagnostics",
+        "artifact": {"apkSha256": expected["apkSha256"], "sourceRevision": REVISION, "profile": profile,
+                     "provenanceSha256": "d" * 64,
+                     "openxr": {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "cold-discovery"},
+                     "openxrImages": {"abi": "arm64-v8a", "diagnosticHostSha256": "e" * 64, "loaderSha256": "f" * 64}},
+        "qualification": {"host": {"requested": "linux-x64", "observed": "linux-x64"},
+                          "connection": {"requested": "usb", "observed": "usb"}, "profile": profile,
+                          "runtime": {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"},
+                          "physicalXrQualification": "not_run"},
+        "device": {"abi": "arm64-v8a", "buildSha256": expected["deviceBuildSha256"]},
+        "observed": {"crashObserved": False, "openxr": {"abi": "arm64-v8a", "stage": "discovered", "result": 0,
+                                                       "runtimeVersion": {"major": 1, "minor": 2, "patch": 3}}},
+        "cleanup": {"status": "stopped"},
+    }
+
+
+def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    receipt = android_receipt(row, evidence)
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 0, result.stderr
+    assert "Standalone (xr-platform): Passed" in result.stdout
+
+    row["recordSha256"] = None
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Missing or invalid artifact digest" in result.stderr
+
+
+@pytest.mark.parametrize(("section", "key", "value", "message"), [
+    ("artifact", "sourceRevision", "b" * 40, "another source revision"),
+    ("artifact", "apkSha256", "a" * 64, "different diagnostic APK"),
+    ("device", "buildSha256", "a" * 64, "different system build"),
+    ("device", "abi", "x86_64", "different packaged ABI"),
+    ("qualification", "connection", {"requested": "usb", "observed": "tcpip"}, "different ADB connection"),
+    ("qualification", "physicalXrQualification", "passed", "Expected cold discovery evidence"),
+    ("observed", "crashObserved", True, "recorded a crash"),
+    ("cleanup", "status", "unconfirmed", "process retirement is unconfirmed"),
+])
+def test_android_matrix_rejects_wrong_or_partial_discovery(release, section, key, value, message):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    receipt = android_receipt(row, evidence)
+    receipt[section][key] = value
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_tuple(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.4")
+    receipt = android_receipt(row, evidence)
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "different runtime version" in result.stderr
+
+
+def test_android_preflight_does_not_apply_to_pcvr(release):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    receipt = android_receipt(row, evidence)
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Android preflight requires a standalone Android tuple" in result.stderr
+
+
+def test_android_preflight_rejects_received_bytes_with_the_wrong_digest(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    receipt = android_receipt(row, evidence)
+    digest = store(evidence, json.dumps(receipt).encode())
+    row["androidPreflight"]["receiptSha256"] = digest
+    (evidence / digest).write_bytes(b"corrupt receipt")
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Android preflight receipt digest does not match" in result.stderr
+
+
 def desktop_receipt(row, *, host=None):
     identity = row["declaration"]["tuple"]
     system = f"{identity['runtime']}\0{identity['headsetModel']}".encode()

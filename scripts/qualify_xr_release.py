@@ -6,6 +6,7 @@ import argparse
 import hashlib
 from pathlib import Path
 
+from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_preflight, validate_android_preflight
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_physical_gate, decode_record, fields, in_set, is_digest, is_token,
@@ -48,6 +49,11 @@ class Evidence:
         with self.path(digest).open("rb") as source:
             check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
 
+    def android_preflight(self, expected: dict, revision: str, runtime_version: str) -> None:
+        self.verify(expected["apkSha256"])
+        with self.path(expected["receiptSha256"]).open("rb") as source:
+            check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, runtime_version)
+
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:
             data = source.read(MAX_RECORD_BYTES + 1)
@@ -55,12 +61,19 @@ class Evidence:
         return validate_record(decode_record(data))
 
 
+def validate_preflight_declarations(row: dict) -> None:
+    preflight = row.get("desktopPreflightSha256")
+    require(preflight is None or is_digest(preflight), "Invalid Desktop preflight digest")
+    component = row.get("desktopComponentSha256")
+    require(component is None or is_digest(component), "Invalid Desktop component digest")
+    if "androidPreflight" in row:
+        validate_android_preflight(row["androidPreflight"])
+
+
 def validate_row(value: object) -> dict:
     required = {"id", "category", "owner", "releaseClaim", "declaration", "requiredOptionalChecks", "recordSha256"}
-    if isinstance(value, dict) and "desktopPreflightSha256" in value:
-        required.add("desktopPreflightSha256")
-    if isinstance(value, dict) and "desktopComponentSha256" in value:
-        required.add("desktopComponentSha256")
+    if isinstance(value, dict):
+        required |= value.keys() & {"desktopPreflightSha256", "desktopComponentSha256", "androidPreflight"}
     row = fields(value, required, "matrix row")
     require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
     require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
@@ -77,10 +90,7 @@ def validate_row(value: object) -> dict:
             "Invalid optional physical checks")
     require(len(optional) == len(set(optional)), "Duplicate optional physical checks")
     require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
-    preflight = row.get("desktopPreflightSha256")
-    require(preflight is None or is_digest(preflight), "Invalid Desktop preflight digest")
-    component = row.get("desktopComponentSha256")
-    require(component is None or is_digest(component), "Invalid Desktop component digest")
+    validate_preflight_declarations(row)
     return row
 
 
@@ -120,6 +130,10 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     evidence.verify(identity["buildSha256"])
     evidence.verify(identity["packageReceiptSha256"])
     verify_desktop_route(row, evidence, identity)
+    if "androidPreflight" in row:
+        require(identity["connectionMode"] == "Standalone" and identity["hostPlatform"].lower() == "android",
+                "Android preflight requires a standalone Android tuple")
+        evidence.android_preflight(row["androidPreflight"], revision, identity["runtimeVersion"])
     for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None}:
         evidence.verify(digest)
     return record["status"]
