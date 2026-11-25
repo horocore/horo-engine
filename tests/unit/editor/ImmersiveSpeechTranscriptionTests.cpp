@@ -314,6 +314,26 @@ namespace Horo::Editor {
             CHECK(mounted->mounted);
         }
 
+        TEST_CASE("Pointing review rejects malformed evidence even from a repeated object", "[agent][immersive][speech]") {
+            constexpr std::uint64_t World = 9;
+            constexpr float Invalid = std::numeric_limits<float>::quiet_NaN();
+            using Hit = ImmersivePointingHits::Hit;
+            ImmersiveSpatialObservation valid{.controllerPress = ImmersiveControllerPress{},
+                                              .pointing = ImmersivePointingHits{.worldGeneration = World,
+                                                                               .structuralRevision = 1,
+                                                                               .hits = {Hit{{17}, 2, {1, 2, 3}}},
+                                                                               .count = 1}};
+            valid.candidate.shape = Math::Ray{};
+            auto observations = std::array{valid, valid};
+            const auto review = [&] { return CollectImmersivePointingHits(observations, World, ImmersivePointingReviewKind::Objects); };
+            REQUIRE(review());
+            for (const auto &hit : {Hit{{}, 2, {1, 2, 3}}, Hit{{17}, -1, {1, 2, 3}}, Hit{{17}, Invalid, {1, 2, 3}},
+                                    Hit{{17}, 2, {1, Invalid, 3}}}) {
+                observations[1].pointing->hits[0] = hit;
+                CHECK_FALSE(review());
+            }
+        }
+
         TEST_CASE("Physical surface review requires its original grant and complete live plane identities", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 7;
             SpeechFixture fixture;
@@ -343,6 +363,14 @@ namespace Horo::Editor {
             REQUIRE(candidates->count == 1);
             CHECK(candidates->hits[0].classification == wall.classification);
             CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World + 1, live.Value()));
+
+            auto malformed = repeated;
+            auto &hit = malformed[1].surfaces->hits[0];
+            hit.worldPosition.x = std::numeric_limits<float>::infinity();
+            CHECK_FALSE(CollectImmersiveSurfaceHits(malformed, World, live.Value()));
+            hit = press.surfaces->hits[0];
+            hit.classification = XR::XRPlaneClassification::Count;
+            CHECK_FALSE(CollectImmersiveSurfaceHits(malformed, World, live.Value()));
 
             const auto later = XR::XRRuntimeTime::Create(101).Value();
             REQUIRE(publication.Publish(scope, later, {}).HasValue());

@@ -238,13 +238,14 @@ Ownership rules:
   triangle hit per intersected draw. The query borrows the latest committed
   authored geometry on the owner lane and applies a fixed triangle and hit budget.
   The Agent panel can review the same-world hits aligned to the speech interval.
-  Incomplete hit queries produce an unavailable result.
+  Incomplete or malformed hit evidence produces an unavailable result.
   Location review shows press-time world coordinates in meters for eligible
   objects. Separate points on one object remain separate location candidates.
   Physical surface review uses the separate one-session plane grant. The
   controller press copies bounded hit coordinates and plane identities from
   the admitted publication. Each preview checks that the same grant and all
-  referenced plane identities are still live.
+  referenced plane identities are still live. Non-finite coordinates and invalid
+  classifications make the surface evidence unavailable for review.
   Play mesh hits and listening lineage retain the structural revision of the
   draws, so recycled object identities require a new observation.
   World UI dispatch owns its targeted and reserved gestures. Scene evidence

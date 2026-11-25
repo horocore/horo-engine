@@ -90,12 +90,12 @@ namespace Horo::Editor {
      * @param aligned Borrowed observations admitted by the command envelope.
      * @param worldGeneration Exact Play occurrence in the command context.
      * @param kind Selects whether distinct points on the same object remain separate.
-     * @return Complete evidence, including empty for a verified miss, or no value for incomplete evidence. */
+     * @return Complete evidence, including empty for a verified miss, or no value for incomplete or invalid evidence. */
     [[nodiscard]] std::optional<ImmersivePointingHits> CollectImmersivePointingHits(std::span<const ImmersiveSpatialObservation> aligned,
                                                                                     std::uint64_t worldGeneration,
                                                                                     ImmersivePointingReviewKind kind) noexcept;
 
-    /** @brief Reviews press-time hits against the exact current grant and all referenced live planes. */
+    /** @brief Reviews valid press-time geometry against the exact current grant and all referenced live planes. */
     [[nodiscard]] std::optional<ImmersiveSurfaceHits> CollectImmersiveSurfaceHits(std::span<const ImmersiveSpatialObservation> aligned,
                                                                                   std::uint64_t worldGeneration,
                                                                                   const XR::XRPlaneSnapshot &current) noexcept;

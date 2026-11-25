@@ -101,12 +101,20 @@ namespace Horo::Editor {
             return press == Aligned ? pose : press;
         }
 
+        /** @brief Requires an authored object and finite press-time geometry in world units. */
+        bool ValidPointingHit(const ImmersivePointingHits::Hit &hit) noexcept {
+            return hit.object.IsValid() && Math::IsFinite(hit.worldPosition) && std::isfinite(hit.distanceMeters) &&
+                   hit.distanceMeters >= 0.0F;
+        }
+
         /** @brief Adds a complete support set without picking a preferred hit. */
         bool AppendPointingHits(ImmersivePointingHits &output, const ImmersivePointingHits &source,
                                 const ImmersivePointingReviewKind kind) noexcept {
             if (source.count > source.hits.size())
                 return false;
             for (const auto &hit : std::span{source.hits}.first(source.count)) {
+                if (!ValidPointingHit(hit))
+                    return false;
                 const auto previous = std::span{output.hits}.first(output.count);
                 const auto sameHit = [&](const ImmersivePointingHits::Hit &prior) {
                     return prior.object == hit.object &&
@@ -129,13 +137,19 @@ namespace Horo::Editor {
                    (result.structuralRevision == hits.structuralRevision && result.mounted == hits.mounted);
         }
 
+        /** @brief Checks the copied press-time coordinates and classification against the current plane inventory. */
+        bool ValidSurfaceHit(const ImmersiveSurfaceHits::Hit &hit, std::span<const XR::XRPlaneObservation> current) noexcept {
+            return Math::IsFinite(hit.worldPosition) && hit.classification < XR::XRPlaneClassification::Count &&
+                   std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id) != current.end();
+        }
+
         /** @brief Copies distinct current surface candidates or rejects the entire incomplete review. */
         bool AppendSurfaceHits(ImmersiveSurfaceHits &output, const ImmersiveSurfaceHits &source,
                                const std::span<const XR::XRPlaneObservation> current) noexcept {
             if (source.count > source.hits.size())
                 return false;
             for (const auto &hit : std::span{source.hits}.first(source.count)) {
-                if (std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id) == current.end())
+                if (!ValidSurfaceHit(hit, current))
                     return false;
                 const auto previous = std::span{output.hits}.first(output.count);
                 if (std::ranges::any_of(previous, [&](const ImmersiveSurfaceHits::Hit &prior) {
