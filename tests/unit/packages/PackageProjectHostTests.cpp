@@ -1086,6 +1086,43 @@ namespace {
                 .descriptorPath = "extensions/native/extension.json"};
     }
 
+    TEST_CASE("Package removal reports retained runtime blockers after an unsupported departing role",
+              "[packages][application][host][removal-coverage]") {
+        using namespace Packages;
+        HostFixture fixture{true, NativeArchiveContributions::WithBackendImporter};
+        const auto retained = AddRetainedRuntime(fixture);
+        const auto assets = fixture.AssetSource({retained});
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto packages = expected.Value().application.lockedPlan->Packages();
+        const auto provider = std::ranges::find(packages, fixture.graph.package, &LockedPackage::package);
+        REQUIRE(provider != packages.end());
+        auto registration = ObserveFixtureRuntime(*provider);
+        registration.services.push_back({.id = Gameplay::GameplayServiceId::Parse("game.tests.required").Value()});
+        auto sources = fixture.RemovalSources(*assets);
+        sources.requireGameplayOwner = true;
+        sources.registrations = std::span{&registration, 1};
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+
+        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+
+        REQUIRE(blocked.HasError());
+        const auto &error = blocked.ErrorValue();
+        CHECK(error.code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.lifecycle.removal_module_owner_required";
+        }));
+        CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.runtime_registration_unobserved" &&
+                   diagnostic.path == "com.horo.retained.native";
+        }));
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+    }
+
     /** @brief Writes one Decision graph and its canonical asset registry identity. */
     void WriteRemovalDecisionGraph(std::filesystem::path path, std::string_view id, AI::DecisionPlanKind family,
                                    const AI::DecisionGraphSource &graph) {

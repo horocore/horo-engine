@@ -30,6 +30,7 @@ namespace Horo::Application::Internal {
         using ComponentOwners = std::map<Gameplay::ComponentTypeId, std::set<Packages::HoroPackageId>>;
         constexpr std::size_t MaximumBehaviorReferences = 16'384;
         constexpr std::size_t MaximumServiceReferences = 16'384;
+        constexpr std::size_t MaximumCoverageDiagnostics = 16'384;
         constexpr auto ServiceInUse = "packages.host.service_in_use";
         using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
         using ServiceOwners = std::map<Gameplay::GameplayServiceId, std::set<Packages::HoroPackageId>>;
@@ -540,8 +541,6 @@ namespace Horo::Application::Internal {
         Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
                                             const Packages::VerifiedPackageInstallRecord &install, const Packages::LockedPackage &locked,
                                             const bool departing, std::vector<Diagnostic> &blockers) {
-            if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
-                return authority;
             const auto *package = FindExactArchive(graph, locked);
             if (!package)
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
@@ -555,6 +554,20 @@ namespace Horo::Application::Internal {
             for (const auto &role : declared.Value())
                 ObserveRuntimeRole(sources, locked, role, blockers);
             return Result<void>::Success();
+        }
+
+        /** @brief Preserves the first typed failure while making each affected package visible in the review. */
+        void RecordRuntimeCoverageFailure(const Packages::LockedPackage &locked, Error failure, std::optional<Error> &firstFailure,
+                                          std::vector<Diagnostic> &blockers) {
+            if (failure.diagnostics.empty())
+                blockers.emplace_back(DiagnosticCode{failure.code.Value()}, DiagnosticSeverity::Error, failure.message,
+                                      SourceLocation{"packages.lock"}, locked.package.Value());
+            else
+                std::ranges::move(failure.diagnostics, std::back_inserter(blockers));
+            if (!firstFailure) {
+                failure.diagnostics.clear();
+                firstFailure.emplace(std::move(failure));
+            }
         }
 
         /** @brief Accepts only exact staged archives that contain no executable or extension contribution. */
@@ -586,19 +599,21 @@ namespace Horo::Application::Internal {
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             std::vector<Diagnostic> blockers;
+            std::optional<Error> firstFailure;
             const bool inspectRetained = HasDepartingNativeDependency(sources.registrations, lock, removal);
             for (const auto &entry : lock.Packages()) {
                 const bool departing = IsDeparting(removal, entry.package);
                 if (!inspectRetained && !departing)
                     continue;
-                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, departing, blockers); checked.HasError()) {
-                    auto error = std::move(checked).ErrorValue();
-                    std::ranges::move(blockers, std::back_inserter(error.diagnostics));
-                    return Result<void>::Failure(std::move(error));
-                }
+                if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
+                    return authority;
+                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, departing, blockers); checked.HasError())
+                    RecordRuntimeCoverageFailure(entry, std::move(checked).ErrorValue(), firstFailure, blockers);
+                if (blockers.size() > MaximumCoverageDiagnostics)
+                    return Result<void>::Failure(ReferenceError("packages.host.removal_reference_coverage_limit"));
             }
             if (!blockers.empty()) {
-                auto error = ReferenceError(blockers.front().code.Value());
+                auto error = firstFailure ? std::move(*firstFailure) : ReferenceError(blockers.front().code.Value());
                 error.diagnostics = std::move(blockers);
                 return Result<void>::Failure(std::move(error));
             }
