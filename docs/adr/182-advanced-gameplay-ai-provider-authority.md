@@ -28,6 +28,9 @@ contribution manifest, compatible request/result versions, target support, and
 the project-granted capabilities. Native and script contributions use their
 existing package and backend-extension admission owners. A descriptor is
 metadata until the host explicitly activates the provider.
+If a provider withdraws admission during node binding, binding stops before
+invoking another factory and disposes of already created nodes under their
+original provider lease.
 
 Each contribution declares its execution domain, required immutable inputs,
 maximum request and result sizes, work and concurrency limits, output schema,

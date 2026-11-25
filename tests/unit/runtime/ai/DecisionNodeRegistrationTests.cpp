@@ -85,6 +85,37 @@ namespace Horo::AI {
             CHECK(fixture.probe->destroyed == 1);
         }
 
+        TEST_CASE("Decision binding stops invoking factories after admission is withdrawn", "[ai][decision-node]") {
+            using enum BehaviorTreeOperation;
+            Fixture fixture({Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)});
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            struct RevokingFactory final {
+                std::shared_ptr<BehaviorTreeTestSupport::Probe> probe;
+                std::atomic_bool &admission;
+                std::size_t calls{};
+            } factory{fixture.probe, *admission};
+            auto registration = Registration(fixture.probe);
+            registration.factory.userData = &factory;
+            registration.factory.create = [](void *value, std::span<const BehaviorTreeProperty>) -> IBehaviorTreeExecutor * {
+                auto &owner = *static_cast<RevokingFactory *>(value);
+                ++owner.calls;
+                owner.admission.store(false);
+                return new BehaviorTreeTestSupport::Executor(owner.probe);
+            };
+            const auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            SECTION("asset bindings") {
+                ExpectError(generation->CreateExecutor(generation, *fixture.Bindings(), {}), AIErrors::RuntimeUnavailable);
+            }
+            SECTION("executable plan bindings") {
+                ExpectError(generation->CreateExecutor(generation, *fixture.Plan(), {}), AIErrors::RuntimeUnavailable);
+            }
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(factory.calls == 1);
+            CHECK(fixture.probe->destroyed == 1);
+        }
+
         TEST_CASE("Decision node executor retirement aborts and cleans running work once while retaining its generation",
                   "[ai][decision-node]") {
             Fixture fixture({Node(1, BehaviorTreeOperation::Task)});

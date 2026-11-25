@@ -233,7 +233,7 @@ namespace Horo::AI {
             return result;
         }
 
-        /** @brief Rejects condition and service results when their generation is withdrawn during the callback. */
+        /** @brief Rejects callback results when their generation is withdrawn during the call. */
         template <typename T> Result<T> AdmitResult(Result<T> result) const noexcept {
             if (!generation_->CanAdmit())
                 return Failure<T>(AIErrors::RuntimeUnavailable);
@@ -305,18 +305,21 @@ namespace Horo::AI {
             auto properties = Detail::BindDecisionProperties(contract, values);
             if (properties.HasError())
                 return Result<void>::Failure(properties.ErrorValue());
+            if (!generation_->CanAdmit())
+                return Failure<void>(AIErrors::RuntimeUnavailable);
             const auto &bound = properties.Value();
             if (std::ranges::find(bound, BehaviorTreePropertyKind::QueryOutput, &BehaviorTreeProperty::kind) != bound.end()) {
                 if (contract.role != DecisionNodeRole::Task)
                     return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
-                return BindQueryTask(execution, queryTasks, found == configuration.end() ? nullptr : std::to_address(found));
+                return AdmitResult(BindQueryTask(execution, queryTasks,
+                                                 found == configuration.end() ? nullptr : std::to_address(found)));
             }
             const auto factory = generation_->factories_[index];
             auto *instance = factory.create(factory.userData, properties.Value());
             if (!instance)
                 return Failure<void>(AIErrors::RuntimeUnavailable);
             nodes_.push_back({.node = node.id, .role = contract.role, .factory = factory, .instance = instance});
-            return Result<void>::Success();
+            return AdmitResult(Result<void>::Success());
         }
 
         bool OwnerAvailable() const noexcept {
