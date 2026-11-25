@@ -304,6 +304,24 @@ namespace Horo::Physics::Detail {
                 droppedDuringTick_};
     }
 
+    /** @copydoc PhysicsEventProjection::CopyPublishedBodyEvents */
+    PhysicsEventReadCompletion PhysicsEventProjection::CopyPublishedBodyEvents(const std::span<PhysicsEventRecord> records,
+                                                                               const std::uint32_t maximumRecords,
+                                                                               const BodyHandle body) const noexcept {
+        const auto limit = std::min(records.size(), static_cast<std::size_t>(maximumRecords));
+        PhysicsEventReadCompletion result{.droppedRecordCount = droppedDuringTick_};
+        for (const auto &event : PublishedEvents()) {
+            if (event.pair.first.body != body && event.pair.second.body != body)
+                continue;
+            if (result.recordCount < limit)
+                records[result.recordCount++] = event;
+            else
+                ++result.omittedRecordCount;
+        }
+        result.truncated = result.omittedRecordCount != 0;
+        return result;
+    }
+
     /** @copydoc PhysicsEventProjection::PublishedTick */
     std::uint64_t PhysicsEventProjection::PublishedTick() const noexcept {
         return publishedTick_;

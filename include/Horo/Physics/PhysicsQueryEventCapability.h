@@ -130,9 +130,23 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEvents(const PhysicsEventReadCommand &command,
                                                                     std::span<PhysicsEventRecord> records) const;
+        /** @brief Copies only events incident to one exact body handle from a completed publication.
+         * @param command Same capability, publication and output budget as ReadEvents.
+         * @param body Exact body generation in the capability's world.
+         * @param records Caller-owned output in publication order.
+         * @return Matching count and caller omissions. Projection drops still cover the whole tick.
+         * @pre Physics owner thread outside a fixed tick.
+         */
+        [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEventsForBody(const PhysicsEventReadCommand &command, BodyHandle body,
+                                                                           std::span<PhysicsEventRecord> records) const;
 
     private:
         friend class PhysicsWorld;
+
+        /** @brief Applies common owner, tick and budget checks before any output is written. */
+        [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEventPublication(const PhysicsEventReadCommand &command,
+                                                                              std::span<PhysicsEventRecord> records,
+                                                                              const BodyHandle *body) const;
 
         explicit PhysicsQueryEventCapability(std::shared_ptr<PhysicsQueryEventCapabilityState> state) noexcept : state_(std::move(state)) {}
 

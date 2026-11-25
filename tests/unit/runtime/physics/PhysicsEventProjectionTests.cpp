@@ -276,6 +276,26 @@ namespace Horo::Physics::Detail {
         REQUIRE(completed.Value().droppedRecordCount == 0);
     }
 
+    TEST_CASE("Body event reads apply the output budget only to exact incident records", "[physics][events][projection]") {
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        REQUIRE(CaptureOne(projection, 1, 1, 2));
+        REQUIRE(projection.TryCapture(Observation(1, 3, 4)));
+        REQUIRE(projection.TryCapture(Observation(1, 4, 5)));
+        REQUIRE(projection.CompleteTick(1).HasValue());
+        std::array<PhysicsEventRecord, 2> records{};
+        const auto incident = projection.CopyPublishedBodyEvents(records, 2, Endpoint(4).body);
+        REQUIRE(incident.recordCount == 2);
+        CHECK_FALSE(incident.truncated);
+        CHECK(records[0].pair.first.body == Endpoint(3).body);
+        CHECK(records[1].pair.second.body == Endpoint(5).body);
+
+        const auto bounded = projection.CopyPublishedBodyEvents(records, 1, Endpoint(4).body);
+        CHECK(bounded.recordCount == 1);
+        CHECK(bounded.truncated);
+        CHECK(bounded.omittedRecordCount == 1);
+        CHECK(projection.CopyPublishedBodyEvents(records, 2, Endpoint(4, 2).body).recordCount == 0);
+    }
+
     TEST_CASE("Physics event projection applies drop-newest and fail-tick overflow policies", "[physics][events][projection]") {
         SECTION("drop newest retains a coherent bounded lifecycle") {
             PhysicsEventProjection projection(1, 4, PhysicsEventOverflowPolicy::DropNewest);
@@ -298,6 +318,9 @@ namespace Horo::Physics::Detail {
             REQUIRE_FALSE(retained.truncated);
             REQUIRE(retained.omittedRecordCount == 0);
             REQUIRE(retained.droppedRecordCount == 2);
+            const auto filtered = projection.CopyPublishedBodyEvents(copied, 1, Endpoint(9).body);
+            CHECK_FALSE(filtered.truncated);
+            CHECK(filtered.droppedRecordCount == 2);
 
             REQUIRE(CapturePair(projection, 2, 1, 2));
             REQUIRE(projection.CompleteTick(2).Value().publishedRecordCount == 1);

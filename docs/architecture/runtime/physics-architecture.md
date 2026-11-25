@@ -894,6 +894,10 @@ in `PhysicsQueryResult`.
 The event reader accepts only the latest completed tick and revision, copying at
 most the caller's bound into caller-owned records and reporting the exact count
 omitted by caller storage separately from the published projection-drop count.
+Clients can also read events for one exact body handle. This read preserves
+publication order and counts only matching records against the caller's bound.
+Producer drops still describe the whole tick. Existing unfiltered callers retain
+the same request and result types.
 Earlier ticks are not readable through this
 capability. It cannot run during stepping or from a solver/tick callback, and
 returns no borrowed projection span. Both paths validate capability and world identity on

@@ -74,12 +74,13 @@ namespace Horo::Physics {
                             .HasValue());
                 const auto publication = world.PublishedTick();
                 std::array<PhysicsEventRecord, 8> events{};
-                const auto read = capability.ReadEvents({.identity = capability.Identity(),
-                                                         .completedTick = publication.eventTick,
-                                                         .publicationRevision = publication.publicationRevision,
-                                                         .maximumRecords = events.size()},
-                                                        events);
+                const auto read = capability.ReadEventsForBody({.identity = capability.Identity(),
+                                                                .completedTick = publication.eventTick,
+                                                                .publicationRevision = publication.publicationRevision,
+                                                                .maximumRecords = events.size()},
+                                                               moving, events);
                 REQUIRE(read.HasValue());
+                REQUIRE_FALSE(read.Value().truncated);
                 for (std::size_t index = 0; index < read.Value().recordCount; ++index) {
                     enters += events[index].kind == PhysicsEventKind::TriggerEnter;
                     exits += events[index].kind == PhysicsEventKind::TriggerExit;

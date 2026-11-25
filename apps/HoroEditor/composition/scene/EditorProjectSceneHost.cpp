@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -26,6 +27,7 @@ namespace Horo::Application::Internal {
     namespace {
         /** @brief Reads one complete published tick using a short, owner-lane Physics capability. */
         std::optional<std::size_t> ReadAgentContactRecords(Physics::PhysicsWorld &world, const Physics::PhysicsPublishedTick published,
+                                                           const std::optional<Physics::BodyHandle> body,
                                                            const std::span<Physics::PhysicsEventRecord> storage) {
             const auto limit = std::min(storage.size(), static_cast<std::size_t>(world.Settings().Values().budgets.maximumEvents));
             if (limit == 0 || published.eventTick == 0 || published.eventTick != published.completedTick)
@@ -34,9 +36,10 @@ namespace Horo::Application::Internal {
             if (access.HasError())
                 return std::nullopt;
             const auto &capability = access.Value();
-            const auto events = capability.ReadEvents({capability.Identity(), published.eventTick, published.publicationRevision,
-                                                       static_cast<std::uint32_t>(limit)},
-                                                      storage.first(limit));
+            const Physics::PhysicsEventReadCommand command{capability.Identity(), published.eventTick, published.publicationRevision,
+                                                           static_cast<std::uint32_t>(limit)};
+            const auto events = body ? capability.ReadEventsForBody(command, *body, storage.first(limit))
+                                     : capability.ReadEvents(command, storage.first(limit));
             const auto revoked = world.RevokeQueryEventCapability(capability);
             if (revoked.HasError() || events.HasError() || events.Value().truncated || events.Value().droppedRecordCount)
                 return std::nullopt;
@@ -91,13 +94,16 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         const auto anchorId = *anchor.Value().authoredObject;
         const auto bindings = scope.Value().bodyBindings;
-        if (std::ranges::find(bindings, anchorId, &Physics::PhysicsSceneBodyBinding::object) == bindings.end())
+        const auto binding = std::ranges::find(bindings, anchorId, &Physics::PhysicsSceneBodyBinding::object);
+        if (binding == bindings.end())
             return std::nullopt;
 
         auto &world = scope.Value().physics;
         const auto tick = world.PublishedTick();
         std::array<Physics::PhysicsEventRecord, 32> records;
-        const auto copied = ReadAgentContactRecords(world, tick, records);
+        const auto other = std::ranges::find(std::next(binding), bindings.end(), anchorId, &Physics::PhysicsSceneBodyBinding::object);
+        const auto filter = other == bindings.end() ? std::optional{binding->handle} : std::nullopt;
+        const auto copied = ReadAgentContactRecords(world, tick, filter, records);
         if (!copied)
             return std::nullopt;
         Editor::EditorPlayContactSnapshot review{.anchor = object,

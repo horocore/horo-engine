@@ -110,6 +110,9 @@ namespace Horo::Physics::Detail {
          * omission from producer drops. */
         [[nodiscard]] PhysicsEventReadCompletion CopyPublishedEvents(std::span<PhysicsEventRecord> records,
                                                                      std::uint32_t maximumRecords) const noexcept;
+        /** @brief Copies incident records in publication order and counts only matching caller omissions. */
+        [[nodiscard]] PhysicsEventReadCompletion CopyPublishedBodyEvents(std::span<PhysicsEventRecord> records,
+                                                                         std::uint32_t maximumRecords, BodyHandle body) const noexcept;
         /** @brief Returns the tick owning PublishedEvents, or zero before first
          * publication. */
         [[nodiscard]] std::uint64_t PublishedTick() const noexcept;
