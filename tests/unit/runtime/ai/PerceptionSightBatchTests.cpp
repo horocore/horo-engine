@@ -298,6 +298,60 @@ namespace Horo::AI {
             CHECK(budget.remainingRaycasts == 10);
         }
 
+        TEST_CASE("Sight rejects a replayed revision after the spatial owner revokes its publication", "[unit][ai][sight][canonical]") {
+            SightScene scene;
+            SightWorld physics;
+            PerceptionSight sight;
+            const auto revision = scene.revision;
+            const auto frame = physics.CompletePending(sight, scene);
+            scene.Publish();
+
+            const auto revoked = sight.Poll(scene.scene->View(), revision, Publication(physics.capability, frame));
+            REQUIRE(revoked.HasValue());
+            CHECK_FALSE(PerceptionSightTestAccess::Pending(sight));
+            CHECK(revoked.Value().count == 0);
+            CHECK_FALSE(revoked.Value().observations.front().source.IsValid());
+        }
+
+        TEST_CASE("Sight reacquires after policy withdrawal and retains gains across position updates", "[unit][ai][sight][canonical]") {
+            SightScene scene;
+            SightWorld physics;
+            PerceptionSight sight;
+            const PerceptionSightPolicy policy{.gainSamples = 2};
+            REQUIRE_FALSE(physics.Sample(sight, scene, policy).observations.front().visible);
+            scene.Publish(Math::WorldCoordinate64::FromMillimeters(0, 0, -9'000));
+            physics.Advance();
+            REQUIRE(physics.Sample(sight, scene, policy).observations.front().visible);
+
+            scene.visibility = PerceptionGameplayVisibility::Hidden;
+            scene.Publish();
+            scene.visibility = PerceptionGameplayVisibility::Everyone;
+            scene.Publish();
+            physics.Advance();
+            CHECK_FALSE(physics.Sample(sight, scene, policy).observations.front().visible);
+            physics.Advance();
+            CHECK(physics.Sample(sight, scene, policy).observations.front().visible);
+        }
+
+        TEST_CASE("Sight staging cannot bind a result to another owner with the same revision", "[unit][ai][sight][canonical]") {
+            SightScene scene;
+            SightWorld physics;
+            PerceptionSight sight;
+            const auto result = physics.Sample(sight, scene);
+            const AgentHandle agent{AiRuntimeIncarnation::Create(9).Value(), {1, 1}};
+            auto memory = RequireFixtureValue(AIPerceptionMemory::Create(77, agent), "create listener memory");
+            const auto listener = PerceptionListenerTypeId::Create(1).Value();
+            const auto view = scene.scene->View();
+            const auto inputs = scene.spatial->Inputs();
+            PerceptionSpatialBroadphase other;
+            const auto sameRevision = RequireFixtureValue(
+                other.Publish(view, scene.revision, inputs.listeners, inputs.sources, inputs.filtering), "publish an independent owner");
+            CHECK(StagePerceptionSightAtSensePoll(view, *sameRevision, result, listener, memory).HasError());
+            CHECK(memory.StoredCount() == 0);
+            REQUIRE(StagePerceptionSightAtSensePoll(view, *scene.spatial, result, listener, memory).HasValue());
+            CHECK(memory.StoredCount() == 1);
+        }
+
         TEST_CASE("Current sight staging reaches memory and rejects policy-revoked observations", "[unit][ai][sight][canonical][filter]") {
             SightScene scene;
             SightWorld physics;

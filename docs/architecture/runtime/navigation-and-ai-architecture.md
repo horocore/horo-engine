@@ -1922,6 +1922,15 @@ view and rejects destroyed or recycled generations; destruction may also eagerly
 call `ForgetSource`. This memory component does not publish to a blackboard or
 choose sense scheduling policy; those remain separate phase owners.
 
+Pending sight queries retain the authorization of the exact Spatial publication
+that admitted their rays. Replaying its revision cannot recover old evidence
+after replacement. Sight staging accepts a result issued by `PerceptionSight`
+with the same live read lease as the destination snapshot. Callers that copy a
+result retain its lease rather than constructing a result from a revision alone.
+Position-only updates can preserve confirmation history
+between sensing windows. Membership and visibility policy changes require fresh
+confirmation before reacquiring visibility.
+
 ## Environment Query System (EQS)
 
 ### EQS Ownership And Provider Execution

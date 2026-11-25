@@ -99,6 +99,28 @@ namespace Horo::AI {
             return Result<bool>::Success(blocked);
         }
 
+        /** @brief Binds completed evidence to the exact publication and live listener before examining observations. */
+        [[nodiscard]] bool CanStageSight(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &filtering,
+                                         const PerceptionSightResult &result, const AIPerceptionMemory &memory) {
+            const auto authorization = filtering.ReadAuthorization();
+            const auto runtime = scene.RuntimeId();
+            return scene.IsCurrent() && result.spatialAuthorization == authorization && authorization->IsCurrent() &&
+                   filtering.Scene() == runtime && result.spatialRevision == filtering.Revision() && result.listener.runtime == runtime &&
+                   scene.Get(result.listener).HasValue() && memory.SceneIncarnation() == runtime.value;
+        }
+
+        /** @brief Refreshes confirmed evidence and preserves memory when the sample is inconclusive. */
+        [[nodiscard]] Result<void> ApplySightObservation(AIPerceptionMemory &memory, PerceptionListenerTypeId listener,
+                                                          const PerceptionSightObservation &entry, std::uint64_t tick) {
+            using enum PerceptionSightEvidence;
+            const PerceptionMemoryKey key{listener, SenseTypeIds::Sight, StimulusTypeIds::Visual, ProjectPerceptionSource(entry.source)};
+            if (entry.evidence == Clear && entry.visible)
+                return memory.Observe({.key = key, .position = entry.sourcePosition}, tick);
+            if (!entry.visible && (entry.evidence == Occluded || entry.evidence == OutsideCone))
+                return memory.MarkLost(key, tick);
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc PerceptionSight::~PerceptionSight */
@@ -111,6 +133,7 @@ namespace Horo::AI {
         if (batch_)
             (void)batch_->Cancel();
         batch_.reset();
+        policyAuthorization_.reset();
         history_ = {};
         result_ = {};
         rayCount_ = 0;
@@ -176,9 +199,13 @@ namespace Horo::AI {
              .affiliation = frame.affiliation});
         if (candidates.HasError())
             return Result<PerceptionSightResult>::Failure(candidates.ErrorValue());
-        const auto previous = history_;
+        const auto policyAuthorization = spatial.ReadPolicyAuthorization();
+        const bool retainHistory = policyAuthorization && policyAuthorization == policyAuthorization_ && policyAuthorization->IsCurrent();
+        const auto previous = retainHistory ? history_ : decltype(history_){};
+        policyAuthorization_ = policyAuthorization;
         InitializeWindow(candidates.Value(), spatial.Revision(), physics.Identity(), frame, policy, budget.simulationTick);
         result_.listener = frame.listener;
+        result_.spatialAuthorization = spatial.ReadAuthorization();
         for (std::size_t index = 0; index < result_.count; ++index) {
             if (const auto error = PrepareCandidate(scene, candidates.Value().candidates[index], listenerPosition.Value(), previous, index,
                                                     budget.remainingRaycasts);
@@ -365,7 +392,9 @@ namespace Horo::AI {
 
     /** @copydoc PerceptionSight::PublicationCurrent */
     bool PerceptionSight::PublicationCurrent(const std::uint64_t spatialRevision, const PerceptionSightPhysicsPublication &physics) const {
-        return spatialRevision == result_.spatialRevision && physics.publicationRevision == frame_.physicsPublicationRevision &&
+        const auto &authorization = result_.spatialAuthorization;
+        return authorization && authorization->IsCurrent() && spatialRevision == result_.spatialRevision &&
+               physics.publicationRevision == frame_.physicsPublicationRevision &&
                physics.completedTick == frame_.physicsCompletedTick && physics.sceneGeneration == frame_.physicsSceneGeneration &&
                physics.identity.world == physicsIdentity_.world &&
                physics.identity.capabilityGeneration == physicsIdentity_.capabilityGeneration;
@@ -386,6 +415,7 @@ namespace Horo::AI {
         if (!current) {
             result_.observations = {};
             result_.count = 0;
+            result_.spatialAuthorization.reset();
             history_ = {};
         }
         if (failure_)
@@ -405,32 +435,20 @@ namespace Horo::AI {
     Result<void> StagePerceptionSightAtSensePoll(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &filtering,
                                                  const PerceptionSightResult &result, const PerceptionListenerTypeId listenerType,
                                                  AIPerceptionMemory &memory) {
-        using enum PerceptionSightEvidence;
-        if (!scene.IsCurrent() || !filtering.ReadAuthorization()->IsCurrent() || filtering.Scene() != scene.RuntimeId() ||
-            result.spatialRevision != filtering.Revision() || result.listener.runtime != scene.RuntimeId() ||
-            scene.Get(result.listener).HasError() || memory.SceneIncarnation() != scene.RuntimeId().value)
+        if (!CanStageSight(scene, filtering, result, memory))
             return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         if (result.pending || !listenerType.IsValid() || result.count > result.observations.size())
             return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
-        for (std::size_t index = 0; index < result.count; ++index) {
-            const auto &entry = result.observations[index];
+        const auto observations = std::span{result.observations}.first(result.count);
+        for (const auto &entry : observations) {
             if (scene.Get(entry.source).HasError() || !filtering.Allows(result.listener, entry.source, SenseTypeIds::Sight))
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionEventFiltered));
         }
         if (const auto advanced = memory.AdvanceTo(result.simulationTick); advanced.HasError())
             return advanced;
-        for (std::size_t index = 0; index < result.count; ++index) {
-            const auto &entry = result.observations[index];
-            const PerceptionMemoryKey key{listenerType, SenseTypeIds::Sight, StimulusTypeIds::Visual,
-                                          ProjectPerceptionSource(entry.source)};
-            if (entry.evidence == Clear && entry.visible) {
-                if (const auto staged = memory.Observe({.key = key, .position = entry.sourcePosition}, result.simulationTick);
-                    staged.HasError())
-                    return staged;
-            } else if (!entry.visible && (entry.evidence == Occluded || entry.evidence == OutsideCone)) {
-                if (const auto staged = memory.MarkLost(key, result.simulationTick); staged.HasError())
-                    return staged;
-            }
+        for (const auto &entry : observations) {
+            if (auto applied = ApplySightObservation(memory, listenerType, entry, result.simulationTick); applied.HasError())
+                return applied;
         }
         return Result<void>::Success();
     }
