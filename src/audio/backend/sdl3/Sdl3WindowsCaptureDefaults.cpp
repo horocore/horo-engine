@@ -189,7 +189,7 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         if (!apartment.Ready())
             return {};
         IMMDeviceEnumerator *raw{};
-        const auto status = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&raw));
+        const auto status = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&raw));
         const ComPtr<IMMDeviceEnumerator> enumerator(raw);
         if (FAILED(status) || !enumerator)
             return {};
