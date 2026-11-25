@@ -286,6 +286,13 @@ namespace Horo::Gameplay {
                                             const PerceptionEventSourceFactory &producer) {
         if (!producer)
             return ai.PollPerceptionAtSensePoll(scene, spatial, tick, fixedStep);
+        const auto admission = ai.NeedsPerceptionPollAtSensePoll(scene, spatial, tick, fixedStep);
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
+        if (!admission.Value())
+            return Result<void>::Success();
+        if (!spatial.CurrentFor(scene))
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
         const auto captured = producer(scene, ai, spatial, tick);
         if (captured.HasError())
             return Result<void>::Failure(captured.ErrorValue());

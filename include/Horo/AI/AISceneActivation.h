@@ -526,6 +526,16 @@ namespace Horo::AI {
                                                                  const PerceptionSpatialBroadphase &spatial,
                                                                  const AiScenePerceptionExecution &execution);
 
+        /** @brief Checks whether an external producer should open a new sensing window.
+         * @param scene Current Scene publication. @param spatial The exact bound spatial owner.
+         * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.
+         * @return True for a new window, false for a successful tick already processed, or its original failure.
+         * @details This check does not reserve or advance the tick. The sensing call revalidates after any producer work.
+         */
+        [[nodiscard]] Result<bool> NeedsPerceptionPollAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                                 const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
+                                                                 Duration fixedStep) const;
+
         /** @brief Advances admitted native senses on the exact committed owner lane.
          * @param scene Current Scene and endpoint lifetime fence. @param spatial Current Scene's admitted spatial owner.
          * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.

@@ -141,7 +141,8 @@ namespace Horo::Gameplay {
     /** @brief Polls native senses and committed Gameplay events together before the host publishes Blackboard values.
      * @param ai Current Scene runtime. @param scene Current structural view. @param spatial Current Spatial publication owner.
      * @param tick Exact simulation tick. @param fixedStep Host simulation quantum.
-     * @param producer Optional explicit producer. Its captures stay owned until the synchronous poll returns.
+     * @param producer Optional explicit producer. It is called only for a new valid tick with current spatial evidence.
+     * Its returned capture stays owned until the synchronous poll returns.
      * @return Success or original producer or sensing failure. An absent producer retains the existing native path.
      */
     [[nodiscard]] Result<void> PollPerceptionWithGameplay(AI::AiSceneRuntime &ai, const Runtime::RuntimeSceneView &scene,

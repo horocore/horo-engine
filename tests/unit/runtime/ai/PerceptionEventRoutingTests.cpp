@@ -380,9 +380,11 @@ namespace Horo::AI {
             closedWindow.Close();
             ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, expiredFeed), AIErrors::PerceptionEventUnauthorized);
             using Window = Result<std::optional<PerceptionEventSource>>;
+            std::size_t captures{};
             const Gameplay::PerceptionEventSourceFactory producer =
                 [&](const Runtime::RuntimeSceneView &current, const AiSceneRuntime &owner, const PerceptionSpatialBroadphase &filter,
                     const std::uint64_t tick) -> Window {
+                ++captures;
                 CHECK(tick == sound.delivery.simulationTick);
                 auto captured = PerceptionEventSource::Capture(current, owner, host, Network::NetworkModeWorldKind::AuthorityServer,
                                                                 *registry, filter, std::span{&sound, 1});
@@ -390,7 +392,13 @@ namespace Horo::AI {
                     return Window::Failure(captured.ErrorValue());
                 return Window::Success(std::move(captured).Value());
             };
+            ExpectError(Gameplay::PollPerceptionWithGameplay(runtime, view, foreignSpatial, 1, quantum, producer),
+                        AIErrors::PerceptionSpatialStale);
+            ExpectError(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 0, quantum, producer), AIErrors::PerceptionMemoryInvalid);
+            CHECK(captures == 0);
             REQUIRE(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 1, quantum, producer).HasValue());
+            REQUIRE(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 1, quantum, producer).HasValue());
+            CHECK(captures == 1);
             REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, 1).HasValue());
             const auto perceived = runtime.ReadPerceptionAtSafePoint(view, listener);
             REQUIRE(perceived.HasValue());

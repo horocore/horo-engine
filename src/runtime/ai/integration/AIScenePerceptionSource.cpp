@@ -579,27 +579,50 @@ namespace Horo::AI {
         return PollScenePerception(scene, spatial, tick, fixedStep, &events);
     }
 
+    namespace {
+        /** @brief Checks the committed sensing clock and preserves the outcome of a repeated tick. */
+        [[nodiscard]] Result<bool> CheckPerceptionTick(const Detail::AiSceneRuntimeState &state, const std::uint64_t tick,
+                                                       const Duration fixedStep, const AiScenePerceptionExecution &policy) {
+            using Admission = Result<bool>;
+            if (tick == 0 || tick < state.lastPerceptionTick || fixedStep.ToNanoseconds() != policy.memory.fixedStep.count())
+                return Admission::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
+            if (tick == state.lastPerceptionTick && state.perceptionPollFailure)
+                return Admission::Failure(*state.perceptionPollFailure);
+            return Admission::Success(tick != state.lastPerceptionTick);
+        }
+    }  // namespace
+
+    /** @copydoc AiSceneRuntime::NeedsPerceptionPollAtSensePoll */
+    Result<bool> AiSceneRuntime::NeedsPerceptionPollAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                              const PerceptionSpatialBroadphase &spatial, const std::uint64_t tick,
+                                                              const Duration fixedStep) const {
+        using Admission = Result<bool>;
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return Admission::Failure(owner.ErrorValue());
+        const auto &policy = active_->perceptionExecution;
+        if (!policy || !policy->generation->CanAdmit())
+            return Admission::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (!scene.IsCurrent() || active_->binding.scene != scene.RuntimeId() || active_->perceptionSpatial != &spatial)
+            return Admission::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        return CheckPerceptionTick(*active_, tick, fixedStep, *policy);
+    }
+
     /** @copydoc AiSceneRuntime::PollScenePerception */
     Result<void> AiSceneRuntime::PollScenePerception(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
                                                       const std::uint64_t tick, const Duration fixedStep, const PerceptionEventFeed *events) {
-        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
-            return owner;
-        const auto state = active_;
-        const auto &policy = state->perceptionExecution;
-        if (!policy || !policy->generation->CanAdmit())
-            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
-        if (!scene.IsCurrent() || active_->binding.scene != scene.RuntimeId() || active_->perceptionSpatial != &spatial)
-            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        const auto admission = NeedsPerceptionPollAtSensePoll(scene, spatial, tick, fixedStep);
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
         if (events) {
             if (events->runtime_ != this || events->spatial_ != &spatial)
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionEventStale));
             if (const auto valid = events->validate_(events->owner_); valid.HasError())
                 return valid;
         }
-        if (tick == 0 || tick < active_->lastPerceptionTick || fixedStep.ToNanoseconds() != policy->memory.fixedStep.count())
-            return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
-        if (tick == active_->lastPerceptionTick)
-            return active_->perceptionPollFailure ? Result<void>::Failure(*active_->perceptionPollFailure) : Result<void>::Success();
+        if (!admission.Value())
+            return Result<void>::Success();
+        const auto state = active_;
+        const auto &policy = state->perceptionExecution;
         active_->lastPerceptionTick = tick;
         active_->perceptionPollFailure.reset();
         AiWorkBudget global{policy->workUnitsPerTick};
