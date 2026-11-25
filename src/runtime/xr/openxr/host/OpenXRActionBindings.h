@@ -384,6 +384,8 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<std::optional<XRPoseSample>> SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
                                                                               Duration ageLimit, const bool &consent) const;
+        /** @brief Checks the native revocation generation of the current gaze route on its owner lane. */
+        [[nodiscard]] bool HasCurrentGazeConsent() const noexcept;
         /** @brief Locates actual primary-stereo views at the runtime's exact predicted display time.
          * @param session Same issued active owner. @param time Actual OS-converted sample plus native frame prediction, no simulation time.
          * @param expectedViews Complete primary view count observed by the same native system census.
@@ -571,6 +573,7 @@ namespace Horo::XR::OpenXRInternal {
             XrSpace gazeSpace{XR_NULL_HANDLE};
             XRCoordinateSpace gazeIdentity;
             mutable std::uint64_t gazeSequence{};
+            std::uint64_t gazeObservationRevision{};
 
             /** @brief Checks the exact current native spaces and origin for a reference calibration. */
             [[nodiscard]] Result<void> ValidateCalibrationBinding(const XRCoordinateSpace &reference,

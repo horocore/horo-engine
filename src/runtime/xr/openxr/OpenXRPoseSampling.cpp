@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -171,6 +172,13 @@ namespace Horo::XR::OpenXRInternal {
                                     : Result<XRPoseDescriptor>::Success(descriptor);
     }
 
+    /** @copydoc OpenXRActionBindings::HasCurrentGazeConsent */
+    bool OpenXRActionBindings::HasCurrentGazeConsent() const noexcept {
+        return std::this_thread::get_id() == controlThread_ && active_ && tracking_.gazeSpace != XR_NULL_HANDLE &&
+               tracking_.gazeObservationRevision == session_->observationRevision_ &&
+               tracking_.gazeObservationRevision != std::numeric_limits<std::uint64_t>::max();
+    }
+
     /** @copydoc OpenXRActionBindings::SampleConsentedGaze */
     Result<std::optional<XRPoseSample>> OpenXRActionBindings::SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
                                                                                   const Duration ageLimit, const bool &consent) const {
@@ -184,7 +192,10 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(current.ErrorValue());
         if (!tracking_.request || tracking_.gazeSpace == XR_NULL_HANDLE)
             return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
-        if (!consent)
+        const auto authorized = [this, &consent] {
+            return consent && HasCurrentGazeConsent();
+        };
+        if (!authorized())
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         if (!cutoff.runtimeSample.IsValid() || !cutoff.simulation || !cutoff.simulation->IsValid() || cutoff.renderPrediction ||
             ageLimit <= Duration{})
@@ -193,7 +204,7 @@ namespace Horo::XR::OpenXRInternal {
         const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, tracking_.gazeAction, XR_NULL_PATH};
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
         const auto queried = dispatch_.poseState(native_.session, &info, &state);
-        if (!consent)
+        if (!authorized())
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         if (queried != XR_SUCCESS)
             return Outcome::Failure(GazeFailure("query gaze activity", queried));
@@ -203,11 +214,13 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Success(std::nullopt);
         if (const auto current = ValidateOwner(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
+        if (!authorized())
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
 
         XrEyeGazeSampleTimeEXT sampleTime{XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT};
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &sampleTime};
         const auto located = dispatch_.locate(tracking_.gazeSpace, tracking_.base, cutoff.runtimeSample.Nanoseconds(), &location);
-        if (!consent)
+        if (!authorized())
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         if (located != XR_SUCCESS)
             return Outcome::Failure(GazeFailure("locate gaze space", located));
@@ -228,6 +241,8 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         if (const auto current = ValidateOwner(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
+        if (!authorized())
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         // Gaze velocity is not part of the granted pointing purpose.
         const auto components = Components(location, XrSpaceVelocity{XR_TYPE_SPACE_VELOCITY});
         auto sample = XRPoseSample::Create({session,

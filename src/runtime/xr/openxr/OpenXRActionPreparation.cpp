@@ -25,6 +25,7 @@ namespace Horo::XR::OpenXRInternal {
         if (owner_.IsValid() || preparation_ || sampling_ || session == attached_.owner)
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "Retire the previous action owner and replace the attached session first."));
+        const auto observationRevision = session_->observationRevision_;
         const auto borrowed = [&] {
             const Operation operation{sampling_};
             return session_->Borrow(session);
@@ -33,6 +34,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(borrowed.ErrorValue());
         native_ = borrowed.Value();
         owner_ = session;
+        tracking_.gazeObservationRevision = observationRevision;
         if (const auto prepared = PrepareTransaction(request, native_.maximumActions); prepared.HasError())
             return prepared;
         if (const auto spaces = tracking_.BindSpaces(session); spaces.HasError()) {
@@ -50,6 +52,7 @@ namespace Horo::XR::OpenXRInternal {
             return lane;
         if (owner_.IsValid() || preparation_ || sampling_ || !actions_.empty() || !sets_.empty())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto observationRevision = session_->observationRevision_;
         const auto borrowed = [&] {
             const Operation operation{sampling_};
             return session_->BorrowPreparedSession(preparation);
@@ -60,6 +63,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "OpenXR action sets attach only once to the same prepared native session."));
         preparation_.emplace(preparation.preflight, preparation.activeAttempt, maximumActions);
+        tracking_.gazeObservationRevision = observationRevision;
         native_ = borrowed.Value();  // maximumActions remains zero: creation is not admission to frame work.
         auto prepared = PrepareTransaction(request, maximumActions);
         if (prepared.HasValue())

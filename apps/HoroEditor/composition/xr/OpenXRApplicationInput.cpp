@@ -347,7 +347,7 @@ namespace Horo::Application::Internal {
                 return current;
             if (!bindingsCurrent())
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-            if (observed.HasValue() && input_.gazeAllowed)
+            if (observed.HasValue() && input_.gazeAllowed && input_.native->HasCurrentGazeConsent())
                 gaze = std::move(observed).Value();
             else if (observed.HasError() &&
                      ErrorChainContains(observed.ErrorValue(), XRErrors::PermissionDenied.domain, XRErrors::PermissionDenied.code))
@@ -716,9 +716,9 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::ReadEyeGaze */
     std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot,
                                                                       const XRRuntimeTime now) const noexcept {
-        if (std::this_thread::get_id() != lane_ || !input_.gazeAllowed || !input_.gaze || input_.gazeRevision != snapshot.Revision() ||
-            input_.gaze->Session() != snapshot.Session() || snapshot.Focus() != XRTrackingFocusState::Focused ||
-            snapshot.State() != XRTrackingState::Active)
+        if (std::this_thread::get_id() != lane_ || !input_.gazeAllowed || !input_.native || !input_.native->HasCurrentGazeConsent() ||
+            !input_.gaze || input_.gazeRevision != snapshot.Revision() || input_.gaze->Session() != snapshot.Session() ||
+            snapshot.Focus() != XRTrackingFocusState::Focused || snapshot.State() != XRTrackingState::Active)
             return std::nullopt;
         const auto observed = input_.gaze->Time().runtimeSample;
         if (now < observed || now.Nanoseconds() - observed.Nanoseconds() > MaximumEyeGazeAge.ToNanoseconds())

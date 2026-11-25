@@ -1,4 +1,6 @@
+#include "OpenXRSessionEvents.h"
 #include "support/OpenXRApplicationNativeScriptTestSupport.h"
+#include "support/OpenXREventScriptTestSupport.h"
 
 #include <cmath>
 #include <limits>
@@ -40,7 +42,7 @@ namespace Horo::Tests::OpenXRAction {
                                                                                 gazeSet, stageBoundaryWarningMeters}});
             }
 
-            void Activate(std::uint32_t maximumSpaces = 3, const bool quad = false) {
+            void Activate(std::uint32_t maximumSpaces = 3, const bool quad = false, XRSessionLifecycle *lifecycle = nullptr) {
                 auto &session = actions.session;
                 if (quad)
                     session.capabilities = Capabilities(16, false, true);
@@ -53,8 +55,15 @@ namespace Horo::Tests::OpenXRAction {
                                                                            .maximumDevices = 1}});
                 REQUIRE(plan.plan.has_value());
                 session.plan = *plan.plan;
-                REQUIRE(session.owner.Activate(session.Request()).HasValue());
-                REQUIRE(actions.owner.Bind(session.Request().candidate).HasValue());
+                auto request = session.Request();
+                if (lifecycle) {
+                    const auto active = lifecycle->Activate(session.capabilities, session.capabilities.System(),
+                                                            session.capabilities.Revision(), session.plan);
+                    REQUIRE(active.HasValue());
+                    request.candidate = active.Value();
+                }
+                REQUIRE(session.owner.Activate(request).HasValue());
+                REQUIRE(actions.owner.Bind(request.candidate).HasValue());
             }
 
             XRTimeEvidence Time() const {
@@ -67,7 +76,17 @@ namespace Horo::Tests::OpenXRAction {
             }
 
             void Sync() {
-                REQUIRE(actions.owner.Sync(actions.session.Request().candidate).HasValue());
+                REQUIRE(actions.owner.Sync(actions.session.owner.Session()).HasValue());
+            }
+        };
+
+        struct GazeEventResources final : IXRSessionResources {
+            Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
+                return Result<void>::Success();
+            }
+
+            void Release(XRSessionPreparation, const XRSessionId &) noexcept override {
+                // Native teardown is owned by the tracking fixture.
             }
         };
 
@@ -161,6 +180,53 @@ namespace Horo::Tests::OpenXRAction {
             CHECK_FALSE(queried);
             CHECK(fixture.actions.script.gaze.locationReads == 0);
         }
+    }
+
+    TEST_CASE("OpenXR gaze discards an in-flight observation after a native focus interruption", "[xr][native][poses][gaze][revocation]") {
+        TrackingFixture fixture;
+        GazeEventResources resources;
+        XRSessionLifecycle lifecycle{resources};
+        REQUIRE(fixture.Prepare(std::nullopt, false, XRActionSetId{1}).HasValue());
+        fixture.Activate(4, false, &lifecycle);
+        auto &native = fixture.actions.session;
+        const auto session = native.owner.Session();
+        for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+            REQUIRE(lifecycle.ApplyEvent(session, event).HasValue());
+        XRFrameLifecycle frames{lifecycle};
+        OpenXRSessionEvents events{native.owner, lifecycle, frames};
+        REQUIRE(events.Bind({&EventScript::GetProc}, {}).HasValue());
+        EventScript script;
+        script.session = native.script.lastSession;
+        script.Push(XR_SESSION_STATE_VISIBLE);
+        script.Push(XR_SESSION_STATE_FOCUSED);
+        bool located = false;
+        auto &gaze = fixture.actions.script.gaze;
+        gaze.sampleTime = 95;
+        gaze.onLocation = [&located] {
+            located = true;
+        };
+        native.fence.onValidate = [&located, &script, &events] {
+            if (!std::exchange(located, false))
+                return;
+            EventScript::active = &script;
+            const auto observed = events.Poll(true);
+            EventScript::active = nullptr;
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().actionsInterrupted);
+        };
+        fixture.Sync();
+        const auto sample = [&fixture, &session] {
+            return fixture.actions.owner.SampleConsentedGaze(session, fixture.Time(), Duration::FromNanoseconds(10), true);
+        };
+        const auto denied = sample();
+        native.fence.onValidate = {};
+        gaze.onLocation = {};
+        RequireFailureIdentity(denied, XRErrors::PermissionDenied);
+        CHECK(lifecycle.Snapshot().admitsActions);
+        const auto reads = gaze.locationReads;
+        fixture.Sync();
+        RequireFailureIdentity(sample(), XRErrors::PermissionDenied);
+        CHECK(gaze.locationReads == reads);
     }
 
     TEST_CASE("OpenXR locates the complete quad projection and fences misplaced insets", "[xr][native][poses][quad]") {

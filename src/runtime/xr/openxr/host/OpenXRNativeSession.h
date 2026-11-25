@@ -479,7 +479,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> DiscardSpatialAnchorWrite(const XRAnchorScope &scope, std::uint64_t generation, std::string_view name);
         friend class OpenXRFrameCompositor;
         friend class OpenXRSessionEvents;
-        friend class OpenXRPlaneCapture;
+        friend class OpenXRActionBindings;
         friend class OpenXRHandTracking;
         friend class OpenXRPlaneCapture;
 
