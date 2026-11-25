@@ -690,12 +690,12 @@ namespace Horo::Tests::VulkanEditor {
             const auto update = [&](bool down, std::uint64_t time) {
                 const auto result = pointer_.Update(port, scene, target, ray, down, time, *this);
                 Check(result, "World pointer");
-                return result.Value().activePointers;
+                return std::pair{result.Value().activePointers, pointer_.ReservesScenePress(result.Value())};
             };
-            REQUIRE(update(true, 1) == 0);
-            CHECK(update(false, 2) == 0);
+            REQUIRE(update(true, 1) == std::pair{0U, true});
+            CHECK(update(false, 2) == std::pair{0U, false});
             CHECK_FALSE(Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene)));
-            CHECK(update(true, 3) == 1);
+            CHECK(update(true, 3) == std::pair{1U, true});
             const auto cue = Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene));
             REQUIRE(cue);
             CHECK(cue->kind == Runtime::Ui::UiFeedbackKind::Focus);
@@ -706,9 +706,9 @@ namespace Horo::Tests::VulkanEditor {
             const auto deferred = pointer_.Cancel(unavailable);
             REQUIRE(deferred.HasError());
             CHECK(deferred.ErrorValue().code.Value() == Runtime::Ui::UiErrors::EventDispatchLifecycleUnavailable.code.Value());
-            CHECK(update(true, 4) == 0);
-            CHECK(update(false, 5) == 0);
-            CHECK(update(true, 6) == 1);
+            CHECK(update(true, 4) == std::pair{0U, true});
+            CHECK(update(false, 5) == std::pair{0U, false});
+            CHECK(update(true, 6) == std::pair{1U, true});
             CHECK(pressed_);
             CHECK(pressCount_ == 2);
             CHECK_FALSE(Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene)));

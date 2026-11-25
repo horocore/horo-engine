@@ -313,6 +313,13 @@ namespace Horo::Application::Internal {
                                                                              const Math::Ray &ray, bool down, std::uint64_t milliseconds,
                                                                              Runtime::Ui::UiEventHandler &observer);
 
+        /** @brief Reserves a routed sample for UI, including a held button awaiting neutral on a replacement canvas.
+         * @pre The result comes from this pointer's last successful Update.
+         * @return Whether another consumer must suppress interpretation of this sample as a scene press. */
+        [[nodiscard]] bool ReservesScenePress(const Runtime::Ui::UiPointerInteractionResult &result) const noexcept {
+            return !armed_ || result.activePointers != 0 || result.defaultPrevented;
+        }
+
         /** @brief Releases all held state and requires a fresh press before another activation.
          * @param port Actual paint owner. @return Cleanup result.
          */

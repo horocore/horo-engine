@@ -230,6 +230,9 @@ Ownership rules:
   referenced plane identities are still live.
   Play mesh hits and listening lineage retain the structural revision of the
   draws, so recycled object identities require a new observation.
+  World UI dispatch owns its targeted and reserved gestures. Scene evidence
+  observes the raw button edge after that routing decision, including releases
+  and UI-owned presses. A held UI press cannot become a later scene reference.
   Mounted XR Play resolves hits against the prepared origin-relative cell
   geometry. The review carries the exact Scene structural revision and uses
   runtime membership for read-only cell references. Cell or origin retirement

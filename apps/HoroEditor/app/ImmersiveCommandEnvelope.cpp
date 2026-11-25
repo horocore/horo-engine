@@ -4,6 +4,20 @@
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc ImmersivePointingPressEdge::Observe */
+    bool ImmersivePointingPressEdge::Observe(const std::uint64_t captureGeneration, const bool down, const bool uiOwned) noexcept {
+        const bool pressed = captureGeneration != 0 && generation_ == captureGeneration && !down_ && down;
+        generation_ = captureGeneration;
+        down_ = down;
+        return pressed && !uiOwned;
+    }
+
+    /** @copydoc ImmersivePointingPressEdge::Reset */
+    void ImmersivePointingPressEdge::Reset() noexcept {
+        generation_ = 0;
+        down_ = false;
+    }
+
     namespace {
         using enum ImmersiveCommandStatus;
 

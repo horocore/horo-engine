@@ -11,6 +11,19 @@
 #include <span>
 
 namespace Horo::Editor {
+    /** @brief Tracks the observed raw button edge while leaving gesture ownership with the routed input owner. */
+    class ImmersivePointingPressEdge final {
+    public:
+        /** @brief Accepts a new scene-owned press in the same capture generation, after a release was observed. */
+        [[nodiscard]] bool Observe(std::uint64_t captureGeneration, bool down, bool uiOwned) noexcept;
+        /** @brief Disarms an outgoing pointer source before its replacement can report a neutral sample. */
+        void Reset() noexcept;
+
+    private:
+        std::uint64_t generation_{};
+        bool down_{};
+    };
+
     /** @brief Bounds the observed transition between released and pressed controller states in Audio time. */
     struct ImmersiveControllerPress final {
         Audio::AudioMonotonicTimestamp earliest;

@@ -2076,19 +2076,19 @@ namespace Horo::Editor {
         public:
             /** @brief Observes one committed input frame. Pointing contributes evidence only. */
             void Update(EditorMicrophoneSpeechSession &speech, const Application::Internal::OpenXRPlayHost &xr,
-                        const std::optional<PointerFrame> &frame) {
+                        const std::optional<PointerFrame> &frame, const bool uiOwned) {
                 if (!frame || !frame->captureTime.poses) {
                     Reset();
                     return;
                 }
                 const auto &time = *frame->captureTime.poses;
                 const auto capture = time.earliest.captureGeneration;
-                const bool pressed = source_ == frame->source && generation_ == capture && !down_ && frame->sample.selectDown;
-                source_ = frame->source;
-                generation_ = capture;
-                down_ = frame->sample.selectDown;
+                if (source_ != frame->source) {
+                    Reset();
+                    source_ = frame->source;
+                }
                 const auto previousAction = std::exchange(actionTime_, frame->captureTime.actions);
-                if (!pressed)
+                if (!pressEdge_.Observe(capture, frame->sample.selectDown, uiOwned))
                     return;
 
                 const auto &pointer = frame->sample;
@@ -2108,8 +2108,7 @@ namespace Horo::Editor {
             void Reset() noexcept {
                 source_.reset();
                 actionTime_.reset();
-                generation_ = 0;
-                down_ = false;
+                pressEdge_.Reset();
             }
 
         private:
@@ -2158,35 +2157,36 @@ namespace Horo::Editor {
 
             std::optional<Source> source_;
             std::optional<Interval> actionTime_;
-            std::uint64_t generation_{};
-            bool down_{};
+            ImmersivePointingPressEdge pressEdge_;
         };
 #endif
 
         /** @brief Composes the selected XR input source with the shared World UI route. */
         class EditorXrWorldUiPointer final : private Runtime::Ui::UiEventHandler {
         public:
-            /** @brief Delivers one current pointer or cancels the outgoing source when admission is lost. */
-            [[nodiscard]] Result<void> Update(const std::optional<Application::Internal::OpenXRWorldUiPointerFrame> &frame,
+            /** @brief Routes a current pointer and reports whether the World UI owns its interaction. */
+            [[nodiscard]] Result<bool> Update(const std::optional<Application::Internal::OpenXRWorldUiPointerFrame> &frame,
                                               const Application::Internal::RuntimeUiPaintPort &port, std::uint64_t milliseconds) {
                 if (!frame)
-                    return Cancel(port);
+                    return CancelToScene(port);
                 const auto target = port.ReadPresentedWorldCanvas(frame->source.scene);
                 if (target.HasError()) {
                     const auto cancelled = Cancel(port);
-                    return Result<void>::Failure(cancelled.HasError() ? WithCause(target.ErrorValue(), cancelled.ErrorValue())
+                    return Result<bool>::Failure(cancelled.HasError() ? WithCause(target.ErrorValue(), cancelled.ErrorValue())
                                                                       : target.ErrorValue());
                 }
                 if (!target.Value())
-                    return Cancel(port);
+                    return CancelToScene(port);
                 if (current_ != frame->source) {
                     if (const auto cancelled = Cancel(port); cancelled.HasError())
-                        return cancelled;
+                        return Result<bool>::Failure(cancelled.ErrorValue());
                     current_ = frame->source;
                 }
                 const auto applied = pointer_.Update(port, frame->source.scene, *target.Value(), frame->sample.ray,
                                                      frame->sample.selectDown, milliseconds, *this);
-                return applied.HasError() ? Result<void>::Failure(applied.ErrorValue()) : Result<void>::Success();
+                if (applied.HasError())
+                    return Result<bool>::Failure(applied.ErrorValue());
+                return Result<bool>::Success(pointer_.ReservesScenePress(applied.Value()));
             }
 
             /** @brief Neutralizes the existing gesture before focus, presentation or source ownership changes. */
@@ -2200,6 +2200,12 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Releases any previous canvas capture before yielding the pointer to scene observation. */
+            Result<bool> CancelToScene(const Application::Internal::RuntimeUiPaintPort &port) {
+                const auto result = Cancel(port);
+                return result.HasError() ? Result<bool>::Failure(result.ErrorValue()) : Result<bool>::Success(false);
+            }
+
             Result<Runtime::Ui::UiEventResponse> Handle(Runtime::Ui::UiElementHandle, Runtime::Ui::UiEventPhase,
                                                         const Runtime::Ui::UiRoutedEvent &) override {
                 return Result<Runtime::Ui::UiEventResponse>::Success({});
@@ -2764,11 +2770,14 @@ namespace Horo::Editor {
                     const auto milliseconds =
                         static_cast<std::uint64_t>(context.presentationAdmittedDuration.ToNanoseconds() / nanosecondsPerMillisecond);
                     const auto pointer = composition.xrPlay->ReadWorldUiPointer(p_->options.xrInputPlayer->player);
+                    const auto routed = xrWorldUiPointer_.Update(pointer, authorities_.ui, milliseconds);
+                    if (routed.HasError())
+                        return Result<void>::Failure(routed.ErrorValue());
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
                     if (auto *speech = screenHost_->Services().TryGet<EditorMicrophoneSpeechSession>())
-                        xrSpeechPointing_.Update(*speech, *composition.xrPlay, pointer);
+                        xrSpeechPointing_.Update(*speech, *composition.xrPlay, pointer, routed.Value());
 #endif
-                    return xrWorldUiPointer_.Update(pointer, authorities_.ui, milliseconds);
+                    return Result<void>::Success();
                 }
 #endif
                 return Result<void>::Success();

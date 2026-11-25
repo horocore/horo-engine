@@ -205,6 +205,21 @@ namespace Horo::Editor {
             CHECK_FALSE(speechOnly.envelope->IsCurrent());
         }
 
+        TEST_CASE("World UI presses do not become scene evidence while held or after a source replacement", "[agent][immersive][speech]") {
+            ImmersivePointingPressEdge edge;
+            CHECK_FALSE(edge.Observe(8, false, false));
+            CHECK_FALSE(edge.Observe(8, true, true));
+            CHECK_FALSE(edge.Observe(8, true, false));
+            CHECK_FALSE(edge.Observe(8, false, false));
+            CHECK(edge.Observe(8, true, false));
+            CHECK_FALSE(edge.Observe(8, true, false));
+            edge.Reset();
+            CHECK_FALSE(edge.Observe(8, true, false));
+            CHECK_FALSE(edge.Observe(9, true, false));
+            CHECK_FALSE(edge.Observe(9, false, false));
+            CHECK(edge.Observe(9, true, false));
+        }
+
         TEST_CASE("Pointing review preserves distinct locations on the same object", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 9;
             ImmersiveSpatialObservation first{.controllerPress = ImmersiveControllerPress{},
