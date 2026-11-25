@@ -22,6 +22,27 @@ namespace Horo::Editor {
         return preview_ ? preview_->Speech().Hypothesis().text : std::string_view{};
     }
 
+    /** @copydoc EditorImmersiveListening::ReviewReferences */
+    std::optional<AgentSceneReferenceReview> EditorImmersiveListening::ReviewReferences(
+        const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review) const {
+        if (!preview_ || !review)
+            return std::nullopt;
+        const auto current = Current();
+        if (!current || !preview_->IsCurrent(current->interaction.cutoff))
+            return std::nullopt;
+        const auto &context = preview_->Speech().Context();
+        const auto &identity = context.Identity();
+        const auto selection = context.Selection();
+        if (selection.size() > AgentSceneSelectionSnapshot::MaximumObjects)
+            return std::nullopt;
+
+        std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
+        for (std::size_t index = 0; index < selection.size(); ++index)
+            objects[index] = selection[index].value;
+        return review(
+            {identity.documentOpening, identity.documentRevision, identity.worldGeneration, std::span{objects}.first(selection.size())});
+    }
+
     bool EditorImmersiveListening::CanListen() {
         return microphone_.CanRecord() && microphone_.Status() == EditorMicrophonePermissionStatus::Granted &&
                ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted && xr_.ReadListeningScope(player_).has_value();

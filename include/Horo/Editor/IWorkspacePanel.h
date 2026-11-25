@@ -118,6 +118,8 @@ namespace Horo::Editor {
         std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
         /** @brief Captures bounded selected Scene object IDs on the workspace owner lane. */
         std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection{};
+        /** @brief Revalidates captured scene references on the workspace owner lane for a read-only review. */
+        std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences{};
         /** @brief Optional rooted read authority for explicit saved-file review, bound to generation one. */
         std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles{};
         std::string_view agentProjectReadIdentity{}; /**< Exact workspace reader identity, borrowed during attachment. */

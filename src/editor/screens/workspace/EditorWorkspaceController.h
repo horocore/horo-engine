@@ -339,6 +339,8 @@ namespace Horo::Editor {
 
         /** @brief Captures the current ordinary Scene selection and its revocable revision on the owner lane. */
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection();
+        /** @brief Reviews captured references against the same document and current Play scene. */
+        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewAgentSceneReferences(const AgentSceneReferenceRequest &request) const;
 
         /** @brief Captures the currently authored camera and selection for one explicit local review. */
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport(AgentViewportComponents components);

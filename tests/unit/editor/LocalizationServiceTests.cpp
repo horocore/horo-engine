@@ -206,6 +206,15 @@ namespace {
             "workspace.local_agent.xr_listening_finish",
             "workspace.local_agent.xr_listening_cancel",
             "workspace.local_agent.xr_listening_discard",
+            "workspace.local_agent.xr_reference_review",
+            "workspace.local_agent.xr_reference_stale",
+            "workspace.local_agent.xr_reference_revision",
+            "workspace.local_agent.xr_reference_ambiguous",
+            "workspace.local_agent.xr_reference_available",
+            "workspace.local_agent.xr_reference_hidden",
+            "workspace.local_agent.xr_reference_locked",
+            "workspace.local_agent.xr_reference_deleted",
+            "workspace.local_agent.xr_reference_out_of_scope",
         };
         RequireCatalogKeys(service, keys);
     }

@@ -804,6 +804,24 @@ namespace {
         static_cast<void>(subscription);
     }
 
+    /** @brief Checks the read-only candidate review against a running editor scene. */
+    void VerifyPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene,
+                                   const SceneObjectId selected) {
+        const auto capturedSelection = workspace.CaptureAgentSceneSelection();
+        REQUIRE(capturedSelection);
+        const std::array candidates{selected.value, SceneObjectId{1}.value, std::uint64_t{999999}};
+        AgentSceneReferenceRequest request{capturedSelection->documentEpoch, capturedSelection->documentRevision, scene.value, candidates};
+        const auto references = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(references);
+        REQUIRE(references->Candidates().size() == candidates.size());
+        CHECK(references->RequiresClarification());
+        CHECK(references->Candidates()[0].state == AgentSceneReferenceState::Available);
+        CHECK(references->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
+        CHECK(references->Candidates()[2].state == AgentSceneReferenceState::Deleted);
+        ++request.documentRevision;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+    }
+
     TEST_CASE("Play Decision navigation honors the exact Scene and report identities", "[unit][editor][play][ai]") {
         Tests::OwnedTestDirectory project{"workspace-decision-navigation"};
         const auto scenePath = project.Path() / "assets/scenes/main.horo";
@@ -943,6 +961,7 @@ namespace {
         workspace.ProcessCommand(navigate);
         CHECK(workspace.ViewModel().primarySelection == original);
         CHECK(workspace.ViewModel().hierarchyRevealObject == original);
+        VerifyPlayReferenceReview(workspace, first.scene, original);
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);

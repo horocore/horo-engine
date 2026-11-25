@@ -596,6 +596,46 @@ namespace Horo::Editor {
         return CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
     }
 
+    namespace {
+        /** @brief Checks candidate eligibility against authored state and committed Play membership. */
+        AgentSceneReferenceState ClassifySelectedReference(const std::span<const SceneObjectSnapshot> objects,
+                                                           const std::span<const SceneObjectId> selection,
+                                                           const Runtime::RuntimeSceneView &play, const SceneObjectId object) {
+            using enum AgentSceneReferenceState;
+            if (std::ranges::find(objects, object, &SceneObjectSnapshot::id) == objects.end())
+                return Deleted;
+            if (std::ranges::find(selection, object) == selection.end())
+                return OutOfScope;
+            const auto editorState = ResolveSceneObjectEditorState(objects, object);
+            if (!editorState)
+                return OutOfScope;
+            if (!editorState->effectivelyVisible)
+                return Hidden;
+            if (editorState->effectivelyLocked)
+                return Locked;
+            return play.Find({object.value}) ? Available : OutOfScope;
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceController::ReviewAgentSceneReferences */
+    std::optional<AgentSceneReferenceReview> EditorWorkspaceController::ReviewAgentSceneReferences(
+        const AgentSceneReferenceRequest &request) const {
+        const auto play = m_playSession.SceneView();
+        if (m_playSession.State() != EditorPlaySessionState::Playing || !play || !play->IsCurrent() ||
+            play->RuntimeId().value != request.worldGeneration || play->DefinitionRevision().value != m_document.State().value)
+            return std::nullopt;
+        if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value ||
+            request.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects)
+            return std::nullopt;
+
+        const auto objects = m_document.Objects();
+        const auto &selection = m_selection.Current().objects;
+        AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
+        for (const auto object : request.objects)
+            review.candidates[review.count++] = {object, ClassifySelectedReference(objects, selection, *play, {object})};
+        return review;
+    }
+
     /** @copydoc EditorWorkspaceController::CaptureAgentViewport */
     std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentViewport(const AgentViewportComponents components) {
         const auto &camera = m_viewport.Current().camera;

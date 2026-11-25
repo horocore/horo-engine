@@ -212,6 +212,10 @@ Ownership rules:
   requested separately. Play capture retains only a transient transcript preview
   and does not grant model, tool or mutation authority. The panel clears capture
   when presentation, selection or the Play lineage is withdrawn.
+- The local Agent panel can request a read-only review of captured selection
+  references. The workspace checks the exact authored revision and active Play
+  scene, then reports each candidate's visibility, lock, or scope status.
+  Multiple captured candidates require clarification.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

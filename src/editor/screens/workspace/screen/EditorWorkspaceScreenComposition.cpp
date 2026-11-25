@@ -211,6 +211,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 [this] {
             return controller_->CaptureAgentSceneSelection();
         },
+            .reviewAgentSceneReferences =
+                [this](const AgentSceneReferenceRequest &request) {
+            return controller_->ReviewAgentSceneReferences(request);
+        },
             .agentProjectFiles = agentProjectFiles_,
             .agentProjectReadIdentity = agentProjectReadIdentity_,
             .captureEditorDiagnostics =

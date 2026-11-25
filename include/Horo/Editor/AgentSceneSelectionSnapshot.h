@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace Horo::Editor {
     inline constexpr char LocalAgentWorkspacePanelId[] = "horo.local_agent";
@@ -59,5 +60,45 @@ namespace Horo::Editor {
         std::optional<AgentViewportOverview> viewport; /**< Present only for a separately requested viewport review. */
         std::array<AgentViewportTransform, MaximumObjects> transforms{};
         std::size_t transformCount{};
+    };
+
+    /** @brief Eligibility of an explicitly selected authored object in a captured Play scene. */
+    enum class AgentSceneReferenceState : std::uint8_t {
+        Available,
+        Hidden,
+        Locked,
+        Deleted,
+        OutOfScope
+    };
+
+    /** @brief Read-only request to review the captured selection against its exact authoring and Play scope. */
+    struct AgentSceneReferenceRequest final {
+        std::uint64_t documentEpoch{};
+        std::uint64_t documentRevision{};
+        std::uint64_t worldGeneration{};
+        std::span<const std::uint64_t> objects;
+    };
+
+    /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */
+    struct AgentSceneReferenceReview final {
+        struct Candidate final {
+            std::uint64_t object{};
+            AgentSceneReferenceState state{AgentSceneReferenceState::OutOfScope};
+        };
+
+        std::uint64_t documentRevision{};
+        std::array<Candidate, AgentSceneSelectionSnapshot::MaximumObjects> candidates{};
+        std::size_t count{};
+
+        /** @brief Indicates that selection alone cannot establish the intended referent. */
+        [[nodiscard]] bool RequiresClarification() const noexcept {
+            return count > 1;
+        }
+
+        [[nodiscard]] std::span<const Candidate> Candidates() const & noexcept {
+            return std::span{candidates}.first(count);
+        }
+
+        [[nodiscard]] std::span<const Candidate> Candidates() const && = delete;
     };
 }  // namespace Horo::Editor

@@ -304,6 +304,9 @@ namespace Horo::Editor {
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                reviewAgentSceneReferences_ = context.reviewAgentSceneReferences;
+#endif
                 captureAgentViewport_ = context.captureAgentViewport;
                 takeAgentViewportReview_ = context.takeAgentViewportReview;
                 captureEditorDiagnostics_ = context.captureEditorDiagnostics;
@@ -424,6 +427,8 @@ namespace Horo::Editor {
                 if (listening_ && listening_->Status() != EditorImmersiveListening::State::Idle)
                     listening_->Cancel();
                 ResetListeningInput();
+                listeningReferences_.reset();
+                requestedListeningReferences_ = false;
 #endif
             }
 
@@ -508,6 +513,8 @@ namespace Horo::Editor {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(state)), Theme::Text(), fonts);
                 if (state == Idle || state == Interrupted) {
+                    listeningReferences_.reset();
+                    requestedListeningReferences_ = false;
                     DrawListeningStart(context);
                     return;
                 }
@@ -515,16 +522,65 @@ namespace Horo::Editor {
                     listening_->Finish();
                 const bool hasTranscript = state == SpeechOnly || state == Spatial;
                 if (Button(locale, hasTranscript ? "xr_listening_discard" : "xr_listening_cancel", true)) {
-                    listening_->Cancel();
+                    CancelListening();
                     return;
                 }
                 if (const auto transcript = listening_->Transcript(); !transcript.empty())
                     Ui::WrappedText(width, transcript, Theme::Text(), fonts);
+                if (hasTranscript)
+                    DrawListeningReferences(context);
+            }
+
+            /** @brief Projects owner-issued reference states without selecting a candidate. */
+            static const char *ReferenceStateKey(const AgentSceneReferenceState state) noexcept {
+                using enum AgentSceneReferenceState;
+                switch (state) {
+                    case Available:
+                        return "xr_reference_available";
+                    case Hidden:
+                        return "xr_reference_hidden";
+                    case Locked:
+                        return "xr_reference_locked";
+                    case Deleted:
+                        return "xr_reference_deleted";
+                    case OutOfScope:
+                        return "xr_reference_out_of_scope";
+                }
+                return "xr_reference_out_of_scope";
+            }
+
+            /** @brief Rechecks the captured selection on demand and displays its exact revision and every candidate. */
+            void DrawListeningReferences(const EditorGuiContext &context) {
+                const auto &locale = context.localization;
+                if (Button(locale, "xr_reference_review", static_cast<bool>(reviewAgentSceneReferences_))) {
+                    listeningReferences_ = listening_->ReviewReferences(reviewAgentSceneReferences_);
+                    requestedListeningReferences_ = true;
+                }
+                if (!requestedListeningReferences_)
+                    return;
+                const auto width = ImGui::GetContentRegionAvail().x;
+                const auto &fonts = context.theme.fonts;
+                if (!listeningReferences_) {
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_stale"), Theme::Muted(), fonts);
+                    return;
+                }
+                const auto &review = *listeningReferences_;
+                Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
+                                Theme::Muted(), fonts);
+                if (review.RequiresClarification())
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
+                for (const auto &candidate : review.Candidates())
+                    Ui::WrappedText(width,
+                                    LocalizedText(locale, ReferenceStateKey(candidate.state)) + " #" + std::to_string(candidate.object),
+                                    Theme::Text(), fonts);
             }
 
             EditorImmersiveListening *listening_{};
             int listeningInput_{-1};
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
+            std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
+            std::optional<AgentSceneReferenceReview> listeningReferences_;
+            bool requestedListeningReferences_{};
 #endif
 
             enum class BuildContextChoice {
@@ -587,6 +643,9 @@ namespace Horo::Editor {
                 patchDestination_.clear();
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                reviewAgentSceneReferences_ = {};
+#endif
                 captureAgentViewport_ = {};
                 takeAgentViewportReview_ = {};
                 captureEditorDiagnostics_ = {};

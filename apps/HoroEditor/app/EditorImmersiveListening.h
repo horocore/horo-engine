@@ -6,6 +6,8 @@
 #include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "OpenXRPlayHost.h"
 
+#include <functional>
+
 namespace Horo::Editor {
     /** @brief Retains and revalidates one explicitly selected local capture while the editor panel is attached. */
     class EditorImmersiveListening final {
@@ -26,6 +28,9 @@ namespace Horo::Editor {
         /** @brief Returns the current UI state and a transient preview, if the captured context remains valid. */
         [[nodiscard]] State Status() const noexcept;
         [[nodiscard]] std::string_view Transcript() const & noexcept;
+        /** @brief Reads a review of the exact captured selection on the workspace owner lane. */
+        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewReferences(
+            const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review) const;
         [[nodiscard]] bool CanListen();
         [[nodiscard]] bool NeedsMicrophonePermission();
         [[nodiscard]] bool NeedsSpeechPermission() const noexcept;
