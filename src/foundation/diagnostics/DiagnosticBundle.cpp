@@ -202,29 +202,43 @@ namespace Horo::Diagnostics {
             return Withheld;
         }
 
+        /** @brief Keeps sanitized records without copying original map keys that could encode a private identity. */
+        void AppendRedactedEntries(Json &value, Json entries) {
+            constexpr std::string_view member = "redactedEntries";
+            if (auto existing = value.find(member); existing != value.end()) {
+                entries.insert(entries.begin(), std::move(*existing));
+                *existing = std::move(entries);
+                return;
+            }
+            value[member] = std::move(entries);
+        }
+
         /** @brief Withholds records that may repeat private descendant values, while preserving unrelated aggregate entries. */
         DiagnosticRedaction RedactObject(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
             const bool hasInlineText = !namespaces.empty() && HasInlineText(value);
+            Json sanitizedEntries;
             bool privateDescendant = false;
             for (auto child = value.begin(); child != value.end();) {
                 const auto redaction = RedactJson(*child, namespaces);
+                const bool sensitiveKey = Detail::IsSensitiveKey(child.key());
                 if (redaction != Kept) {
                     if (hasInlineText || IsCausalField(child.key())) {
                         value = nullptr;
                         return Withheld;
                     }
                     privateDescendant = true;
-                    // A dynamic member name can carry the same data as the withheld value.
-                    if (redaction == Withheld) {
-                        child = value.erase(child);
-                        continue;
-                    }
+                    if (redaction == DescendantWithheld && !sensitiveKey)
+                        sanitizedEntries.push_back(std::move(*child));
+                    child = value.erase(child);
+                    continue;
                 }
-                if (Detail::IsSensitiveKey(child.key()))
+                if (sensitiveKey)
                     *child = "[REDACTED]";
                 ++child;
             }
+            if (!sanitizedEntries.empty())
+                AppendRedactedEntries(value, std::move(sanitizedEntries));
             return FinishAggregate(value, privateDescendant);
         }
 

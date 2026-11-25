@@ -620,9 +620,12 @@ TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics"
                << R"("private-direct-slot-key":{"domain":"horo.save","message":"private-save-detail"},)"
                << R"("private-nested-player-key":{"latest":{"domain":"horo.save","message":"private-save-detail"}},)"
                << R"("private-array-slot-key":[{"domain":"horo.save","message":"private-save-detail"}],)"
-               << R"("group":[{"domain":"horo.scene","message":"safe-first"},)"
+               << R"("private-mixed-slot-key":[{"domain":"horo.scene","message":"safe-first"},)"
                << R"({"domain":"horo.save","message":"private-save-detail"},)"
-               << R"({"domain":"horo.scene","message":"safe-second"}]}})" << '\n';
+               << R"({"domain":"horo.scene","message":"safe-second"}],)"
+               << R"("redactedEntries":{"domain":"horo.scene","message":"safe-existing-entry"},)"
+               << R"("private-token-group":[{"domain":"horo.scene","message":"private-credential-copy"},)"
+               << R"({"domain":"horo.save","message":"private-save-detail"}]}})" << '\n';
         REQUIRE(output.good());
     }
     const auto bundled = session.host->GenerateDiagnosticBundle(
@@ -631,10 +634,12 @@ TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics"
     REQUIRE(bundled.HasValue());
     const auto archive = Read(bundled.Value().outputPath);
     for (const std::string_view withheld : {"private-direct-slot-key", "private-nested-player-key", "private-array-slot-key",
+                                           "private-mixed-slot-key", "private-token-group", "private-credential-copy",
                                            "private-save-detail"})
         CHECK(archive.find(withheld) == std::string::npos);
     CHECK(archive.find("safe-first") < archive.find("safe-second"));
     CHECK(archive.find("safe-second") != std::string::npos);
+    CHECK(archive.find("safe-existing-entry") != std::string::npos);
 }
 
 TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before publication", "[save][telemetry][privacy][bundle]") {

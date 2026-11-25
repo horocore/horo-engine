@@ -1846,6 +1846,9 @@ keeps the producer's result inside the storage owner. Each projected cause uses
 only its registered Save descriptor. Unknown causes use the generic diagnostic
 code, and projection stops at the fixed diagnostic cause limit. Source text and
 attached diagnostic fields never cross this boundary.
+When a diagnostic bundle removes private Save records from a mixed aggregate,
+it retains independently classified records under a neutral key. The original
+group key can contain a player or slot name and is withheld.
 
 Current production hooks cover participant capture, archive finalization,
 migration execution, slot commit/recovery, staged restore preparation, arbiter
