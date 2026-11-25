@@ -405,18 +405,23 @@ namespace Horo::Application::Internal {
         const auto &b = other.interaction;
         return a.scene == b.scene && a.player == b.player && a.assignmentRevision == b.assignmentRevision &&
                a.cutoff.session == b.cutoff.session && a.cutoff.origin == b.cutoff.origin &&
-               a.cutoff.bindingRevision == b.cutoff.bindingRevision && reference == other.reference && capabilities == other.capabilities;
+               a.cutoff.bindingRevision == b.cutoff.bindingRevision && reference == other.reference && capabilities == other.capabilities &&
+               structuralRevision == other.structuralRevision;
     }
 
     /** @copydoc OpenXRPlayHost::ReadListeningScope */
     std::optional<OpenXRPlayListeningScope> OpenXRPlayHost::ReadListeningScope(const Input::PlayerId player) const {
         const auto tracking = CurrentInteractionTracking(player);
-        if (tracking.HasError() || (scene_->geometry && !scene_->geometry->IsMountedSourceCurrent()))
+        if (tracking.HasError() || !scene_->geometry || !scene_->geometry->IsMountedSourceCurrent())
+            return std::nullopt;
+        const auto revision = scene_->geometry->sourceScene.StructuralRevision();
+        if (revision == 0)
             return std::nullopt;
         const auto &snapshot = *tracking.Value();
         return OpenXRPlayListeningScope{{DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment},
                                         scene_->references.local.id,
-                                        sessions_->Snapshot().capabilityRevision};
+                                        sessions_->Snapshot().capabilityRevision,
+                                        revision};
     }
 
     /** @copydoc OpenXRPlayHost::ReadInteractionSources */

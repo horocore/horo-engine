@@ -645,8 +645,7 @@ namespace Horo::Editor {
                                                                                const Runtime::RuntimeSceneView &play) {
             if (!request.objects.empty() || request.locations.size() > AgentSceneSelectionSnapshot::MaximumObjects)
                 return std::nullopt;
-            AgentSceneReferenceReview review{.documentRevision = request.documentRevision,
-                                             .mounted = request.mountedStructuralRevision != 0};
+            AgentSceneReferenceReview review{.documentRevision = request.documentRevision, .mounted = request.mounted};
             for (const auto &location : request.locations) {
                 if (!Math::IsFinite(location.worldPosition))
                     return std::nullopt;
@@ -668,8 +667,7 @@ namespace Horo::Editor {
                                                                              const Runtime::RuntimeSceneView &play) {
             if (!request.locations.empty() || request.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects)
                 return std::nullopt;
-            AgentSceneReferenceReview review{.documentRevision = request.documentRevision,
-                                             .mounted = request.mountedStructuralRevision != 0};
+            AgentSceneReferenceReview review{.documentRevision = request.documentRevision, .mounted = request.mounted};
             for (const auto object : request.objects) {
                 const SceneObjectId id{object};
                 const bool admitted =
@@ -691,9 +689,9 @@ namespace Horo::Editor {
         if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value)
             return std::nullopt;
 
-        const bool mounted = request.mountedStructuralRevision != 0;
-        if (mounted && (!m_mountedWorldPlaySelected || request.source == AgentSceneReferenceSource::Selection ||
-                        request.mountedStructuralRevision != play->StructuralRevision()))
+        if (request.source != AgentSceneReferenceSource::Selection && request.structuralRevision != play->StructuralRevision())
+            return std::nullopt;
+        if (request.mounted && (!m_mountedWorldPlaySelected || request.source == AgentSceneReferenceSource::Selection))
             return std::nullopt;
         const auto objects = m_document.Objects();
         if (request.source == AgentSceneReferenceSource::Location)

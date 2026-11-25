@@ -93,6 +93,14 @@ namespace Horo::Editor {
             return true;
         }
 
+        /** @brief All pointing receipts must come from one live scene revision and draw source. */
+        bool MatchesPointingScope(const ImmersivePointingHits &result, const ImmersivePointingHits &hits) noexcept {
+            if (hits.worldGeneration != result.worldGeneration || hits.structuralRevision == 0)
+                return false;
+            return result.structuralRevision == 0 ||
+                   (result.structuralRevision == hits.structuralRevision && result.mounted == hits.mounted);
+        }
+
         /** @brief Copies distinct current surface candidates or rejects the entire incomplete review. */
         bool AppendSurfaceHits(ImmersiveSurfaceHits &output, const ImmersiveSurfaceHits &source,
                                const std::span<const XR::XRPlaneObservation> current) noexcept {
@@ -137,21 +145,18 @@ namespace Horo::Editor {
                                                                       const std::uint64_t worldGeneration,
                                                                       const ImmersivePointingReviewKind kind) noexcept {
         ImmersivePointingHits result{.worldGeneration = worldGeneration};
-        bool queried{};
         for (const auto &observation : aligned) {
             if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
                 continue;
             const auto &hits = observation.pointing;
-            if (!observation.controllerPress || !hits || hits->worldGeneration != worldGeneration)
-                return std::nullopt;
-            if (queried && result.mountedStructuralRevision != hits->mountedStructuralRevision)
+            if (!observation.controllerPress || !hits || !MatchesPointingScope(result, *hits))
                 return std::nullopt;
             if (!AppendPointingHits(result, *hits, kind))
                 return std::nullopt;
-            result.mountedStructuralRevision = hits->mountedStructuralRevision;
-            queried = true;
+            result.structuralRevision = hits->structuralRevision;
+            result.mounted = hits->mounted;
         }
-        return queried ? std::optional{result} : std::nullopt;
+        return result.structuralRevision != 0 ? std::optional{result} : std::nullopt;
     }
 
     /** @copydoc ImmersiveCommandEnvelope::IsCurrent */

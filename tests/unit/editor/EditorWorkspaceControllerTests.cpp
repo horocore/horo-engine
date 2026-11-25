@@ -805,12 +805,13 @@ namespace {
     }
 
     /** @brief Checks the read-only candidate review against a running editor scene. */
-    void VerifyPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene,
+    void VerifyPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::RuntimeSceneView &play,
                                    const SceneObjectId selected) {
         const auto capturedSelection = workspace.CaptureAgentSceneSelection();
         REQUIRE(capturedSelection);
         const std::array candidates{selected.value, SceneObjectId{1}.value, std::uint64_t{999999}, std::uint64_t{3}, std::uint64_t{4}};
-        AgentSceneReferenceRequest request{capturedSelection->documentEpoch, capturedSelection->documentRevision, scene.value, candidates};
+        AgentSceneReferenceRequest request{capturedSelection->documentEpoch, capturedSelection->documentRevision, play.RuntimeId().value,
+                                           candidates};
         const auto references = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(references);
         REQUIRE(references->Candidates().size() == candidates.size());
@@ -819,12 +820,17 @@ namespace {
         CHECK(references->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
         CHECK(references->Candidates()[2].state == AgentSceneReferenceState::Deleted);
         request.source = AgentSceneReferenceSource::Pointing;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.structuralRevision = play.StructuralRevision();
         const auto pointed = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(pointed);
         CHECK(pointed->RequiresClarification());
         CHECK(pointed->Candidates()[1].state == AgentSceneReferenceState::Available);
         CHECK(pointed->Candidates()[3].state == AgentSceneReferenceState::Hidden);
         CHECK(pointed->Candidates()[4].state == AgentSceneReferenceState::Locked);
+        ++request.structuralRevision;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.structuralRevision = play.StructuralRevision();
         ++request.documentRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
     }
@@ -840,7 +846,8 @@ namespace {
                                            .worldGeneration = play.RuntimeId().value,
                                            .source = AgentSceneReferenceSource::Location,
                                            .locations = points,
-                                           .mountedStructuralRevision = play.StructuralRevision()};
+                                           .structuralRevision = play.StructuralRevision(),
+                                           .mounted = true};
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(true);
         const auto mounted = workspace.ReviewAgentSceneReferences(request);
@@ -851,22 +858,24 @@ namespace {
         CHECK(mounted->Candidates()[0].worldPosition == points[0].worldPosition);
         CHECK(mounted->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
         CHECK_FALSE(mounted->Candidates()[1].worldPosition);
-        ++request.mountedStructuralRevision;
+        ++request.structuralRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(false);
     }
 
     /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */
-    void VerifyPlayLocationReview(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene, const SceneObjectId selected) {
+    void VerifyPlayLocationReview(EditorWorkspaceController &workspace, const Runtime::RuntimeSceneView &play,
+                                  const SceneObjectId selected) {
         const auto captured = workspace.CaptureAgentSceneSelection();
         REQUIRE(captured);
         const std::array locations{AgentSceneReferencePoint{selected.value, {1, 2, 3}}, AgentSceneReferencePoint{selected.value, {1, 2, 4}},
                                    AgentSceneReferencePoint{999999, {5, 6, 7}}};
         const AgentSceneReferenceRequest request{.documentEpoch = captured->documentEpoch,
                                                  .documentRevision = captured->documentRevision,
-                                                 .worldGeneration = scene.value,
+                                                 .worldGeneration = play.RuntimeId().value,
                                                  .source = AgentSceneReferenceSource::Location,
-                                                 .locations = locations};
+                                                 .locations = locations,
+                                                 .structuralRevision = play.StructuralRevision()};
         const auto review = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(review);
         REQUIRE(review->Candidates().size() == 3);
@@ -889,6 +898,39 @@ namespace {
         REQUIRE(review);
         CHECK(review->Candidates().empty());
         CHECK_FALSE(review->RequiresClarification());
+    }
+
+    /** @brief Retires old pointing evidence when the live scene publishes a structural edit. */
+    void VerifyPlayPointingAfterStructuralCommit(EditorWorkspaceController &workspace, Runtime::RuntimeSceneService &scenes,
+                                                 const SceneObjectId selected) {
+        const auto play = scenes.ActiveScene();
+        REQUIRE(play);
+        const auto retired = play->Find(Runtime::SceneObjectId{3});
+        REQUIRE(retired);
+        const auto captured = workspace.CaptureAgentSceneSelection();
+        REQUIRE(captured);
+        const std::array objects{selected.value};
+        AgentSceneReferenceRequest request{.documentEpoch = captured->documentEpoch,
+                                           .documentRevision = captured->documentRevision,
+                                           .worldGeneration = play->RuntimeId().value,
+                                           .objects = objects,
+                                           .source = AgentSceneReferenceSource::Pointing,
+                                           .structuralRevision = play->StructuralRevision()};
+        REQUIRE(workspace.ReviewAgentSceneReferences(request));
+
+        Runtime::SceneCommandBuffer removal;
+        removal.Destroy(*retired);
+        REQUIRE(scenes.QueueStructuralCommands(std::move(removal)).HasValue());
+        const CancellationToken cancellation;
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 100, .cancellation = cancellation})
+                    .HasValue());
+        const auto updated = scenes.ActiveScene();
+        REQUIRE(updated);
+        REQUIRE(updated->Find({selected.value}));
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        CHECK(updated->StructuralRevision() != request.structuralRevision);
+        request.structuralRevision = updated->StructuralRevision();
+        CHECK(workspace.ReviewAgentSceneReferences(request));
     }
 
     TEST_CASE("Play Decision navigation honors the exact Scene and report identities", "[unit][editor][play][ai]") {
@@ -1036,12 +1078,13 @@ namespace {
         workspace.ProcessCommand(navigate);
         CHECK(workspace.ViewModel().primarySelection == original);
         CHECK(workspace.ViewModel().hierarchyRevealObject == original);
-        VerifyPlayReferenceReview(workspace, first.scene, original);
-        VerifyPlayLocationReview(workspace, first.scene, original);
         REQUIRE(activeHost);
         const auto playScene = activeHost->Scenes().ActiveScene();
         REQUIRE(playScene);
+        VerifyPlayReferenceReview(workspace, *playScene, original);
+        VerifyPlayLocationReview(workspace, *playScene, original);
         VerifyMountedPlayReferenceReview(workspace, *playScene, original);
+        VerifyPlayPointingAfterStructuralCommit(workspace, activeHost->Scenes(), original);
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);

@@ -183,7 +183,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (authored)
             return authored->ValidateSource();
-        if (!mounted || !mountedScene.IsCurrent())
+        if (!mounted || !sourceScene.IsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const auto origin = mounted->origin.Get();
         return origin.HasError() ? Result<void>::Failure(origin.ErrorValue()) : Result<void>::Success();
@@ -191,16 +191,19 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent */
     bool OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent() const noexcept {
-        return !mounted || (!revoked && mountedScene.IsCurrent() && mounted->origin.IsCurrent());
+        return !mounted || (!revoked && sourceScene.IsCurrent() && mounted->origin.IsCurrent());
     }
 
     /** @copydoc OpenXRPlayHost::SceneGeometry::Update */
     Result<void> OpenXRPlayHost::SceneGeometry::Update(const Runtime::RuntimeSceneView &scene) {
         if (authored) {
             const auto updated = authored->Update(scene);
-            return updated.HasError() ? Result<void>::Failure(updated.ErrorValue()) : Result<void>::Success();
+            if (updated.HasError())
+                return Result<void>::Failure(updated.ErrorValue());
+            sourceScene = scene;
+            return Result<void>::Success();
         }
-        if (!scene.IsCurrent() || !mountedScene.SameIncarnation(scene))
+        if (!scene.IsCurrent() || !sourceScene.SameIncarnation(scene))
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         return ValidateSource();
     }
@@ -224,6 +227,9 @@ namespace Horo::Application::Internal {
     Result<OpenXRPlayPointingResult> OpenXRPlayHost::SceneGeometry::QueryPointing(const Math::Ray &ray,
                                                                                   const std::span<Editor::EditorXrGeometryHit> hits) const {
         using Hits = Result<OpenXRPlayPointingResult>;
+        const auto revision = sourceScene.StructuralRevision();
+        if (revision == 0)
+            return Hits::Failure(MakeError(XRErrors::IdentityStale));
         if (const auto valid = ValidateSource(); valid.HasError())
             return Hits::Failure(valid.ErrorValue());
         const auto instances = Instances();
@@ -233,7 +239,7 @@ namespace Horo::Application::Internal {
                                                                  Resources(), hits);
         if (count.HasError())
             return Hits::Failure(count.ErrorValue());
-        return Hits::Success({count.Value(), mounted ? mountedScene.StructuralRevision() : 0});
+        return Hits::Success({count.Value(), revision, static_cast<bool>(mounted)});
     }
 
     /** @copydoc OpenXRPlayHost::SceneGeometry::Revoke */
@@ -418,7 +424,7 @@ namespace Horo::Application::Internal {
 
         auto state = std::make_shared<SceneState>();
         state->scene = sceneIdentity;
-        state->geometry.emplace(SceneGeometry{.authored = std::move(geometry).Value()});
+        state->geometry.emplace(SceneGeometry{.authored = std::move(geometry).Value(), .sourceScene = candidate});
         return PrepareState(std::move(state), {origin.Value(), XRSpaceKind::Local, root.Value()});
     }
 
@@ -452,7 +458,7 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(XRErrors::PoseInvalid, "Mounted World tracking placement must be finite and rigid."));
         auto state = std::make_shared<SceneState>();
         state->scene = candidate.RuntimeId();
-        auto &source = state->geometry.emplace(SceneGeometry{.mounted = geometry, .mountedScene = candidate});
+        auto &source = state->geometry.emplace(SceneGeometry{.mounted = geometry, .sourceScene = candidate});
         if (!ResolveMountedDrawOwners(candidate, drawEntities, std::span{source.mountedObjects}.first(geometry->scene.instances.size())))
             return Output::Failure(MakeError(XRErrors::IdentityStale, "Mounted XR draw owners do not match the candidate Scene."));
         return PrepareState(std::move(state), {revision.Value(), XRSpaceKind::Local, originFromLocal});

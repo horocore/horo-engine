@@ -120,6 +120,7 @@ namespace Horo::Application::Internal {
         OpenXRPlayInteractionScope interaction;
         XR::XRSpaceId reference;
         XR::XRCapabilityRevision capabilities;
+        std::uint64_t structuralRevision{};
 
         /** @brief Tracking can advance within the same scene, session, origin, bindings and player assignment. */
         [[nodiscard]] bool SharesLineage(const OpenXRPlayListeningScope &other) const noexcept;
@@ -192,10 +193,11 @@ namespace Horo::Application::Internal {
         OpenXRInputCaptureWindows captureTime;
     };
 
-    /** @brief Complete bounded Play hits with their optional mounted Scene structural revision. */
+    /** @brief Complete bounded Play hits from one exact Scene revision and draw source. */
     struct OpenXRPlayPointingResult final {
         std::size_t count{};
-        std::uint64_t mountedStructuralRevision{};
+        std::uint64_t structuralRevision{};
+        bool mounted{};
     };
 
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
@@ -662,7 +664,7 @@ namespace Horo::Application::Internal {
         struct SceneGeometry final {
             std::unique_ptr<Editor::PreparedEditorXrGeometry> authored;
             std::shared_ptr<const Render::RenderOriginLocalScene> mounted;
-            Runtime::RuntimeSceneView mountedScene; /**< Captured structural occurrence, checked while borrowing mounted geometry. */
+            Runtime::RuntimeSceneView sourceScene; /**< Exact structural occurrence used to prepare the current draws. */
             std::array<Render::RenderMotionObjectId, Editor::PreparedEditorXrGeometry::MaximumInstances> mountedObjects{};
             bool revoked{};
 

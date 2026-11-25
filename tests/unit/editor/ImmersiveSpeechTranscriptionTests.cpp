@@ -208,7 +208,8 @@ namespace Horo::Editor {
         TEST_CASE("Pointing review preserves distinct locations on the same object", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 9;
             ImmersiveSpatialObservation first{.controllerPress = ImmersiveControllerPress{},
-                                              .pointing = ImmersivePointingHits{.worldGeneration = World, .count = 1}};
+                                              .pointing =
+                                                  ImmersivePointingHits{.worldGeneration = World, .structuralRevision = 1, .count = 1}};
             first.candidate.shape = Math::Ray{};
             first.pointing->hits[0] = {{17}, 2, {1, 2, 3}};
             auto second = first;
@@ -227,13 +228,18 @@ namespace Horo::Editor {
             ++observations[1].pointing->worldGeneration;
             CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
             observations[1].pointing->worldGeneration = World;
-            observations[1].pointing->mountedStructuralRevision = 2;
+            observations[1].pointing->structuralRevision = 2;
             CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
-            observations[0].pointing->mountedStructuralRevision = 2;
-            observations[2].pointing->mountedStructuralRevision = 2;
+            for (auto &observation : observations)
+                observation.pointing->structuralRevision = 2;
+            observations[1].pointing->mounted = true;
+            CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
+            for (auto &observation : observations)
+                observation.pointing->mounted = true;
             const auto mounted = CollectImmersivePointingHits(observations, World, Locations);
             REQUIRE(mounted);
-            CHECK(mounted->mountedStructuralRevision == 2);
+            CHECK(mounted->structuralRevision == 2);
+            CHECK(mounted->mounted);
         }
 
         TEST_CASE("Physical surface review requires its original grant and complete live plane identities", "[agent][immersive][speech]") {

@@ -99,7 +99,8 @@ namespace Horo::Editor {
         std::span<const std::uint64_t> objects;
         AgentSceneReferenceSource source{AgentSceneReferenceSource::Selection};
         std::span<const AgentSceneReferencePoint> locations;
-        std::uint64_t mountedStructuralRevision{}; /**< Nonzero only for a press captured from mounted XR draws. */
+        std::uint64_t structuralRevision{}; /**< Exact Play topology at the press; selection-only requests omit it. */
+        bool mounted{};                     /**< Draw source was a committed mounted cell. */
     };
 
     /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */

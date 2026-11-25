@@ -2134,7 +2134,8 @@ namespace Horo::Editor {
                 if (result.HasError())
                     return std::nullopt;
                 ImmersivePointingHits copied{.worldGeneration = frame.source.scene.value,
-                                             .mountedStructuralRevision = result.Value().mountedStructuralRevision,
+                                             .structuralRevision = result.Value().structuralRevision,
+                                             .mounted = result.Value().mounted,
                                              .count = result.Value().count};
                 for (std::size_t index = 0; index < copied.count; ++index)
                     copied.hits[index] = {{hits[index].object.value}, hits[index].distanceMeters, hits[index].worldPosition};
