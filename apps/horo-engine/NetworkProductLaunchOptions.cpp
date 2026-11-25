@@ -402,6 +402,9 @@ namespace Horo::Application::Internal {
             if (launch.decisionReplay && (launch.role != Net::NetworkProjectRole::Standalone || launch.cookedDecisionBindings.empty()))
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "AI replay requires standalone mode and explicit cooked controllers."));
+            if (launch.aiSimulationAnchor.IsValid() && (launch.cookedDecisionBindings.empty() || launch.decisionReplay))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "An AI simulation anchor requires live cooked controllers."));
             if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "Native Perception requires explicit native cooked controller selection."));
@@ -423,8 +426,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Parses a positive decimal replay identity or fixed tick. */
-        [[nodiscard]] bool ReadReplayNumber(const std::string_view text, std::uint64_t &value) noexcept {
+        /** @brief Parses a positive decimal authored identity or fixed tick. */
+        [[nodiscard]] bool ReadPositiveNumber(const std::string_view text, std::uint64_t &value) noexcept {
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
             return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && value != 0;
         }
@@ -434,8 +437,8 @@ namespace Horo::Application::Internal {
             const std::size_t width = window ? 4 : 3;
             constexpr auto Usage = "Use --ai-replay <agent> <tick> or --ai-replay-window <agent> <first-tick> <tick-count> once.";
             std::uint64_t agent{}, tick{}, count{1};
-            if (launch.decisionReplay || arguments.size() - index < width || !ReadReplayNumber(arguments[index + 1], agent) ||
-                !ReadReplayNumber(arguments[index + 2], tick) || (window && !ReadReplayNumber(arguments[index + 3], count)) ||
+            if (launch.decisionReplay || arguments.size() - index < width || !ReadPositiveNumber(arguments[index + 1], agent) ||
+                !ReadPositiveNumber(arguments[index + 2], tick) || (window && !ReadPositiveNumber(arguments[index + 3], count)) ||
                 count > MaximumHeadlessReplayTicks)
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, Usage));
             const HeadlessDecisionReplaySelection selection{AI::AgentId::Create(agent).Value(), tick, static_cast<std::size_t>(count)};
@@ -533,6 +536,16 @@ namespace Horo::Application::Internal {
                 if (key == "--ai-missing-controller") {
                     if (auto policy = ReadMissingControllerPolicy(arguments, index, launch); policy.HasError())
                         return policy;
+                    continue;
+                }
+                if (key == "--ai-simulation-anchor") {
+                    std::uint64_t object{};
+                    if (launch.aiSimulationAnchor.IsValid() || arguments.size() - index < 2 ||
+                        !ReadPositiveNumber(arguments[index + 1], object))
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-simulation-anchor <scene-object-id> once."));
+                    launch.aiSimulationAnchor = Runtime::SceneObjectId{object};
+                    index += 2;
                     continue;
                 }
                 if (key == "--ai-decision" || key == "--ai-prefab-decision") {

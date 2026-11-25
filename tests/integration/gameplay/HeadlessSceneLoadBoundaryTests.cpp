@@ -426,7 +426,10 @@ namespace {
         namespace Decision = AI::DecisionGraphTestSupport;
         namespace Output = Assets::OutputTestSupport;
         const bool outOfRange = GENERATE(false, true);
-        const bool withRelevance = GENERATE(false, true);
+        enum class Relevance { None, Injected, AuthoredAnchor, MissingAnchor };
+        const auto relevanceMode = GENERATE(Relevance::None, Relevance::Injected, Relevance::AuthoredAnchor, Relevance::MissingAnchor);
+        const Runtime::SceneObjectId anchorId{10};
+        const bool authoredAnchor = relevanceMode == Relevance::AuthoredAnchor || relevanceMode == Relevance::MissingAnchor;
         Decision::Fixture fixture;
         const auto score = Decision::MakeIdentity<BlackboardKeyId>(101);
         const auto feature = Decision::MakeIdentity<BlackboardKeyId>(102);
@@ -475,6 +478,11 @@ namespace {
                                                               .blackboardSchema = Decision::SchemaId(),
                                                               .decisionKind = DecisionPlanKind::Utility};
         authored.Add(actor);
+        if (relevanceMode == Relevance::AuthoredAnchor) {
+            Runtime::RuntimeEntityDefinition anchor{.object = anchorId};
+            anchor.localTransform.translation.x = 31;
+            authored.Add(anchor);
+        }
         const auto definition = std::move(authored).Build();
         REQUIRE(definition.HasValue());
         const auto scene = SceneCook::EncodeCookedSceneDefinition(definition.Value());
@@ -537,9 +545,11 @@ namespace {
         std::array observations{HeadlessDecisionRelevance{identity, {.anchorDistanceMillimeters = 31'000}},
                                 HeadlessDecisionRelevance{identity, {.gameplayPinned = true}}};
         HeadlessDecisionRelevanceSource relevance;
-        if (withRelevance) {
+        if (relevanceMode != Relevance::None) {
             execution.scheduler.mode = AiSchedulingMode::BestEffort;
             execution.scheduler.simulationProfile = AiDecisionSimulationProfile{10'000, 20'000, 30'000, 2, 1};
+        }
+        if (relevanceMode == Relevance::Injected) {
             relevance = [&](const Runtime::RuntimeSceneView &scene, const std::uint64_t tick) {
                 CHECK(scene.IsCurrent());
                 CHECK(scene.RuntimeId() == Runtime::SceneRuntimeId{7});
@@ -563,7 +573,9 @@ namespace {
                                                                                  .environment = fixture.Environment(),
                                                                                  .bindings = std::move(bindings).Value(),
                                                                                  .execution = execution,
-                                                                                 .relevance = std::move(relevance)})},
+                                                                                 .relevance = std::move(relevance),
+                                                                                 .simulationAnchor =
+                                                                                     authoredAnchor ? anchorId : Runtime::SceneObjectId{}})},
                                                 {}, std::nullopt, replication);
         REQUIRE(composed.HasValue());
         const auto service = [&](const NetworkModeServiceKind kind) {
@@ -592,7 +604,7 @@ namespace {
         REQUIRE_FALSE(fixture.probe.calls.empty());
         CHECK(fixture.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
         CHECK(fixture.probe.starts == 1);
-        if (withRelevance) {
+        if (relevanceMode == Relevance::Injected) {
             CHECK(fixture.probe.resumes == 0);
             runTick(3);
             CHECK(fixture.probe.starts == 2);
@@ -600,6 +612,8 @@ namespace {
             const auto duplicate = physics.Value()->RunFixedTick({4, Duration::FromNanoseconds(16'666'667), {}});
             REQUIRE(duplicate.HasError());
             CHECK(duplicate.ErrorValue().code.Value() == AIErrors::SchedulerPolicyInvalid.code.Value());
+            CHECK(fixture.probe.resumes == 0);
+        } else if (relevanceMode == Relevance::AuthoredAnchor) {
             CHECK(fixture.probe.resumes == 0);
         } else {
             CHECK(fixture.probe.resumes == 1);

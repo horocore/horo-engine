@@ -24,6 +24,7 @@ namespace Horo::Application::Internal {
         std::optional<GameplayWorldSelection> gameplay;
         HeadlessProjectSceneOptions sceneInput;
         std::vector<HeadlessCookedDecisionBinding> cookedDecisionBindings;
+        Runtime::SceneObjectId aiSimulationAnchor; /**< Optional stable object in the selected authoritative Scene. */
         std::optional<AI::AiMissingControllerPolicy> aiMissingController;
         std::optional<HeadlessNavigationPathPolicy> navigationPath;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay;

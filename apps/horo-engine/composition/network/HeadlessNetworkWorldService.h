@@ -11,6 +11,8 @@
 #include "ProjectScenePerception.h"
 #include "SceneDecisionQueries.h"
 
+#include <cmath>
+
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
     public:
@@ -628,8 +630,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
-            if (OwnsCookedDecisionExecution() && input.cookedDecisions->relevance)
-                record_->decisionRelevance.Reserve(input.cookedDecisions->execution->scheduler.maximumAgents);
+            if (OwnsCookedDecisionExecution())
+                PrepareDecisionRelevance(*input.cookedDecisions);
             std::optional<AI::AiScenePerceptionActivationInput> activation;
             std::optional<AI::AiScenePerceptionGroupInput> structural;
             if (OwnsPerception()) {
@@ -951,11 +953,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         /** @brief Translates one authority snapshot to the live scheduler's atomic relevance batch. */
         Result<void> PublishDecisionRelevance(const Runtime::FixedStepContext &context) const {
             const auto &selection = *owners_->configured->cookedDecisions;
-            if (!selection.relevance)
+            if (!selection.relevance && !selection.simulationAnchor.IsValid())
                 return Result<void>::Success();
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)
                 return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+            if (selection.simulationAnchor.IsValid())
+                return PublishAnchorRelevance(*scene, selection.simulationAnchor, context.cancellation);
             const auto observed = selection.relevance(*scene, context.simulationTick);
             if (observed.HasError())
                 return Result<void>::Failure(observed.ErrorValue());
@@ -964,6 +968,76 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (!scene->IsCurrent())
                 return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
             return ApplyDecisionRelevance(*scene, observed.Value(), selection.execution->scheduler.maximumAgents);
+        }
+
+        /** @brief Reserves only the buffers needed by the selected owner source. */
+        void PrepareDecisionRelevance(const HeadlessCookedDecisionInput &selection) const {
+            const auto capacity = selection.execution->scheduler.maximumAgents;
+            if (selection.relevance)
+                record_->decisionRelevance.Reserve(capacity);
+            if (selection.simulationAnchor.IsValid()) {
+                record_->decisionRelevance.agents.resize(capacity);
+                record_->decisionRelevance.updates.reserve(capacity);
+            }
+        }
+
+        /** @brief Computes the full signed-coordinate difference without overflow or floating-point cancellation. */
+        static std::uint64_t AxisDistance(const std::int64_t first, const std::int64_t second) noexcept {
+            const auto [low, high] = std::minmax(first, second);
+            return static_cast<std::uint64_t>(high) - static_cast<std::uint64_t>(low);
+        }
+
+        /** @brief Measures rounded-down Euclidean millimetres in the common Scene frame, saturating at the range limit. */
+        static std::uint64_t AnchorDistance(const Math::WorldCoordinate64 &anchor, const Math::WorldCoordinate64 &position) noexcept {
+            const auto a = anchor.Millimeters();
+            const auto p = position.Millimeters();
+            const auto distance = std::hypot(static_cast<long double>(AxisDistance(a[0], p[0])),
+                                             static_cast<long double>(AxisDistance(a[1], p[1])),
+                                             static_cast<long double>(AxisDistance(a[2], p[2])));
+            constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+            return distance < static_cast<long double>(limit) ? static_cast<std::uint64_t>(distance) : limit;
+        }
+
+        /** @brief Samples exact scheduled owners relative to the live authored anchor. Missing evidence preserves Full. */
+        Result<void> PublishAnchorRelevance(const Runtime::RuntimeSceneView &scene, const Runtime::SceneObjectId anchor,
+                                            const CancellationToken &cancellation) const {
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            auto &buffer = record_->decisionRelevance;
+            const auto copied = scheduler.Value()->CopyLiveRegistrationsAtSafePoint(buffer.agents);
+            if (copied.HasError())
+                return Result<void>::Failure(copied.ErrorValue());
+            const auto anchorEntity = scene.Find(anchor);
+            const auto anchorPosition = anchorEntity ? ReadAnchorPosition(scene, *anchorEntity) : std::nullopt;
+            buffer.updates.clear();
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            for (const auto handle : std::span(buffer.agents).first(copied.Value()))
+                buffer.updates.push_back({handle, {.anchorDistanceMillimeters = AnchorDistanceForAgent(scene, capability, handle,
+                                                                                                     anchorPosition)}});
+            if (cancellation.IsCancellationRequested())
+                return JobCancelled();
+            return scheduler.Value()->SetRelevanceBatchAtSafePoint(buffer.updates);
+        }
+
+        /** @brief Captures a pose in the shared Scene-relative frame, including the entity's parents. */
+        static std::optional<Math::WorldCoordinate64> ReadAnchorPosition(const Runtime::RuntimeSceneView &scene,
+                                                                         const Runtime::EntityRef entity) {
+            const auto point = CaptureProjectSceneWorldPosition(scene, entity, {});
+            return point.HasValue() ? std::optional{point.Value()} : std::nullopt;
+        }
+
+        /** @brief Leaves distance unknown when either participant lacks a valid current pose. */
+        static std::optional<std::uint64_t> AnchorDistanceForAgent(const Runtime::RuntimeSceneView &scene,
+                                                                  const AI::AiRuntimeCapability &capability, const AI::AgentHandle handle,
+                                                                  const std::optional<Math::WorldCoordinate64> &anchor) {
+            if (!anchor)
+                return std::nullopt;
+            const auto entity = capability.ResolveAgentOwner(handle);
+            if (entity.HasError())
+                return std::nullopt;
+            const auto position = ReadAnchorPosition(scene, entity.Value());
+            return position ? std::optional{AnchorDistance(*anchor, *position)} : std::nullopt;
         }
 
         /** @brief Resolves and orders the bounded snapshot without mutating the scheduler during staging. */

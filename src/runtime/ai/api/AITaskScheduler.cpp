@@ -570,6 +570,22 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc AiTaskScheduler::CopyLiveRegistrationsAtSafePoint */
+    Result<std::size_t> AiTaskScheduler::CopyLiveRegistrationsAtSafePoint(const std::span<AgentHandle> output) const {
+        using Output = Result<std::size_t>;
+        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
+            return Output::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (output.size() < activeByHandle_.size())
+            return Output::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        std::size_t written{};
+        for (const auto slot : activeByHandle_) {
+            const auto &entry = entries_[slot];
+            if (!entry.cancellation.IsCancellationRequested())
+                output[written++] = entry.agent;
+        }
+        return Output::Success(written);
+    }
+
     /** @copydoc AiTaskScheduler::SimulationTier */
     Result<AiSimulationTier> AiTaskScheduler::SimulationTier(const AgentHandle agent) {
         auto *entry = Find(agent);

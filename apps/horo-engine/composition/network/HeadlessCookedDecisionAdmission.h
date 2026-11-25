@@ -56,6 +56,7 @@ namespace Horo::Application::Internal {
         std::optional<AI::QueryResultCacheLimits> queryCacheLimits{};
         std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayQueryTests;
         HeadlessDecisionRelevanceSource relevance; /**< Optional owner source for a live best-effort simulation profile. */
+        Runtime::SceneObjectId simulationAnchor; /**< Optional authored anchor, exclusive with an injected relevance source. */
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

@@ -64,6 +64,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
     /** @brief Keeps the last accepted streaming facts separate from the next candidate batch. */
     struct DecisionRelevanceBuffer final {
         std::vector<AI::AiDecisionRelevanceUpdate> updates;
+        std::vector<AI::AgentHandle> agents; /**< Fixed-capacity capture for authored anchor observations. */
         std::vector<StreamedDecisionRelevance> retained;
         std::vector<StreamedDecisionRelevance> staged;
 

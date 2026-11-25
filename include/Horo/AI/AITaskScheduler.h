@@ -359,6 +359,12 @@ namespace Horo::AI {
          * @post Failure preserves all previously accepted facts. Success starts no work and invokes no callbacks.
          */
         [[nodiscard]] Result<void> SetRelevanceBatchAtSafePoint(std::span<const AiDecisionRelevanceUpdate> updates);
+        /** @brief Copies current, non-cancelled registrations in exact handle order without invoking callbacks.
+         * @param output Caller-owned storage for all registrations, including those whose cancellation has not been drained.
+         * @return Populated prefix length or typed phase or capacity failure. Failure writes nothing.
+         * @pre Call on the scheduler owner lane before its first decision phase or after intent dispatch.
+         */
+        [[nodiscard]] Result<std::size_t> CopyLiveRegistrationsAtSafePoint(std::span<AgentHandle> output) const;
         /** @brief Reads the current admitted tier. @param agent Exact registered generation.
          * @return Current tier or a typed stale-agent failure. */
         [[nodiscard]] Result<AiSimulationTier> SimulationTier(AgentHandle agent);

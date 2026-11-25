@@ -757,7 +757,10 @@ namespace Horo::Application::Internal {
             if (input.decisionReplay && decisions->execution->scheduler.simulationProfile)
                 return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                        "Deterministic AI replay cannot use a best-effort simulation profile."));
-            if (decisions && decisions->relevance &&
+            if (decisions && decisions->relevance && decisions->simulationAnchor.IsValid())
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                       "Select either an authored simulation anchor or an external relevance source."));
+            if (decisions && (decisions->relevance || decisions->simulationAnchor.IsValid()) &&
                 (!decisions->execution || decisions->execution->scheduler.mode != AI::AiSchedulingMode::BestEffort ||
                  !decisions->execution->scheduler.simulationProfile ||
                  decisions->execution->scheduler.maximumAgents > AI::AiTaskSchedulerSettings::HardAgents))

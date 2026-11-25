@@ -4100,6 +4100,15 @@ no reactive Perception watches, query work, or external feedback. Deterministic
 headless replay rejects the profile. Without gameplay relevance observations
 the scheduler keeps the full cadence.
 
+For standalone and dedicated headless runs with explicit cooked controllers,
+`--ai-simulation-anchor <scene-object-id>` samples an authored Scene object's
+current transform as the simulation anchor. It requires a best-effort profile.
+The authority samples only its live scheduled agents and measures distance in
+the same Scene-relative frame, including parent transforms. If an anchor or
+agent pose becomes unavailable, its distance becomes unknown and the agent
+returns to full cadence. A custom authoritative relevance source can supply
+streaming membership, pins, and urgent events.
+
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through
