@@ -394,6 +394,10 @@ bounded list of diagnosed package paths. This preview does not claim cache
 locks, quarantine artifacts, or write package metadata. Apply verifies the
 archives again before publication.
 
+Behavior rename previews identify each matching attachment with the SHA-256
+of its saved Scene or Prefab bytes. Unreadable sources block the review and
+appear alongside findings from readable sources within the diagnostic limit.
+
 `horo-engine package apply-update` takes the same project and candidate options,
 plus `--approve` with the preview fingerprint and `--package-cache-root` with the
 absolute path to an existing verified cache. This path stages offline and

@@ -2,6 +2,7 @@
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Packages/PackageMigration.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
@@ -105,17 +106,22 @@ namespace {
             REQUIRE(output.good());
         }
 
-        void WriteScene(const char *name, const char *assetId, std::string_view bytes, bool imported = false) const {
+        void WriteSource(const char *name, const char *assetId, std::string_view bytes, std::string_view assetType,
+                         bool imported = false) const {
             const auto folder = project.Path() / "Assets";
             std::filesystem::create_directories(folder);
             const auto asset = folder / name;
             auto sidecar = asset;
             sidecar += ".horo";
             std::ofstream{asset, std::ios::binary} << bytes;
-            nlohmann::json metadata{{"schemaVersion", 1}, {"assetId", assetId}, {"assetType", "core.scene"}};
+            nlohmann::json metadata{{"schemaVersion", 1}, {"assetId", assetId}, {"assetType", assetType}};
             if (imported)
                 metadata["importerPackageId"] = graph.package.Value();
             std::ofstream{sidecar} << metadata;
+        }
+
+        void WriteScene(const char *name, const char *assetId, std::string_view bytes, bool imported = false) const {
+            WriteSource(name, assetId, bytes, "core.scene", imported);
         }
 
         void WriteImporterReference(const char *name, const char *assetId) const {
@@ -570,15 +576,60 @@ namespace {
         CHECK(after.Value() == unchanged.Value());
     }
 
+    /** @brief Writes distinct Scene and Prefab snapshots that use the same legacy behavior. */
+    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType) {
+        const Gameplay::BehaviorComponent behavior{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(),
+                                                    .enabled = false};
+        SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
+        object.components.behaviors = {behavior};
+        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}});
+        fixture.WriteScene("Migration.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e", scene);
+        constexpr auto prefabId = "10213243-5465-7687-98a9-bacbdcedfe0f";
+        const auto prefab = Prefab::PrefabDocument::Create(
+            {.projectVersion = ParseHoroVersion("1.2.3").Value(), .assetId = Assets::AssetId::Parse(prefabId).Value(),
+             .objects = {{.name = "Prefab Root", .behaviors = {behavior}}}},
+            Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(prefab.HasValue());
+        const auto serialized = prefab.Value().SerializeCanonical();
+        REQUIRE(serialized.HasValue());
+        fixture.WriteSource("Migration.prefab", prefabId, serialized.Value(), "core.prefab");
+        const auto revision = [](std::string_view bytes) { return FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes}))); };
+        return {revision(scene), revision(serialized.Value())};
+    }
+
+    /** @brief Verifies which saved revisions contributed usable preview evidence. */
+    void CheckBehaviorMigrationDiagnostics(const Error &error, const std::array<std::string, 2> &revisions, bool applies,
+                                            bool hasUnreadableSource) {
+        CHECK(error.code.Value() == "packages.host.update_requires_migration_review");
+        const auto failedSource = std::ranges::find_if(error.diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.saved_reference_source_unreadable";
+        });
+        CHECK((failedSource != error.diagnostics.end()) == (applies && hasUnreadableSource));
+        if (failedSource != error.diagnostics.end())
+            CHECK(failedSource->location.source == "Assets/Unreadable.horoasset");
+        const std::array paths{"Assets/Migration.horoasset", "Assets/Migration.prefab"};
+        for (std::size_t index = 0; index < paths.size(); ++index) {
+            const auto match = std::ranges::find_if(error.diagnostics, [&](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_possible_behavior_rename" && diagnostic.path == paths[index];
+            });
+            REQUIRE((match != error.diagnostics.end()) == applies);
+            if (applies) {
+                CHECK(match->message.find("source sha256:" + revisions[index]) != std::string::npos);
+                CHECK(match->message.find("game.tests.legacy_behavior -> game.tests.current_behavior") != std::string::npos);
+                CHECK(match->message.ends_with(index == 0 ? " (object 7, attachment 3)" : " (object 0, attachment 3)"));
+            }
+        }
+    }
+
     TEST_CASE("Cached updates preview saved behavior rename impact", "[packages][application][cli][update]") {
         NativeProject fixture;
         constexpr std::string_view oldType = "game.tests.legacy_behavior";
         constexpr std::string_view newType = "game.tests.current_behavior";
-        SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
-        object.components.behaviors = {{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(), .enabled = false}};
-        fixture.WriteScene("Migration.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e",
-                           SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}}));
+        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType);
         const bool applies = GENERATE(true, false);
+        const bool unreadable = GENERATE(true, false);
+        if (unreadable)
+            fixture.WriteScene("Unreadable.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "{");
         const auto source = applies ? fixture.graph.archive.Digest() : Sha256Digest{};
         const nlohmann::json transition{{"fromVersion", "1.0.0"}, {"fromArtifactSha256", FormatSha256(source)},
                                        {"renames", {{{"from", oldType}, {"to", newType}}}}};
@@ -608,16 +659,7 @@ namespace {
         InInvocation([&](CliExecutionContext &context) {
             const auto result = preview.adapter->Execute(command, context);
             REQUIRE(result.HasError());
-            const auto &failure = result.ErrorValue();
-            CHECK(failure.code.Value() == "packages.host.update_requires_migration_review");
-            const auto match = std::ranges::find_if(failure.diagnostics, [](const auto &diagnostic) {
-                return diagnostic.code.Value() == "packages.host.update_possible_behavior_rename";
-            });
-            REQUIRE((match != failure.diagnostics.end()) == applies);
-            if (applies) {
-                CHECK(match->path == "Assets/Migration.horoasset");
-                CHECK(match->message.ends_with("game.tests.legacy_behavior -> game.tests.current_behavior (object 7, attachment 3)"));
-            }
+            CheckBehaviorMigrationDiagnostics(result.ErrorValue(), revisions, applies, unreadable);
         });
     }
 

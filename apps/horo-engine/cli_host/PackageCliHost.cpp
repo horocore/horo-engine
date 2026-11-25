@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <format>
 #include <iterator>
+#include <ranges>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -372,10 +373,14 @@ namespace Horo::Application::Internal {
             if (inventory.HasError())
                 return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), inventory.ErrorValue()));
             const auto &inputs = inventory.Value();
-            auto matches = InspectPackageBehaviorMigrations(*inputs.assets, *inputs.files, inputs.admission, claims,
-                                                            MaximumUpdateDiagnostics - diagnostics.size());
-            if (matches.HasError())
-                return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), matches.ErrorValue()));
+            const auto remaining = MaximumUpdateDiagnostics - diagnostics.size();
+            auto matches = InspectPackageBehaviorMigrations(*inputs.assets, *inputs.files, inputs.admission, claims, remaining);
+            if (matches.HasError()) {
+                auto failure = std::move(matches).ErrorValue();
+                std::ranges::move(failure.diagnostics | std::views::take(remaining), std::back_inserter(diagnostics));
+                failure.diagnostics.clear();
+                return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), std::move(failure)));
+            }
             auto notes = std::move(matches).Value();
             std::ranges::move(notes, std::back_inserter(diagnostics));
             return Result<void>::Success();

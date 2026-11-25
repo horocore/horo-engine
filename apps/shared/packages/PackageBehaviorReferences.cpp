@@ -50,6 +50,7 @@ namespace Horo::Application::Internal {
         /** @brief Bounded matches from the same captured Scene and Prefab bytes. */
         struct SavedReferenceScan final {
             References behaviors;
+            std::map<std::string, std::string, std::less<>> behaviorSourceRevisions;
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
             PackageSourceReviewFailures failures;
@@ -296,8 +297,12 @@ namespace Horo::Application::Internal {
             if (source.HasError())
                 return scan.failures.Record(path, WithCause(ReferenceError("packages.host.behavior_reference_unreadable", path),
                                                              source.ErrorValue()));
-            return record.type.Value() == "core.scene" ? InspectScene(scan, owners, path, *source.Value().text)
-                                                      : InspectPrefab(scan, owners, record, *source.Value().text, limits);
+            const auto before = scan.behaviors.size();
+            auto inspected = record.type.Value() == "core.scene" ? InspectScene(scan, owners, path, *source.Value().text)
+                                                                : InspectPrefab(scan, owners, record, *source.Value().text, limits);
+            if (inspected.HasValue() && scan.behaviors.size() != before)
+                scan.behaviorSourceRevisions.emplace(path, source.Value().revision);
+            return inspected;
         }
 
         /** @brief Shares the original deadline across bounded descendant reads and the resulting observations. */
@@ -661,16 +666,15 @@ namespace Horo::Application::Internal {
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
         auto scan = std::move(matches).Value();
-        if (auto complete = std::move(scan.failures).Finish({}); complete.HasError())
-            return complete;
         std::vector<Diagnostic> diagnostics;
         for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit)) {
             const auto *target = targets.at({match.package, match.type});
-            auto message = match.package.Value() + ": " + match.type.Value() + " -> " + target->Value() +
+            const auto &revision = scan.behaviorSourceRevisions.at(match.assetPath);
+            auto message = match.package.Value() + " [source sha256:" + revision + "]: " + match.type.Value() + " -> " + target->Value() +
                            " (object " + std::to_string(match.object) + ", attachment " + std::to_string(match.instance.value) + ')';
             diagnostics.emplace_back(DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
                                      std::move(message), SourceLocation{"packages.host"}, match.assetPath);
         }
-        return Inspection::Success(std::move(diagnostics));
+        return std::move(scan.failures).Finish(std::move(diagnostics));
     }
 }  // namespace Horo::Application::Internal
