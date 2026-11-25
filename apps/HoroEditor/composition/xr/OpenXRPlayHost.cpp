@@ -365,6 +365,20 @@ namespace Horo::Application::Internal {
         return refresh.HasValue() && !refresh.Value();
     }
 
+    /** @copydoc OpenXRPlayHost::HasActiveInteractionScene */
+    bool OpenXRPlayHost::HasActiveInteractionScene(const XRTrackingSnapshot &snapshot) const noexcept {
+        return scene_ && scene_->published && !scene_->retiring && !eventsPending_ && input_.admitted &&
+               input_.play == Editor::EditorPlayState::Playing && snapshot.Focus() == XRTrackingFocusState::Focused &&
+               snapshot.Visibility() == XRTrackingVisibilityState::Visible && snapshot.State() == XRTrackingState::Active;
+    }
+
+    /** @copydoc OpenXRPlayHost::MatchesInteractionPublication */
+    bool OpenXRPlayHost::MatchesInteractionPublication(const XRTrackingSnapshot &snapshot, const XRSessionId &session) const noexcept {
+        return scene_->session == session && snapshot.Session() == session && snapshot.WorldOriginRevision() == input_.origin &&
+               input_.coordinator && input_.coordinator->Current() && input_.coordinator->Revision() == snapshot.BindingRevision() &&
+               (!scene_->geometry || scene_->geometry->IsMountedSourceCurrent());
+    }
+
     /** @copydoc OpenXRPlayHost::CurrentInteractionTracking */
     Result<const XRTrackingSnapshot *> OpenXRPlayHost::CurrentInteractionTracking(const Input::PlayerId player) const {
         using Outcome = Result<const XRTrackingSnapshot *>;
@@ -375,13 +389,9 @@ namespace Horo::Application::Internal {
         const auto assignment = input_.port->ReadPlayerAssignmentRevision();
         const auto *snapshot = tracking_.Current();
         const auto state = sessions_->Snapshot();
-        if (!snapshot || !scene_ || !scene_->published || scene_->retiring || !state.admitsActions || eventsPending_ || !input_.admitted ||
-            !assignment || input_.play != Editor::EditorPlayState::Playing || snapshot->Focus() != XRTrackingFocusState::Focused ||
-            snapshot->Visibility() != XRTrackingVisibilityState::Visible || snapshot->State() != XRTrackingState::Active)
+        if (!snapshot || !assignment || !state.admitsActions || !HasActiveInteractionScene(*snapshot))
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (scene_->session != state.session || snapshot->Session() != state.session || snapshot->WorldOriginRevision() != input_.origin ||
-            !input_.coordinator || !input_.coordinator->Current() || input_.coordinator->Revision() != snapshot->BindingRevision() ||
-            assignment != input_.interactionAssignment)
+        if (assignment != input_.interactionAssignment || !MatchesInteractionPublication(*snapshot, state.session))
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         return Outcome::Success(snapshot);
     }
@@ -412,7 +422,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::ReadListeningScope */
     std::optional<OpenXRPlayListeningScope> OpenXRPlayHost::ReadListeningScope(const Input::PlayerId player) const {
         const auto tracking = CurrentInteractionTracking(player);
-        if (tracking.HasError() || !scene_->geometry || !scene_->geometry->IsMountedSourceCurrent())
+        if (tracking.HasError() || !scene_->geometry)
             return std::nullopt;
         const auto revision = scene_->geometry->sourceScene.StructuralRevision();
         if (revision == 0)

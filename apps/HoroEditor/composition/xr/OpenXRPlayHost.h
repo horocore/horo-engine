@@ -554,6 +554,13 @@ namespace Horo::Application::Internal {
         void Neutralize(const XR::XRSessionId &session, std::uint64_t revision) noexcept override;
         [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame);
         [[nodiscard]] Result<void> Lane() const;
+        /** @brief Checks the Scene lifecycle and focused tracking before admitting an interaction read. */
+        [[nodiscard]] bool HasActiveInteractionScene(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Checks that committed tracking and its mounted geometry still share the exact published authority.
+         * @pre HasActiveInteractionScene() succeeded on the same owner lane.
+         */
+        [[nodiscard]] bool MatchesInteractionPublication(const XR::XRTrackingSnapshot &snapshot,
+                                                         const XR::XRSessionId &session) const noexcept;
         /** @brief Borrows a current committed interaction cutoff for this synchronous owner-lane read only. */
         [[nodiscard]] Result<const XR::XRTrackingSnapshot *> CurrentInteractionTracking(Input::PlayerId player) const;
         /** @brief Fences an existing request against the exact committed Scene and tracking cutoff. */

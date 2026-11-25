@@ -919,6 +919,8 @@ query needs. The read returns bounded World-space ray segments, points and proxi
 spheres in request order. Replaced or unfocused input and invalid probes reject the whole
 query. These live coordinates stay on the owner lane. World-space canvas resolution,
 contact ordering and focus or capture use the consuming domain's existing contracts.
+Mounted World interaction reads recheck the retained Scene and origin before
+returning a sample, including between Input commits.
 
 World-space canvases remain ordinary Runtime UI owner scopes with the same layout,
 localization, semantic accessibility and action-command model. Renderer owns per-view

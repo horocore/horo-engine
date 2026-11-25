@@ -56,6 +56,19 @@ namespace Horo::Tests::OpenXRApplication {
         namespace Host = Horo::Application::Internal;
         using OpenXRProduct::RequireValue;
 
+        /** @brief Installs the existing digital action as the left controller's World UI pointer. */
+        std::string PointerBindingDocument() {
+            auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+            document["worldUiPointer"] = {{"action", document["actions"][0]["id"]}, {"maximumDistanceMeters", 6.0F}};
+            document["poses"].push_back({{"profile", 1},
+                                         {"set", 1},
+                                         {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                         {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                         {"path", "/user/hand/left/input/aim/pose"},
+                                         {"label", "Aim"}});
+            return document.dump();
+        }
+
         struct MountedOriginFixture final {
             const WorldStreaming::WorldStreamingRuntimeCompositionConfig config = Config();
             const std::array<int, 4> serviceInstances{1, 2, 3, 4};
@@ -1198,12 +1211,13 @@ namespace Horo::Tests::OpenXRApplication {
             play.CommitAuthoredCharacter(scene, RequireValue(world.ControllerTransform(controller)), step);
         }
 
-        std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(auto &fixture, const std::optional<Input::PlayerId> player) {
+        std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(auto &fixture, const std::optional<Input::PlayerId> player,
+                                                                        Editor::EditorMountedXrGeometryCapture mounted = {}) {
             REQUIRE(fixture.play);
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
             const auto input = fixture.InputPort(player);
             REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
-            auto participant = fixture.play->MakeSceneParticipant();
+            auto participant = fixture.play->MakeSceneParticipant(std::move(mounted));
             auto candidate = RequireValue(participant->Prepare(fixture.definition, fixture.scene->View()));
             REQUIRE(candidate->ValidatePublication().HasValue());
             candidate->Publish();
@@ -2723,6 +2737,78 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Mounted XR pointing loses its hit when the origin is retired", "[xr][application][play][mounted_origin][pointing]") {
+        namespace WS = WorldStreaming;
+        using WS::TestSupport::IdentityFrom;
+        using enum XR::XRProjectFeaturePolicy;
+        constexpr Input::PlayerId player = 7;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, PointerBindingDocument()};
+        fixture.script.actions.tracking.enabled = true;
+        fixture.CreatePlay();
+
+        const auto scene = fixture.scene->View();
+        const auto box = scene.Find({fixture.objects.child.value});
+        REQUIRE(box);
+        const std::array drawOwners{*box};
+        auto authored = RequireValue(fixture.source.Port().Capture(fixture.definition.Revision(), scene));
+        REQUIRE(authored->Instances().size() == 1);
+        auto draw = authored->Instances().front();
+        draw.localToWorld = Math::Mat4::Identity();
+        constexpr std::int64_t worldX = 9'007'199'254'740'993;
+        const auto world = Math::WorldCoordinate64::FromMillimeters(worldX, 0, 0);
+        const auto origin =
+            RequireValue(WS::OriginFrame::Create({IdentityFrom<WS::OriginFrameId>(7), IdentityFrom<WS::OriginFrameRevision>(3),
+                                                  IdentityFrom<WS::OriginGeneration>(1)},
+                                                 world));
+        MountedOriginFixture mounted{origin};
+        const auto view = RequireValue(fixture.frontend->CreateRenderViewIdentity());
+        const WS::OriginRebaseParticipantRequirement requirement{IdentityFrom<WS::OriginRebaseParticipantId>(7),
+                                                                 IdentityFrom<WS::OriginRebaseParticipantRevision>(1)};
+        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*mounted.composition.Origin(), view, requirement, {1, 1, 0}));
+        const std::array draws{Render::RenderOriginInstance{Math::WorldCoordinate64::FromMillimeters(worldX + 1000, 2000, 1000), draw}};
+        const Render::RenderOriginSceneSource source{{world, Math::WorldCoordinate64::FromMillimeters(worldX, 0, -1000)},
+                                                     draws,
+                                                     {},
+                                                     scene.RuntimeId().value};
+        const auto frame = RequireValue(adapter->Capture(source, Render::RenderOriginCoordinateBasis::OriginRelative));
+        const auto packet = std::make_shared<const Render::RenderOriginLocalScene>(RequireValue(frame.OriginScene(authored->Resources())));
+        const auto &position = fixture.script.actions.tracking.locatedPosition;
+        const Math::Transform placement{.translation = {position.x, position.y, position.z}};
+        auto active = ActivatePlay(fixture, player, [&](const Runtime::RuntimeSceneView &candidate, Runtime::SceneObjectId root) {
+            REQUIRE(candidate.SameIncarnation(scene));
+            return Result<Editor::EditorMountedXrScene>::Success({packet, root, placement, drawOwners});
+        });
+        auto sampler = std::make_unique<AppInputSample>(*fixture.play);
+        const auto *observed = sampler.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(sampler)));
+        RequireValue(fixture.scheduler->Startup());
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result);
+        RequireValue(*observed->result);
+
+        const auto pointer = fixture.play->ReadWorldUiPointer(player);
+        REQUIRE(pointer);
+        const auto scope = RequireValue(fixture.play->ReadInteractionSources(player)).Scope();
+        REQUIRE(fixture.play->ReadInteractionCandidates(scope, {}).HasValue());
+        std::array<Editor::EditorXrGeometryHit, 1> hits;
+        const auto result = RequireValue(fixture.play->QueryPlayPointing(*pointer, hits));
+        CHECK(result.mounted);
+        CHECK(result.structuralRevision == scene.StructuralRevision());
+        REQUIRE(result.count == 1);
+        CHECK(hits.front().object.value == fixture.objects.child.value);
+        RequireValue(mounted.composition.BeginShutdown(mounted.config.owner));
+        const auto retired = fixture.play->ReadInteractionSources(player);
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        CHECK(fixture.play->ReadInteractionCandidates(scope, {}).HasError());
+        CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
+        CHECK(fixture.play->QueryPlayPointing(*pointer, hits).HasError());
+
+        fixture.scheduler->Shutdown();
+        active->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Installed Play exposes exact player-scoped interaction geometry from its committed tracking cutoff",
               "[xr][application][interaction]") {
         using enum XR::XRProjectFeaturePolicy;
@@ -2731,15 +2817,7 @@ namespace Horo::Tests::OpenXRApplication {
             mutable std::uint64_t now{100};
         } capture;
 
-        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
-        document["worldUiPointer"] = {{"action", document["actions"][0]["id"]}, {"maximumDistanceMeters", 6.0F}};
-        document["poses"].push_back({{"profile", 1},
-                                     {"set", 1},
-                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
-                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
-                                     {"path", "/user/hand/left/input/aim/pose"},
-                                     {"label", "Aim"}});
-        ApplicationFixture fixture{true, 6, Unrequested, OptionalDisable, Unrequested, false, document.dump()};
+        ApplicationFixture fixture{true, 6, Unrequested, OptionalDisable, Unrequested, false, PointerBindingDocument()};
         fixture.script.actions.tracking.enabled = true;
         constexpr Input::PlayerId player = 7;
         fixture.CreatePlay({&capture, [](const void *owner) noexcept -> std::optional<Host::OpenXRInputCaptureStamp> {
