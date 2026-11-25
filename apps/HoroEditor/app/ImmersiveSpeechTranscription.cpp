@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
+#include <thread>
 
 namespace Horo::Editor {
     namespace {
@@ -13,7 +16,6 @@ namespace Horo::Editor {
         constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
         constexpr std::uint64_t MaximumInputSeconds = 15;
         constexpr std::uint32_t MaximumHypotheses = 64;
-        constexpr auto MaximumWorkerDuration = std::chrono::seconds(20);
 
         /** @brief Accepts a bounded ASCII language tag with nonempty hyphen-separated subtags. */
         bool ValidLocale(const std::string_view locale) noexcept {
@@ -58,6 +60,34 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @brief Signals elapsed-time or host cancellation during a synchronous provider call. */
+    struct ImmersiveSpeechTranscription::ProviderWindow final {
+        struct RelayStop final {
+            std::stop_source target;
+
+            void operator()() noexcept {
+                target.request_stop();
+            }
+        };
+
+        std::stop_source providerStop;
+        std::mutex mutex;
+        std::condition_variable_any wake;
+        std::stop_callback<RelayStop> relay;
+        std::jthread timer;
+
+        ProviderWindow(const Clock::time_point deadline, const std::stop_token parent)
+            : relay(parent, RelayStop{providerStop}), timer([this, deadline](const std::stop_token done) {
+                  std::unique_lock lock{mutex};
+                  wake.wait_until(lock, done, deadline, [] {
+                      return false;
+                  });
+                  lock.unlock();
+                  if (!done.stop_requested())
+                      providerStop.request_stop();
+              }) {}
+    };
+
     /** @copydoc ImmersiveSpeechEvidence::IsCurrent */
     bool ImmersiveSpeechEvidence::IsCurrent() const noexcept {
         return context_.IsCurrent() && !release_.stop_requested() && !stop_.stop_requested();
@@ -70,8 +100,8 @@ namespace Horo::Editor {
     ImmersiveSpeechTranscription::ImmersiveSpeechTranscription(ConstructionKey, const ImmersivePlanningContext &context,
                                                                const Audio::Backend::AudioCaptureBufferDescriptor &source,
                                                                const std::string_view locale, const float minimumConfidence,
-                                                               const std::stop_token stop)
-        : source_(source), minimumConfidence_(minimumConfidence) {
+                                                               const std::stop_token stop, const std::chrono::milliseconds providerBudget)
+        : source_(source), providerBudget_(providerBudget), minimumConfidence_(minimumConfidence) {
         evidence_.context_ = context;
         evidence_.release_ = release_.get_token();
         evidence_.stop_ = stop;
@@ -89,25 +119,27 @@ namespace Horo::Editor {
                                                                    const ImmersivePlanningContext &context,
                                                                    const Audio::Backend::AudioCaptureBufferDescriptor &source,
                                                                    const std::string_view locale, const float minimumConfidence,
-                                                                   const std::stop_token stop) {
+                                                                   const std::stop_token stop,
+                                                                   const std::chrono::milliseconds providerBudget) {
         if (const auto admission = owner.Admit(context, ImmersiveRequestKind::SpeechCapture); admission != ImmersiveAdmission::Admitted)
             return {admission == ImmersiveAdmission::StaleContext ? StaleContext : InvalidRequest, {}};
         if (stop.stop_requested())
             return {Cancelled, {}};
         if (!ValidSource(source) || !ValidConfidence(minimumConfidence) || locale.size() > ImmersiveSpeechEvidence::MaximumLocaleBytes ||
-            !ValidLocale(locale))
+            !ValidLocale(locale) || providerBudget <= std::chrono::milliseconds::zero() || providerBudget > MaximumProviderDuration)
             return {InvalidRequest, {}};
-        return {Accepted,
-                std::make_unique<ImmersiveSpeechTranscription>(ConstructionKey{}, context, source, locale, minimumConfidence, stop)};
+        return {Accepted, std::make_unique<ImmersiveSpeechTranscription>(ConstructionKey{}, context, source, locale, minimumConfidence,
+                                                                         stop, providerBudget)};
     }
 
     /** @copydoc ImmersiveSpeechTranscription::Start */
     SpeechTranscriptionStatus ImmersiveSpeechTranscription::Start(ISpeechProvider &provider) {
         if (const auto status = CheckLive(); status != Pending)
             return status == Accepted ? InvalidRequest : status;
-        deadline_ = Clock::now() + MaximumWorkerDuration;
+        deadline_ = Clock::now() + providerBudget_;
+        providerWindow_ = std::make_unique<ProviderWindow>(deadline_, evidence_.stop_);
         status_ = Accepted;
-        stream_ = provider.Open(evidence_.Locale(), source_.format, evidence_.stop_);
+        stream_ = provider.Open(evidence_.Locale(), source_.format, providerWindow_->providerStop.get_token());
         return CheckProvider(static_cast<bool>(stream_));
     }
 
@@ -126,7 +158,7 @@ namespace Horo::Editor {
         const auto end = BlockEnd(block, source_.format.sampleRate);
         if (!end || !FitsWindow(block, *end))
             return CloseWith(LimitExceeded);
-        const auto accepted = stream_->Append(block, pcm, evidence_.stop_);
+        const auto accepted = stream_->Append(block, pcm, providerWindow_->providerStop.get_token());
         if (const auto status = CheckProvider(accepted); status != Accepted)
             return status;
         if (sequence_ == 0)
@@ -146,7 +178,7 @@ namespace Horo::Editor {
             return Accepted;
         if (sequence_ == 0)
             return CloseWith(CaptureInterrupted);
-        const auto accepted = stream_->FinishInput(evidence_.stop_);
+        const auto accepted = stream_->FinishInput(providerWindow_->providerStop.get_token());
         if (const auto status = CheckProvider(accepted); status != Accepted)
             return status;
         inputFinished_ = true;
@@ -157,7 +189,7 @@ namespace Horo::Editor {
     SpeechTranscriptionUpdate ImmersiveSpeechTranscription::Poll() {
         if (const auto status = CheckLive(); status != Accepted)
             return {status, {}};
-        const auto update = stream_->Poll(evidence_.stop_);
+        const auto update = stream_->Poll(providerWindow_->providerStop.get_token());
         if (const auto status = CheckLive(); status != Accepted)
             return {status, {}};
         if (const auto *hypothesis = std::get_if<SpeechHypothesisView>(&update))
@@ -198,6 +230,7 @@ namespace Horo::Editor {
             stream_->Cancel();
             stream_.reset();
         }
+        providerWindow_.reset();
         status_ = status;
         return status_;
     }
@@ -220,6 +253,7 @@ namespace Horo::Editor {
         owned.textSize_ = hypothesis.text.size();
         std::ranges::copy(hypothesis.text, owned.text_.begin());
         if (isFinal) {
+            providerWindow_.reset();
             stream_.reset();
             status_ = Finished;
         }

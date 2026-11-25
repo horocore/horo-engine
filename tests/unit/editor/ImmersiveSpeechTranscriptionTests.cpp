@@ -1,7 +1,9 @@
 #include "../../../apps/HoroEditor/app/ImmersiveCommandEnvelope.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 
 namespace Horo::Editor {
     namespace {
@@ -54,6 +56,23 @@ namespace Horo::Editor {
             unsigned finished{};
             unsigned cancelled{};
             bool available{true};
+        };
+
+        /** @brief Models a cooperative provider blocked while opening its recognizer. */
+        struct WaitingSpeechProvider final : ISpeechProvider {
+            std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
+                                                        const std::stop_token stop) noexcept override {
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds(1), [] {
+                    return false;
+                });
+                observedStop = stop.stop_requested();
+                return {};
+            }
+
+            bool observedStop{};
         };
 
         /** @brief Owns one true authoring generation and one checked microphone source. */
@@ -143,6 +162,19 @@ namespace Horo::Editor {
             REQUIRE(result.status == Status::Finished);
             REQUIRE(result.evidence);
             return std::move(*result.evidence);
+        }
+
+        TEST_CASE("Immersive provider deadline requests stop while a provider call is blocked", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto context = fixture.Context();
+            WaitingSpeechProvider provider;
+            auto prepared = ImmersiveSpeechTranscription::Prepare(fixture.owner, context, fixture.source, "tr-TR", 0.5F,
+                                                                  fixture.stop.get_token(), std::chrono::milliseconds(20));
+            REQUIRE(prepared.stream);
+            CHECK(prepared.stream->Start(provider) == Status::LimitExceeded);
+            CHECK(provider.observedStop);
+            CHECK_FALSE(fixture.stop.stop_requested());
+            CHECK_FALSE(prepared.stream->Poll().evidence);
         }
 
         TEST_CASE("Immersive speech can produce a local Play diagnostics preview without model authority", "[agent][immersive][speech]") {

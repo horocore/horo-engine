@@ -150,20 +150,25 @@ namespace Horo::Editor {
         };
 
     public:
+        static constexpr std::chrono::milliseconds MaximumProviderDuration{20'000};
+
         /** @brief Factory-only construction for an admitted context and checked source. */
         ImmersiveSpeechTranscription(ConstructionKey, const ImmersivePlanningContext &context,
                                      const Audio::Backend::AudioCaptureBufferDescriptor &source, std::string_view locale,
-                                     float minimumConfidence, std::stop_token stop);
+                                     float minimumConfidence, std::stop_token stop, std::chrono::milliseconds providerBudget);
         /** @brief Binds the admitted context, exact source and selected provider to a bounded listening window.
          * @param owner Current owner of the planning snapshot. @param context Exact snapshot to admit.
          * @param source Audio-owned source generation and format. @param locale Recognizer language tag.
          * @param minimumConfidence Inclusive threshold in [0, 1].
-         * @param stop Host cancellation that also revokes previously issued evidence. @return Stream or typed admission failure.
+         * @param stop Host cancellation that also revokes previously issued evidence.
+         * @param providerBudget Positive elapsed-time limit within MaximumProviderDuration.
+         * @return Stream or typed admission failure.
          */
         [[nodiscard]] static SpeechTranscriptionStart Prepare(const ImmersiveAuthoringContext &owner,
                                                               const ImmersivePlanningContext &context,
                                                               const Audio::Backend::AudioCaptureBufferDescriptor &source,
-                                                              std::string_view locale, float minimumConfidence, std::stop_token stop = {});
+                                                              std::string_view locale, float minimumConfidence, std::stop_token stop = {},
+                                                              std::chrono::milliseconds providerBudget = MaximumProviderDuration);
         ~ImmersiveSpeechTranscription();
         ImmersiveSpeechTranscription(const ImmersiveSpeechTranscription &) = delete;
         ImmersiveSpeechTranscription &operator=(const ImmersiveSpeechTranscription &) = delete;
@@ -193,6 +198,7 @@ namespace Horo::Editor {
         void Cancel() noexcept;
 
     private:
+        struct ProviderWindow;
         [[nodiscard]] SpeechTranscriptionStatus CheckLive() noexcept;
         [[nodiscard]] SpeechTranscriptionStatus CheckProvider(bool accepted) noexcept;
         SpeechTranscriptionStatus CloseWith(SpeechTranscriptionStatus status) noexcept;
@@ -207,7 +213,9 @@ namespace Horo::Editor {
         Audio::Backend::AudioCaptureBufferDescriptor source_;
         std::stop_source release_;
         std::unique_ptr<ISpeechProviderStream> stream_;
+        std::unique_ptr<ProviderWindow> providerWindow_;
         std::chrono::steady_clock::time_point deadline_{};
+        std::chrono::milliseconds providerBudget_;
         std::uint64_t nextFrame_{};
         std::uint64_t sequence_{};
         std::uint64_t firstTime_{};
