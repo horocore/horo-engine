@@ -55,18 +55,46 @@ namespace Horo::Editor {
                !m_prefabDrop;
     }
 
-    /** @copydoc EditorWorkspaceController::CaptureAgentSceneReplacement */
-    Result<SceneObjectReplacement> EditorWorkspaceController::CaptureAgentSceneReplacement(const SceneObjectId id) const {
-        using Output = Result<SceneObjectReplacement>;
+    /** @copydoc EditorWorkspaceController::FindAgentSceneEditTarget */
+    Result<const SceneObjectSnapshot *> EditorWorkspaceController::FindAgentSceneEditTarget(const SceneObjectId id) const {
+        using Output = Result<const SceneObjectSnapshot *>;
         const auto &objects = m_document.Objects();
         const auto object = std::ranges::find(objects, id, &SceneObjectSnapshot::id);
         const auto visible = std::ranges::find(m_viewModel.objects, id, &SceneObject::id);
         if (object == objects.end() || object->generated || visible == m_viewModel.objects.end() || !visible->effectivelyVisible)
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        const auto fingerprint = FingerprintSceneObjectContent(*object, MaximumSceneObjectFingerprintBytes);
+        if (visible->effectivelyLocked)
+            return Output::Failure(MakeError(SceneDocumentErrors::ObjectLocked));
+        return Output::Success(std::to_address(object));
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectAgentSceneEditTargets */
+    Result<void> EditorWorkspaceController::InspectAgentSceneEditTargets(const InspectionSceneRevision revision,
+                                                                         const std::span<const std::uint64_t> objects) const {
+        if (objects.empty() || objects.size() > MaximumProposalObjects)
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Invalid));
+        const auto current = InspectSceneRevision();
+        if (current.HasError() || current.Value() != revision)
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
+        for (const auto id : objects) {
+            const auto target = FindAgentSceneEditTarget({id});
+            if (target.HasError())
+                return Result<void>::Failure(target.ErrorValue());
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::CaptureAgentSceneReplacement */
+    Result<SceneObjectReplacement> EditorWorkspaceController::CaptureAgentSceneReplacement(const SceneObjectId id) const {
+        using Output = Result<SceneObjectReplacement>;
+        const auto target = FindAgentSceneEditTarget(id);
+        if (target.HasError())
+            return Output::Failure(target.ErrorValue());
+        const auto &object = *target.Value();
+        const auto fingerprint = FingerprintSceneObjectContent(object, MaximumSceneObjectFingerprintBytes);
         if (fingerprint.HasError())
             return Output::Failure(fingerprint.ErrorValue());
-        return Output::Success({.object = id, .priorContent = fingerprint.Value(), .desired = *object});
+        return Output::Success({.object = id, .priorContent = fingerprint.Value(), .desired = object});
     }
 
     /** @copydoc EditorWorkspaceController::FindOrCaptureAgentSceneReplacement */

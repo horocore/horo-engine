@@ -209,6 +209,18 @@ namespace {
     TEST_CASE("Editor Visibility And Lock Commands Project State And Block Locked Edits", "[unit][editor]") {
         TestWorkspaceController controller;
         const SceneObject original = controller.ViewModel().objects.front();
+        const auto revision = [&] {
+            const auto fence = controller.ViewModel().assetDropFence;
+            return InspectionSceneRevision{fence.replacementEpoch, fence.revision.value};
+        };
+        const auto endpoint = controller.Controller().BindSceneInspection("test-project", 1).lock();
+        REQUIRE(endpoint);
+        REQUIRE(endpoint->inspectEditTargets);
+        const std::array targets{original.id.value};
+        const auto initial = revision();
+        CHECK(endpoint->inspectEditTargets(initial, targets).HasValue());
+        const std::array absent{std::uint64_t{0}};
+        CHECK(endpoint->inspectEditTargets(initial, absent).HasError());
         std::vector<NotificationEvent> notifications;
         const auto subscription = controller.DataBus().Subscribe<NotificationEvent>([&notifications](const NotificationEvent &event) {
             notifications.push_back(event);
@@ -222,6 +234,8 @@ namespace {
         controller.ProcessCommand(hide);
         REQUIRE_FALSE((controller.ViewModel().objects.front().editorState.visible));
         REQUIRE_FALSE((controller.ViewModel().objects.front().effectivelyVisible));
+        CHECK(endpoint->inspectEditTargets(revision(), targets).HasError());
+        CHECK(endpoint->inspectEditTargets(initial, targets).HasError());
         REQUIRE((notifications.empty()));
 
         controller.ProcessCommand(EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::UndoScene});
@@ -233,6 +247,7 @@ namespace {
         lock.editorStatePayload = SceneObjectEditorState{.visible = true, .locked = true};
         controller.ProcessCommand(lock);
         REQUIRE((controller.ViewModel().objects.front().effectivelyLocked));
+        CHECK(endpoint->inspectEditTargets(revision(), targets).HasError());
         REQUIRE((notifications.empty()));
 
         EditorWorkspaceViewCommandData rename;
@@ -247,6 +262,7 @@ namespace {
         lock.editorStatePayload = SceneObjectEditorState{};
         controller.ProcessCommand(lock);
         REQUIRE_FALSE((controller.ViewModel().objects.front().effectivelyLocked));
+        CHECK(endpoint->inspectEditTargets(revision(), targets).HasValue());
         REQUIRE((notifications.size() == 1));
     }
 

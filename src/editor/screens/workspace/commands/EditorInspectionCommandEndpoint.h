@@ -320,5 +320,7 @@ namespace Horo::Editor {
                                             std::span<const AgentSceneObjectRename>, std::span<const AgentSceneLightUpdate>,
                                             std::function<bool()>)>
             proposeEdits;
+        /** @brief Read-only target admission on this exact workspace owner lane. */
+        std::function<Result<void>(InspectionSceneRevision, std::span<const std::uint64_t>)> inspectEditTargets;
     };
 }  // namespace Horo::Editor

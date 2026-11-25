@@ -830,6 +830,12 @@ namespace Horo::Editor {
                                     {local.scale[0], local.scale[1], local.scale[2]}}});
             }
             return PreviewAgentSceneEdits(scene, updates, renames, {}, std::move(authorized), lights);
+        },
+                                            [this, owner = std::this_thread::get_id()](InspectionSceneRevision scene,
+                                                                                       std::span<const std::uint64_t> objects) {
+            if (owner != std::this_thread::get_id())
+                return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::WrongThread)));
+            return InspectAgentSceneEditTargets(scene, objects);
         }});
         return m_inspectionCommandEndpoint;
     }

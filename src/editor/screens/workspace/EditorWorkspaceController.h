@@ -352,6 +352,13 @@ namespace Horo::Editor {
         /** @brief Captures the currently authored camera and selection for one explicit local review. */
         [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport(AgentViewportComponents components);
 
+        /** @brief Checks a bounded set of proposed edit targets against the exact authored Scene on the owner lane.
+         * @param revision Scene opening and revision of the proposal. @param objects Stable proposed object IDs.
+         * @return Success when every target is editable, or the first typed rejection.
+         */
+        [[nodiscard]] Result<void> InspectAgentSceneEditTargets(InspectionSceneRevision revision,
+                                                                std::span<const std::uint64_t> objects) const;
+
         /** @brief Displays a validated batch in the authored viewport while leaving the scene unchanged.
          * @param revision Exact scene opening and revision captured by the proposing client.
          * @param updates Bounded list of proposed object-local transforms.
@@ -1694,6 +1701,8 @@ namespace Horo::Editor {
         void ReconcileAgentSceneReview();
         /** @brief Checks whether the current authored viewport can safely display or approve a review. */
         [[nodiscard]] bool CanReviewAgentSceneEdits() const;
+        /** @brief Borrows a live authored object only while visible, editable and within workspace scope. */
+        [[nodiscard]] Result<const SceneObjectSnapshot *> FindAgentSceneEditTarget(SceneObjectId id) const;
         /** @brief Captures one exact visible object's replacement without altering authored state. */
         [[nodiscard]] Result<SceneObjectReplacement> CaptureAgentSceneReplacement(SceneObjectId id) const;
         /** @brief Merge an additional typed field change into the captured replacement for this object. */

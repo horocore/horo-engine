@@ -93,15 +93,20 @@ namespace Horo::Editor {
     /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
     class ImmersivePlanReview final {
     public:
+        using TargetValidator = std::function<bool(const Agent::AgentPlanObjectScope &)>;
+
         /** @brief Reports terminal status, including cancellation or stale scope after inference. */
         [[nodiscard]] Agent::AgentTurnStatus Status() const noexcept;
 
         /** @brief Borrows the validated draft and effects for the exact current authoring generation.
          * @param current Editor-owned context at presentation time.
+         * @param inspectTargets Current workspace admission on the owner lane, required for scoped tools.
          * @return Plan while current and complete, or null after withdrawal or failure.
          */
-        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current) const & noexcept;
-        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current) const && = delete;
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current,
+                                                       const TargetValidator &inspectTargets = {}) const & noexcept;
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current,
+                                                       const TargetValidator &inspectTargets = {}) const && = delete;
 
     private:
         friend class ImmersiveAgentRequest;

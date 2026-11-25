@@ -109,8 +109,19 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ImmersivePlanReview::Read */
-    const Agent::AgentTurnPlan *ImmersivePlanReview::Read(const ImmersivePlanningContext &current) const & noexcept {
-        return context_.SharesGeneration(current) && Status() == Agent::AgentTurnStatus::Completed ? &plan_ : nullptr;
+    const Agent::AgentTurnPlan *ImmersivePlanReview::Read(const ImmersivePlanningContext &current,
+                                                          const TargetValidator &inspectTargets) const & noexcept {
+        using enum Agent::AgentTurnStatus;
+        if (!context_.SharesGeneration(current) || Status() != Completed)
+            return nullptr;
+        try {
+            for (const auto &tool : plan_.tools)
+                if (tool.scope && (!inspectTargets || !inspectTargets(*tool.scope)))
+                    return nullptr;
+            return Status() == Completed ? &plan_ : nullptr;
+        } catch (...) {
+            return nullptr;
+        }
     }
 
     /** @copydoc ImmersiveAgentRequest::Plan */

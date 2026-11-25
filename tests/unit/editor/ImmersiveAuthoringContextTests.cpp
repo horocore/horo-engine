@@ -322,7 +322,14 @@ namespace Horo::Editor {
                 return Agent::AgentPlanToolInspection{Completed, Agent::AgentPlannedTool{Agent::AgentPlannedEffect::Presentation, scope}};
             });
             CHECK(result.Status() == expected);
-            CHECK((result.Read(*context) != nullptr) == (expected == Completed));
+            CHECK_FALSE(result.Read(*context));
+            CHECK_FALSE(result.Read(*context, [](const auto &) {
+                return false;
+            }));
+            CHECK((result.Read(*context, [&](const auto &targets) {
+                CHECK(targets.objects == scope.objects);
+                return true;
+            }) != nullptr) == (expected == Completed));
         }
 
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {
