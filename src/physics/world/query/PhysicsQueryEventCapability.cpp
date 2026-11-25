@@ -304,14 +304,23 @@ namespace Horo::Physics {
     /** @copydoc PhysicsQueryEventCapability::ReadEvents */
     Result<PhysicsEventReadCompletion> PhysicsQueryEventCapability::ReadEvents(const PhysicsEventReadCommand &command,
                                                                                const std::span<PhysicsEventRecord> records) const {
-        return ReadEventPublication(command, records, nullptr);
+        return ReadEventPublication(command, records, {});
     }
 
     /** @copydoc PhysicsQueryEventCapability::ReadEventsForBody */
     Result<PhysicsEventReadCompletion> PhysicsQueryEventCapability::ReadEventsForBody(const PhysicsEventReadCommand &command,
                                                                                       const BodyHandle body,
                                                                                       const std::span<PhysicsEventRecord> records) const {
-        return ReadEventPublication(command, records, &body);
+        return ReadEventsForBodies(command, std::span{&body, 1}, records);
+    }
+
+    /** @copydoc PhysicsQueryEventCapability::ReadEventsForBodies */
+    Result<PhysicsEventReadCompletion> PhysicsQueryEventCapability::ReadEventsForBodies(const PhysicsEventReadCommand &command,
+                                                                                        const std::span<const BodyHandle> bodies,
+                                                                                        const std::span<PhysicsEventRecord> records) const {
+        if (bodies.empty() || bodies.size() > MaximumEventBodyFilter)
+            return Result<PhysicsEventReadCompletion>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        return ReadEventPublication(command, records, bodies);
     }
 
     namespace {
@@ -328,12 +337,20 @@ namespace Horo::Physics {
                 return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
             return Result<void>::Success();
         }
+
+        /** @brief Rejects a foreign or malformed filter before any matching records can be written. */
+        Result<void> ValidateEventBodies(const std::span<const BodyHandle> bodies, const PhysicsWorldId world) {
+            for (const auto body : bodies)
+                if (const auto owner = ValidatePhysicsHandleOwner(body, world); owner.HasError())
+                    return owner;
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc PhysicsQueryEventCapability::ReadEventPublication */
     Result<PhysicsEventReadCompletion> PhysicsQueryEventCapability::ReadEventPublication(const PhysicsEventReadCommand &command,
                                                                                          const std::span<PhysicsEventRecord> records,
-                                                                                         const BodyHandle *body) const {
+                                                                                         const std::span<const BodyHandle> bodies) const {
         if (!state_)
             return Result<PhysicsEventReadCompletion>::Failure(MakeError(PhysicsErrors::CapabilityStale));
         const auto access = ResolveAccess(*state_, command.identity);
@@ -350,10 +367,10 @@ namespace Horo::Physics {
                                                     world.PublishedTick(), events.PublishedTick());
             admitted.HasError())
             return Result<PhysicsEventReadCompletion>::Failure(admitted.ErrorValue());
-        if (!body)
+        if (bodies.empty())
             return Result<PhysicsEventReadCompletion>::Success(events.CopyPublishedEvents(records, command.maximumRecords));
-        if (const auto owner = ValidatePhysicsHandleOwner(*body, command.identity.world); owner.HasError())
+        if (const auto owner = ValidateEventBodies(bodies, command.identity.world); owner.HasError())
             return Result<PhysicsEventReadCompletion>::Failure(owner.ErrorValue());
-        return Result<PhysicsEventReadCompletion>::Success(events.CopyPublishedBodyEvents(records, command.maximumRecords, *body));
+        return Result<PhysicsEventReadCompletion>::Success(events.CopyPublishedBodyEvents(records, command.maximumRecords, bodies));
     }
 }  // namespace Horo::Physics

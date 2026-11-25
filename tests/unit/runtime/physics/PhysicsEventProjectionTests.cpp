@@ -280,20 +280,21 @@ namespace Horo::Physics::Detail {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
         REQUIRE(CaptureOne(projection, 1, 1, 2));
         REQUIRE(projection.TryCapture(Observation(1, 3, 4)));
-        REQUIRE(projection.TryCapture(Observation(1, 4, 5)));
+        REQUIRE(projection.TryCapture(Observation(1, 5, 6)));
         REQUIRE(projection.CompleteTick(1).HasValue());
         std::array<PhysicsEventRecord, 2> records{};
-        const auto incident = projection.CopyPublishedBodyEvents(records, 2, Endpoint(4).body);
+        const std::array selected{Endpoint(3).body, Endpoint(4).body, Endpoint(5).body};
+        const auto incident = projection.CopyPublishedBodyEvents(records, 2, selected);
         REQUIRE(incident.recordCount == 2);
         CHECK_FALSE(incident.truncated);
         CHECK(records[0].pair.first.body == Endpoint(3).body);
-        CHECK(records[1].pair.second.body == Endpoint(5).body);
+        CHECK(records[1].pair.second.body == Endpoint(6).body);
 
-        const auto bounded = projection.CopyPublishedBodyEvents(records, 1, Endpoint(4).body);
+        const auto bounded = projection.CopyPublishedBodyEvents(records, 1, selected);
         CHECK(bounded.recordCount == 1);
         CHECK(bounded.truncated);
         CHECK(bounded.omittedRecordCount == 1);
-        CHECK(projection.CopyPublishedBodyEvents(records, 2, Endpoint(4, 2).body).recordCount == 0);
+        CHECK(projection.CopyPublishedBodyEvents(records, 2, std::array{Endpoint(4, 2).body}).recordCount == 0);
     }
 
     TEST_CASE("Physics event projection applies drop-newest and fail-tick overflow policies", "[physics][events][projection]") {
@@ -318,7 +319,7 @@ namespace Horo::Physics::Detail {
             REQUIRE_FALSE(retained.truncated);
             REQUIRE(retained.omittedRecordCount == 0);
             REQUIRE(retained.droppedRecordCount == 2);
-            const auto filtered = projection.CopyPublishedBodyEvents(copied, 1, Endpoint(9).body);
+            const auto filtered = projection.CopyPublishedBodyEvents(copied, 1, std::array{Endpoint(9).body});
             CHECK_FALSE(filtered.truncated);
             CHECK(filtered.droppedRecordCount == 2);
 

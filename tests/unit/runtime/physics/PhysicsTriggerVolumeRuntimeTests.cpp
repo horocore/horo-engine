@@ -64,8 +64,9 @@ namespace Horo::Physics {
 #if HORO_TEST_PHYSICS_NATIVE
         /** @brief Executes the same fixed90-tick native oracle while all world/capability leases remain caller-owned. */
         void RequireTriggerPassThrough(PhysicsWorld &world, PhysicsQueryEventCapability &capability, std::uint64_t sceneGeneration,
-                                       BodyHandle moving) {
+                                       BodyHandle moving, BodyHandle trigger) {
             std::size_t enters{}, exits{};
+            const std::array bodies{moving, trigger};
             for (std::uint64_t tick = 1; tick <= 90; ++tick) {
                 REQUIRE(world
                             .AdvanceFixedTick({.simulationTick = tick,
@@ -74,11 +75,11 @@ namespace Horo::Physics {
                             .HasValue());
                 const auto publication = world.PublishedTick();
                 std::array<PhysicsEventRecord, 8> events{};
-                const auto read = capability.ReadEventsForBody({.identity = capability.Identity(),
-                                                                .completedTick = publication.eventTick,
-                                                                .publicationRevision = publication.publicationRevision,
-                                                                .maximumRecords = events.size()},
-                                                               moving, events);
+                const auto read = capability.ReadEventsForBodies({.identity = capability.Identity(),
+                                                                  .completedTick = publication.eventTick,
+                                                                  .publicationRevision = publication.publicationRevision,
+                                                                  .maximumRecords = events.size()},
+                                                                 bodies, events);
                 REQUIRE(read.HasValue());
                 REQUIRE_FALSE(read.Value().truncated);
                 for (std::size_t index = 0; index < read.Value().recordCount; ++index) {
@@ -144,8 +145,10 @@ namespace Horo::Physics {
             auto &world = PhysicsSceneContainmentTestAccess::World(candidate);
             const auto moving = candidate.FindBody({2}, {100});
             REQUIRE(moving.has_value());
+            const auto trigger = candidate.FindBody({1}, {1});
+            REQUIRE(trigger);
             auto capability = world.IssueQueryEventCapability().Value();
-            RequireTriggerPassThrough(world, capability, view.RuntimeId().value, *moving);
+            RequireTriggerPassThrough(world, capability, view.RuntimeId().value, *moving, *trigger);
             candidate.Shutdown();
             REQUIRE(candidate.BodyBindings().empty());
             REQUIRE(world.ReadSceneBodyReconciliation(*moving).HasError());

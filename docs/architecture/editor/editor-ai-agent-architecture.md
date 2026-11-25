@@ -250,7 +250,9 @@ Ownership rules:
   trigger mechanics. AIA may adapt those events into spatial evidence but does
   not own the mechanics or gameplay meaning.
   The on-demand Physics preview reads contact starts and trigger entries for the
-  selected object in one completed Play tick. It displays the tick alongside
+  selected object in one completed Play tick. It filters by the object's
+  resident body handles when they fit the Physics filter budget and uses the
+  complete tick otherwise. It displays the tick alongside
   the events and leaves speech timing separate. Incomplete event batches and
   hidden, locked, or deleted peers suppress the preview. A new selection,
   document revision, or Scene structural revision withdraws the captured review.

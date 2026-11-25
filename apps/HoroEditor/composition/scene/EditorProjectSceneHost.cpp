@@ -18,7 +18,6 @@
 #include <array>
 #include <cmath>
 #include <exception>
-#include <iterator>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -27,7 +26,7 @@ namespace Horo::Application::Internal {
     namespace {
         /** @brief Reads one complete published tick using a short, owner-lane Physics capability. */
         std::optional<std::size_t> ReadAgentContactRecords(Physics::PhysicsWorld &world, const Physics::PhysicsPublishedTick published,
-                                                           const std::optional<Physics::BodyHandle> body,
+                                                           const std::span<const Physics::BodyHandle> bodies,
                                                            const std::span<Physics::PhysicsEventRecord> storage) {
             const auto limit = std::min(storage.size(), static_cast<std::size_t>(world.Settings().Values().budgets.maximumEvents));
             if (limit == 0 || published.eventTick == 0 || published.eventTick != published.completedTick)
@@ -38,12 +37,29 @@ namespace Horo::Application::Internal {
             const auto &capability = access.Value();
             const Physics::PhysicsEventReadCommand command{capability.Identity(), published.eventTick, published.publicationRevision,
                                                            static_cast<std::uint32_t>(limit)};
-            const auto events = body ? capability.ReadEventsForBody(command, *body, storage.first(limit))
-                                     : capability.ReadEvents(command, storage.first(limit));
+            const auto events = bodies.empty() ? capability.ReadEvents(command, storage.first(limit))
+                                               : capability.ReadEventsForBodies(command, bodies, storage.first(limit));
             const auto revoked = world.RevokeQueryEventCapability(capability);
             if (revoked.HasError() || events.HasError() || events.Value().truncated || events.Value().droppedRecordCount)
                 return std::nullopt;
             return events.Value().recordCount;
+        }
+
+        /** @brief Collects exact selected handles. An empty filter falls back to a complete tick when the filter is too small. */
+        std::optional<std::span<const Physics::BodyHandle>> SelectContactBodyFilter(
+            const std::span<const Physics::PhysicsSceneBodyBinding> bindings, const Runtime::SceneObjectId object,
+            const std::span<Physics::BodyHandle> storage) {
+            std::size_t count{};
+            for (const auto &binding : bindings) {
+                if (binding.object != object)
+                    continue;
+                if (count == storage.size())
+                    return std::span<const Physics::BodyHandle>{};
+                storage[count++] = binding.handle;
+            }
+            if (count == 0)
+                return std::nullopt;
+            return storage.first(count);
         }
 
         /** @brief Resolves a physical body only through the published Scene's exact binding. */
@@ -94,16 +110,15 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         const auto anchorId = *anchor.Value().authoredObject;
         const auto bindings = scope.Value().bodyBindings;
-        const auto binding = std::ranges::find(bindings, anchorId, &Physics::PhysicsSceneBodyBinding::object);
-        if (binding == bindings.end())
+        std::array<Physics::BodyHandle, Physics::PhysicsQueryEventCapability::MaximumEventBodyFilter> bodies;
+        const auto filter = SelectContactBodyFilter(bindings, anchorId, bodies);
+        if (!filter)
             return std::nullopt;
 
         auto &world = scope.Value().physics;
         const auto tick = world.PublishedTick();
         std::array<Physics::PhysicsEventRecord, 32> records;
-        const auto other = std::ranges::find(std::next(binding), bindings.end(), anchorId, &Physics::PhysicsSceneBodyBinding::object);
-        const auto filter = other == bindings.end() ? std::optional{binding->handle} : std::nullopt;
-        const auto copied = ReadAgentContactRecords(world, tick, filter, records);
+        const auto copied = ReadAgentContactRecords(world, tick, *filter, records);
         if (!copied)
             return std::nullopt;
         Editor::EditorPlayContactSnapshot review{.anchor = object,

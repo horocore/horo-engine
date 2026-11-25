@@ -150,6 +150,13 @@ namespace Horo::Physics {
         const BodyHandle foreignBody{PhysicsWorldId::Create(52).Value(), {1, 1}};
         Test::RequireError(capability.ReadEventsForBody(EventsAt(capability, published), foreignBody, events),
                            PhysicsErrors::HandleWorldMismatch);
+        const BodyHandle sameWorld{capability.Identity().world, {1, 1}};
+        Test::RequireError(capability.ReadEventsForBodies(EventsAt(capability, published), std::array{sameWorld, foreignBody}, events),
+                           PhysicsErrors::HandleWorldMismatch);
+        Test::RequireError(capability.ReadEventsForBodies(EventsAt(capability, published), {}, events), PhysicsErrors::CapacityExceeded);
+        const std::array<BodyHandle, PhysicsQueryEventCapability::MaximumEventBodyFilter + 1> oversized{};
+        Test::RequireError(capability.ReadEventsForBodies(EventsAt(capability, published), oversized, events),
+                           PhysicsErrors::CapacityExceeded);
         auto foreignQuery = RayAt(capability, published);
         foreignQuery.descriptor.world = PhysicsWorldId::Create(52).Value();
         Test::RequireError(capability.Submit(foreignQuery, hits), PhysicsErrors::HandleWorldMismatch);

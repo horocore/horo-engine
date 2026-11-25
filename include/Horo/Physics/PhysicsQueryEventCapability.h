@@ -8,6 +8,7 @@
 #include "Horo/Physics/PhysicsEvents.h"
 #include "Horo/Physics/PhysicsQuery.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -100,6 +101,8 @@ namespace Horo::Physics {
      */
     class PhysicsQueryEventCapability final {
     public:
+        static constexpr std::size_t MaximumEventBodyFilter = 16;
+
         /** @brief Creates an inert client; access returns CapabilityStale without storage access. */
         PhysicsQueryEventCapability() noexcept = default;
         /** @brief Returns the issued world and capability generation. @return Inert exact identity, or invalid when moved from. */
@@ -139,6 +142,16 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEventsForBody(const PhysicsEventReadCommand &command, BodyHandle body,
                                                                            std::span<PhysicsEventRecord> records) const;
+        /** @brief Copies each event incident to any supplied exact body at most once.
+         * @param command Same capability, publication and output budget as ReadEvents.
+         * @param bodies Between one and MaximumEventBodyFilter handles in the capability's world.
+         * @param records Caller-owned output in publication order.
+         * @return Matching count and caller omissions, whole-tick drops, or a typed admission error.
+         * @pre Physics owner thread outside a fixed tick.
+         */
+        [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEventsForBodies(const PhysicsEventReadCommand &command,
+                                                                             std::span<const BodyHandle> bodies,
+                                                                             std::span<PhysicsEventRecord> records) const;
 
     private:
         friend class PhysicsWorld;
@@ -146,7 +159,7 @@ namespace Horo::Physics {
         /** @brief Applies common owner, tick and budget checks before any output is written. */
         [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEventPublication(const PhysicsEventReadCommand &command,
                                                                               std::span<PhysicsEventRecord> records,
-                                                                              const BodyHandle *body) const;
+                                                                              std::span<const BodyHandle> bodies) const;
 
         explicit PhysicsQueryEventCapability(std::shared_ptr<PhysicsQueryEventCapabilityState> state) noexcept : state_(std::move(state)) {}
 
