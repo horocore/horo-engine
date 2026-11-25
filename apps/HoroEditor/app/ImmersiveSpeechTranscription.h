@@ -236,7 +236,7 @@ namespace Horo::Editor {
         std::uint64_t nextFrame_{};
         std::uint64_t sequence_{};
         std::uint64_t firstTime_{};
-        std::uint64_t lastStart_{};
+        std::uint64_t earliestNextStart_{};
         std::uint64_t endTime_{};
         std::uint32_t hypotheses_{};
         float minimumConfidence_{};

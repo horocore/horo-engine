@@ -695,6 +695,24 @@ namespace Horo::Editor {
             CHECK_FALSE(partial.evidence->IsCurrent());
         }
 
+        TEST_CASE("Immersive speech admits capture rounding and rejects overlapping PCM", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            fixture.provider.next = Transcript();
+            const auto partial = fixture.stream->Poll();
+            REQUIRE(partial.evidence);
+            auto block = Capture::AudioCapturedBlock{.start = {5, 1'041'666}, .firstFrame = 2, .sequence = 2, .frames = 2};
+            auto expected = Status::Accepted;
+            SECTION("next block starts at the floor of the previous frame boundary") {}
+            SECTION("next block starts before the rounded boundary") {
+                --block.start.nanoseconds;
+                expected = Status::CaptureInterrupted;
+            }
+            CHECK(fixture.stream->Append(fixture.source, block, fixture.Samples) == expected);
+            CHECK(fixture.provider.blocks == (expected == Status::Accepted ? 2 : 1));
+            CHECK(partial.evidence->IsCurrent() == (expected == Status::Accepted));
+        }
+
         TEST_CASE("Immersive speech rejects stale, malformed and low confidence updates", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             fixture.StartWithAudio();

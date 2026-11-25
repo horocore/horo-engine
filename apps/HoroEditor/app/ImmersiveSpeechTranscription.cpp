@@ -41,12 +41,20 @@ namespace Horo::Editor {
                    source.maximumFrames <= Audio::MaximumAudioCallbackFrames && Audio::ValidateAudioProcessingFormat(source.format);
         }
 
-        /** @brief Computes the exclusive time end with no wrap, including fractional-frame rounding. */
-        std::optional<std::uint64_t> BlockEnd(const Audio::Backend::AudioCapturedBlock &block, const std::uint32_t rate) noexcept {
-            const auto duration = (block.frames * NanosecondsPerSecond + rate - 1) / rate;
-            if (block.start.nanoseconds > std::numeric_limits<std::uint64_t>::max() - duration)
+        struct BlockTimeBounds final {
+            std::uint64_t earliestNextStart;
+            std::uint64_t latestEnd;
+        };
+
+        /** @brief Accounts for sample-to-nanosecond rounding without admitting overlapping PCM. */
+        std::optional<BlockTimeBounds> BlockEnd(const Audio::Backend::AudioCapturedBlock &block, const std::uint32_t rate) noexcept {
+            const auto scaled = block.frames * NanosecondsPerSecond;
+            const auto floorDuration = scaled / rate;
+            const auto ceilDuration = floorDuration + (scaled % rate != 0);
+            const auto start = block.start.nanoseconds;
+            if (start > std::numeric_limits<std::uint64_t>::max() - ceilDuration)
                 return std::nullopt;
-            return block.start.nanoseconds + duration;
+            return BlockTimeBounds{start + floorDuration, start + ceilDuration};
         }
 
         /** @brief Accepts confidence only within the provider-neutral normalized range. */
@@ -167,15 +175,15 @@ namespace Horo::Editor {
         if (!ValidPcm(source_, block.frames, pcm))
             return CloseWith(InvalidRequest);
         const auto end = BlockEnd(block, source_.format.sampleRate);
-        if (!end || !FitsWindow(block, *end))
+        if (!end || !FitsWindow(block, end->latestEnd))
             return CloseWith(CaptureLimitExceeded);
         const auto accepted = stream_->Append(block, pcm, providerWindow_->providerStop.get_token());
         if (const auto status = CheckProvider(accepted); status != Accepted)
             return status;
         if (sequence_ == 0)
             firstTime_ = block.start.nanoseconds;
-        lastStart_ = block.start.nanoseconds;
-        endTime_ = *end;
+        earliestNextStart_ = end->earliestNextStart;
+        endTime_ = end->latestEnd;
         nextFrame_ += block.frames;
         sequence_ = block.sequence;
         return Accepted;
@@ -278,7 +286,7 @@ namespace Horo::Editor {
 
     bool ImmersiveSpeechTranscription::ContinuesCapture(const Audio::Backend::AudioCapturedBlock &block) const noexcept {
         return block.start.clockDomain == source_.clockDomain && block.sequence == sequence_ + 1 && block.firstFrame == nextFrame_ &&
-               (sequence_ == 0 || block.start.nanoseconds > lastStart_) && block.missingSourceFramesBefore == 0 &&
+               block.start.nanoseconds >= earliestNextStart_ && block.missingSourceFramesBefore == 0 &&
                block.droppedFramesBefore == 0;
     }
 
