@@ -14,6 +14,10 @@ using namespace std::chrono_literals;
 
 namespace {
     using Runtime::Ui::CaptionTimeline;
+    using Application::NpcDialogueTriggerId;
+    constexpr std::uint64_t AuthoredTrigger = 3;
+    constexpr std::uint64_t OtherNpcTrigger = 4;
+    constexpr std::uint64_t MissingTrigger = 5;
 
     /** @brief Waits only within the test budget for owner-lane caption publication. */
     bool PublishCaption(App::NpcDialogueScenePresentation &scene, const NpcDialogueGrant &grant,
@@ -103,16 +107,16 @@ namespace {
 
     /** @brief Cancels a queued remote turn before the I/O worker can send any request. */
     int RunQueuedRetirement(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
-                            const NpcDialogueGrant &grant, std::span<const NpcDialogueFact> facts, bool disableAgent) {
+                            const NpcDialogueGrant &grant, NpcDialogueTriggerId trigger, bool disableAgent) {
         const auto deadline = std::chrono::steady_clock::now() + 5s;
         std::promise<void> release;
         if (HoldIo(jobs, release).HasError())
             return 11;
-        if (scene.Start(owner, grant.route, grant, facts, 1, 10, deadline, {}).HasError())
+        if (scene.Start(owner, trigger, grant, 1, 10, deadline, {}).HasError())
             return 7;
         if (disableAgent) {
             if (runtime.DisableAtSafePoint(owner).HasError() || scene.Pump(grant, 2) ||
-                scene.Start(owner, grant.route, grant, facts, 2, 10, deadline, {}).HasValue())
+                scene.Start(owner, trigger, grant, 2, 10, deadline, {}).HasValue())
                 return 14;
         } else {
             scene.Retire();
@@ -124,15 +128,22 @@ namespace {
 
     /** @brief Drives a live NPC turn to HUD publication, then optionally retires its Scene. */
     int RunTurn(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner, const NpcDialogueGrant &grant,
-                std::span<const NpcDialogueFact> facts, std::string_view mode) {
+                NpcDialogueTriggerId trigger, std::string_view mode) {
         const auto deadline = std::chrono::steady_clock::now() + (mode == "timeout" ? 500ms : 5s);
-        if (scene.Start(owner, grant.route, grant, facts, 1, 10, deadline, {}).HasError())
+        if (scene.Start(owner, trigger, grant, 1, 10, deadline, {}).HasError())
             return 7;
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
         if (mode == "retired")
             runtime.BeginShutdown();
         return CheckTimeline(scene, mode == "retired", mode == "approved" ? 1 : 0) ? 0 : 9;
+    }
+
+    /** @brief Verifies that an unknown or mismatched trigger cannot schedule or publish a turn. */
+    int RunRejectedTrigger(App::NpcDialogueScenePresentation &scene, AgentHandle owner, const NpcDialogueGrant &grant, std::string_view mode) {
+        const auto trigger = NpcDialogueTriggerId::Create(mode == "missing-trigger" ? MissingTrigger : OtherNpcTrigger).Value();
+        const auto rejected = scene.Start(owner, trigger, grant, 1, 10, std::chrono::steady_clock::now() + 5s, {});
+        return rejected.HasError() && !scene.Pump(grant, 2) && CheckTimeline(scene, true, 0) ? 0 : 17;
     }
 
     /** @brief Composes one Scene channel and exercises a complete presentation turn. */
@@ -147,9 +158,6 @@ namespace {
             return 16;
         const auto owner = snapshot.Value().Agents().front().handle;
         const auto grant = activation.Grant();
-        const std::array facts{NpcDialogueFact{NpcDialogueFactId::Create(1).Value(), NpcDialogueValueId::Create(1234).Value()},
-                               NpcDialogueFact{NpcDialogueFactId::Create(2).Value(), NpcDialogueValueId::Create(20).Value()},
-                               NpcDialogueFact{NpcDialogueFactId::Create(3).Value(), NpcDialogueValueId::Create(5678).Value()}};
         const std::array cues{App::NpcDialogueCaption{NpcDialogueCueId::Create(4).Value(), 0, 0, 20},
                               App::NpcDialogueCaption{NpcDialogueCueId::Create(5).Value(), 1, 0, 20}};
         auto queue = MakeQueue();
@@ -157,13 +165,16 @@ namespace {
             return 5;
         JobSystem jobs({.ioWorkerCount = 1});
         auto channel = App::NpcDialogueScenePresentation::Create(jobs, runtime, std::move(queue).Value(), cues,
-                                                                  cues.front().cue, activation.Binding());
+                                                                  cues.front().cue, activation.Triggers(), activation.Binding());
         if (channel.HasError())
             return 6;
         auto scene = std::move(channel).Value();
+        if (mode == "different-agent" || mode == "missing-trigger")
+            return RunRejectedTrigger(scene, owner, grant, mode);
+        const auto trigger = NpcDialogueTriggerId::Create(AuthoredTrigger).Value();
         if (mode == "queued-retire" || mode == "disabled-agent")
-            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, facts, mode == "disabled-agent");
-        return RunTurn(scene, runtime, owner, grant, facts, mode);
+            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode == "disabled-agent");
+        return RunTurn(scene, runtime, owner, grant, trigger, mode);
     }
 
     /** @brief Captures the same canonical project bytes used to identify approval. */
@@ -175,7 +186,10 @@ namespace {
         const auto contents = R"({"horoVersion":"0.2.0","persistentContract":")" + contract + R"(","projectId":"npc-fixture",
             "name":"NPC fixture","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",
             "settings":{"renderBackend":"null","ai":{"schemaVersion":1,
-            "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2]}}}})";
+            "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2],"triggers":[
+              {"id":4,"agent":2,"facts":[{"field":2,"value":20}]},
+              {"id":3,"agent":1,"facts":[{"field":3,"value":5678},{"field":1,"value":1234},{"field":2,"value":20}]}
+            ]}}}})";
         return DecodeProjectSourceDocument(contents);
     }
 

@@ -11,7 +11,7 @@ target_link_libraries(HoroNpcDialogueHttpsHostInternal PUBLIC HoroEngine::AI Hor
 add_library(HoroNpcDialogueScenePresentationInternal STATIC shared/ai/NpcDialogueScenePresentation.cpp)
 target_compile_features(HoroNpcDialogueScenePresentationInternal PUBLIC cxx_std_20)
 target_include_directories(HoroNpcDialogueScenePresentationInternal PUBLIC "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
-target_link_libraries(HoroNpcDialogueScenePresentationInternal PUBLIC HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::RuntimeUi)
+target_link_libraries(HoroNpcDialogueScenePresentationInternal PUBLIC HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::ProjectSettings HoroEngine::RuntimeUi)
 
 # Explicit non-installed package composition contract; stage only its owning host header.
 set(HORO_PACKAGE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/package_host_headers")

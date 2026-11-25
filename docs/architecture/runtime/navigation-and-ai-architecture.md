@@ -2341,7 +2341,14 @@ owner resets the old caption session when switching Scenes.
 Projects opt in with `settings.ai.npcDialogue` in `.horo/project.json`. The
 version-one object requires positive numeric `provider` and `destination` IDs,
 `version: 1`, and a `fields` array of distinct positive authored IDs. The
-application binds a remote provider only when its separate approval matches
+optional `triggers` array binds each distinct positive `id` to an authored
+`agent` ID and a bounded `facts` array of distinct `field` tokens with
+numeric `value` tokens. There are at most 256 triggers and each has the normal
+dialogue fact limit. The gameplay host selects a trigger from the admitted
+catalog and passes a live handle. The Scene verifies that the handle resolves
+to the authored NPC before starting a turn and at publication.
+
+The application binds a remote provider only when its separate approval matches
 the authorized project source fingerprint, route, and provider generation.
 Only the intersection of the project and host field lists is disclosed. An
 absent policy leaves dialogue inactive. A policy without matching approval

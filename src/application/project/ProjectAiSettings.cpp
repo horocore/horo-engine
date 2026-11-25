@@ -238,20 +238,65 @@ namespace Horo::Application {
             return std::ranges::adjacent_find(output) == output.end();
         }
 
+        /** @brief Admits only authored field and value tokens for one interaction. */
+        bool ReadTriggerFacts(const Json &facts, std::vector<AI::NpcDialogueFact> &output) {
+            if (!facts.is_array() || facts.size() > AI::NpcDialogueTurn::MaximumFacts)
+                return false;
+            constexpr std::array<std::string_view, 2> keys{"field", "value"};
+            for (const auto &entry : facts) {
+                if (!HasOnly(entry, keys) || entry.size() != keys.size())
+                    return false;
+                const AI::NpcDialogueFact fact{ReadIdentity<AI::NpcDialogueFactId>(entry["field"]),
+                                               ReadIdentity<AI::NpcDialogueValueId>(entry["value"])};
+                if (!fact.field.IsValid() || !fact.value.IsValid())
+                    return false;
+                output.push_back(fact);
+            }
+            std::ranges::sort(output, {}, &AI::NpcDialogueFact::field);
+            return std::ranges::adjacent_find(output, {}, &AI::NpcDialogueFact::field) == output.end();
+        }
+
+        /** @brief Decodes one trigger and its bound NPC. */
+        bool ReadDialogueTrigger(const Json &entry, ProjectNpcDialogueTrigger &trigger) {
+            constexpr std::array<std::string_view, 3> keys{"id", "agent", "facts"};
+            if (!HasOnly(entry, keys) || entry.size() != keys.size())
+                return false;
+            trigger.id = ReadIdentity<NpcDialogueTriggerId>(entry["id"]);
+            trigger.agent = ReadIdentity<AI::AgentId>(entry["agent"]);
+            return trigger.id.IsValid() && trigger.agent.IsValid() && ReadTriggerFacts(entry["facts"], trigger.facts);
+        }
+
+        /** @brief Admits the optional bounded trigger catalog independent of trigger ordering in the source. */
+        bool ReadDialogueTriggers(const Json &object, std::vector<ProjectNpcDialogueTrigger> &output) {
+            const auto triggers = object.find("triggers");
+            if (triggers == object.end())
+                return true;
+            if (!triggers->is_array() || triggers->size() > ProjectNpcDialogueSettings::MaximumTriggers)
+                return false;
+            output.reserve(triggers->size());
+            for (const auto &entry : *triggers) {
+                if (!ReadDialogueTrigger(entry, output.emplace_back()))
+                    return false;
+            }
+            std::ranges::sort(output, {}, &ProjectNpcDialogueTrigger::id);
+            return std::ranges::adjacent_find(output, {}, &ProjectNpcDialogueTrigger::id) == output.end();
+        }
+
         /** @brief Reads typed dialogue config without admitting a URL, credential or arbitrary text field. */
         bool ReadNpcDialogue(const Json &root, std::optional<ProjectNpcDialogueSettings> &output) {
             const auto object = root.find("npcDialogue");
             if (object == root.end())
                 return true;
-            constexpr std::array<std::string_view, 4> keys{"provider", "destination", "version", "fields"};
-            if (!HasOnly(*object, keys) || object->size() != keys.size())
+            constexpr std::array<std::string_view, 5> keys{"provider", "destination", "version", "fields", "triggers"};
+            if (!HasOnly(*object, keys) || !object->contains("provider") || !object->contains("destination") || !object->contains("fields"))
                 return false;
             auto &dialogue = output.emplace();
             auto &route = dialogue.route;
             route.provider = ReadIdentity<AI::DecisionProviderId>((*object)["provider"]);
             route.destination = ReadIdentity<AI::NpcDialogueDestinationId>((*object)["destination"]);
             return route.provider.IsValid() && route.destination.IsValid() && ReadUnsigned(*object, "version", route.version) &&
-                   route.version == AI::NpcDialogueWireVersion && ReadDialogueFields((*object)["fields"], dialogue.fields);
+                   route.version == AI::NpcDialogueWireVersion && ReadDialogueFields((*object)["fields"], dialogue.fields) &&
+                   ReadDialogueTriggers(*object, dialogue.triggers);
         }
 
         /** @brief Reads and validates budgets under their owning scheduler, Perception and query rules. */

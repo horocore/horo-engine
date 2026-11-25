@@ -39,10 +39,23 @@ namespace Horo::Application {
         std::vector<ProjectLocalPolicyController> controllers;
     };
 
+    /** @brief Stable project-authored identifier for a dialogue interaction. */
+    using NpcDialogueTriggerId = AI::AiStableIdentity<struct NpcDialogueTriggerIdentityTag>;
+
+    /** @brief Authored dialogue context for one interaction with an exact NPC identity. */
+    struct ProjectNpcDialogueTrigger final {
+        NpcDialogueTriggerId id;
+        AI::AgentId agent;
+        std::vector<AI::NpcDialogueFact> facts; /**< Canonical increasing list of distinct fields. */
+    };
+
     /** @brief Project-authored NPC dialogue request. The host owns endpoint and disclosure approval. */
     struct ProjectNpcDialogueSettings final {
+        static constexpr std::size_t MaximumTriggers = 256;
+
         AI::NpcDialogueRoute route;
         std::vector<AI::NpcDialogueFactId> fields; /**< Canonical increasing set of requested context fields. */
+        std::vector<ProjectNpcDialogueTrigger> triggers; /**< Canonical increasing list of distinct trigger IDs. */
     };
 
     /** @brief Validated authoritative project settings with no renderer or local visualization inputs. */

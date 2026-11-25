@@ -29,6 +29,8 @@ namespace Horo::App {
         [[nodiscard]] AI::NpcDialogueGrant Grant() const noexcept;
         /** @brief Returns the admitted endpoint binding, or absence for offline activation. */
         [[nodiscard]] const std::optional<AI::NpcDialogueProviderBinding> &Binding() const noexcept;
+        /** @brief Borrows the admitted interaction catalog until the activation is moved or retired. */
+        [[nodiscard]] std::span<const Application::ProjectNpcDialogueTrigger> Triggers() const noexcept;
 
     private:
         AI::NpcDialogueRoute route_;
@@ -36,5 +38,6 @@ namespace Horo::App {
         std::array<AI::NpcDialogueFactId, AI::NpcDialogueTurn::MaximumFacts> fields_{};
         std::size_t count_{};
         std::optional<AI::NpcDialogueProviderBinding> binding_;
+        std::vector<Application::ProjectNpcDialogueTrigger> triggers_;
     };
 }  // namespace Horo::App

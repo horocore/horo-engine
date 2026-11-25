@@ -134,6 +134,7 @@ namespace {
         CHECK(dialogue.route.destination.Value() == 9);
         CHECK(dialogue.fields[0].Value() == 2);
         CHECK(dialogue.fields[1].Value() == 4);
+        CHECK(dialogue.triggers.empty());
 
         auto &draft = ai["npcDialogue"];
         SECTION("endpoint URL is host-owned") { draft["endpoint"] = "https://example.invalid/"; }
@@ -145,6 +146,42 @@ namespace {
                 draft["fields"].push_back(index + 1);
         }
         CHECK(resolve().HasError());
+    }
+
+    TEST_CASE("Project NPC dialogue binds distinct triggers to authored agents and fact tokens", "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        auto &ai = document["settings"]["ai"];
+        ai = Json::parse(R"({"schemaVersion":1,"npcDialogue":{"provider":8,"destination":9,"version":1,"fields":[4,2],
+            "triggers":[{"id":9,"agent":12,"facts":[]},
+                        {"id":5,"agent":7,"facts":[{"field":4,"value":42},{"field":2,"value":30}]}]}})");
+        auto &triggers = ai["npcDialogue"]["triggers"];
+        SECTION("valid source decodes to a canonical catalog") {
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            const auto parsed = ResolveProjectAiSettings(source.Value());
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value());
+            REQUIRE(parsed.Value()->NpcDialogue());
+            const auto &catalog = parsed.Value()->NpcDialogue()->triggers;
+            REQUIRE(catalog.size() == 2);
+            CHECK(catalog.front().id.Value() == 5);
+            CHECK(catalog.front().agent.Value() == 7);
+            REQUIRE(catalog.front().facts.size() == 2);
+            CHECK(catalog.front().facts.front().field.Value() == 2);
+            CHECK(catalog.front().facts.front().value.Value() == 30);
+            return;
+        }
+        SECTION("duplicate trigger IDs fail") { triggers[0]["id"] = 5; }
+        SECTION("zero agent IDs fail") { triggers[1]["agent"] = 0; }
+        SECTION("duplicate fact fields fail") { triggers[1]["facts"][0]["field"] = 2; }
+        SECTION("free-form context fails") { triggers[1]["facts"][0]["value"] = "text"; }
+        SECTION("oversized trigger catalogs fail") {
+            while (triggers.size() <= ProjectNpcDialogueSettings::MaximumTriggers)
+                triggers.push_back({{"id", triggers.size() + 10}, {"agent", 7}, {"facts", Json::array()}});
+        }
+        const auto source = DecodeProjectSourceDocument(document.dump());
+        REQUIRE(source.HasValue());
+        CHECK(ResolveProjectAiSettings(source.Value()).HasError());
     }
 
     TEST_CASE("Project AI admits only typed local-policy targets and controller bindings", "[unit][application][source-profile][ai]") {

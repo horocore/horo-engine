@@ -35,6 +35,7 @@ namespace Horo::App {
         NpcDialogueProjectActivation activation;
         activation.route_ = policy.route;
         activation.generation_ = generation;
+        activation.triggers_ = policy.triggers;
         if (!Matches(project, policy.route, generation, approval))
             return Activation::Success(std::move(activation));
         if (!ValidFields(approval->fields))
@@ -57,5 +58,10 @@ namespace Horo::App {
     /** @copydoc NpcDialogueProjectActivation::Binding */
     const std::optional<AI::NpcDialogueProviderBinding> &NpcDialogueProjectActivation::Binding() const noexcept {
         return binding_;
+    }
+
+    /** @copydoc NpcDialogueProjectActivation::Triggers */
+    std::span<const Application::ProjectNpcDialogueTrigger> NpcDialogueProjectActivation::Triggers() const noexcept {
+        return triggers_;
     }
 }  // namespace Horo::App
