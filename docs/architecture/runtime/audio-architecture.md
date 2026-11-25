@@ -2346,8 +2346,9 @@ Capture discovery uses `AudioCaptureDeviceSnapshot` and generation-scoped
 `AudioCaptureDeviceId` values. Recording roles resolve within the capture
 catalog and never fall back to playback or another role. Adapters may omit
 unavailable format evidence. Discovery reports platform permission as a
-separate fact. SDL3 and PipeWire attach endpoint additions and removals, changed
-role bindings, and observed permission transitions to the same discovery revision.
+separate fact. SDL3 and PipeWire attach endpoint additions, removals and metadata
+changes, changed role bindings, and observed permission transitions to the same
+discovery revision. An endpoint metadata change preserves its identity.
 Withdrawal has an empty current binding. A default change does not retire the
 old endpoint while it remains in the catalog. Opening a capture stream still
 requires the host's permission and consent decision.
@@ -2367,8 +2368,10 @@ permission revocation, focus loss or shutdown.
 The internal capture buffer reserves one callback-to-consumer queue for an exact
 device, capture generation, clock domain and semantic PCM layout. It drops the
 newest whole block on overflow. The producer still advances source chronology
-and records cumulative dropped frames. Subsequent reads expose sequence and
-sample-frame gaps, and the counter exposes trailing drops with no later block.
+and records cumulative dropped frames. Accepted blocks and the last discarded
+block also carry cumulative frames missing from the producer's timeline after
+its first observation. Consumers can distinguish a source discontinuity from
+queue backpressure, including when a gap precedes the last discarded block.
 A short destination leaves the block queued. Cancellation closes admission
 while the host retains storage until both participants detach. The reader
 scrubs consumed samples before releasing their slot. After detachment, the

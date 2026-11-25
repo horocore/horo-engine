@@ -173,23 +173,24 @@ namespace Horo::Audio {
     [[nodiscard]] AudioCaptureDeviceResolution ResolveAudioCaptureDevice(const AudioCaptureDeviceSnapshot &snapshot,
                                                                          const AudioCaptureDeviceSelection &selection) noexcept;
 
-    /** @brief Membership changes between two complete recording discoveries. */
+    /** @brief Endpoint changes between two complete recording discoveries. */
     enum class AudioCaptureDeviceChangeKind : std::uint8_t {
         Removed,
-        Added
+        Added,
+        MetadataChanged /**< The same generation reports different endpoint metadata. */
     };
 
-    /** @brief The exact generation retired or admitted at a recording discovery revision. */
+    /** @brief The generation affected by a change at a recording discovery revision. */
     struct AudioCaptureDeviceChange final {
         AudioCaptureDeviceChangeKind kind{};
         AudioCaptureDeviceId device;
         std::uint64_t revision{};
     };
 
-    /** @brief Derives ordered removal and addition facts for one backend's successive capture discoveries.
+    /** @brief Derives ordered endpoint changes for one backend's successive capture discoveries.
      * @param before Previous validated snapshot of the same backend owner.
      * @param after Current validated snapshot, with a strictly newer revision.
-     * @return Removed generations followed by added generations, or a typed validation/allocation failure.
+     * @return Removed generations followed by additions and metadata changes in current catalog order, or a typed failure.
      * @details A slot reused with a higher generation emits both changes. A lower generation
      * in the same slot is invalid even at a newer catalog revision. The routine runs on control.
      */

@@ -43,7 +43,8 @@ namespace Horo::Audio::Backend {
 
         /** @brief Checks coherent timing and cumulative counts for one observed overflow. */
         bool MatchesTestOverflow(const AudioCapturedBlock &block, const std::uint64_t total) {
-            return MatchesTestTimeline(block) && block.frames == 1 && block.droppedFramesBefore < total;
+            return MatchesTestTimeline(block) && block.frames == 1 && block.droppedFramesBefore < total &&
+                   block.missingSourceFramesBefore == 0;
         }
 
         TEST_CASE("Capture overflow drops the newest whole block and preserves the next source timestamp", "[audio][capture]") {
@@ -117,7 +118,28 @@ namespace Horo::Audio::Backend {
             CHECK(lost->sequence == 4);
             CHECK(lost->frames == 1);
             CHECK(lost->droppedFramesBefore == 1);
+            CHECK(lost->missingSourceFramesBefore == 3);
             CHECK(buffer.DroppedFrames() == 2);
+        }
+
+        TEST_CASE("Capture consumers distinguish source gaps from ring loss after an overflow", "[audio][capture]") {
+            auto buffer = MakeBuffer();
+            const std::array<AudioSample, 2> stereo{0.5F, -0.5F};
+            REQUIRE(buffer.TryWrite({5, 10}, 2, 1, stereo) == AudioCaptureWrite::Accepted);
+            REQUIRE(buffer.TryWrite({5, 20}, 4, 1, stereo) == AudioCaptureWrite::Accepted);
+            REQUIRE(buffer.TryWrite({5, 30}, 8, 1, stereo) == AudioCaptureWrite::Full);
+            AudioCapturedBlock block;
+            std::array<AudioSample, 2> output{};
+            REQUIRE(buffer.TryRead(block, output) == AudioCaptureRead::Copied);
+            CHECK(block.missingSourceFramesBefore == 0);
+            REQUIRE(buffer.TryWrite({5, 40}, 9, 1, stereo) == AudioCaptureWrite::Accepted);
+            REQUIRE(buffer.TryRead(block, output) == AudioCaptureRead::Copied);
+            CHECK(block.missingSourceFramesBefore == 1);
+            CHECK(block.droppedFramesBefore == 0);
+            REQUIRE(buffer.TryRead(block, output) == AudioCaptureRead::Copied);
+            CHECK(block.firstFrame == 9);
+            CHECK(block.missingSourceFramesBefore == 4);
+            CHECK(block.droppedFramesBefore == 1);
         }
 
         TEST_CASE("Capture preparation rejects over-budget or invalid fixed storage", "[audio][capture]") {

@@ -263,5 +263,37 @@ namespace Horo::Audio {
             after.backend = AudioBackendKind::CoreAudio;
             CHECK(DescribeAudioCaptureDeviceChanges(before, after).HasError());
         }
+
+        TEST_CASE("Recording discovery reports metadata changes without replacing a device generation", "[audio][discovery][capture]") {
+            const auto owner = AudioRuntimeId::Create(7).Value();
+            const AudioCaptureDeviceId microphone{owner, 1, 2};
+            const AudioCaptureDeviceId headset{owner, 2, 3};
+            const auto mono = AudioProcessingFormat{48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono)};
+            const AudioCaptureDeviceSnapshot before{.owner = owner,
+                                                    .backend = AudioBackendKind::SDL3Audio,
+                                                    .revision = 8,
+                                                    .devices = {{microphone, "Microphone", AudioDeviceClass::Physical, mono},
+                                                                {headset, "Headset"}},
+                                                    .defaults = {.communications = microphone}};
+            auto after = before;
+            ++after.revision;
+            SECTION("preferred format is no longer reported") {
+                after.devices.front().preferredFormat.reset();
+            }
+            SECTION("preferred format has a new sample rate") {
+                after.devices.front().preferredFormat->sampleRate = 44'100;
+            }
+            SECTION("display label changes") {
+                after.devices.front().displayName = "USB microphone";
+            }
+            std::ranges::reverse(after.devices);
+            const auto changes = DescribeAudioCaptureDeviceChanges(before, after);
+            REQUIRE(changes.HasValue());
+            REQUIRE(changes.Value().size() == 1);
+            CHECK(changes.Value().front().kind == AudioCaptureDeviceChangeKind::MetadataChanged);
+            CHECK(changes.Value().front().device == microphone);
+            CHECK(changes.Value().front().revision == after.revision);
+            CHECK(ResolveAudioCaptureDevice(after, AudioDefaultDeviceRole::Communications).device == microphone);
+        }
     }  // namespace
 }  // namespace Horo::Audio

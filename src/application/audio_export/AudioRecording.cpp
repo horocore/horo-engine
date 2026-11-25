@@ -113,8 +113,8 @@ namespace Horo::Application::Internal {
     /** @brief Rejects gaps, reordered samples and clock or frame evidence from a different take. */
     bool AudioRecording::Continues(const Audio::Backend::AudioCapturedBlock &block) const noexcept {
         return block.start.clockDomain == source_.clockDomain && block.start.nanoseconds >= latestStart_ &&
-               block.sequence == sequence_ + 1 && block.firstFrame == frames_ && block.droppedFramesBefore == 0 && block.frames != 0 &&
-               block.frames <= source_.maximumFrames;
+               block.sequence == sequence_ + 1 && block.firstFrame == frames_ && block.droppedFramesBefore == 0 &&
+               block.missingSourceFramesBefore == 0 && block.frames != 0 && block.frames <= source_.maximumFrames;
     }
 
     /** @copydoc AudioRecording::Append */

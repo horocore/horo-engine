@@ -30,6 +30,7 @@ namespace Horo::Audio::Backend {
         std::uint64_t sequence{};
         std::uint64_t droppedFramesBefore{}; /**< Cumulative frames discarded by ring overflow before this block. */
         std::uint32_t frames{};
+        std::uint64_t missingSourceFramesBefore{}; /**< Cumulative source gaps after the first observed frame, independent of overflow. */
     };
 
     /** @brief Callback admission outcome; a full ring consumes the source sequence and drops the new block. */

@@ -44,10 +44,10 @@ namespace Horo::Audio::Backend {
          */
         [[nodiscard]] static Result<AudioCaptureDiscovery> Between(const AudioCaptureDeviceSnapshot &before,
                                                                    const AudioCaptureDeviceSnapshot &after) {
-            auto membership = DescribeAudioCaptureDeviceChanges(before, after);
-            if (membership.HasError())
-                return Result<AudioCaptureDiscovery>::Failure(membership.ErrorValue());
-            AudioCaptureDiscovery discovery{after, std::move(membership).Value()};
+            auto changes = DescribeAudioCaptureDeviceChanges(before, after);
+            if (changes.HasError())
+                return Result<AudioCaptureDiscovery>::Failure(changes.ErrorValue());
+            AudioCaptureDiscovery discovery{after, std::move(changes).Value()};
             const std::array roles{AudioDefaultDeviceRole::Console, AudioDefaultDeviceRole::Multimedia,
                                    AudioDefaultDeviceRole::Communications};
             const std::array previous{before.defaults.console, before.defaults.multimedia, before.defaults.communications};

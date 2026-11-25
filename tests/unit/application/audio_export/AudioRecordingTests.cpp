@@ -164,13 +164,18 @@ namespace Horo::Application::Internal {
             CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
         }
 
-        TEST_CASE("A stale capture block discards the private recording and cannot later publish", "[audio][recording]") {
+        TEST_CASE("An invalid capture block discards the private recording and cannot later publish", "[audio][recording]") {
             RecordingFixture fixture;
             auto recording = fixture.Recording();
-            auto stale = fixture.source;
-            ++stale.generation;
-            const AudioCapturedBlock block{.start = {7, 0}, .sequence = 1, .frames = 1};
-            CHECK(recording.Append(stale, block, StereoFrame).HasError());
+            auto source = fixture.source;
+            AudioCapturedBlock block{.start = {7, 0}, .sequence = 1, .frames = 1};
+            SECTION("stale device generation") {
+                ++source.generation;
+            }
+            SECTION("capture source reports a discontinuity") {
+                block.missingSourceFramesBefore = 1;
+            }
+            CHECK(recording.Append(source, block, StereoFrame).HasError());
             auto buffer = fixture.Buffer();
             REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
             const auto discarded = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, {});

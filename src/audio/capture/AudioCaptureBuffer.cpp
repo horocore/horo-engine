@@ -58,6 +58,7 @@ namespace Horo::Audio::Backend {
             std::atomic<std::uint64_t> nanoseconds{};
             std::atomic<std::uint64_t> firstFrame{};
             std::atomic<std::uint64_t> droppedBefore{};
+            std::atomic<std::uint64_t> missingSourceFramesBefore{};
             std::atomic<std::uint32_t> frames{};
 
             /** @brief Publishes the latest discarded block without retaining its PCM. */
@@ -66,6 +67,7 @@ namespace Horo::Audio::Backend {
                 nanoseconds.store(block.start.nanoseconds);
                 firstFrame.store(block.firstFrame);
                 droppedBefore.store(block.droppedFramesBefore);
+                missingSourceFramesBefore.store(block.missingSourceFramesBefore);
                 frames.store(block.frames);
                 sequence.store(block.sequence);
                 updating.store(false);
@@ -80,7 +82,8 @@ namespace Horo::Audio::Backend {
                                                   firstFrame.load(),
                                                   observed,
                                                   droppedBefore.load(),
-                                                  frames.load()};
+                                                  frames.load(),
+                                                  missingSourceFramesBefore.load()};
                 if (updating.load() || sequence.load() != observed)
                     return std::nullopt;
                 return snapshot;
@@ -93,6 +96,7 @@ namespace Horo::Audio::Backend {
         std::uint64_t sequence{};
         std::uint64_t nextFrame{};
         std::uint64_t previousStart{};
+        std::uint64_t missingSourceFrames{};
 
         /** @brief Reserves the generation's descriptors and all sample slots before attachment. */
         explicit State(const AudioCaptureBufferDescriptor &description)
@@ -158,11 +162,14 @@ namespace Horo::Audio::Backend {
         if (state.sequence == MaximumFrameIndex)
             return Exhausted;
 
+        // Nonoverlapping source gaps sum to at most firstFrame. The first observation establishes the origin.
+        if (state.sequence != 0)
+            state.missingSourceFrames += firstFrame - state.nextFrame;
         ++state.sequence;
         state.nextFrame = firstFrame + frames;
         state.previousStart = start.nanoseconds;
         const auto write = state.write.load();
-        const AudioCapturedBlock block{start, firstFrame, state.sequence, state.dropped.load(), frames};
+        const AudioCapturedBlock block{start, firstFrame, state.sequence, state.dropped.load(), frames, state.missingSourceFrames};
         if (write - state.read.load() >= state.descriptor.slots) {
             state.CountDrop(block);
             return Full;

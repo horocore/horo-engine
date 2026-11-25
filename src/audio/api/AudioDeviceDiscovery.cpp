@@ -107,6 +107,18 @@ namespace Horo::Audio {
                    ValidateAudioCaptureDeviceSnapshot(before) && ValidateAudioCaptureDeviceSnapshot(after);
         }
 
+        /** @brief Appends added endpoints and changes to retained generations in current catalog order. */
+        void AppendCurrentCaptureChanges(const AudioCaptureDeviceSnapshot &before, const AudioCaptureDeviceSnapshot &after,
+                                         std::vector<AudioCaptureDeviceChange> &changes) {
+            for (const auto &device : after.devices) {
+                if (const auto previous = std::ranges::find(before.devices, device.id, &AudioDiscoveredCaptureDevice::id);
+                    previous == before.devices.end())
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::Added, device.id, after.revision);
+                else if (*previous != device)
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::MetadataChanged, device.id, after.revision);
+            }
+        }
+
         /** @brief Keeps explicit selection fenced to this catalog's exact owner and generation. */
         template <class Resolution, class DeviceId>
         Resolution ResolveSelection(const auto &snapshot, const std::variant<DeviceId, AudioDefaultDeviceRole> &selection) noexcept {
@@ -167,9 +179,7 @@ namespace Horo::Audio {
                 if (current == after.devices.end() || current->id != device.id)
                     changes.emplace_back(AudioCaptureDeviceChangeKind::Removed, device.id, after.revision);
             }
-            for (const auto &device : after.devices)
-                if (!Contains(before, device.id))
-                    changes.emplace_back(AudioCaptureDeviceChangeKind::Added, device.id, after.revision);
+            AppendCurrentCaptureChanges(before, after, changes);
             return Output::Success(std::move(changes));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
