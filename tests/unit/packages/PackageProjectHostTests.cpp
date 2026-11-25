@@ -748,7 +748,7 @@ namespace {
         CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
-    TEST_CASE("Package removal reports the saved Scene and Prefab attachments of a departing behavior", "[packages][application][host]") {
+    TEST_CASE("Package removal verifies saved Scene and Prefab dependencies", "[packages][application][host]") {
         HostFixture fixture{true};
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
                                           .platform = {"linux", "x64", "horo-sdk-2"}};
@@ -766,6 +766,7 @@ namespace {
                                                                                      {type},
                                                                                      {},
                                                                                      "extensions/native/extension.json"}};
+        owners.front().hasCustomSenses = true;
         auto sources = fixture.RemovalSources(*assets);
         const auto unobserved = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(unobserved.HasError());
@@ -827,11 +828,15 @@ namespace {
         REQUIRE(blocked.HasError());
         CHECK(blocked.ErrorValue().code.Value() == "packages.host.behavior_in_use");
         const auto &details = blocked.ErrorValue().diagnostics;
-        REQUIRE(details.size() == 2);
+        REQUIRE(details.size() == 4);
         CHECK(details[0].location.source == "Assets/Scene.horoasset");
         CHECK(details[0].path == "7/3");
         CHECK(details[1].location.source == "Assets/Example.prefab");
         CHECK(details[1].path == "0/3");
+        CHECK(details[2].code.Value() == "packages.host.perception_reference_review");
+        CHECK(details[2].location.source == "Assets/Scene.horoasset");
+        CHECK(details[3].code.Value() == "packages.host.perception_reference_review");
+        CHECK(details[3].location.source == "Assets/Example.prefab");
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
@@ -857,6 +862,34 @@ namespace {
         CHECK(unreadable.ErrorValue().code.Value() == "packages.host.scene_reference_unreadable");
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
+
+        root.behaviors.clear();
+        const auto plainPrefab = Prefab::PrefabDocument::Create(
+            {.projectVersion = ParseHoroVersion("1.2.3").Value(), .assetId = prefabAsset, .objects = {root}},
+            Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(plainPrefab.HasValue());
+        const auto plainPrefabBytes = plainPrefab.Value().SerializeCanonical();
+        REQUIRE(plainPrefabBytes.HasValue());
+        writeAsset("Example.prefab", prefabAsset, "core.prefab", plainPrefabBytes.Value());
+
+        object.components.behaviors.clear();
+        object.components.aiAgent = AI::AiAgentComponent{.agent = AI::AgentId::Create(9).Value(), .enabled = false};
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}}));
+        const auto requiresReview = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(requiresReview.HasError());
+        REQUIRE(requiresReview.ErrorValue().diagnostics.size() == 1);
+        CHECK(requiresReview.ErrorValue().diagnostics.front().code.Value() == "packages.host.perception_reference_review");
+        CHECK(requiresReview.ErrorValue().diagnostics.front().location.source == "Assets/Scene.horoasset");
+
+        object.components.aiAgent.reset();
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}}));
+        REQUIRE(PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources).HasValue());
+        CHECK(std::filesystem::is_regular_file(policy.projectRoot / "Assets/Scene.horoasset"));
+        CHECK(std::filesystem::is_regular_file(policy.projectRoot / "Assets/Example.prefab"));
+        const auto rollback = ReadPackageProjectRollback(policy, fixture.files, {});
+        REQUIRE(rollback.HasValue());
+        CHECK(rollback.Value().lock == oldLock);
+        CHECK(rollback.Value().request == oldRequest);
     }
 
     /** @brief Adds a second independently locked package with a declared runtime role. */

@@ -494,15 +494,6 @@ namespace Horo::Application::Internal {
             std::ranges::move(failure.diagnostics, std::back_inserter(blocking->diagnostics));
         }
 
-        /** @brief Retains the asset, object, and attachment identity for each confirmed use. */
-        void AppendBehaviorReferences(std::vector<Diagnostic> &diagnostics, std::span<const PackageBehaviorReference> references) {
-            for (const auto &reference : references)
-                diagnostics.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
-                                         reference.package.Value() + ": " + std::string{reference.type.Value()},
-                                         SourceLocation{reference.assetPath},
-                                         std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
-        }
-
         /** @brief Reports confirmed references even when another reference category cannot be fully inspected. */
         Result<void> CheckRemovalReferences(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
                                             const Packages::PackageRemovalGraphPreview &impact) {
@@ -517,12 +508,11 @@ namespace Horo::Application::Internal {
             else
                 AppendPackageImporterDiagnostics(references, importers.Value());
 
-            auto behaviors =
-                InspectPackageBehaviorReferences(sources.assets, sources.files, sources.context, sources.registrations, lock, impact);
-            if (behaviors.HasError())
-                RecordRemovalFailure(blocking, std::move(behaviors).ErrorValue());
+            auto sceneSources = InspectPackageScenePrefabReferences(sources, lock, impact);
+            if (sceneSources.HasError())
+                RecordRemovalFailure(blocking, std::move(sceneSources).ErrorValue());
             else
-                AppendBehaviorReferences(references, behaviors.Value());
+                std::ranges::move(sceneSources.Value(), std::back_inserter(references));
 
             auto services = InspectPackageServiceReferences(sources, lock, impact);
             if (services.HasError())

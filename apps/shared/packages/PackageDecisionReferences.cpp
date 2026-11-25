@@ -78,7 +78,7 @@ namespace Horo::Application::Internal {
             return Independence::Success(AI::ReadBuiltinPointQuerySettings(query.Value(), pointSchema).HasValue());
         }
 
-        /** @brief Examines EQS with its typed codec; other authored Perception surfaces still require owner review. */
+        /** @brief Examines EQS with its typed codec and keeps the conservative Decision dependency check. */
         Result<void> ReviewSenseUse(const PackageRemovalSources &sources, const ProviderOwners &owners,
                                     const Assets::AssetRecord &record, const AI::QuerySchemaRegistry *pointSchema, const bool decision,
                                     std::vector<Diagnostic> &diagnostics) {
@@ -93,7 +93,7 @@ namespace Horo::Application::Internal {
                 if (independent.Value())
                     return Result<void>::Success();
             }
-            if (!decision && type != "core.scene" && type != "core.prefab" && type != AI::EnvironmentQuerySourceAssetType)
+            if (!decision && type != AI::EnvironmentQuerySourceAssetType)
                 return Result<void>::Success();
             return CollectSenseReview(owners, path, diagnostics);
         }
