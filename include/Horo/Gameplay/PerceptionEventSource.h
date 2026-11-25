@@ -175,6 +175,17 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> Prepare(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeDispatchEvidence &evidence,
                                            std::span<const GameplayHearingDelivery> deliveries);
 
+        /** @brief Stages hearing for a host whose Scene counts fixed steps independently of its scheduler.
+         * @param scene Current view from the bound Scene incarnation.
+         * @param evidence Scheduler-issued proof of the active fixed attempt.
+         * @param sceneTick Current Scene step, starting at one and never ahead of the scheduler.
+         * @param deliveries Exact proposed listener deliveries. The batch becomes readable at sceneTick + 1.
+         * @return Success or typed refusal, without changing the committed batch.
+         */
+        [[nodiscard]] Result<void> PrepareForSceneTick(const Runtime::RuntimeSceneView &scene,
+                                                       const Runtime::RuntimeDispatchEvidence &evidence, std::uint64_t sceneTick,
+                                                       std::span<const GameplayHearingDelivery> deliveries);
+
         /** @brief Promotes prepared storage without allocation or user callbacks during actual scheduler commitment.
          * @param evidence Active fixed callback evidence for the prepared attempt.
          * @return True when the batch was promoted. Invalid, duplicate and uncommitted attempts leave it unchanged.
@@ -196,6 +207,10 @@ namespace Horo::Gameplay {
                                                                                std::uint64_t tick) const;
 
     private:
+        /** @brief Checks real scheduler authority and stages a batch on the host's selected tick domain. */
+        [[nodiscard]] Result<void> Stage(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeDispatchEvidence &evidence,
+                                         std::optional<std::uint64_t> sceneTick, std::span<const GameplayHearingDelivery> deliveries);
+
         /** @brief One bounded candidate or committed sensing batch. */
         struct Batch final {
             std::array<CommittedPerceptionDelivery, PerceptionEventSource::MaximumDeliveries> records{};

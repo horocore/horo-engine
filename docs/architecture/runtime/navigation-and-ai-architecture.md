@@ -1810,6 +1810,9 @@ producer-approved listener deliveries during the actual fixed attempt. Only the
 same scheduler's commit evidence promotes the batch. The immediately following
 sensing tick can borrow it without draining or exposing uncommitted Gameplay
 outcomes. Producer filtering remains explicit and Audio is not required.
+Hosts that count fixed steps per Scene can stage against that local step.
+The committed batch targets the next Scene sensing step, while the actual host
+scheduler still owns publication and rollback.
 An authored project can select built-in Hearing (`sense` 2) in its existing
 Perception listener declarations. The shared Editor Play and headless project
 registry supply the Hearing/Sound descriptors whenever a listener selects them.

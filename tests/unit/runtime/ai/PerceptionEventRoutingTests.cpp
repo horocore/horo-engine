@@ -309,8 +309,11 @@ namespace Horo::AI {
                 return Result<void>::Success();
             }
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+                if (context.simulationTick < stageAt)
+                    return Result<void>::Success();
                 attempted = context.dispatchEvidence;
-                auto result = publisher_.Prepare(scene_, attempted, deliveries_);
+                auto result = sceneTick ? publisher_.PrepareForSceneTick(scene_, attempted, *sceneTick, deliveries_)
+                                        : publisher_.Prepare(scene_, attempted, deliveries_);
                 premature = publisher_.Commit(attempted);
                 return result;
             }
@@ -318,6 +321,8 @@ namespace Horo::AI {
                 return reject ? Result<void>::Failure(MakeError(AIErrors::PerceptionEventInvalid)) : Result<void>::Success();
             }
             void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                if (context.simulationTick < stageAt)
+                    return;
                 committed = publisher_.Commit(context.dispatchEvidence);
                 duplicate = publisher_.Commit(context.dispatchEvidence);
             }
@@ -327,6 +332,8 @@ namespace Horo::AI {
             void Shutdown() noexcept override {}
 
             Runtime::RuntimeDispatchEvidence attempted;
+            std::optional<std::uint64_t> sceneTick;
+            std::uint64_t stageAt{1};
             bool reject{};
             bool premature{};
             bool committed{};
@@ -378,6 +385,7 @@ namespace Horo::AI {
             CancellationSource cancellation;
             std::size_t count = 1;
             bool rejectCommit{};
+            std::optional<std::uint64_t> sceneTick;
             SECTION("successful commitment stamps an exact next-tick delivery") {}
             SECTION("a failed fixed preparation never publishes its staged hearing") {
                 rejectCommit = true;
@@ -385,20 +393,40 @@ namespace Horo::AI {
             SECTION("an oversized producer batch fails before partial publication") {
                 count = proposals.size();
             }
-            const bool rejected = rejectCommit || count > PerceptionEventSource::MaximumDeliveries;
+            SECTION("a Scene opened after the scheduler started uses its own sensing tick") {
+                sceneTick = 1;
+            }
+            SECTION("a Scene cannot advance its sensing tick ahead of the scheduler") {
+                sceneTick = 3;
+            }
+            const bool rejected = rejectCommit || count > PerceptionEventSource::MaximumDeliveries || sceneTick == 3;
             auto callback = std::make_unique<HearingFixedParticipant>(publisher, view, std::span{proposals}.first(count));
             auto &participant = *callback;
             participant.reject = rejectCommit;
+            participant.sceneTick = sceneTick;
+            if (sceneTick) {
+                participant.stageAt = 2;
+            }
             REQUIRE(lifecycle.AddParticipant(std::move(callback)).HasValue());
             REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
             REQUIRE(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
             clock.now = quantum;
+            if (sceneTick) {
+                REQUIRE(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+                CHECK_FALSE(participant.committed);
+                clock.now += quantum;
+            }
             CHECK(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasError() == rejected);
             CHECK_FALSE(participant.premature);
             CHECK_FALSE(participant.duplicate);
             CHECK(participant.committed == !rejected);
             CHECK_FALSE(publisher.Commit(participant.attempted));
             RequireCommittedHearing(fixture, publisher, !rejected);
+            if (sceneTick && !rejected) {
+                clock.now += quantum;
+                ExpectError(scheduler->RunFrame(lifecycle, cancellation.Token(), false), AIErrors::PerceptionEventStale);
+                RequireCommittedHearing(fixture, publisher, true);
+            }
             scheduler->RetireDispatch();
             const auto retired = publisher.Read(view, 2);
             REQUIRE(retired.HasError());

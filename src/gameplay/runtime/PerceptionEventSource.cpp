@@ -312,6 +312,22 @@ namespace Horo::Gameplay {
     Result<void> GameplayHearingPublisher::Prepare(const Runtime::RuntimeSceneView &scene,
                                                     const Runtime::RuntimeDispatchEvidence &evidence,
                                                     const std::span<const GameplayHearingDelivery> deliveries) {
+        return Stage(scene, evidence, std::nullopt, deliveries);
+    }
+
+    /** @copydoc GameplayHearingPublisher::PrepareForSceneTick */
+    Result<void> GameplayHearingPublisher::PrepareForSceneTick(const Runtime::RuntimeSceneView &scene,
+                                                                const Runtime::RuntimeDispatchEvidence &evidence,
+                                                                const std::uint64_t sceneTick,
+                                                                const std::span<const GameplayHearingDelivery> deliveries) {
+        return Stage(scene, evidence, sceneTick, deliveries);
+    }
+
+    /** @copydoc GameplayHearingPublisher::Stage */
+    Result<void> GameplayHearingPublisher::Stage(const Runtime::RuntimeSceneView &scene,
+                                                 const Runtime::RuntimeDispatchEvidence &evidence,
+                                                 const std::optional<std::uint64_t> sceneTick,
+                                                 const std::span<const GameplayHearingDelivery> deliveries) {
         Runtime::RuntimeDispatchFacts facts;
         if (evidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts) != Runtime::RuntimeDispatchStatus::Valid ||
             facts.committedAttempt == facts.fixedAttempt)
@@ -319,10 +335,14 @@ namespace Horo::Gameplay {
         if (!scene.IsCurrent() || !scene_.SameIncarnation(scene) || prepared_.RefersToSameDispatch(evidence))
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         auto &pending = batches_[1 - published_];
-        if (facts.fixedTick == std::numeric_limits<std::uint64_t>::max() || deliveries.size() > pending.records.size())
+        const auto tick = sceneTick.value_or(facts.fixedTick);
+        if (tick == 0 || tick > facts.fixedTick || tick == std::numeric_limits<std::uint64_t>::max() ||
+            deliveries.size() > pending.records.size())
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
 
-        const auto nextTick = facts.fixedTick + 1;
+        const auto nextTick = tick + 1;
+        if (nextTick <= batches_[published_].sensingTick)
+            return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
         if (auto valid = ValidateHearingBatch(scene, nextTick, deliveries); valid.HasError())
             return valid;
         std::ranges::transform(deliveries, pending.records.begin(), [nextTick](const GameplayHearingDelivery &delivery) {
