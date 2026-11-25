@@ -560,7 +560,7 @@ namespace Horo::AI {
             entry.intents = false;
             entry.context = {};
             jobs_->DiscardAgentWork(entry.agent);
-            entry.executor->Cancel();
+            entry.executor->SuspendForRelevance();
         } else if (tier < previous) {
             if (!entry.pending.Any())
                 entry.waitingSince = report_.tick;

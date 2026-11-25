@@ -189,6 +189,53 @@ namespace Horo::AI {
             CHECK(fixture.probe.resumes == 0);
         }
 
+        TEST_CASE("A suspended cooked decision resumes under the same Scene agent generation",
+                  "[ai][decision_reservation][simulation-tier]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto root = CallTree(1, 2, DecisionPlanKind::StateMachine);
+            root.executionTask = MakeIdentity<TaskId>(9000);
+            const std::array sources{root, CallingMachine(2, 3, DecisionPlanKind::BehaviorTree), TaskTree(3)};
+            const auto plan = fixture.Compile(sources, 1);
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            const AiTaskSchedulerSettings settings{.mode = AiSchedulingMode::BestEffort,
+                                                   .simulationProfile = AiDecisionSimulationProfile{10, 20, 30, 2, 1}};
+            const AiSceneCookedDecisionExecution execution{.jobs = jobs,
+                                                          .scheduler = settings,
+                                                          .agent = {.workUnitsPerTick = plan->MaximumDecisionWorkUnits().value()},
+                                                          .timing = AiCookedDecisionTiming::BestEffortReactive};
+            auto runtime = AiSceneRuntime::Create({}, execution).Value();
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            const auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto run = [&](std::uint64_t tick) {
+                const auto evaluated = scheduler->EvaluateAtDecision(tick);
+                REQUIRE(evaluated.HasValue());
+                CHECK(evaluated.Value().failed == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
+            };
+            REQUIRE(scheduler->SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 31}).HasValue());
+            run(1);
+            REQUIRE(fixture.probe.starts == 1);
+            const auto retired = fixture.probe.continuation;
+            REQUIRE(retired.IsCurrent());
+            const auto before = runtime.CaptureDecisionSnapshotAtSafePoint(agent).Value().Binding();
+            run(2);
+            CHECK(scheduler->SimulationTier(agent).Value() == AiSimulationTier::Suspended);
+            CHECK_FALSE(retired.IsCurrent());
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK(fixture.probe.abortReasons == std::vector{AiTaskCancellationReason::Superseded});
+            REQUIRE(scheduler->SetRelevanceAtSafePoint(agent, {.gameplayPinned = true}).HasValue());
+            run(3);
+            CHECK(scheduler->SimulationTier(agent).Value() == AiSimulationTier::Full);
+            REQUIRE(fixture.probe.starts == 2);
+            CHECK(fixture.probe.resumes == 0);
+            CHECK(fixture.probe.tasks[0] != fixture.probe.tasks[1]);
+            CHECK(runtime.CaptureDecisionSnapshotAtSafePoint(agent).Value().Binding() == before);
+        }
+
         TEST_CASE("Scene admits the entire tree closure and retires its removed callee at a tick boundary",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture old;

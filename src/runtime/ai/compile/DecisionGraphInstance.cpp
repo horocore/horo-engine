@@ -553,8 +553,7 @@ namespace Horo::AI {
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {
-            for (std::size_t index = occurrences_.size(); index > 0; --index)
-                StopOccurrence(index - 1, AiTaskCancellationReason::Requested);
+            StopOccurrences(AiTaskCancellationReason::Requested);
             shutdown_ = true;
         }
         if (result.HasValue() && !providers_->CanAdmit())
@@ -651,13 +650,40 @@ namespace Horo::AI {
             StopOccurrence(child, reason);
     }
 
+    /** @copydoc DecisionGraphInstance::StopOccurrences */
+    void DecisionGraphInstance::StopOccurrences(AiTaskCancellationReason reason) noexcept {
+        for (std::size_t index = occurrences_.size(); index > 0; --index)
+            StopOccurrence(index - 1, reason);
+    }
+
+    /** @copydoc DecisionGraphInstance::SuspendForRelevance */
+    Result<void> DecisionGraphInstance::SuspendForRelevance() {
+        if (!Available() || evaluating_)
+            return Invalid<void>(AIErrors::RuntimeUnavailable);
+        auto &root = *occurrences_.front();
+        if (root.outcome != AiTaskState::Running)
+            return Result<void>::Success();
+
+        StopOccurrences(AiTaskCancellationReason::Superseded);
+        if (!Available()) {
+            shutdown_ = true;
+            return Invalid<void>(AIErrors::RuntimeUnavailable);
+        }
+        auto restarted = ResetOccurrence(0);
+        if (restarted.HasError()) {
+            shutdown_ = true;
+            return restarted;
+        }
+        root.active = true;
+        return Result<void>::Success();
+    }
+
     Result<void> DecisionGraphInstance::Cancel(AiTaskCancellationReason reason) {
         if (std::this_thread::get_id() != owner_ || evaluating_ || reason >= AiTaskCancellationReason::Count)
             return Invalid<void>();
         if (shutdown_)
             return Result<void>::Success();
-        for (std::size_t index = occurrences_.size(); index > 0; --index)
-            StopOccurrence(index - 1, reason);
+        StopOccurrences(reason);
         shutdown_ = true;
         return Result<void>::Success();
     }

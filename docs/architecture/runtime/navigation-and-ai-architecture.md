@@ -4114,8 +4114,18 @@ demotion requires the same candidate tier for the profile's positive fixed-tick
 delay. A suspended registration can wake to event-only on committed perception
 or an explicit owner request and is reclassified from the latest facts. Its
 executor retains canonical state and retires transient callback identities when
-its optional work is cancelled. Deterministic scheduling rejects a relevance
-profile and keeps every admitted agent at its reserved full-rate cadence.
+its optional work is cancelled. A running cooked graph restarts from its authored
+root on promotion, using the same Scene agent and Blackboard binding. A graph
+that already completed keeps its terminal result. If its transient graph cannot
+be reset, execution closes and the Scene still owns the canonical state.
+Deterministic scheduling rejects a relevance profile and keeps every admitted
+agent at its reserved full-rate cadence.
+
+Rebuild C++ consumers implementing `IAiScheduledDecision` with the appended
+`SuspendForRelevance` virtual hook. Implementations whose `Cancel` is resumable
+can use the default. Implementations with terminal cancellation override the
+hook to discard only optional work. Native gameplay module registration and
+serialized controller data keep their existing formats.
 
 ## Gameplay AI Profiles And Simulation Budgets
 

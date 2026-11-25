@@ -144,6 +144,11 @@ namespace Horo::AI {
         /** @brief Copies the earliest fixed deadline across active trees, Utility actions and running State Machines.
          * @return No deadline when the graph cannot be observed or has no active deadline. */
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
+        /** @brief Retires transient tasks so the same reserved graph can resume from its authored root.
+         * @return Success, or a typed ownership or reset failure. Completed graphs keep their terminal outcome.
+         * @details A failed reset leaves execution closed. The owning Scene retains its agent and Blackboard.
+         */
+        [[nodiscard]] Result<void> SuspendForRelevance();
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
 
@@ -218,6 +223,8 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);
         void EndCall(std::size_t parent, DecisionNodeId node, AiTaskCancellationReason reason) noexcept;
         void StopOccurrence(std::size_t index, AiTaskCancellationReason reason) noexcept;
+        /** @brief Retires the closure from leaves to root. */
+        void StopOccurrences(AiTaskCancellationReason reason) noexcept;
         [[nodiscard]] std::size_t FindChild(std::size_t parent, DecisionNodeId node) const noexcept;
         [[nodiscard]] AiTaskOperationContext Operation(std::size_t index, TaskId task, std::uint32_t offset,
                                                        std::uint32_t generation) const;

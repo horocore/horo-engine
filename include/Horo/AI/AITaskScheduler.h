@@ -163,9 +163,7 @@ namespace Horo::AI {
         /** @brief Publishes a bounded prefix of evaluated intents. @param context Evaluation identity, revalidated by the scheduler.
          * @param budget Command allowance. @return True when all intents are committed, false to retain the bounded remainder. */
         [[nodiscard]] virtual Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept = 0;
-        /** @brief Discards retained intents and transient evaluation at cancellation. Must be idempotent.
-         * @details A relevance-profile executor can be evaluated again after cancellation. Discard only optional work,
-         * retire any of its pending callback generations and keep the canonical controller and blackboard state. */
+        /** @brief Discards retained intents and transient evaluation at cancellation. Must be idempotent. */
         virtual void Cancel() noexcept = 0;
 
         /** @brief Retires the exact previous plan after a committed safe-point replacement. */
@@ -186,6 +184,14 @@ namespace Horo::AI {
         /** @brief Borrows the immutable listener declarations admitted with this exact executable. */
         [[nodiscard]] virtual std::span<const PerceptionListenerTypeId> DeclaredPerceptionWatches() const noexcept {
             return {};
+        }
+
+        /** @brief Drops optional work while retaining a decision that can be evaluated after promotion.
+         * @details Existing resumable executors may use their cancellation behavior. Executors with terminal
+         * cancellation override this hook and retire only their transient callback generations.
+         */
+        virtual void SuspendForRelevance() noexcept {
+            Cancel();
         }
     };
 

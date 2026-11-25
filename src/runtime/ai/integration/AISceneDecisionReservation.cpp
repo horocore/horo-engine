@@ -185,19 +185,18 @@ namespace Horo::AI {
             }
 
             void Cancel() noexcept override {
-                if (intents_)
-                    intents_->Discard(agent_);
-                providerFailure_.reset();
-                nextFixedWake_.reset();
+                DiscardOptionalState();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
             }
 
             void CancelForReplacement() noexcept override {
-                if (intents_)
-                    intents_->Discard(agent_);
-                providerFailure_.reset();
-                nextFixedWake_.reset();
+                DiscardOptionalState();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
+            }
+
+            void SuspendForRelevance() noexcept override {
+                DiscardOptionalState();
+                static_cast<void>(decision_->SuspendForRelevance());
             }
 
             bool HasPendingTaskWake() const noexcept override {
@@ -225,6 +224,14 @@ namespace Horo::AI {
             }
 
         private:
+            /** @brief Clears queued intents and diagnostics before retiring the graph's transient tasks. */
+            void DiscardOptionalState() noexcept {
+                if (intents_)
+                    intents_->Discard(agent_);
+                providerFailure_.reset();
+                nextFixedWake_.reset();
+            }
+
             Result<std::optional<AiTaskState>> StepGraph(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                          DecisionStepTrace *trace) {
                 return trace ? decision_->StepBudgetedWithTrace(input, budget, *trace, &providerFailure_)
