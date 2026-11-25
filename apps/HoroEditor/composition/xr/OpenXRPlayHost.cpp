@@ -399,6 +399,26 @@ namespace Horo::Application::Internal {
         return current;
     }
 
+    /** @copydoc OpenXRPlayListeningScope::SharesLineage */
+    bool OpenXRPlayListeningScope::SharesLineage(const OpenXRPlayListeningScope &other) const noexcept {
+        const auto &a = interaction;
+        const auto &b = other.interaction;
+        return a.scene == b.scene && a.player == b.player && a.assignmentRevision == b.assignmentRevision &&
+               a.cutoff.session == b.cutoff.session && a.cutoff.origin == b.cutoff.origin &&
+               a.cutoff.bindingRevision == b.cutoff.bindingRevision && reference == other.reference && capabilities == other.capabilities;
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadListeningScope */
+    std::optional<OpenXRPlayListeningScope> OpenXRPlayHost::ReadListeningScope(const Input::PlayerId player) const {
+        const auto tracking = CurrentInteractionTracking(player);
+        if (tracking.HasError())
+            return std::nullopt;
+        const auto &snapshot = *tracking.Value();
+        return OpenXRPlayListeningScope{{DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment},
+                                        scene_->references.local.id,
+                                        sessions_->Snapshot().capabilityRevision};
+    }
+
     /** @copydoc OpenXRPlayHost::ReadInteractionSources */
     Result<OpenXRPlayInteractionSources> OpenXRPlayHost::ReadInteractionSources(const Input::PlayerId player) const {
         using Outcome = Result<OpenXRPlayInteractionSources>;

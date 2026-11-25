@@ -12,6 +12,7 @@ namespace Horo {
 namespace Horo::Editor {
     class IWorkspacePanel;
     class EditorCloudModelProfileStore;
+    class EditorImmersiveListening;
 
     /** @brief Editor ownership of model work and panel publication, including while the dock is hidden. */
     struct EditorLocalAgentPanelHost final {
@@ -26,5 +27,6 @@ namespace Horo::Editor {
      * @return Workspace panel and runtime pump that must remain on the editor lane. */
     [[nodiscard]] EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
                                                                       std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles = {},
-                                                                      IExternalProcessRunner *processes = nullptr);
+                                                                      IExternalProcessRunner *processes = nullptr,
+                                                                      EditorImmersiveListening *listening = nullptr);
 }  // namespace Horo::Editor

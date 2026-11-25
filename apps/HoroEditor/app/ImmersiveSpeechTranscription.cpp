@@ -90,7 +90,7 @@ namespace Horo::Editor {
                                                                    const Audio::Backend::AudioCaptureBufferDescriptor &source,
                                                                    const std::string_view locale, const float minimumConfidence,
                                                                    const std::stop_token stop) {
-        if (const auto admission = owner.Admit(context, ImmersiveRequestKind::Plan); admission != ImmersiveAdmission::Admitted)
+        if (const auto admission = owner.Admit(context, ImmersiveRequestKind::SpeechCapture); admission != ImmersiveAdmission::Admitted)
             return {admission == ImmersiveAdmission::StaleContext ? StaleContext : InvalidRequest, {}};
         if (stop.stop_requested())
             return {Cancelled, {}};

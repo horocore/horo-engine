@@ -26,9 +26,9 @@ namespace Horo::Editor {
         ~EditorMicrophoneSpeechSession();
 
         /** @brief Opens the exact selected input and prepares one on-device transcription. */
-        [[nodiscard]] SpeechTranscriptionStatus Start(std::size_t input, bool foreground, const ImmersiveAuthoringContext &owner,
-                                                      const ImmersivePlanningContext &context, std::string_view locale,
-                                                      float minimumConfidence);
+        [[nodiscard]] SpeechTranscriptionStatus Start(Audio::AudioCaptureDeviceId input, bool foreground,
+                                                      const ImmersiveAuthoringContext &owner, const ImmersivePlanningContext &context,
+                                                      std::string_view locale, float minimumConfidence);
         /** @brief Records one XR pointing observation measured during the current listening generation.
          * @param observation Exact cutoff, geometry and measured Audio interval from the XR owner.
          * @param captureGeneration Listening generation bound to both clock readings.

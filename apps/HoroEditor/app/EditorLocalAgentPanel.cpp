@@ -8,6 +8,10 @@
 #include "EditorLocalAgentHistory.h"
 #include "EditorLocalAgentPatch.h"
 #include "EditorLocalAgentPatchCheckpoint.h"
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+#include "EditorImmersiveListening.h"
+#include "Horo/Editor/EditorSettingsService.h"
+#endif
 #include "Horo/Agent/ReferenceModelProviders.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -254,11 +258,17 @@ namespace Horo::Editor {
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background,
-                            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles, IExternalProcessRunner *processes)
+                            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles, IExternalProcessRunner *processes,
+                            [[maybe_unused]] EditorImmersiveListening *listening)
                 : IWorkspacePanel("workspace.local_agent"), cloudProfiles_(std::move(cloudProfiles)), background_(std::move(background)),
-                  history_(jobs, files), files_(files), processes_(processes) {}
+                  history_(jobs, files), files_(files), processes_(processes) {
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                listening_ = listening;
+#endif
+            }
 
             ~LocalAgentPanel() override {
+                CancelListening();
                 RevokeContext();
             }
 
@@ -310,6 +320,7 @@ namespace Horo::Editor {
             }
 
             void OnDetach() override {
+                CancelListening();
                 background_->Abandon();
                 prompt_.clear();
                 cloudPrompt_.clear();
@@ -327,6 +338,7 @@ namespace Horo::Editor {
             }
 
             void OnPresentationHidden(EditorWorkspaceViewCommandData &) override {
+                CancelListening();
                 textInput_.Reset();
                 sceneQueryReview_.reset();
                 cloudReview_.reset();
@@ -334,6 +346,10 @@ namespace Horo::Editor {
 
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
             void Poll() {
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (listening_)
+                    listening_->Poll();
+#endif
                 if (history_.Poll()) {
                     if (std::exchange(awaitingCheckpoint_, false))
                         Send(prompt_, {}, true);
@@ -362,6 +378,7 @@ namespace Horo::Editor {
                 textFieldActive_ = false;
                 DrawProviderSelection(locale);
                 if (cloudMode_) {
+                    CancelListening();
                     DrawCloud(locale, fonts);
                     UpdateTextInputFocus();
                     ImGui::EndChild();
@@ -369,6 +386,7 @@ namespace Horo::Editor {
                 }
                 ReviewOfferedViewport();
                 DrawProvider(locale, fonts);
+                DrawOptionalListening(context);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
                 ImGui::BeginDisabled(awaitingCheckpoint_ || ContextLocksComposer() || sceneQueryReview_);
                 static_cast<void>(DrawTextField("##Prompt", prompt_, 4096, fonts));
@@ -392,6 +410,123 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Draws the native listening controls only when the runtime supplies that host. */
+            void DrawOptionalListening([[maybe_unused]] const EditorGuiContext &context) {
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (listening_)
+                    DrawListening(context);
+#endif
+            }
+
+            /** @brief Retires an utterance before its panel or workspace leaves presentation. */
+            void CancelListening() noexcept {
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (listening_ && listening_->Status() != EditorImmersiveListening::State::Idle)
+                    listening_->Cancel();
+                ResetListeningInput();
+#endif
+            }
+
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            /** @brief Requires a fresh choice after the device list changes. */
+            void ResetListeningInput() noexcept {
+                listeningInput_ = -1;
+                listeningDevice_.reset();
+            }
+
+            /** @brief Maps the local capture state to one localized status. */
+            static const char *ListeningStatusKey(const EditorImmersiveListening::State state) noexcept {
+                using enum EditorImmersiveListening::State;
+                switch (state) {
+                    case Idle:
+                        return "xr_listening_idle";
+                    case Listening:
+                        return "xr_listening_active";
+                    case Finishing:
+                        return "xr_listening_finishing";
+                    case SpeechOnly:
+                        return "xr_listening_speech_only";
+                    case Spatial:
+                        return "xr_listening_spatial";
+                    case Interrupted:
+                        return "xr_listening_interrupted";
+                }
+                return "xr_listening_interrupted";
+            }
+
+            /** @brief Presents distinct owner permission requests without opening capture. */
+            void DrawListeningPermissions(const ILocalizationService &locale) {
+                if (listening_->NeedsMicrophonePermission() && Button(locale, "xr_listening_microphone_permission", true))
+                    listening_->RequestMicrophone();
+                if (listening_->NeedsSpeechPermission() && Button(locale, "xr_listening_speech_permission", true))
+                    listening_->RequestSpeech();
+            }
+
+            /** @brief Presents explicit discovery and selected input controls. */
+            void DrawListeningStart(const EditorGuiContext &context) {
+                const auto &locale = context.localization;
+                DrawListeningPermissions(locale);
+                if (Button(locale, "xr_listening_refresh", true)) {
+                    ResetListeningInput();
+                    listening_->RefreshInputs();
+                }
+                DrawListeningInput(context);
+                if (Button(locale, "xr_listening_start", listeningDevice_.has_value() && listening_->CanListen())) {
+                    const auto selection = captureSceneSelection_ ? captureSceneSelection_() : std::nullopt;
+                    listening_->Start(*listeningDevice_, context.settings.settings.languageTag, contextGeneration_,
+                                      selection.value_or(AgentSceneSelectionSnapshot{}));
+                }
+            }
+
+            /** @brief Projects the current labels and checks that the chosen endpoint still owns its row. */
+            void DrawListeningInput(const EditorGuiContext &context) {
+                const auto inputs = listening_->Inputs();
+                if (inputs.empty()) {
+                    ResetListeningInput();
+                    return;
+                }
+                const Ui::ComboItemSource source{.label = [inputs](int index) {
+                    return inputs[static_cast<std::size_t>(index)].c_str();
+                }};
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(context.localization, "xr_listening_input"), Theme::Text(),
+                                context.theme.fonts);
+                const bool changed = Ui::ComboControl("##xr-listening-input", &listeningInput_, static_cast<int>(inputs.size()), source,
+                                                      context.theme.fonts);
+                const auto input = listeningInput_ >= 0 ? listening_->InputAt(static_cast<std::size_t>(listeningInput_)) : std::nullopt;
+                if (changed)
+                    listeningDevice_ = input;
+                if (listeningDevice_ != input)
+                    ResetListeningInput();
+            }
+
+            /** @brief Shows the separate Play-only local listening workflow without feeding the model composer. */
+            void DrawListening(const EditorGuiContext &context) {
+                using enum EditorImmersiveListening::State;
+                const auto state = listening_->Status();
+                const auto &locale = context.localization;
+                const auto &fonts = context.theme.fonts;
+                const auto width = ImGui::GetContentRegionAvail().x;
+                Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(state)), Theme::Text(), fonts);
+                if (state == Idle || state == Interrupted) {
+                    DrawListeningStart(context);
+                    return;
+                }
+                if (state == Listening && Button(locale, "xr_listening_finish", true))
+                    listening_->Finish();
+                const bool hasTranscript = state == SpeechOnly || state == Spatial;
+                if (Button(locale, hasTranscript ? "xr_listening_discard" : "xr_listening_cancel", true)) {
+                    listening_->Cancel();
+                    return;
+                }
+                if (const auto transcript = listening_->Transcript(); !transcript.empty())
+                    Ui::WrappedText(width, transcript, Theme::Text(), fonts);
+            }
+
+            EditorImmersiveListening *listening_{};
+            int listeningInput_{-1};
+            std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
+#endif
+
             enum class BuildContextChoice {
                 ActiveOutput,
                 ActiveDiagnostics,
@@ -1923,9 +2058,9 @@ namespace Horo::Editor {
     /** @copydoc MakeEditorLocalAgentPanel */
     EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
                                                         std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles,
-                                                        IExternalProcessRunner *processes) {
+                                                        IExternalProcessRunner *processes, EditorImmersiveListening *listening) {
         auto background = std::make_shared<BackgroundTurn>();
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles), processes);
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles), processes, listening);
         return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
             if (const auto current = owner.lock()) {
                 current->Poll();

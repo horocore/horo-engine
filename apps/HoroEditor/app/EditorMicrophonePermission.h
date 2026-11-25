@@ -61,13 +61,17 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<Assets::AssetId> TakeSavedRecording() noexcept override;
 
         /** @brief Starts a selected input for speech after an explicit foreground action on Audio control.
-         * @param input Index in the current Inputs() snapshot. @param foreground Current immersive focus.
+         * @param input Stable ID selected from the input snapshot. @param foreground Current immersive focus.
          * @param owner Current editor context owner. @param context Admitted immersive planning snapshot.
          * @return Exact capture descriptor and token to pass to the transcription worker, or typed failure.
          */
-        [[nodiscard]] Result<EditorSpeechCaptureLease> BeginSpeechCapture(std::size_t input, bool foreground,
+        [[nodiscard]] Result<EditorSpeechCaptureLease> BeginSpeechCapture(Audio::AudioCaptureDeviceId input, bool foreground,
                                                                           const ImmersiveAuthoringContext &owner,
                                                                           const ImmersivePlanningContext &context);
+        /** @brief Refreshes the selectable input list from an explicit foreground speech control. Does not open a device. */
+        [[nodiscard]] bool RefreshSpeechInputs(bool foreground);
+        /** @brief Resolves one displayed input to the exact stable endpoint in the current list. */
+        [[nodiscard]] std::optional<Audio::AudioCaptureDeviceId> SpeechInputAt(std::size_t index) const noexcept;
         /** @brief Copies at most one admitted block. The caller clears scratch after consumption.
          * @param generation Exact lease generation. @param foreground Current immersive focus.
          * @param block Metadata written on success. @param pcm Bounded caller-owned interleaved scratch.

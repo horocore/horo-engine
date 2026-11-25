@@ -115,6 +115,16 @@ namespace Horo::Application::Internal {
         bool operator==(const OpenXRPlayInteractionScope &) const noexcept = default;
     };
 
+    /** @brief Stable lineage for one local Play listening operation plus the latest measured cutoff. */
+    struct OpenXRPlayListeningScope final {
+        OpenXRPlayInteractionScope interaction;
+        XR::XRSpaceId reference;
+        XR::XRCapabilityRevision capabilities;
+
+        /** @brief Tracking can advance within the same scene, session, origin, bindings and player assignment. */
+        [[nodiscard]] bool SharesLineage(const OpenXRPlayListeningScope &other) const noexcept;
+    };
+
     /** @brief Fixed-dispatch evidence for the selected gameplay owner, with no Character or renderer authority. */
     struct OpenXRPlayLocomotionEvidence final {
         OpenXRPlayInteractionScope scope;
@@ -433,6 +443,8 @@ namespace Horo::Application::Internal {
          * @return Copied sources or a typed unavailable, wrong-owner, or stale failure.
          */
         [[nodiscard]] Result<OpenXRPlayInteractionSources> ReadInteractionSources(Input::PlayerId player) const;
+        /** @brief Copies the current player, scene and XR lineage for local capture. */
+        [[nodiscard]] std::optional<OpenXRPlayListeningScope> ReadListeningScope(Input::PlayerId player) const;
         /** @brief Copies the current tracking and project comfort for an explicitly bound gameplay fixed update.
          * @details The evidence owns its storage and is issued only while gameplay can route input. Gameplay
          * revalidates the assignment and exact fixed attempt before Character submission.

@@ -189,6 +189,27 @@ namespace {
         REQUIRE((service.ActivatePrepared()));
     }
 
+    /** @brief Covers the optional local XR listening controls in both shipped languages. */
+    void RequireXrListeningCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{
+            "workspace.local_agent.xr_listening_idle",
+            "workspace.local_agent.xr_listening_active",
+            "workspace.local_agent.xr_listening_finishing",
+            "workspace.local_agent.xr_listening_speech_only",
+            "workspace.local_agent.xr_listening_spatial",
+            "workspace.local_agent.xr_listening_interrupted",
+            "workspace.local_agent.xr_listening_microphone_permission",
+            "workspace.local_agent.xr_listening_speech_permission",
+            "workspace.local_agent.xr_listening_refresh",
+            "workspace.local_agent.xr_listening_input",
+            "workspace.local_agent.xr_listening_start",
+            "workspace.local_agent.xr_listening_finish",
+            "workspace.local_agent.xr_listening_cancel",
+            "workspace.local_agent.xr_listening_discard",
+        };
+        RequireCatalogKeys(service, keys);
+    }
+
     /** @brief Requires the localized controls and close decisions belonging to persistent document tabs. */
     void RequireDocumentCatalogKeys(const Horo::Editor::LocalizationService &service) {
         constexpr std::array sourceEditingKeys{
@@ -390,6 +411,7 @@ namespace {
                                          "workspace.packages.recovery_hint"};
         RequireCatalogKeys(service, packageKeys);
         RequireCatalogKeys(service, globalDockKeys);
+        RequireXrListeningCatalogKeys(service);
         RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
         RequireCatalogKeys(service, std::array{"workspace.source_language.unavailable",

@@ -2748,6 +2748,7 @@ namespace Horo::Tests::OpenXRApplication {
         }});
         auto scene = ActivatePlay(fixture, player);
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        CHECK_FALSE(fixture.play->ReadListeningScope(player));
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();
         RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
@@ -2760,6 +2761,10 @@ namespace Horo::Tests::OpenXRApplication {
         sample();
         CHECK(fixture.play->ReadInteractionSources(2).HasError());
         const auto sources = RequireValue(fixture.play->ReadInteractionSources(player));
+        const auto listening = fixture.play->ReadListeningScope(player);
+        REQUIRE(listening);
+        CHECK(listening->interaction == sources.Scope());
+        CHECK(listening->reference.session == sources.Scope().cutoff.session);
         REQUIRE(sources.PoseCaptureTime());
         CHECK(sources.PoseCaptureTime()->earliest.clockDomain == 7);
         CHECK(sources.PoseCaptureTime()->earliest.nanoseconds == 100);
@@ -2855,12 +2860,16 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->ReadWorldUiPointer(player));
 
         const auto beforeReassignment = RequireValue(fixture.play->ReadInteractionSources(player));
+        const auto continuedListening = fixture.play->ReadListeningScope(player);
+        REQUIRE(continuedListening);
+        CHECK(listening->SharesLineage(*continuedListening));
         CHECK_FALSE(beforeReassignment.PoseCaptureTime());
         fixture.router.AssignKeyboardMouse(player + 1);
         const auto staleAssignment = fixture.play->ReadInteractionCandidates(beforeReassignment.Scope(), probes);
         REQUIRE(staleAssignment.HasError());
         CHECK(staleAssignment.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        CHECK_FALSE(fixture.play->ReadListeningScope(player));
         CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
 
         fixture.script.actions.sample.boolean = XR_FALSE;

@@ -145,6 +145,35 @@ namespace Horo::Editor {
             return std::move(*result.evidence);
         }
 
+        TEST_CASE("Immersive speech can produce a local Play diagnostics preview without model authority", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto edit = fixture.Context();
+            auto identity = edit.Identity();
+            identity.mode = ImmersiveAuthoringMode::Play;
+            identity.worldGeneration = 1;
+            identity.user = 0;
+            identity.conversation = 0;
+            identity.toolContext = 0;
+            identity.planningAllowed = false;
+            identity.localSpeechOnly = true;
+            const auto context = fixture.owner.Publish(identity, {});
+            REQUIRE(context);
+            auto capture =
+                ImmersiveSpeechTranscription::Prepare(fixture.owner, *context, fixture.source, "tr-TR", 0.5F, fixture.stop.get_token());
+            REQUIRE(capture.status == Status::Accepted);
+            REQUIRE(capture.stream->Start(fixture.provider) == Status::Accepted);
+            REQUIRE(capture.stream->Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == Status::Accepted);
+            REQUIRE(capture.stream->FinishInput() == Status::Accepted);
+            fixture.provider.next = Transcript(Kind::Final);
+            const auto update = capture.stream->Poll();
+            REQUIRE(update.status == Status::Finished);
+            REQUIRE(update.evidence);
+            const auto assembled = ImmersiveCommandEnvelope::Assemble(*context, *update.evidence);
+            CHECK(assembled.status == ImmersiveCommandStatus::SpeechOnly);
+            REQUIRE(assembled.envelope);
+            CHECK(assembled.envelope->Speech().Hypothesis().text == "Seçili nesne");
+        }
+
         TEST_CASE("Immersive commands retain only spatial evidence aligned with final speech", "[agent][immersive][speech]") {
             using enum ImmersiveCommandStatus;
             SpeechFixture fixture;

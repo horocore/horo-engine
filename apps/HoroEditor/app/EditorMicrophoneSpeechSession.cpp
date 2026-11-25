@@ -25,7 +25,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorMicrophoneSpeechSession::Start */
-    SpeechTranscriptionStatus EditorMicrophoneSpeechSession::Start(const std::size_t input, const bool foreground,
+    SpeechTranscriptionStatus EditorMicrophoneSpeechSession::Start(const Audio::AudioCaptureDeviceId input, const bool foreground,
                                                                    const ImmersiveAuthoringContext &owner,
                                                                    const ImmersivePlanningContext &context, const std::string_view locale,
                                                                    const float minimumConfidence) {

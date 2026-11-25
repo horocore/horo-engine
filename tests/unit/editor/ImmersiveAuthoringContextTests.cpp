@@ -121,6 +121,7 @@ namespace Horo::Editor {
             const auto play = owner.Publish(identity, {});
             REQUIRE(play);
             CHECK(owner.Admit(*play, ImmersiveRequestKind::Plan) == ImmersiveAdmission::ModeDenied);
+            CHECK(owner.Admit(*play, ImmersiveRequestKind::SpeechCapture) == ImmersiveAdmission::ModeDenied);
             CHECK(owner.Admit(*play, ImmersiveRequestKind::Diagnostics) == ImmersiveAdmission::Admitted);
             SECTION("reference space belongs to a different session") {
                 ++identity.referenceSpace.session.slot.generation;
@@ -135,6 +136,29 @@ namespace Horo::Editor {
                 CHECK_FALSE(owner.Publish(identity, selection));
             }
             CHECK_FALSE(play->IsCurrent());
+        }
+
+        TEST_CASE("Local Play speech capture cannot acquire model or editing authority", "[agent][immersive]") {
+            using enum ImmersiveRequestKind;
+            ImmersiveAuthoringContext owner;
+            auto identity = Opening();
+            identity.mode = ImmersiveAuthoringMode::Play;
+            identity.worldGeneration = 9;
+            identity.user = 0;
+            identity.conversation = 0;
+            identity.toolContext = 0;
+            identity.planningAllowed = false;
+            identity.localSpeechOnly = true;
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+            CHECK(owner.Admit(*context, SpeechCapture) == ImmersiveAdmission::Admitted);
+            CHECK(owner.Admit(*context, Plan) == ImmersiveAdmission::ModeDenied);
+            CHECK_FALSE(owner.CaptureRequest(*context, Diagnostics, Prompt()));
+            CHECK_FALSE(owner.CaptureRequest(*context, SpeechCapture, Prompt()));
+
+            identity.planningAllowed = true;
+            CHECK_FALSE(owner.Publish(identity, {}));
+            CHECK(owner.Admit(*context, SpeechCapture) == ImmersiveAdmission::StaleContext);
         }
 
         TEST_CASE("Immersive observation does not grant authority without host admission", "[agent][immersive]") {

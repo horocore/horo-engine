@@ -11,14 +11,35 @@ namespace Horo::Editor {
     };
 
     namespace {
-        /** @brief Admits only a complete observation and a space owned by the exact XR session. */
-        bool ValidIdentity(const ImmersiveContextIdentity &identity) noexcept {
+        /** @brief Capture-only Play admits no user, conversation or tool dispatch credentials. */
+        bool ValidAuthority(const ImmersiveContextIdentity &identity) noexcept {
+            if (identity.localSpeechOnly)
+                return identity.mode == ImmersiveAuthoringMode::Play && identity.diagnosticsAllowed && !identity.planningAllowed &&
+                       !identity.user && !identity.conversation && !identity.toolContext;
+            return identity.user && identity.conversation && identity.toolContext;
+        }
+
+        /** @brief Verifies that the mode, optional world and spatial scope come from the same owner. */
+        bool ValidXrScope(const ImmersiveContextIdentity &identity) noexcept {
             using enum ImmersiveAuthoringMode;
             const bool validMode = identity.mode == Edit || identity.mode == Simulate || identity.mode == Play;
             const bool validWorld = (identity.worldGeneration == 0) == (identity.mode == Edit);
-            return identity.projectOpening && identity.documentOpening && identity.documentRevision && identity.user &&
-                   identity.conversation && identity.toolContext && identity.capabilities.IsValid() && identity.xrSession.IsValid() &&
-                   identity.referenceSpace.IsValid() && identity.referenceSpace.session == identity.xrSession && validMode && validWorld;
+            return validMode && validWorld && identity.capabilities.IsValid() && identity.xrSession.IsValid() &&
+                   identity.referenceSpace.IsValid() && identity.referenceSpace.session == identity.xrSession;
+        }
+
+        /** @brief Admits only a complete document observation and the matching authority. */
+        bool ValidIdentity(const ImmersiveContextIdentity &identity) noexcept {
+            return identity.projectOpening && identity.documentOpening && identity.documentRevision && ValidAuthority(identity) &&
+                   ValidXrScope(identity);
+        }
+
+        /** @brief Play can consume speech locally. Other modes use the planning admission. */
+        ImmersiveAdmission AdmitPlanningOrSpeech(const ImmersiveContextIdentity &identity, const ImmersiveRequestKind kind) noexcept {
+            using enum ImmersiveAdmission;
+            if (identity.mode != ImmersiveAuthoringMode::Play)
+                return identity.planningAllowed ? Admitted : PermissionDenied;
+            return kind == ImmersiveRequestKind::SpeechCapture && identity.localSpeechOnly ? Admitted : ModeDenied;
         }
 
         /** @brief Verifies selection without allocations or reordering the owner projection. */
@@ -97,21 +118,21 @@ namespace Horo::Editor {
         if (context.epoch_ != epoch_ || !context.IsCurrent())
             return ImmersiveAdmission::StaleContext;
         const auto &identity = context.Identity();
-        switch (kind) {
-            case ImmersiveRequestKind::Plan:
-                if (identity.mode == ImmersiveAuthoringMode::Play)
-                    return ImmersiveAdmission::ModeDenied;
-                return identity.planningAllowed ? ImmersiveAdmission::Admitted : ImmersiveAdmission::PermissionDenied;
-            case ImmersiveRequestKind::Diagnostics:
-                return identity.diagnosticsAllowed ? ImmersiveAdmission::Admitted : ImmersiveAdmission::PermissionDenied;
-        }
-        return ImmersiveAdmission::InvalidRequest;
+        using enum ImmersiveAdmission;
+        using enum ImmersiveRequestKind;
+        if (kind == Diagnostics)
+            return identity.diagnosticsAllowed ? Admitted : PermissionDenied;
+        if (kind != Plan && kind != SpeechCapture)
+            return InvalidRequest;
+        return AdmitPlanningOrSpeech(identity, kind);
     }
 
     /** @copydoc ImmersiveAuthoringContext::CaptureRequest */
     std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CaptureRequest(const ImmersivePlanningContext &context,
                                                                                    const ImmersiveRequestKind kind,
                                                                                    Agent::ModelRequest &&request) const {
+        if (context.Identity().localSpeechOnly || kind == ImmersiveRequestKind::SpeechCapture)
+            return std::nullopt;
         if (Admit(context, kind) != ImmersiveAdmission::Admitted || !ValidTextRequest(request))
             return std::nullopt;
         return ImmersiveAgentRequest{context, std::move(request)};

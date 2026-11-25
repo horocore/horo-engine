@@ -41,6 +41,7 @@
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
 #include "EditorMicrophonePermission.h"
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+#include "EditorImmersiveListening.h"
 #include "EditorMicrophoneSpeechSession.h"
 #endif
 #endif
@@ -4518,6 +4519,7 @@ namespace Horo::Editor {
             }};
             EditorAudioPreviewHost audioPreview{MakeSdl3AudioPreviewOutput};
             Assets::AssetRegistry assetRegistry;
+            EditorImmersiveListening *listening{};
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
             EditorMicrophonePermission microphonePermission{mutationCoordinator, durableFiles, assetRegistry};
             guiContext.microphonePermission = &microphonePermission;
@@ -4525,6 +4527,10 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             EditorMicrophoneSpeechSession immersiveSpeech{microphonePermission};
             const XrSpeechClockScope immersiveSpeechClock{xrComposition.xrPlay.get(), immersiveSpeech};
+            std::optional<EditorImmersiveListening> localListening;
+            if (xrComposition.xrPlay && p.options.xrInputPlayer)
+                listening =
+                    &localListening.emplace(microphonePermission, immersiveSpeech, *xrComposition.xrPlay, p.options.xrInputPlayer->player);
 #endif
 #endif
             CollisionInventoryEvidence collisionInventory;
@@ -4578,7 +4584,7 @@ namespace Horo::Editor {
                         std::make_shared<EditorCloudModelProfileStore>(ResolveEditorSettingsPath().parent_path() / "cloud_model.profile",
                                                                        std::move(credentials));
                 }
-                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles), &externalProcesses);
+                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles), &externalProcesses, listening);
             }
             if (localAgent.panel)
                 workspacePanelRegistry.RegisterPanel(localAgent.panel);

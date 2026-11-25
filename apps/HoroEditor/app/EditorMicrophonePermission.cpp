@@ -360,23 +360,43 @@ namespace Horo::Editor {
         CancelSpeechCapture(check_->generation);
     }
 
+    /** @copydoc EditorMicrophonePermission::RefreshSpeechInputs */
+    bool EditorMicrophonePermission::RefreshSpeechInputs(const bool foreground) {
+        if (!foreground || check_->InputBusy() || Status() != EditorMicrophonePermissionStatus::Granted)
+            return false;
+        check_->labels.clear();
+        check_->inputs.clear();
+        try {
+            return check_->Discover();
+        } catch (const std::bad_alloc &) {
+            return false;
+        }
+    }
+
+    /** @copydoc EditorMicrophonePermission::SpeechInputAt */
+    std::optional<Audio::AudioCaptureDeviceId> EditorMicrophonePermission::SpeechInputAt(const std::size_t index) const noexcept {
+        if (index >= check_->inputs.size())
+            return std::nullopt;
+        return check_->inputs[index];
+    }
+
     /** @copydoc EditorMicrophonePermission::BeginSpeechCapture */
-    Result<EditorSpeechCaptureLease> EditorMicrophonePermission::BeginSpeechCapture(const std::size_t input, const bool foreground,
+    Result<EditorSpeechCaptureLease> EditorMicrophonePermission::BeginSpeechCapture(const Audio::AudioCaptureDeviceId input,
+                                                                                    const bool foreground,
                                                                                     const ImmersiveAuthoringContext &owner,
                                                                                     const ImmersivePlanningContext &context) {
         using Output = Result<EditorSpeechCaptureLease>;
-        if (!SpeechCaptureAllowed(foreground) || owner.Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted)
+        if (!SpeechCaptureAllowed(foreground) || owner.Admit(context, ImmersiveRequestKind::SpeechCapture) != ImmersiveAdmission::Admitted)
             return Output::Failure(MakeError(Audio::AudioErrors::CapturePermissionDenied));
         if (check_->InputBusy())
             return Output::Failure(MakeError(Audio::AudioErrors::HandleCapacityExhausted));
-        if (check_->project.empty() || input >= check_->inputs.size())
+        if (check_->project.empty() || std::ranges::find(check_->inputs, input) == check_->inputs.end())
             return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
-        const auto selected = check_->inputs[input];
         try {
-            auto spec = check_->RefreshSelected(selected);
+            auto spec = check_->RefreshSelected(input);
             if (spec.HasError())
                 return Output::Failure(spec.ErrorValue());
-            return check_->OpenSpeech(selected, std::move(spec).Value(), context);
+            return check_->OpenSpeech(input, std::move(spec).Value(), context);
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Audio::AudioErrors::MemoryAllocationFailed));
         }

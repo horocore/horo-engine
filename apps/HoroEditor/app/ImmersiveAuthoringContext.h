@@ -20,7 +20,8 @@ namespace Horo::Editor {
     };
     enum class ImmersiveRequestKind : std::uint8_t {
         Plan,
-        Diagnostics
+        Diagnostics,
+        SpeechCapture
     };
     enum class ImmersiveAdmission : std::uint8_t {
         Admitted,
@@ -45,6 +46,7 @@ namespace Horo::Editor {
         std::uint64_t worldGeneration{}; /**< Required for a disposable simulation or Play world. */
         bool planningAllowed{};
         bool diagnosticsAllowed{};
+        bool localSpeechOnly{}; /**< Local Play diagnostics. No model, conversation or tool authority. */
         bool operator==(const ImmersiveContextIdentity &) const noexcept = default;
     };
 
