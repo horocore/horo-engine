@@ -163,12 +163,21 @@ namespace Horo::Agent {
 
         /** @brief Validates an inert draft and rechecks freshness before it can leave the runtime. */
         AgentTurnStatus ValidatePlanRound(const ModelRequest &request, const ModelMessage &message, const AgentPlanToolValidator &plan,
-                                          const TurnStop &stop, TurnContextGate &context) {
+                                          const TurnStop &stop, TurnContextGate &context, std::vector<AgentPlannedEffect> &effects) {
             try {
+                effects.reserve(message.toolIntents.size());
                 const auto status = PrepareTools(request, message, [&](const ModelToolIntent &intent) {
                     if (const auto stopped = stop.Status())
                         return *stopped;
-                    return context.Check() ? plan(intent) : ContextDenied;
+                    if (!context.Check())
+                        return ContextDenied;
+                    const auto inspected = plan(intent);
+                    if (inspected.status != Completed)
+                        return inspected.status;
+                    if (!inspected.effect || *inspected.effect > AgentPlannedEffect::Mutation)
+                        return ToolDenied;
+                    effects.push_back(*inspected.effect);
+                    return Completed;
                 });
                 if (const auto stopped = stop.Status())
                     return *stopped;
@@ -318,10 +327,14 @@ namespace Horo::Agent {
                                          const std::stop_token cancellation) {
         if (!validateTool)
             return {InvalidRequest};
-        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, nullptr, {}, {}, &validateTool});
+        PlanReview review{validateTool};
+        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, nullptr, {}, {}, &review});
         if (result.status != Completed)
             return {.status = result.status, .providerError = result.providerError};
-        return {.status = Completed, .draft = std::move(result.messages.back()), .usage = result.finalUsage};
+        return {.status = Completed,
+                .draft = std::move(result.messages.back()),
+                .usage = result.finalUsage,
+                .effects = std::move(review.effects)};
     }
 
     /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
@@ -379,7 +392,7 @@ namespace Horo::Agent {
                 progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
                 if (plan) {
-                    const auto status = ValidatePlanRound(request, message, *plan, stop, contextGate);
+                    const auto status = ValidatePlanRound(request, message, plan->inspect, stop, contextGate, plan->effects);
                     if (status != Completed)
                         return FailedRound(status);
                 }

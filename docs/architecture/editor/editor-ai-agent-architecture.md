@@ -275,6 +275,9 @@ Ownership rules:
   registry generation, and discards it if admission is withdrawn. Registry
   inspection uses the same input schema and bounds as execution and consumes no
   approvals.
+  The draft retains the registered read, presentation, or mutation effect for
+  each proposed call and any provider-reported token usage. The Editor can read
+  it only under the original authoring generation while the request is current.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

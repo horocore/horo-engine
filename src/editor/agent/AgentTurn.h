@@ -87,8 +87,21 @@ namespace Horo::Agent {
     /** @brief Cold caller's synchronous revocation check over an owned turn authority snapshot. */
     using AgentTurnFreshness = std::function<bool()>;
 
+    /** @brief Host-declared effect of an inspected tool, independent of the model's reasoning. */
+    enum class AgentPlannedEffect : std::uint8_t {
+        Read,
+        Presentation,
+        Mutation
+    };
+
+    /** @brief Disposition of an inert proposal. Success requires an effect from the host. */
+    struct AgentPlanToolInspection final {
+        AgentTurnStatus status{AgentTurnStatus::ToolDenied};
+        std::optional<AgentPlannedEffect> effect;
+    };
+
     /** @brief Validates one proposed tool against host policy. Builds no operation and consumes no approval. */
-    using AgentPlanToolValidator = std::function<AgentTurnStatus(const ModelToolIntent &)>;
+    using AgentPlanToolValidator = std::function<AgentPlanToolInspection(const ModelToolIntent &)>;
 
     /** @brief One bounded inference for review. Draft intents carry neither execution authority nor tool results. */
     struct AgentTurnPlan final {
@@ -96,6 +109,7 @@ namespace Horo::Agent {
         std::optional<ModelMessage> draft;
         std::optional<ModelErrorCode> providerError;
         std::optional<ModelUsage> usage;
+        std::vector<AgentPlannedEffect> effects; /**< One host result per draft intent, in the same order. */
     };
 
     /** @brief Editor-owned admission for at most one active authoring turn.
@@ -137,12 +151,17 @@ namespace Horo::Agent {
                                          std::stop_token cancellation = {});
 
     private:
+        struct PlanReview final {
+            const AgentPlanToolValidator &inspect;
+            std::vector<AgentPlannedEffect> effects;
+        };
+
         struct TurnPorts final {
             const IAgentTurnTools *tools;
             const AgentTurnContext *context;
             const AgentTurnTextObserver &observeText;
             const AgentToolActivityObserver &observeTool;
-            const AgentPlanToolValidator *plan;
+            PlanReview *plan;
         };
 
         [[nodiscard]] AgentTurnResult RunTurn(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,

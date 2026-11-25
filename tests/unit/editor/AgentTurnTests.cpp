@@ -1,6 +1,5 @@
 #include "AgentTurn.h"
 #include "AgentTurnTestTools.h"
-#include "Horo/Mcp/McpErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdexcept>
@@ -76,14 +75,23 @@ namespace Horo::Agent {
 
     TEST_CASE("Editor Agent plans registered tool intents without creating operations", "[agent][turn][plan]") {
         using enum AgentTurnStatus;
-        Tools tools{Mcp::McpToolEffect::Mutation};
         AgentTurnRuntime runtime;
         Model model;
         auto sibling = Intent("second");
         auto expected = Completed;
         std::stop_source stop;
         bool cancelDuringReview{};
-        SECTION("both registered proposals remain inert") {}
+        auto registryEffect = Mcp::McpToolEffect::Mutation;
+        auto expectedEffect = AgentPlannedEffect::Mutation;
+        SECTION("mutation proposals remain inert") {}
+        SECTION("queries publish the registered read effect") {
+            registryEffect = Mcp::McpToolEffect::Query;
+            expectedEffect = AgentPlannedEffect::Read;
+        }
+        SECTION("viewport operations publish the registered presentation effect") {
+            registryEffect = Mcp::McpToolEffect::PresentationSideEffect;
+            expectedEffect = AgentPlannedEffect::Presentation;
+        }
         SECTION("a registered tool rejects arguments that violate its schema") {
             sibling.tool.argumentsJson = R"({"unknown":true})";
             expected = InvalidModelResponse;
@@ -96,20 +104,16 @@ namespace Horo::Agent {
             cancelDuringReview = true;
             expected = Cancelled;
         }
+        Tools tools{registryEffect};
         model.action = [&](std::size_t, const ModelEventSink &sink, std::stop_token) {
             return Emit(sink,
                         {Intent("first"), sibling, {.kind = ModelEventKind::Usage, .usage = {8, 2}}, {.kind = ModelEventKind::Completed}});
         };
         const auto result = runtime.Plan(model, 1, Request(true), {}, [&](const ModelToolIntent &intent) {
             const auto inspected = InspectMcpPlanTool(*tools.snapshot, {}, intent);
-            if (inspected.HasValue()) {
-                CHECK(inspected.Value() == Mcp::McpToolEffect::Mutation);
-                if (cancelDuringReview)
-                    stop.request_stop();
-                return Completed;
-            }
-            const auto &invalid = Mcp::McpErrors::ToolInputInvalid;
-            return ErrorChainContains(inspected.ErrorValue(), invalid.domain, invalid.code) ? InvalidModelResponse : ToolDenied;
+            if (cancelDuringReview)
+                stop.request_stop();
+            return inspected;
         }, stop.get_token());
         CHECK(result.status == expected);
         CHECK(model.requests.size() == 1);
@@ -117,9 +121,11 @@ namespace Horo::Agent {
         REQUIRE(result.draft.has_value() == (expected == Completed));
         if (result.draft) {
             CHECK(result.draft->toolIntents.size() == 2);
+            CHECK((result.effects == std::vector{expectedEffect, expectedEffect}));
             REQUIRE(result.usage);
             CHECK(result.usage->outputTokens == 2);
-        }
+        } else
+            CHECK(result.effects.empty());
     }
 
     TEST_CASE("Editor Agent observes only accepted text deltas from a tool-free turn", "[agent][turn]") {

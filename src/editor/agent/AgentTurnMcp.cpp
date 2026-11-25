@@ -84,12 +84,26 @@ namespace Horo::Agent {
     }  // namespace
 
     /** @copydoc InspectMcpPlanTool */
-    Result<Mcp::McpToolEffect> InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry, const std::span<const std::string> capabilities,
-                                                  const ModelToolIntent &intent) {
+    AgentPlanToolInspection InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry, const std::span<const std::string> capabilities,
+                                               const ModelToolIntent &intent) {
         const auto arguments = DecodeArguments(intent.argumentsJson);
         if (!arguments.is_object())
-            return Result<Mcp::McpToolEffect>::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
-        return registry.InspectDraft({intent.name}, arguments, capabilities);
+            return {InvalidModelResponse};
+        const auto inspected = registry.InspectDraft({intent.name}, arguments, capabilities);
+        if (inspected.HasError()) {
+            const auto &error = inspected.ErrorValue();
+            const auto &invalid = Mcp::McpErrors::ToolInputInvalid;
+            return {ErrorChainContains(error, invalid.domain, invalid.code) ? InvalidModelResponse : ErrorStatus(error.code.Value())};
+        }
+        switch (inspected.Value()) {
+            case Mcp::McpToolEffect::Query:
+                return {Completed, AgentPlannedEffect::Read};
+            case Mcp::McpToolEffect::PresentationSideEffect:
+                return {Completed, AgentPlannedEffect::Presentation};
+            case Mcp::McpToolEffect::Mutation:
+                return {Completed, AgentPlannedEffect::Mutation};
+        }
+        return {ToolDenied};
     }
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */

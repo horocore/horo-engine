@@ -247,12 +247,18 @@ namespace Horo::Editor {
             PlanningModel model;
             CHECK(request->Run(model, 1).status == InvalidRequest);
             const auto validate = [](const Agent::ModelToolIntent &) {
-                return ToolDenied;
+                return Agent::AgentPlanToolInspection{ToolDenied};
             };
             const auto valid = request->Plan(model, 2, {}, validate);
-            REQUIRE(valid.status == Completed);
-            REQUIRE(valid.draft);
-            CHECK(valid.draft->text == "Plan");
+            REQUIRE(valid.Status() == Completed);
+            const auto *draft = valid.Read(*context);
+            REQUIRE(draft);
+            REQUIRE(draft->draft);
+            CHECK(draft->draft->text == "Plan");
+            ImmersiveAuthoringContext other;
+            const auto foreign = other.Publish(identity, {});
+            REQUIRE(foreign);
+            CHECK_FALSE(valid.Read(*foreign));
             auto old = owner.CapturePlan(*context, Prompt());
             REQUIRE(old);
             identity.mode = ImmersiveAuthoringMode::Play;
@@ -260,10 +266,30 @@ namespace Horo::Editor {
             const auto play = owner.Publish(identity, {});
             REQUIRE(play);
             CHECK_FALSE(owner.CapturePlan(*play, Prompt()));
+            CHECK(valid.Status() == ContextDenied);
+            CHECK_FALSE(valid.Read(*context));
             const auto rejected = old->Plan(model, 3, {}, validate);
-            CHECK(rejected.status == ContextDenied);
-            CHECK_FALSE(rejected.draft);
+            CHECK(rejected.Status() == ContextDenied);
+            CHECK_FALSE(rejected.Read(*play));
             CHECK(model.calls == 1);
+        }
+
+        TEST_CASE("Immersive plan is withdrawn when the worker is cancelled before adoption", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto request = owner.CapturePlan(*context, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            std::stop_source stop;
+            const auto review = request->Plan(model, 1, {}, [](const Agent::ModelToolIntent &) {
+                return Agent::AgentPlanToolInspection{ToolDenied};
+            }, stop.get_token());
+            REQUIRE(review.Read(*context));
+            stop.request_stop();
+            CHECK(review.Status() == Cancelled);
+            CHECK_FALSE(review.Read(*context));
         }
 
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {

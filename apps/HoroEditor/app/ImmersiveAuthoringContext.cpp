@@ -84,16 +84,34 @@ namespace Horo::Editor {
         return runtime.Run(provider, nullptr, turnId, std::exchange(request_, {}), {}, stop);
     }
 
+    ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop)
+        : context_(std::move(context)), plan_(std::move(plan)), stop_(stop) {}
+
+    /** @copydoc ImmersivePlanReview::Status */
+    Agent::AgentTurnStatus ImmersivePlanReview::Status() const noexcept {
+        using enum Agent::AgentTurnStatus;
+        if (plan_.status != Completed)
+            return plan_.status;
+        if (stop_.stop_requested())
+            return Cancelled;
+        return context_.IsCurrent() ? Completed : ContextDenied;
+    }
+
+    /** @copydoc ImmersivePlanReview::Read */
+    const Agent::AgentTurnPlan *ImmersivePlanReview::Read(const ImmersivePlanningContext &current) const & noexcept {
+        return context_.SharesGeneration(current) && Status() == Agent::AgentTurnStatus::Completed ? &plan_ : nullptr;
+    }
+
     /** @copydoc ImmersiveAgentRequest::Plan */
-    Agent::AgentTurnPlan ImmersiveAgentRequest::Plan(Agent::IModelProvider &provider, const std::uint64_t turnId,
-                                                     const Agent::AgentTurnLimits &limits,
-                                                     const Agent::AgentPlanToolValidator &validateTool, const std::stop_token stop) {
+    ImmersivePlanReview ImmersiveAgentRequest::Plan(Agent::IModelProvider &provider, const std::uint64_t turnId,
+                                                    const Agent::AgentTurnLimits &limits, const Agent::AgentPlanToolValidator &validateTool,
+                                                    const std::stop_token stop) {
         if (!reviewOnly_)
-            return {.status = Agent::AgentTurnStatus::InvalidRequest};
+            return {context_, {.status = Agent::AgentTurnStatus::InvalidRequest}, stop};
         Agent::AgentTurnRuntime runtime{[this] {
             return IsCurrent();
         }};
-        return runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop);
+        return {context_, runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop), stop};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}

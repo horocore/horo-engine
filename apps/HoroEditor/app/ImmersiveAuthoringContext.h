@@ -88,6 +88,28 @@ namespace Horo::Editor {
         std::shared_ptr<const ImmersiveContextEpoch> epoch_;
     };
 
+    /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
+    class ImmersivePlanReview final {
+    public:
+        /** @brief Reports terminal status, including cancellation or stale scope after inference. */
+        [[nodiscard]] Agent::AgentTurnStatus Status() const noexcept;
+
+        /** @brief Borrows the validated draft and effects for the exact current authoring generation.
+         * @param current Editor-owned context at presentation time.
+         * @return Plan while current and complete, or null after withdrawal or failure.
+         */
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current) const & noexcept;
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current) const && = delete;
+
+    private:
+        friend class ImmersiveAgentRequest;
+        ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop);
+
+        ImmersivePlanningContext context_;
+        Agent::AgentTurnPlan plan_;
+        std::stop_token stop_;
+    };
+
     /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
     class ImmersiveAgentRequest final {
     public:
@@ -117,8 +139,8 @@ namespace Horo::Editor {
          * @param limits Host draft budget. @param validateTool Host registry and policy check.
          * @param stop Worker cancellation. @return Inert draft or terminal rejection.
          */
-        [[nodiscard]] Agent::AgentTurnPlan Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
-                                                const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {});
+        [[nodiscard]] ImmersivePlanReview Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
+                                               const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {});
 
     private:
         friend class ImmersiveAuthoringContext;
