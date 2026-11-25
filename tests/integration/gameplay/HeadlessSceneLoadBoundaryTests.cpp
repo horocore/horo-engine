@@ -426,6 +426,7 @@ namespace {
         namespace Decision = AI::DecisionGraphTestSupport;
         namespace Output = Assets::OutputTestSupport;
         const bool outOfRange = GENERATE(false, true);
+        const bool withRelevance = GENERATE(false, true);
         Decision::Fixture fixture;
         const auto score = Decision::MakeIdentity<BlackboardKeyId>(101);
         const auto feature = Decision::MakeIdentity<BlackboardKeyId>(102);
@@ -532,6 +533,25 @@ namespace {
         const HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + 5s};
         Gameplay::GameplayReplicationAdmissionPolicy replication;
         replication.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
+        AiSceneCookedDecisionExecution execution{jobs, {}, {}};
+        std::array observations{HeadlessDecisionRelevance{identity, {.anchorDistanceMillimeters = 31'000}},
+                                HeadlessDecisionRelevance{identity, {.gameplayPinned = true}}};
+        HeadlessDecisionRelevanceSource relevance;
+        if (withRelevance) {
+            execution.scheduler.mode = AiSchedulingMode::BestEffort;
+            execution.scheduler.simulationProfile = AiDecisionSimulationProfile{10'000, 20'000, 30'000, 2, 1};
+            execution.timing = AiCookedDecisionTiming::BestEffortReactive;
+            relevance = [&](const Runtime::RuntimeSceneView &scene, const std::uint64_t tick) {
+                CHECK(scene.IsCurrent());
+                CHECK(scene.RuntimeId() == Runtime::SceneRuntimeId{7});
+                const std::span<const HeadlessDecisionRelevance> facts{observations};
+                if (tick <= 2)
+                    return Result<std::span<const HeadlessDecisionRelevance>>::Success(facts.first(1));
+                if (tick == 3)
+                    return Result<std::span<const HeadlessDecisionRelevance>>::Success(facts.last(1));
+                return Result<std::span<const HeadlessDecisionRelevance>>::Success(facts);
+            };
+        }
         auto composed =
             ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(decoded).Value()),
                                                 {.mode = Physics::PhysicsRuntimeMode::Canonical,
@@ -543,8 +563,8 @@ namespace {
                                                      HeadlessCookedDecisionInput{.committed = *committed.Value(),
                                                                                  .environment = fixture.Environment(),
                                                                                  .bindings = std::move(bindings).Value(),
-                                                                                 .execution =
-                                                                                     AiSceneCookedDecisionExecution{jobs, {}, {}}})},
+                                                                                 .execution = execution,
+                                                                                 .relevance = std::move(relevance)})},
                                                 {}, std::nullopt, replication);
         REQUIRE(composed.HasValue());
         const auto service = [&](const NetworkModeServiceKind kind) {
@@ -562,16 +582,29 @@ namespace {
         REQUIRE(physics.Value()->Prepare().HasValue());
         REQUIRE(physics.Value()->Activate().HasValue());
         CHECK(fixture.probe.starts == 0);
-        for (std::uint64_t tick = 1; tick <= 2; ++tick) {
+        const auto runTick = [&](const std::uint64_t tick) {
             const auto step = physics.Value()->RunFixedTick({tick, Duration::FromNanoseconds(16'666'667), {}});
             if (step.HasError())
                 UNSCOPED_INFO(step.ErrorValue().message);
             REQUIRE(step.HasValue());
-        }
+        };
+        runTick(1);
+        runTick(2);
         REQUIRE_FALSE(fixture.probe.calls.empty());
         CHECK(fixture.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
         CHECK(fixture.probe.starts == 1);
-        CHECK(fixture.probe.resumes == 1);
+        if (withRelevance) {
+            CHECK(fixture.probe.resumes == 0);
+            runTick(3);
+            CHECK(fixture.probe.starts == 2);
+            CHECK(fixture.probe.resumes == 0);
+            const auto duplicate = physics.Value()->RunFixedTick({4, Duration::FromNanoseconds(16'666'667), {}});
+            REQUIRE(duplicate.HasError());
+            CHECK(duplicate.ErrorValue().code.Value() == AIErrors::SchedulerPolicyInvalid.code.Value());
+            CHECK(fixture.probe.resumes == 0);
+        } else {
+            CHECK(fixture.probe.resumes == 1);
+        }
         const auto value = InspectHeadlessDecisionValue(*physics.Value(), identity, feature);
         REQUIRE(value.HasValue());
         REQUIRE(value.Value());

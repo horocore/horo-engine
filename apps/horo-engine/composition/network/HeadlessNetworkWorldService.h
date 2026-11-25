@@ -628,6 +628,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+            if (OwnsCookedDecisionExecution() && input.cookedDecisions->relevance)
+                record_->decisionRelevance.reserve(input.cookedDecisions->execution->scheduler.maximumAgents);
             std::optional<AI::AiScenePerceptionActivationInput> activation;
             std::optional<AI::AiScenePerceptionGroupInput> structural;
             if (OwnsPerception()) {
@@ -925,6 +927,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return JobCancelled();
             if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
                 return Result<void>::Success();
+            if (auto relevance = PublishDecisionRelevance(context); relevance.HasError())
+                return relevance;
 
             struct ResetMotionPhase {
                 std::uint64_t &tick;
@@ -940,6 +944,44 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (result.HasValue())
                 record_->decisionTick = context.simulationTick;
             return result;
+        }
+
+        /** @brief Translates one authority snapshot to the live scheduler's atomic relevance batch. */
+        Result<void> PublishDecisionRelevance(const Runtime::FixedStepContext &context) const {
+            const auto &selection = *owners_->configured->cookedDecisions;
+            if (!selection.relevance)
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+            const auto observed = selection.relevance(*scene, context.simulationTick);
+            if (observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (!scene->IsCurrent())
+                return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+            return ApplyDecisionRelevance(observed.Value(), selection.execution->scheduler.maximumAgents);
+        }
+
+        /** @brief Resolves and orders the bounded snapshot without mutating the scheduler during staging. */
+        Result<void> ApplyDecisionRelevance(std::span<const HeadlessDecisionRelevance> observed, std::size_t maximumAgents) const {
+            if (observed.size() > maximumAgents)
+                return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+            auto &updates = record_->decisionRelevance;
+            updates.clear();
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            for (const auto &fact : observed) {
+                const auto handle = capability.ResolveAgent(fact.agent);
+                if (handle.HasError())
+                    return Result<void>::Failure(handle.ErrorValue());
+                updates.push_back({handle.Value(), fact.relevance});
+            }
+            std::ranges::sort(updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            return scheduler.Value()->SetRelevanceBatchAtSafePoint(updates);
         }
 
         /** @brief Drives the exact Scene and its current origin through all query phases. */

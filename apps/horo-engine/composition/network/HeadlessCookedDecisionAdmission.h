@@ -5,6 +5,8 @@
 #include "CookedDecisionSceneAdmission.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
+#include <functional>
+
 namespace Horo::AI {
     class GameplayQueryTestRegistry;
 }
@@ -12,6 +14,19 @@ namespace Horo::AI {
 namespace Horo::Application::Internal {
     using HeadlessQueryPlanCatalog = CookedSceneQueryPlanCatalog;
     using HeadlessCookedDecisionBinding = CookedDecisionSceneBinding;
+
+    /** @brief One authority-owned observation keyed by a persistent Scene agent identity. */
+    struct HeadlessDecisionRelevance final {
+        AI::AgentId agent;
+        AI::AiDecisionRelevance relevance;
+    };
+
+    /** @brief Samples gameplay facts from the committed Scene on the fixed-step owner lane.
+     * @details The bounded result is borrowed until the next invocation. Each identity may appear
+     * once. Omitting an agent preserves its last observation. The source must not mutate the Scene.
+     */
+    using HeadlessDecisionRelevanceSource =
+        std::function<Result<std::span<const HeadlessDecisionRelevance>>(const Runtime::RuntimeSceneView &, std::uint64_t)>;
 
     /** @brief Provider ownership chosen by the composing host before opening any candidate. */
     enum class HeadlessDecisionProvider {
@@ -31,6 +46,7 @@ namespace Horo::Application::Internal {
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::optional<AI::QueryResultCacheLimits> queryCacheLimits{};
         std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayQueryTests;
+        HeadlessDecisionRelevanceSource relevance; /**< Optional owner source for a live best-effort simulation profile. */
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

@@ -754,6 +754,13 @@ namespace Horo::Application::Internal {
             if (input.decisionReplay && (!input.decisionReplay->Selection().IsValid() || !decisions || !decisions->execution))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "AI replay requires an exact agent, tick and configured cooked execution."));
+            if (decisions && decisions->relevance &&
+                (input.decisionReplay || !decisions->execution ||
+                 decisions->execution->scheduler.mode != AI::AiSchedulingMode::BestEffort ||
+                 !decisions->execution->scheduler.simulationProfile ||
+                 decisions->execution->scheduler.maximumAgents > AI::AiTaskSchedulerSettings::HardAgents))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                       "Headless relevance requires a bounded live best-effort simulation profile."));
             if (decisions && decisions->provider == HeadlessDecisionProvider::SelectedNativeGameplay &&
                 (!decisions->execution || decisions->environment.nodes || !gameplay || !gameplay->enabled ||
                  gameplay->nativeArtifact.empty() || !gameplay->moduleRetirements))

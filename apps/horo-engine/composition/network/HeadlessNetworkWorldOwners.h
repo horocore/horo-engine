@@ -78,6 +78,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<InitialTransformCapture> initialTransformCapture;
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<SceneDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
+        std::vector<AI::AiDecisionRelevanceUpdate> decisionRelevance; /**< Reserved scratch for exact-generation world observations. */
         CookedSceneLocalPolicyCatalog localPolicies;
         std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;
