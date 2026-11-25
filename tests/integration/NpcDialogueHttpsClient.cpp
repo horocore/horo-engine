@@ -146,6 +146,17 @@ namespace {
         return rejected.HasError() && !scene.Pump(grant, 2) && CheckTimeline(scene, true, 0) ? 0 : 17;
     }
 
+    /** @brief Runs the selected scenario using the same admitted project channel. */
+    int RunScenario(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
+                    const NpcDialogueGrant &grant, std::string_view mode) {
+        if (mode == "different-agent" || mode == "missing-trigger")
+            return RunRejectedTrigger(scene, owner, grant, mode);
+        const auto trigger = NpcDialogueTriggerId::Create(AuthoredTrigger).Value();
+        if (mode == "queued-retire" || mode == "disabled-agent")
+            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode == "disabled-agent");
+        return RunTurn(scene, runtime, owner, grant, trigger, mode);
+    }
+
     /** @brief Composes one Scene channel and exercises a complete presentation turn. */
     int RunScene(const App::NpcDialogueProjectActivation &activation, const std::string_view mode) {
         auto created = AiSceneRuntime::Create();
@@ -169,12 +180,7 @@ namespace {
         if (channel.HasError())
             return 6;
         auto scene = std::move(channel).Value();
-        if (mode == "different-agent" || mode == "missing-trigger")
-            return RunRejectedTrigger(scene, owner, grant, mode);
-        const auto trigger = NpcDialogueTriggerId::Create(AuthoredTrigger).Value();
-        if (mode == "queued-retire" || mode == "disabled-agent")
-            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode == "disabled-agent");
-        return RunTurn(scene, runtime, owner, grant, trigger, mode);
+        return RunScenario(scene, jobs, runtime, owner, grant, mode);
     }
 
     /** @brief Captures the same canonical project bytes used to identify approval. */

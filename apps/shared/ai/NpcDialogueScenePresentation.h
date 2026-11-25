@@ -70,6 +70,8 @@ namespace Horo::App {
         [[nodiscard]] bool SceneIsCurrent() const;
         /** @brief Checks whether the Scene still owns the active agent generation. */
         [[nodiscard]] bool AgentIsActive(AI::AgentHandle agent, AI::AgentId subject) const;
+        /** @brief Finds the admitted trigger or returns null when the ID is absent. */
+        [[nodiscard]] const Application::ProjectNpcDialogueTrigger *FindTrigger(Application::NpcDialogueTriggerId trigger) const;
         const JobSystem *jobs_;
         const AI::AiSceneRuntime *runtime_;
         AI::AiSceneActivationBinding scene_;

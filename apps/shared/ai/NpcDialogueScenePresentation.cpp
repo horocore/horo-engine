@@ -51,6 +51,12 @@ namespace Horo::App {
         return record.HasValue() && record.Value().state == AI::AiAgentActivationState::Active && record.Value().agent.agent == subject;
     }
 
+    /** @copydoc NpcDialogueScenePresentation::FindTrigger */
+    const Application::ProjectNpcDialogueTrigger *NpcDialogueScenePresentation::FindTrigger(Application::NpcDialogueTriggerId trigger) const {
+        const auto found = std::ranges::lower_bound(triggers_, trigger, {}, &Application::ProjectNpcDialogueTrigger::id);
+        return found != triggers_.end() && found->id == trigger ? &*found : nullptr;
+    }
+
     /** @copydoc NpcDialogueScenePresentation::Create */
     Result<NpcDialogueScenePresentation> NpcDialogueScenePresentation::Create(
         const JobSystem &jobs, const AI::AiSceneRuntime &runtime, std::unique_ptr<Runtime::Ui::CaptionCueQueue> queue,
@@ -80,8 +86,8 @@ namespace Horo::App {
                                                     const AI::NpcDialogueGrant &grant, std::uint64_t tick, std::uint64_t deadlineTick,
                                                     std::chrono::steady_clock::time_point deadline,
                                                     const CancellationToken &cancellation) {
-        const auto binding = std::ranges::lower_bound(triggers_, trigger, {}, &Application::ProjectNpcDialogueTrigger::id);
-        if (!trigger.IsValid() || binding == triggers_.end() || binding->id != trigger)
+        const auto *binding = FindTrigger(trigger);
+        if (!binding)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (!queue_ || !SceneIsCurrent() || !AgentIsActive(agent, binding->agent))
             return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));

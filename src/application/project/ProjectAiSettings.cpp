@@ -288,7 +288,8 @@ namespace Horo::Application {
             if (object == root.end())
                 return true;
             constexpr std::array<std::string_view, 5> keys{"provider", "destination", "version", "fields", "triggers"};
-            if (!HasOnly(*object, keys) || !object->contains("provider") || !object->contains("destination") || !object->contains("fields"))
+            const std::size_t expectedKeys = object->contains("triggers") ? keys.size() : keys.size() - 1;
+            if (!HasOnly(*object, keys) || object->size() != expectedKeys)
                 return false;
             auto &dialogue = output.emplace();
             auto &route = dialogue.route;
