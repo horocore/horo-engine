@@ -1819,6 +1819,13 @@ registry supply the Hearing/Sound descriptors whenever a listener selects them.
 Native modules retain ownership of their custom senses and cannot supply the
 reserved Hearing or Sound descriptor. Registering a listener creates no sound
 events. An authoritative Gameplay producer still supplies the sensing feed.
+Editor Play supplies its admitted descriptor registry to an explicitly selected
+producer. The producer supplies location, intensity, radius, tags, source
+identity and lifetime, and decides which listeners may receive each sound.
+The engine checks the committed source and listener generations, the Scene's
+disclosure rules and the supplied radius. A bridge with an explicit attenuation
+or occlusion policy can submit the adjusted sound or reject the delivery before
+publication. Audio playback and mixer settings have no effect on this path.
 Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without
