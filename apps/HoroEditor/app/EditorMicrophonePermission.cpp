@@ -440,8 +440,13 @@ namespace Horo::Editor {
             CancelSpeechCapture(generation);
             return Output::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
         }
-        if (value.status == Copied)
-            block = candidate;
+        if (value.status != Copied)
+            return Output::Success(value.status);
+        if (const auto allowed = ReconcileSpeechLease(generation, foreground); allowed.HasError()) {
+            Security::SecureZero(std::as_writable_bytes(pcm));
+            return Output::Failure(allowed.ErrorValue());
+        }
+        block = candidate;
         return Output::Success(value.status);
     }
 
@@ -452,10 +457,13 @@ namespace Horo::Editor {
         if (const auto allowed = CheckSpeechCapture(generation, foreground); allowed.HasError())
             return Output::Failure(allowed.ErrorValue());
         auto tail = check_->backend->FinishSpeech(generation, *check_->grant);
-        if (tail.HasError())
+        if (tail.HasError()) {
             CancelSpeechCapture(generation);
-        else
-            check_->grant.reset();
+            return tail;
+        }
+        if (const auto allowed = ReconcileSpeechLease(generation, foreground); allowed.HasError())
+            return Output::Failure(allowed.ErrorValue());
+        check_->grant.reset();
         return tail;
     }
 
