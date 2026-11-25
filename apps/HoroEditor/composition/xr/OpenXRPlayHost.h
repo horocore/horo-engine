@@ -96,6 +96,7 @@ namespace Horo::Application::Internal {
         Runtime::SceneObjectId trackingRoot;
         const IOpenXRPlayLightingSource *lighting{}; /**< Optional app-owned provider, borrowed through retirement. */
         XR::OpenXRInternal::NativeFrameMetricHandles metrics;
+        OpenXRInputCaptureClock captureClock; /**< Empty unless the application admits a capture clock. */
     };
 
     /** @brief Fully tracked reference to the gameplay World for one exact active presentation frame. */
@@ -190,9 +191,15 @@ namespace Horo::Application::Internal {
             return std::span{devices_}.first(count_);
         }
 
+        /** @return Capture-clock interval for poses at this cutoff, when measured. */
+        [[nodiscard]] std::optional<OpenXRInputCaptureInterval> PoseCaptureTime() const noexcept {
+            return poseCaptureTime_;
+        }
+
     private:
         friend class OpenXRPlayHost;
         OpenXRPlayInteractionScope scope_;
+        std::optional<OpenXRInputCaptureInterval> poseCaptureTime_;
         std::array<XR::XRTrackedDeviceRecord, XR::XRTrackingSnapshotHardLimits::MaximumDevices> devices_{};
         std::size_t count_{};
     };
@@ -838,6 +845,7 @@ namespace Horo::Application::Internal {
             Runtime::SceneObjectId trackingRoot;
             const IOpenXRPlayLightingSource *lighting;
             XR::OpenXRInternal::NativeFrameMetricHandles metrics;
+            OpenXRInputCaptureClock captureClock;
         };
 
         Parents composition_;

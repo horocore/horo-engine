@@ -13,6 +13,7 @@
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        using Application::Internal::OpenXRInputCaptureStamp;
         using Application::Internal::OpenXRInputClock;
         static_assert(!std::is_copy_constructible_v<OpenXRInputClock>);
         static_assert(!std::is_copy_assignable_v<OpenXRInputClock>);
@@ -39,6 +40,8 @@ namespace Horo::Tests::OpenXR {
                     auto alteredObservations = context;
                     alteredObservations.completedSimulationTick = 999;
                     altered.emplace(clock.Read(alteredObservations));
+                    if (capture.read)
+                        timed.emplace(clock.ReadWithCaptureClock(context, capture));
                 }
                 if (phase == Runtime::RuntimePhase::VariableUpdate)
                     wrongPhaseRejected = clock.Read(context).HasError();
@@ -49,7 +52,26 @@ namespace Horo::Tests::OpenXR {
             std::optional<Runtime::FrameContext> saved;
             std::optional<Result<XRTimeEvidence>> observed;
             std::optional<Result<XRTimeEvidence>> altered;
+            Application::Internal::OpenXRInputCaptureClock capture;
+            std::optional<Result<Application::Internal::OpenXRInputClockObservation>> timed;
             bool wrongPhaseRejected{};
+        };
+
+        /** @brief Supplies capture time and records its call ordering relative to real XR conversions. */
+        struct CaptureClockProbe final {
+            const ClockScript &xr;
+            mutable std::size_t reads{};
+            mutable std::array<std::size_t, 2> conversions{};
+            std::array<std::optional<OpenXRInputCaptureStamp>, 2> samples{OpenXRInputCaptureStamp{7, 100}, OpenXRInputCaptureStamp{7, 115}};
+
+            static std::optional<OpenXRInputCaptureStamp> Read(const void *owner) noexcept {
+                const auto &probe = *static_cast<const CaptureClockProbe *>(owner);
+                if (probe.reads == probe.samples.size())
+                    return std::nullopt;
+                const auto index = probe.reads++;
+                probe.conversions[index] = probe.xr.conversions;
+                return probe.samples[index];
+            }
         };
 
         /** @brief Owns native/script/scheduler parents until the actual clock and every callback have retired. */
@@ -108,6 +130,48 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(reader->observed->HasValue());
         REQUIRE(reader->observed->Value().simulation.has_value());
         CHECK(reader->observed->Value().simulation->Nanoseconds() == ClockFixture::Step.ToNanoseconds());
+    }
+
+    TEST_CASE("Production XR cutoff brackets the native sample with the admitted capture clock", "[xr][host][clock]") {
+        ClockFixture fixture;
+        CaptureClockProbe probe{fixture.script};
+        REQUIRE(fixture.clock.Bind(fixture.host->DispatchSource(), ClockFixture::Step).HasValue());
+        auto participant = std::make_unique<ClockReader>(fixture.clock);
+        auto *reader = participant.get();
+        reader->capture = {&probe, &CaptureClockProbe::Read};
+
+        bool expected = false;
+        SECTION("ordered observations") {
+            expected = true;
+        }
+        SECTION("the capture clock disappeared") {
+            probe.samples.back().reset();
+        }
+        SECTION("the capture clock changed domains") {
+            ++probe.samples.back()->clockDomain;
+        }
+        SECTION("the capture clock regressed") {
+            probe.samples.back()->nanoseconds = 99;
+        }
+        REQUIRE(fixture.host->AddParticipant(std::move(participant)).HasValue());
+        REQUIRE(fixture.host->Startup().HasValue());
+        REQUIRE(fixture.host->RunFrame().HasValue());
+        REQUIRE(reader->timed);
+        REQUIRE(reader->timed->HasValue());
+        CHECK(probe.reads == 2);
+        CHECK(probe.conversions[1] == probe.conversions[0] + 1);
+        const auto &measurement = reader->timed->Value();
+        CHECK(measurement.time == reader->observed->Value());
+        CHECK(measurement.captureInterval.has_value() == expected);
+        if (measurement.captureInterval) {
+            CHECK(measurement.captureInterval->earliest.clockDomain == 7);
+            CHECK(measurement.captureInterval->earliest.nanoseconds == 100);
+            CHECK(measurement.captureInterval->latest.nanoseconds == 115);
+        }
+        probe.reads = 0;
+        REQUIRE(reader->saved);
+        CHECK(fixture.clock.ReadWithCaptureClock(*reader->saved, reader->capture).HasError());
+        CHECK(probe.reads == 0);
     }
 
     TEST_CASE("Production XR clock preserves prediction purpose and rejects reentry and foreign lanes", "[xr][host][clock]") {

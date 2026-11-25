@@ -7,6 +7,30 @@
 #include "OpenXRNativeSession.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Timestamp in a monotonic clock domain supplied by the application. */
+    struct OpenXRInputCaptureStamp final {
+        std::uint64_t clockDomain{};
+        std::uint64_t nanoseconds{};
+    };
+
+    /** @brief Optional read-only capture-clock port supplied by the application. */
+    struct OpenXRInputCaptureClock final {
+        const void *owner{};
+        std::optional<OpenXRInputCaptureStamp> (*read)(const void *owner) noexcept {};
+    };
+
+    /** @brief Bounds one XR time observation in the listening operation's Audio clock domain. */
+    struct OpenXRInputCaptureInterval final {
+        OpenXRInputCaptureStamp earliest;
+        OpenXRInputCaptureStamp latest;
+    };
+
+    /** @brief Exact Input cutoff and optionally a measurement of that same sample in the Audio clock. */
+    struct OpenXRInputClockObservation final {
+        XR::XRTimeEvidence time;
+        std::optional<OpenXRInputCaptureInterval> captureInterval;
+    };
+
     /** @brief Returns the single platform time route shared by cold discovery, preflight and actual runtime sampling. */
     [[nodiscard]] constexpr XR::OpenXRInternal::NativeFeatureProviderRoute OpenXRPlatformTimeRoute() noexcept {
 #if defined(_WIN32)
@@ -58,6 +82,15 @@ namespace Horo::Application::Internal {
          * @post No Input commit, snapshot publication, tick increment, per-frame allocation or new epoch.
          */
         [[nodiscard]] Result<XR::XRTimeEvidence> Read(const Runtime::FrameContext &context) const;
+        /** @brief Reads the Input cutoff and brackets its native sample with the supplied capture clock.
+         * @param context Actual BuildInputSnapshot dispatch on the owner lane.
+         * @param capture Borrowed clock port. Reads must be bounded and non-blocking.
+         * @return Native cutoff with a measured interval when both observations belong to the same ordered Audio clock.
+         * @details Missing, switched or regressing Audio clocks leave the interval absent and preserve native XR input.
+         * The interval applies to poses located at this cutoff. It does not timestamp actions queried later.
+         */
+        [[nodiscard]] Result<OpenXRInputClockObservation> ReadWithCaptureClock(const Runtime::FrameContext &context,
+                                                                               OpenXRInputCaptureClock capture) const;
         /** @brief Pairs an actual native frame prediction with a fresh same-instance OS-counter conversion.
          * @param prediction Exact xrWaitFrame prediction retained by the canonical frame gate, never a simulation timestamp.
          * @return Runtime sample plus presentation evidence, or the original native/currentness error.

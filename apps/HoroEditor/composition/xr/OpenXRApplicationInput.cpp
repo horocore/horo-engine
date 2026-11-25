@@ -267,9 +267,11 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                        const Runtime::FrameContext &context, const XRWorldOriginRevision origin,
-                                                       const Input::InputCollectionFrame &frame, const Math::Transform *worldPlacement) {
+                                                       const Input::InputCollectionFrame &frame, const OpenXRInputFrameOptions options) {
+        const auto *worldPlacement = options.worldPlacement;
         // Revoke prior evidence before foreign calls; a failed cutoff must not revive it.
         publication.Revoke();
+        input_.poseCaptureTime.reset();
         input_.stageBoundary.reset();
         input_.gaze.reset();
         input_.gazeRevision = {};
@@ -286,21 +288,22 @@ namespace Horo::Application::Internal {
             return input_.native && input_.projection && input_.bindings && coordinator.Revision() == bindingRevision &&
                    coordinator.Current() && *coordinator.Current() == *input_.bindings;
         };
-        const auto time = clock.Read(context);
-        if (time.HasError())
-            return Result<void>::Failure(time.ErrorValue());
+        const auto observation = clock.ReadWithCaptureClock(context, options.captureClock);
+        if (observation.HasError())
+            return Result<void>::Failure(observation.ErrorValue());
+        const auto &time = observation.Value().time;
         if (auto synced = input_.native->Sync(state.session); synced.HasError())
             return synced;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        const auto poses = input_.native->ObserveWorldPoses(state.session, time.Value(), origin);
+        const auto poses = input_.native->ObserveWorldPoses(state.session, time, origin);
         if (poses.HasError())
             return Result<void>::Failure(poses.ErrorValue());
         if (auto current = Current(); current.HasError())
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        const auto handSample = SampleHands(state.session, sessions, time.Value());
+        const auto handSample = SampleHands(state.session, sessions, time);
         if (handSample.HasError())
             return Result<void>::Failure(handSample.ErrorValue());
         if (!bindingsCurrent())
@@ -342,7 +345,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         std::optional<XRPoseSample> gaze;
         if (input_.gazeAllowed) {
-            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), MaximumEyeGazeAge, input_.gazeAllowed);
+            auto observed = input_.native->SampleConsentedGaze(state.session, time, MaximumEyeGazeAge, input_.gazeAllowed);
             if (auto current = Current(); current.HasError())
                 return current;
             if (!bindingsCurrent())
@@ -360,14 +363,15 @@ namespace Horo::Application::Internal {
             else
                 gaze.reset();
         }
-        const auto appended = AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision,
-                                                   handSample.Value(), worldPlacement},
-                                                  publication, frame);
+        const auto appended =
+            AppendPreparedInput({poses.Value(), actions.Value(), state, time, origin, bindingRevision, handSample.Value(), worldPlacement},
+                                publication, frame);
         if (appended.HasValue()) {
             input_.profiles = actions.Value().Profiles();
             if (input_.gazeAllowed)
                 input_.gaze = std::move(gaze);
             if (const auto *tracking = publication.Current()) {
+                PublishPoseCaptureTime(*tracking, observation.Value().captureInterval);
                 if (const auto boundary = poses.Value().StageBoundary(); boundary && tracking->State() == XRTrackingState::Active)
                     input_.stageBoundary = StageBoundaryObservation{DescribeXRInteractionCutoff(*tracking), *boundary};
                 AdvancePlaneCapture(*tracking);
@@ -377,6 +381,22 @@ namespace Horo::Application::Internal {
                 input_.gazeRevision = published->Revision();
         }
         return appended;
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadPoseCaptureTime */
+    std::optional<OpenXRInputCaptureInterval> OpenXRApplicationSession::ReadPoseCaptureTime(
+        const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !input_.poseCaptureTime ||
+            input_.poseCaptureTime->cutoff != DescribeXRInteractionCutoff(snapshot))
+            return std::nullopt;
+        return input_.poseCaptureTime->interval;
+    }
+
+    /** @copydoc OpenXRApplicationSession::PublishPoseCaptureTime */
+    void OpenXRApplicationSession::PublishPoseCaptureTime(const XRTrackingSnapshot &snapshot,
+                                                          const std::optional<OpenXRInputCaptureInterval> &interval) noexcept {
+        if (interval)
+            input_.poseCaptureTime = PoseCaptureTime{DescribeXRInteractionCutoff(snapshot), *interval};
     }
 
     /** @copydoc OpenXRApplicationSession::ReadStageBoundary */
@@ -737,6 +757,7 @@ namespace Horo::Application::Internal {
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         input_.stageBoundary.reset();
+        input_.poseCaptureTime.reset();
         RequestHapticCancellation();
         RevokeEyeGaze();
         RevokePlaneCapture();

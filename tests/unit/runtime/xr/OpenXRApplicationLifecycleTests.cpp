@@ -419,7 +419,7 @@ namespace Horo::Tests::OpenXRApplication {
                 RequireValue(session->PrepareSession());
             }
 
-            void CreatePlay() {
+            void CreatePlay(Host::OpenXRInputCaptureClock captureClock = {}) {
                 Prepare();
                 play = RequireValue(Host::OpenXRPlayHost::Create({*session,
                                                                   router,
@@ -428,7 +428,10 @@ namespace Horo::Tests::OpenXRApplication {
                                                                   bindings,
                                                                   scheduler->DispatchSource(),
                                                                   Duration::FromMilliseconds(10),
-                                                                  {objects.parent.value}}));
+                                                                  {objects.parent.value},
+                                                                  nullptr,
+                                                                  {},
+                                                                  captureClock}));
             }
 
             Input::InputActionCollection InputPort(const std::optional<Input::PlayerId> player = std::nullopt) {
@@ -2723,6 +2726,11 @@ namespace Horo::Tests::OpenXRApplication {
     TEST_CASE("Installed Play exposes exact player-scoped interaction geometry from its committed tracking cutoff",
               "[xr][application][interaction]") {
         using enum XR::XRProjectFeaturePolicy;
+
+        struct CaptureProbe {
+            mutable std::uint64_t now{100};
+        } capture;
+
         auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
         document["worldUiPointer"] = {{"action", document["actions"][0]["id"]}, {"maximumDistanceMeters", 6.0F}};
         document["poses"].push_back({{"profile", 1},
@@ -2734,7 +2742,11 @@ namespace Horo::Tests::OpenXRApplication {
         ApplicationFixture fixture{true, 6, Unrequested, OptionalDisable, Unrequested, false, document.dump()};
         fixture.script.actions.tracking.enabled = true;
         constexpr Input::PlayerId player = 7;
-        auto scene = PublishPlay(fixture, player);
+        fixture.CreatePlay({&capture, [](const void *owner) noexcept -> std::optional<Host::OpenXRInputCaptureStamp> {
+            const auto &probe = *static_cast<const CaptureProbe *>(owner);
+            return Host::OpenXRInputCaptureStamp{7, probe.now++};
+        }});
+        auto scene = ActivatePlay(fixture, player);
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();
@@ -2748,6 +2760,10 @@ namespace Horo::Tests::OpenXRApplication {
         sample();
         CHECK(fixture.play->ReadInteractionSources(2).HasError());
         const auto sources = RequireValue(fixture.play->ReadInteractionSources(player));
+        REQUIRE(sources.PoseCaptureTime());
+        CHECK(sources.PoseCaptureTime()->earliest.clockDomain == 7);
+        CHECK(sources.PoseCaptureTime()->earliest.nanoseconds == 100);
+        CHECK(sources.PoseCaptureTime()->latest.nanoseconds == 101);
         const CancellationToken uncancelled;
         CHECK(fixture.play->ReadLocomotionEvidence(sources.Scope(), {.cancellation = uncancelled}).HasError());
         const auto source = [&](const XR::XRTrackedDeviceRole role) {

@@ -24,7 +24,8 @@ namespace Horo::Application::Internal {
                        composition.fixedStep,
                        composition.trackingRoot,
                        composition.lighting,
-                       composition.metrics},
+                       composition.metrics,
+                       composition.captureClock},
           native_(preparation.native), discoveryAttempt_(preparation.preflight.Attempt()),
           locomotionComfort_(preparation.settings.LocomotionComfort()), getProc_(preparation.getProc), clock_(native_) {
         input_.router = &composition.router;
@@ -307,7 +308,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto placement = scene_ && scene_->locomotion ? scene_->locomotion->worldPlacement : std::nullopt;
         auto sampled = composition_.session.AppendInput(*sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame,
-                                                        placement ? &*placement : nullptr);
+                                                        {placement ? &*placement : nullptr, composition_.captureClock});
         input_.sampledWorldPlacement = sampled.HasValue() ? placement : std::nullopt;
         return sampled;
     }
@@ -400,6 +401,7 @@ namespace Horo::Application::Internal {
         const auto &snapshot = *current.Value();
         OpenXRPlayInteractionSources sources;
         sources.scope_ = {DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment};
+        sources.poseCaptureTime_ = composition_.session.ReadPoseCaptureTime(snapshot);
         using enum XRTrackedDeviceCapability;
         for (const auto &device : snapshot.Devices()) {
             const auto &capabilities = device.capabilities;

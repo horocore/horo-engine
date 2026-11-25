@@ -9,6 +9,7 @@
 #include "Horo/XR/XRProjectSettings.h"
 #include "OpenXRApplicationBindings.h"
 #include "OpenXRHandTracking.h"
+#include "OpenXRInputClock.h"
 #include "OpenXRInstalledProductSelection.h"
 #include "OpenXRPlaneCapture.h"
 #include "OpenXRSelectedVulkanBinding.h"
@@ -47,7 +48,11 @@ namespace Horo::Editor {
 }
 
 namespace Horo::Application::Internal {
-    class OpenXRInputClock;
+    /** @brief Synchronous optional inputs for one published tracking cutoff. */
+    struct OpenXRInputFrameOptions final {
+        const Math::Transform *worldPlacement{};
+        OpenXRInputCaptureClock captureClock;
+    };
 
     /** @brief Exact borrowed canonical authorities; none is discovered, replaced or activated by this value. */
     struct OpenXRApplicationAuthorities final {
@@ -409,6 +414,7 @@ namespace Horo::Application::Internal {
          * @param context Actual opaque BuildInputSnapshot dispatch evidence.
          * @param origin Current exact Scene-origin generation bound to these native spaces.
          * @param frame ONE existing Input collection transaction; this method never commits it.
+         * @param options Optional authored placement and capture clock supplied by the application.
          * @return Original native/time/snapshot/projection error; failure revokes the candidate snapshot.
          * @post Unfocused input appends nothing, so the host commits neutral XR without erasing physical input.
          * Native pose activity is joined to the SAME XRRuntime device issuer before scalar sampling; profile names and
@@ -418,7 +424,9 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AppendInput(const XR::XRSessionLifecycle &sessions, const XR::XRActionBindingCoordinator &coordinator,
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
-                                               const Input::InputCollectionFrame &frame, const Math::Transform *worldPlacement = nullptr);
+                                               const Input::InputCollectionFrame &frame, OpenXRInputFrameOptions options = {});
+        /** @brief Copies the Audio clock interval of the exact current pose cutoff, if measured. */
+        [[nodiscard]] std::optional<OpenXRInputCaptureInterval> ReadPoseCaptureTime(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
          * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
          * @return Bounded hand gesture candidates with source ownership.
@@ -630,6 +638,15 @@ namespace Horo::Application::Internal {
             XR::XRStageBoundaryProximity proximity;
         };
 
+        struct PoseCaptureTime final {
+            XR::XRInteractionCutoff cutoff;
+            OpenXRInputCaptureInterval interval;
+        };
+
+        /** @brief Retains a measured interval only for the tracking publication produced by this input frame. */
+        void PublishPoseCaptureTime(const XR::XRTrackingSnapshot &snapshot,
+                                    const std::optional<OpenXRInputCaptureInterval> &interval) noexcept;
+
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
             std::optional<XR::XRInputProjection> projection;
@@ -641,6 +658,7 @@ namespace Horo::Application::Internal {
             std::optional<XR::XRPoseSample> gaze;
             XR::XRTrackingSnapshotRevision gazeRevision;
             std::optional<StageBoundaryObservation> stageBoundary;
+            std::optional<PoseCaptureTime> poseCaptureTime;
             bool gazeAllowed{};
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};

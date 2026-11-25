@@ -37,6 +37,39 @@ namespace Horo::Application::Internal {
                 active = false;
             }
         };
+
+        /** @brief Reads an optional external clock without retaining its owner. */
+        std::optional<OpenXRInputCaptureStamp> CaptureNow(const OpenXRInputCaptureClock clock) noexcept {
+            return clock.read ? clock.read(clock.owner) : std::nullopt;
+        }
+
+        /** @brief Accepts only a closed interval in one ordered nonzero capture domain. */
+        std::optional<OpenXRInputCaptureInterval> CaptureInterval(const std::optional<OpenXRInputCaptureStamp> &earliest,
+                                                                  const std::optional<OpenXRInputCaptureStamp> &latest) noexcept {
+            if (!earliest || !latest || !earliest->clockDomain || earliest->clockDomain != latest->clockDomain ||
+                earliest->nanoseconds > latest->nanoseconds)
+                return std::nullopt;
+            return OpenXRInputCaptureInterval{*earliest, *latest};
+        }
+
+        /** @brief Checks the committed tick against the exact owner's immutable simulation step. */
+        Result<XR::XRSimulationTime> CommittedSimulationTime(const Runtime::RuntimeDispatchFacts &facts, const Duration step) {
+            const auto quantum = step.ToNanoseconds();
+            if (quantum <= 0 || (facts.committedTick && facts.committedDuration != step) ||
+                facts.committedTick > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)() / quantum))
+                return Result<XR::XRSimulationTime>::Failure(MakeError(XR::XRErrors::CapacityExceeded));
+            return XR::XRSimulationTime::Create(static_cast<std::int64_t>(facts.committedTick) * quantum);
+        }
+
+        /** @brief Rechecks that the scheduler still admits the same Input dispatch after foreign calls. */
+        bool MatchesInputDispatch(const Runtime::FrameContext &context, const Runtime::RuntimeDispatchSource &source,
+                                  const Runtime::RuntimeDispatchFacts &before) noexcept {
+            Runtime::RuntimeDispatchFacts after;
+            return context.dispatchEvidence.Read(source, Runtime::RuntimePhase::BuildInputSnapshot, after) ==
+                       Runtime::RuntimeDispatchStatus::Valid &&
+                   after.frame == before.frame && after.committedTick == before.committedTick &&
+                   after.committedAttempt == before.committedAttempt;
+        }
     }  // namespace
 
     /** @copydoc OpenXRInputClock::OpenXRInputClock */
@@ -149,7 +182,15 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRInputClock::Read */
     Result<XR::XRTimeEvidence> OpenXRInputClock::Read(const Runtime::FrameContext &context) const {
-        using Outcome = Result<XR::XRTimeEvidence>;
+        auto observation = ReadWithCaptureClock(context, {});
+        return observation.HasValue() ? Result<XR::XRTimeEvidence>::Success(observation.Value().time)
+                                      : Result<XR::XRTimeEvidence>::Failure(observation.ErrorValue());
+    }
+
+    /** @copydoc OpenXRInputClock::ReadWithCaptureClock */
+    Result<OpenXRInputClockObservation> OpenXRInputClock::ReadWithCaptureClock(const Runtime::FrameContext &context,
+                                                                               const OpenXRInputCaptureClock capture) const {
+        using Outcome = Result<OpenXRInputClockObservation>;
         if (std::this_thread::get_id() != lane_ || reading_ || !provider_)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         ReadScope scope{reading_};
@@ -157,27 +198,22 @@ namespace Horo::Application::Internal {
         if (context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::BuildInputSnapshot, facts) !=
             Runtime::RuntimeDispatchStatus::Valid)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-        const auto quantum = fixedStep_.ToNanoseconds();
-        if (quantum <= 0 || (facts.committedTick && facts.committedDuration != fixedStep_) ||
-            facts.committedTick > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)() / quantum))
-            return Outcome::Failure(MakeError(XR::XRErrors::CapacityExceeded));
+        const auto simulation = CommittedSimulationTime(facts, fixedStep_);
+        if (simulation.HasError())
+            return Outcome::Failure(simulation.ErrorValue());
+        const auto earliest = CaptureNow(capture);
         auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
         auto sample = NativeSample(native.Value().native.instance, native.Value().function);
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
+        const auto latest = CaptureNow(capture);
         if (auto fence = native_->BorrowFeatureProvider(*provider_); fence.HasError())
             return Outcome::Failure(fence.ErrorValue());
-        if (Runtime::RuntimeDispatchFacts after; context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::BuildInputSnapshot, after) !=
-                                                     Runtime::RuntimeDispatchStatus::Valid ||
-                                                 after.frame != facts.frame || after.committedTick != facts.committedTick ||
-                                                 after.committedAttempt != facts.committedAttempt)
+        if (!MatchesInputDispatch(context, source_, facts))
             return Outcome::Failure(MakeError(XR::XRErrors::IdentityStale));
-        auto simulation = XR::XRSimulationTime::Create(static_cast<std::int64_t>(facts.committedTick) * quantum);
-        if (simulation.HasError())
-            return Outcome::Failure(simulation.ErrorValue());
-        return Outcome::Success({sample.Value(), simulation.Value(), {}});
+        return Outcome::Success({{sample.Value(), simulation.Value(), {}}, CaptureInterval(earliest, latest)});
     }
 
     /** @copydoc OpenXRInputClock::PresentationTime */
