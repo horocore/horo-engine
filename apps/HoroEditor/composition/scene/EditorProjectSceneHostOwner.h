@@ -291,6 +291,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return RegisterPresentationParticipants(policy);
         }
 
+        /** @brief Captures the approved project route and verifies the input references an authored interaction. */
+        [[nodiscard]] Result<void> PrepareNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
+                                                      const EditorPlayNpcDialogueSelection &selection);
+
         Result<void> PrepareAnimation(const EditorProjectScenePolicy &policy) {
             if (!policy.animation)
                 return Result<void>::Success();
@@ -564,6 +568,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @copydoc Editor::EditorPlaySceneHost::OnRuntimeSceneCutoff */
         [[nodiscard]] Result<void> OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) override;
 
+        /** @copydoc Editor::EditorPlaySceneHost::StagePresentationInput */
+        void StagePresentationInput(std::span<const Gameplay::GameplayInputAction> input) noexcept override;
+
         /** @copydoc Editor::EditorPlaySceneHost::BeginPresentationUpdate */
         Result<void> BeginPresentationUpdate() override {
             if (!saves_.save_)
@@ -661,6 +668,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             native_.CommitAnimationFixedTick(context);
+            CommitNpcDialogueInput(context.simulationTick);
             if (commitXrLocomotion_)
                 commitXrLocomotion_(native_, context);
             if (animation_)
@@ -680,6 +688,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             native_.AbortAnimationFixedTick(context);
+            if (dialogue_)
+                dialogue_->staged = false;
             if (cancelXrLocomotion_)
                 cancelXrLocomotion_();
             if (animation_)
@@ -697,6 +707,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return;
             saves_.ShutdownSave();
             sceneClosed_ = true;
+            CloseNpcDialogue();
             saves_.ClosePhysicsSaveSource();
             QuiesceGameplay();
             ShutdownSceneOwners();
@@ -819,6 +830,30 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
         std::shared_ptr<AI::AiSceneRuntime> ai_;
+        struct NpcDialogueState final {
+            EditorPlayNpcDialogueSelection selection;
+            App::NpcDialogueProjectActivation activation;
+            JobSystem *jobs{};
+            std::optional<App::NpcDialogueScenePresentation> channel;
+            AI::AiSceneActivationBinding binding;
+            bool staged{};
+            std::optional<std::uint64_t> committed;
+        };
+        std::optional<NpcDialogueState> dialogue_;
+        /** @brief Binds a semantic caption queue to the exact newly published Scene. */
+        [[nodiscard]] Result<void> BindNpcDialogueScene(NpcDialogueState &state, const AI::AiSceneActivationBinding &binding);
+        /** @brief Starts committed interactions and publishes completed turns outside simulation callbacks. */
+        [[nodiscard]] Result<void> AdvanceNpcDialogue(const Runtime::FrameContext &frame);
+        /** @brief Dispatches one eligible committed interaction after the current presentation poll. */
+        static void DispatchCommittedNpcDialogue(NpcDialogueState &state, const Runtime::FrameContext &frame);
+        /** @brief Advances streaming and commits structural changes before presentation observes the Scene. */
+        [[nodiscard]] Result<void> AdvanceMountedWorldAtCutoff(const Runtime::FrameContext &frame);
+        /** @brief Promotes at most one staged input for the next Scene cutoff. */
+        void CommitNpcDialogueInput(std::uint64_t tick) noexcept;
+        /** @brief Revokes the Scene channel and clears its displayed captions. */
+        static void RetireNpcDialogueScene(NpcDialogueState &state) noexcept;
+        /** @brief Releases the Play-scoped dialogue policy after retiring its Scene channel. */
+        void CloseNpcDialogue() noexcept;
         std::shared_ptr<SceneDecisionQueries> decisionQueries_;
         CookedSceneLocalPolicyCatalog localPolicies_;
         [[nodiscard]] Result<void> PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,

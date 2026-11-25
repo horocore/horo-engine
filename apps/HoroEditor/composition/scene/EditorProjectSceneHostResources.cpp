@@ -48,6 +48,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
     /** @copydoc ProjectPlaySceneHost::OnRuntimeSceneCutoff */
     Result<void> ProjectPlaySceneHost::OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) {
+        if (auto world = AdvanceMountedWorldAtCutoff(frame); world.HasError())
+            return world;
+        return AdvanceNpcDialogue(frame);
+    }
+
+    /** @copydoc ProjectPlaySceneHost::AdvanceMountedWorldAtCutoff */
+    Result<void> ProjectPlaySceneHost::AdvanceMountedWorldAtCutoff(const Runtime::FrameContext &frame) {
         if (!mountedWorld_ || !worldSelection_->liveCell || !scenes_->ActiveScene())
             return Result<void>::Success();
         const auto advanced = mountedWorld_->AdvanceLiveCell(frame.dispatchEvidence);

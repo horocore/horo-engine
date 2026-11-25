@@ -2348,6 +2348,13 @@ dialogue fact limit. The gameplay host selects a trigger from the admitted
 catalog and passes a live handle. The Scene verifies that the handle resolves
 to the authored NPC before starting a turn and at publication.
 
+An Editor Play host may explicitly select a gameplay action and authored
+trigger, provide a localized caption catalog, and lend a dedicated caption
+timeline. The fixed callback records only an interaction edge. A successful
+fixed commit releases it to the Scene cutoff, where the host resolves the
+live authored NPC and starts the turn. An aborted tick releases no interaction.
+Retiring or replacing the Scene revokes its channel and clears its captions.
+
 The application binds a remote provider only when its separate approval matches
 the authorized project source fingerprint, route, and provider generation.
 Only the intersection of the project and host field lists is disclosed. An

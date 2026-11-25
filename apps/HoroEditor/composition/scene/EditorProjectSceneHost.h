@@ -15,6 +15,8 @@
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Prefab/PrefabMetrics.h"
 #include "MountedWorldHost.h"
+#include "NpcDialogueProjectActivation.h"
+#include "NpcDialogueScenePresentation.h"
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
 
@@ -54,6 +56,19 @@ namespace Horo::Application::Internal {
     using EditorPlayXrLocomotion =
         std::function<Result<void>(ScenePhysicsHost &, const Runtime::RuntimeSceneView &, const Runtime::FixedStepContext &)>;
 
+    /** @brief Explicit Play input, dialogue catalog and HUD authority supplied by the host. */
+    struct EditorPlayNpcDialogueSelection final {
+        Gameplay::GameplayActionId action;
+        NpcDialogueTriggerId trigger;
+        std::vector<Runtime::Ui::LocalizedMessageRef> messages;
+        std::vector<App::NpcDialogueCaption> captions;
+        AI::NpcDialogueCueId fallback;
+        std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline; /**< Dedicated to the active Play Scene on the owner lane. */
+        Duration workerBudget;
+        std::uint64_t tickBudget{};
+        std::optional<App::NpcDialogueEndpointApproval> approval; /**< Absence selects the authored offline fallback. */
+    };
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
@@ -76,6 +91,7 @@ namespace Horo::Application::Internal {
         std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion;
         std::function<void()> cancelXrLocomotion;
         bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
+        std::optional<EditorPlayNpcDialogueSelection> npcDialogue;
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

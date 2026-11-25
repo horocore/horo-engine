@@ -410,6 +410,13 @@ namespace Horo::Editor {
             return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
         }
 
+        /** @brief Records presentation input for this attempt. External effects require the fixed commit callback.
+         * @param input Borrowed input valid only during this callback.
+         */
+        virtual void StagePresentationInput(std::span<const Gameplay::GameplayInputAction> input) noexcept {
+            static_cast<void>(input);
+        }
+
         /** @brief Arms owned candidates before the actual scheduler fence; default owners have no staged state. */
         [[nodiscard]] virtual Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &) {
             return Result<void>::Success();

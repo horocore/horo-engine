@@ -1,4 +1,5 @@
 #include "../../helpers/GameplayModuleTestSupport.h"
+#include "../runtime/ai/AiSceneTestSupport.h"
 #include "DecisionGraphCompilerTestSupport.h"
 #include "EditorPlayXrHost.h"
 #include "EditorProjectSceneHost.h"
@@ -22,6 +23,7 @@
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
+#include "OwnedTestDirectory.h"
 #if HORO_TEST_NAVIGATION_NATIVE
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "navigation/ProjectSceneNavigationFixture.h"
@@ -750,7 +752,9 @@ namespace {
     /** @brief Matches the real workspace boundary: Play errors stay local while the Editor host continues. */
     class PlayFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        explicit PlayFixedParticipant(Editor::EditorPlaySessionController &play) : play_(play) {}
+        explicit PlayFixedParticipant(Editor::EditorPlaySessionController &play,
+                                      std::span<const Gameplay::GameplayInputAction> presentation = {})
+            : play_(play), presentation_(presentation) {}
 
         Result<void> Startup(const CancellationToken &) override {
             return Result<void>::Success();
@@ -758,12 +762,14 @@ namespace {
 
         void Shutdown() noexcept override {}
 
-        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+            if (!presentation_.empty() && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+                play_.OnRuntimeSceneCutoff(context);
             return Result<void>::Success();
         }
 
         Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-            localFailure = play_.OnRuntimeFixedUpdate({}, context).HasError();
+            localFailure = play_.OnRuntimeFixedUpdate(presentation_, context).HasError();
             return Result<void>::Success();
         }
 
@@ -784,6 +790,7 @@ namespace {
 
     private:
         Editor::EditorPlaySessionController &play_;
+        std::span<const Gameplay::GameplayInputAction> presentation_;
     };
 
     class PlayFixedGate final : public Runtime::RuntimeLifecycleParticipant {
@@ -904,6 +911,114 @@ namespace {
         State &state_;
     };
 }  // namespace
+
+namespace {
+    /** @brief Persists the actual opted-in project with an authored interaction and no remote disclosure. */
+    void WriteDialogueProject(const std::filesystem::path &root) {
+        REQUIRE(std::filesystem::create_directory(root / ".horo"));
+        REQUIRE(std::filesystem::create_directory(root / "assets"));
+        const auto version = Application::ParseHoroVersion("0.2.0").Value();
+        const auto &release = *Application::BuiltInReleaseCompatibilityRegistry().Find({version});
+        const auto contract = Application::FormatPersistentContractHash(release.persistentContract);
+        std::ofstream metadata{root / ".horo/project.json", std::ios::binary};
+        metadata << R"({"horoVersion":"0.2.0","persistentContract":")" << contract
+                 << R"(","projectId":"dialogue-play","name":"Play","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",)"
+                    R"("settings":{"renderBackend":"null","ai":{"schemaVersion":1,"npcDialogue":{"provider":1,"destination":2,)"
+                    R"("version":1,"fields":[],"triggers":[{"id":3,"agent":10,"facts":[]}]}}}})";
+        REQUIRE(metadata.good());
+    }
+
+    /** @brief Supplies the actual product factory with one author-owned localized fallback. */
+    auto MakeDialoguePlayFactory(JobSystem &jobs, const AI::AiControllerDescriptor &controller,
+                                 const Gameplay::GameplayActionId &action, std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline) {
+        using namespace Application::Internal;
+        auto key = Runtime::Ui::UiMessageKey::Create("game.dialogue", "offline");
+        REQUIRE(key.HasValue());
+        auto message = Runtime::Ui::LocalizedMessageRef::Create(std::move(key).Value(), {}, "Come back later.");
+        REQUIRE(message.HasValue());
+        const auto cue = AI::NpcDialogueCueId::Create(4).Value();
+        EditorPlayNpcDialogueSelection dialogue{.action = action,
+                                                .trigger = Application::NpcDialogueTriggerId::Create(3).Value(),
+                                                .messages = {std::move(message).Value()},
+                                                .captions = {{cue, 0, 0, 20}},
+                                                .fallback = cue,
+                                                .timeline = std::move(timeline),
+                                                .workerBudget = Duration::FromMilliseconds(100),
+                                                .tickBudget = 10};
+        return MakeEditorProjectSceneFactory(jobs, {.aiControllers = {controller}, .npcDialogue = std::move(dialogue)});
+    }
+
+    /** @brief Rejects the staged press and verifies that retrying the tick cannot replay it. */
+    template <typename FixedTick>
+    void VerifyAbortedDialoguePress(PlayFixedGate &gate, Gameplay::GameplayInputAction &input,
+                                    const Runtime::Ui::CaptionTimeline &timeline, const FixedTick &tick) {
+        input.pressed = true;
+        gate.fail = true;
+        REQUIRE(tick().HasError());
+        CHECK(timeline.Cues().empty());
+        gate.fail = false;
+        input.pressed = false;
+        REQUIRE(tick().HasValue());
+        REQUIRE(tick().HasValue());
+        CHECK(timeline.Cues().empty());
+    }
+}  // namespace
+
+TEST_CASE("Editor Play starts authored NPC dialogue only after the fixed commit", "[editor][play][ai][product][dialogue]") {
+    const Tests::OwnedTestDirectory project{"npc-dialogue-play"};
+    WriteDialogueProject(project.Path());
+    JobSystem jobs({.workerCount = 1});
+
+    const auto npc = AI::TestSupport::MakeFixture(10, 2, 7, 0);
+    auto authoring = AuthoringScene();
+    authoring.objects.back().components.aiAgent = npc.agent.agent;
+    authoring.objects.back().components.aiController = npc.agent.controller;
+    auto timeline = std::make_shared<Runtime::Ui::CaptionTimeline>();
+    Gameplay::GameplayInputAction input{Gameplay::GameplayActionId{"gameplay.interact"}, 1.0F};
+    const auto product = MakeDialoguePlayFactory(jobs, npc.descriptor, input.action, timeline);
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return product(project.Path(), id, definition);
+    };
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto created = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(created.HasValue());
+    auto scheduler = std::move(created).Value();
+    REQUIRE(play.BindRuntimeDispatch(scheduler->DispatchSource()).HasValue());
+    const auto started = play.Start(authoring, registry, factory);
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+
+    Runtime::RuntimeLifecycle lifecycle;
+    REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play, std::span{&input, 1})).HasValue());
+    auto gate = std::make_unique<PlayFixedGate>();
+    auto *gateView = gate.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
+    const CancellationSource cancellation;
+    const auto token = cancellation.Token();
+    REQUIRE(lifecycle.Startup(token).HasValue());
+    REQUIRE(scheduler->RunFrame(lifecycle, token, false).HasValue());
+    const auto tick = [&] {
+        clock.Advance(Duration::FromMilliseconds(10));
+        return scheduler->RunFrame(lifecycle, token, false);
+    };
+    VerifyAbortedDialoguePress(*gateView, input, *timeline, tick);
+
+    input.pressed = true;
+    REQUIRE(tick().HasValue());
+    input.pressed = false;
+    REQUIRE(tick().HasValue());
+    REQUIRE(timeline->Cues().size() == 1);
+    CHECK(timeline->Cues().front().cue.id.sequence == 1);
+    const auto &caption = timeline->Cues().front();
+    CHECK(caption.catalog->at(caption.cue.text).FallbackText() == "Come back later.");
+    play.Stop();
+    CHECK(timeline->Cues().empty());
+    lifecycle.Shutdown();
+}
 
 TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only committed live failures", "[editor][play][ai][product]") {
     namespace Decisions = AI::DecisionGraphTestSupport;

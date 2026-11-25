@@ -10,7 +10,7 @@ namespace Horo::App {
     struct NpcDialogueEndpointApproval final {
         Sha256Digest projectSource;
         NpcDialogueHttpsConfig endpoint;
-        std::span<const AI::NpcDialogueFactId> fields; /**< Increasing approved field IDs; borrowed for activation only. */
+        std::vector<AI::NpcDialogueFactId> fields; /**< Increasing approved field IDs owned by the host approval. */
     };
 
     /** @brief Owned project activation. Empty binding means authored dialogue runs offline. */

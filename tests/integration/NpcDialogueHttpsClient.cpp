@@ -204,8 +204,8 @@ namespace {
         auto project = CaptureProject();
         if (project.HasError() || !project.Value().sourceFingerprint)
             return 12;
-        const std::array allowed{NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value()};
-        App::NpcDialogueEndpointApproval approval{*project.Value().sourceFingerprint, std::move(config), allowed};
+        App::NpcDialogueEndpointApproval approval{*project.Value().sourceFingerprint, std::move(config),
+                                                  {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value()}};
         if (mode == "stale-grant")
             approval.projectSource.bytes[0] ^= 1;
         if (mode == "other-route")

@@ -48,6 +48,19 @@ namespace Horo::App {
                                          std::uint64_t deadlineTick, std::chrono::steady_clock::time_point deadline,
                                          const CancellationToken &cancellation);
 
+        /** @brief Resolves an authored NPC against the current Scene before accepting a committed interaction.
+         * @param trigger ID of the authored interaction.
+         * @param grant Current host disclosure grant.
+         * @param tick Current committed simulation tick.
+         * @param deadlineTick Exclusive simulation deadline.
+         * @param deadline Exclusive worker deadline.
+         * @param cancellation Parent cancellation for this turn.
+         * @return Success when the turn was accepted, otherwise the exact Scene or admission error.
+         */
+        [[nodiscard]] Result<void> StartAuthored(Application::NpcDialogueTriggerId trigger, const AI::NpcDialogueGrant &grant,
+                                                 std::uint64_t tick, std::uint64_t deadlineTick,
+                                                 std::chrono::steady_clock::time_point deadline, const CancellationToken &cancellation);
+
         /** @brief Polls the active turn and publishes at most one caption.
          * @param grant Current host grant. @param tick Current simulation tick.
          * @return Queue admission when a cue was submitted, empty while pending or on retirement.

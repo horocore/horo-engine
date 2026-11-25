@@ -210,6 +210,9 @@ namespace Horo::Editor {
 
     private:
         [[nodiscard]] bool ShouldTick() const noexcept;
+        /** @brief Stages an admitted fixed attempt in Decision, gameplay, native and presentation order. */
+        [[nodiscard]] Result<void> RunFixedCallbacks(std::span<const Gameplay::GameplayInputAction> input,
+                                                     const Runtime::FixedStepContext &context);
         [[nodiscard]] Result<void> RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
         /** @brief Refreshes the native gameplay preference cache from the start of this dispatch. */
         [[nodiscard]] Result<void> CaptureGameplayAssists();

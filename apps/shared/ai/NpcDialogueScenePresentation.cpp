@@ -114,6 +114,28 @@ namespace Horo::App {
         return Result<void>::Success();
     }
 
+    /** @copydoc NpcDialogueScenePresentation::StartAuthored */
+    Result<void> NpcDialogueScenePresentation::StartAuthored(Application::NpcDialogueTriggerId trigger, const AI::NpcDialogueGrant &grant,
+                                                            std::uint64_t tick, std::uint64_t deadlineTick,
+                                                            std::chrono::steady_clock::time_point deadline,
+                                                            const CancellationToken &cancellation) {
+        const auto *binding = FindTrigger(trigger);
+        if (!binding)
+            return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
+        if (!queue_ || !SceneIsCurrent())
+            return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
+        const auto snapshot = runtime_->Snapshot();
+        if (snapshot.HasError())
+            return Result<void>::Failure(snapshot.ErrorValue());
+        const auto agents = snapshot.Value().Agents();
+        const auto agent = std::ranges::find_if(agents, [subject = binding->agent](const auto &record) {
+            return record.agent.agent == subject && record.state == AI::AiAgentActivationState::Active;
+        });
+        if (agent == agents.end())
+            return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
+        return Start(agent->handle, trigger, grant, tick, deadlineTick, deadline, cancellation);
+    }
+
     /** @copydoc NpcDialogueScenePresentation::Pump */
     std::optional<Accessibility::CaptionAdmission> NpcDialogueScenePresentation::Pump(const AI::NpcDialogueGrant &grant,
                                                                                        std::uint64_t tick) {
