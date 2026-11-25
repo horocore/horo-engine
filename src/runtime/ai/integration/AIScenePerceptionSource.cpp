@@ -136,7 +136,7 @@ namespace Horo::AI {
                 return result;
             if (!hasActiveListener)
                 sensing.suspension = firstFault ? std::move(*firstFault) : MakeError(AIErrors::RuntimeUnavailable);
-            return Result<void>::Success();
+            return sensing.memory.AdvanceTo(tick);
         }
 
         /** @brief Appends one fully admitted endpoint using exact host-captured coordinates. */

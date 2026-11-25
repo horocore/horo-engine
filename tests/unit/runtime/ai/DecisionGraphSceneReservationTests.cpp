@@ -627,9 +627,16 @@ namespace Horo::AI {
                                                                                 .radiusMillimeters = 5000,
                                                                                 .visibleLayers = 1,
                                                                                 .workUnitsPerTick = 100}};
-            bool rotateSenses = false;
+            enum class BudgetScenario { Full, Rotate, ExpireWhileWaiting };
+            auto budgetScenario = BudgetScenario::Full;
             SECTION("two agents with two listeners each share one listener allowance") {
-                rotateSenses = true;
+                budgetScenario = BudgetScenario::Rotate;
+            }
+            SECTION("a watched observation expires on the tick when another agent uses the sensing budget") {
+                budgetScenario = BudgetScenario::ExpireWhileWaiting;
+                sensing.execution->memory.memoryDurationSeconds = 0.001;
+            }
+            if (budgetScenario != BudgetScenario::Full) {
                 sensing.execution->scheduling = AiScenePerceptionScheduling::RotateUnderBudget;
                 sensing.execution->workUnitsPerTick =
                     registrations.front().contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
@@ -671,7 +678,16 @@ namespace Horo::AI {
                 REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
                 return decision.Value().evaluated;
             };
-            if (rotateSenses) {
+            if (budgetScenario == BudgetScenario::ExpireWhileWaiting) {
+                CHECK(evaluate(1) == 2);
+                CHECK(evaluate(2) == 1);
+                CHECK(fixture.probe.resumes == 1);
+                CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+                CHECK(primary.evaluations == 2);
+                CHECK(secondary.evaluations == 0);
+                return;
+            }
+            if (budgetScenario == BudgetScenario::Rotate) {
                 const auto first = *view.Find(Runtime::SceneObjectId{1});
                 const auto second = *view.Find(Runtime::SceneObjectId{2});
                 for (std::uint64_t tick = 1; tick <= 4; ++tick) {

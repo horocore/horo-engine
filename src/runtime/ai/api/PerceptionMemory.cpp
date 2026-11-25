@@ -66,6 +66,8 @@ namespace Horo::AI {
     Result<void> AIPerceptionMemory::AdvanceTo(const std::uint64_t simulationTick) {
         if (simulationTick < simulationTick_)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryTimeInvalid));
+        if (simulationTick == simulationTick_)
+            return Result<void>::Success();
         simulationTick_ = simulationTick;
         for (std::size_t index = 0; index < count_;) {
             auto &entry = entries_[index];

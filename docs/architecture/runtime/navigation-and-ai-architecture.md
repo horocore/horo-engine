@@ -1482,6 +1482,9 @@ creating the Decision executor. The graph wakes on watched Perception changes,
 including retirement of an observed source in a committed Scene update. It also
 wakes on committed Blackboard dependencies, accepted task continuation events,
 and the next fixed deadline of an active service or time limit.
+The sensing window advances memory even when another recipient uses the entire
+provider budget. Watched facts that expire in that window wake Decision in the
+same tick, independently of Blackboard projection or inspector reads.
 Other controllers retain their fixed-tick cadence. In Editor Play and headless
 product launch, an explicit `settings.ai.scheduler.mode` must be `bestEffort`
 when the project declares these watches. If omitted, the watches select the
