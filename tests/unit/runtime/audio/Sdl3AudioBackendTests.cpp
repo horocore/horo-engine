@@ -184,22 +184,12 @@ namespace Horo::Audio::Backend {
 
         /** @brief Pipes real SDL capture through the sole live stream and proves both routes close together. */
         void VerifyMonitorStream(Sdl3AudioBackend &backend, Sdl3CaptureGrant grant, const AudioCaptureBufferDescriptor &capture,
-                                 const AudioDeviceEpoch &epoch, const MonitorRetirement retirement) {
-            JobSystem jobs({.workerCount = 1});
-            auto live = AudioStreamingService::CreateLive(jobs);
-            REQUIRE(live.HasValue());
-            std::shared_ptr<AudioStreamingService> service{std::move(live).Value()};
-            CHECK(backend.BindMonitoringSource(grant, service, MaximumAudioCallbackFrames * 64).HasError());
-            const auto bound = backend.BindMonitoringSource(grant, service, capture.maximumFrames);
-            REQUIRE(bound.HasValue());
-            const auto stream = bound.Value();
-            CHECK(backend.BindMonitoringSource(grant, service, capture.maximumFrames).HasError());
-            auto port = service->RenderPort(stream);
-            REQUIRE(port.HasValue());
+                                 const AudioDeviceEpoch &epoch, const MonitorRetirement retirement,
+                                 const AudioStreamRenderPort &port) {
             AudioCapturedBlock raw;
             CHECK(backend.ReadMonitoring(capture.generation, grant, raw, {}).HasError());
             RequireMonitorBlock(capture, [&](const std::span<AudioSample> pcm) { return backend.PumpMonitoringSource(grant, pcm); });
-            CHECK(port.Value().AvailableFrames() > 0);
+            CHECK(port.AvailableFrames() > 0);
 
             if (retirement == MonitorRetirement::QuiesceOutput) {
                 static_cast<void>(Begin(backend, Quiesce{epoch}));
@@ -209,9 +199,39 @@ namespace Horo::Audio::Backend {
                 CHECK(backend.PumpMonitoringSource(grant, {}).HasError());
             }
             CHECK(backend.CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
-            CHECK(port.Value().IsStopped());
-            CHECK(port.Value().AvailableFrames() == 0);
+            CHECK(port.IsStopped());
+            CHECK(port.AvailableFrames() == 0);
             CHECK(backend.PumpMonitoringSource(grant, {}).HasError());
+        }
+
+        /** @brief Rejects a playback reservation beyond the monitor's queue budget without adopting it. */
+        void VerifyMonitorBinding(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant, const AudioCaptureBufferDescriptor &capture,
+                                  const std::shared_ptr<AudioStreamingService> &service, const AudioStreamHandle prepared) {
+            const auto large = service->AdmitLivePcm({capture.format, MaximumAudioCallbackFrames * 64});
+            REQUIRE(large.HasValue());
+            CHECK(backend.BindMonitoringSource(grant, service, large.Value()).HasError());
+            REQUIRE(service->Retire(large.Value()).HasValue());
+            REQUIRE(backend.BindMonitoringSource(grant, service, prepared).HasValue());
+            CHECK(backend.BindMonitoringSource(grant, service, prepared).HasError());
+        }
+
+        /** @brief Describes the fixture's confirmed private route without granting it to any other output. */
+        Sdl3CaptureGrant MonitorGrant(const AudioCaptureBufferDescriptor &capture, const std::uint64_t discoveryRevision,
+                                      const AudioDeviceEpoch &output) {
+            const AudioCaptureMonitorRoute route{.input = capture.device,
+                                                 .captureGeneration = capture.generation,
+                                                 .output = output,
+                                                 .bus = {Owner(), 3, 1},
+                                                 .clockDomain = capture.clockDomain,
+                                                 .maximumAgeNanoseconds = 200'000'000,
+                                                 .gain = 0.5F,
+                                                 .isolation = AudioMonitorIsolation::PrivateListening};
+            return {.device = capture.device,
+                    .discoveryRevision = discoveryRevision,
+                    .generation = capture.generation,
+                    .authorityRevision = 1,
+                    .intent = {.purpose = Sdl3CapturePurpose::Monitoring, .monitor = route},
+                    .foreground = true};
         }
 
         TEST_CASE("SDL local monitoring requires a pinned output and retires before output quiescence", "[audio][sdl3][monitor]") {
@@ -227,30 +247,28 @@ namespace Horo::Audio::Backend {
                 selection = PlaybackSelection::PinPhysical;
                 retirement = MonitorRetirement::WithdrawConsent;
             }
+            Trace trace;
             auto fixture = CreateOpenedBackend(selection);
             auto &backend = *fixture.backend;
-            Trace trace;
-            StartRendering(backend, fixture.epoch, trace);
-            REQUIRE(backend.CommitRendering(fixture.epoch).HasValue());
             const auto discovered = backend.DiscoverCapture();
             REQUIRE(discovered.HasValue());
             const auto &catalog = discovered.Value().snapshot;
             const auto capture = MonitorCapture(catalog);
-            Sdl3CaptureGrant grant{.device = capture.device,
-                                   .discoveryRevision = catalog.revision,
-                                   .generation = capture.generation,
-                                   .authorityRevision = 1,
-                                   .intent = {.purpose = Sdl3CapturePurpose::Monitoring},
-                                   .foreground = true};
-            CHECK(backend.StartCapture(capture, grant.intent, grant).HasError());
-            grant.intent.monitor = AudioCaptureMonitorRoute{.input = capture.device,
-                                                            .captureGeneration = capture.generation,
-                                                            .output = fixture.epoch,
-                                                            .bus = {Owner(), 3, 1},
-                                                            .clockDomain = capture.clockDomain,
-                                                            .maximumAgeNanoseconds = 200'000'000,
-                                                            .gain = 0.5F,
-                                                            .isolation = AudioMonitorIsolation::PrivateListening};
+            JobSystem jobs({.workerCount = 1});
+            auto live = AudioStreamingService::CreateLive(jobs);
+            REQUIRE(live.HasValue());
+            std::shared_ptr<AudioStreamingService> service{std::move(live).Value()};
+            const auto prepared = service->AdmitLivePcm({capture.format, capture.maximumFrames});
+            REQUIRE(prepared.HasValue());
+            auto port = service->RenderPort(prepared.Value());
+            REQUIRE(port.HasValue());
+            CHECK(port.Value().AvailableFrames() == 0);
+            StartRendering(backend, fixture.epoch, trace);
+            REQUIRE(backend.CommitRendering(fixture.epoch).HasValue());
+            const auto grant = MonitorGrant(capture, catalog.revision, fixture.epoch);
+            auto unproven = grant;
+            unproven.intent.monitor.reset();
+            CHECK(backend.StartCapture(capture, unproven.intent, unproven).HasError());
             const auto started = backend.StartCapture(capture, grant.intent, grant);
             if (selection == PlaybackSelection::FollowDefault) {
                 CHECK(started.HasError());
@@ -262,7 +280,8 @@ namespace Horo::Audio::Backend {
             RequireMonitorBlock(capture, [&](const std::span<AudioSample> pcm) {
                 return backend.ReadMonitoring(capture.generation, grant, raw, pcm);
             });
-            VerifyMonitorStream(backend, grant, capture, fixture.epoch, retirement);
+            VerifyMonitorBinding(backend, grant, capture, service, prepared.Value());
+            VerifyMonitorStream(backend, grant, capture, fixture.epoch, retirement, port.Value());
         }
 
         TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {

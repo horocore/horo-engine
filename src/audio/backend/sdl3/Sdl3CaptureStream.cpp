@@ -394,27 +394,45 @@ namespace Horo::Audio::Backend {
         return Output::Success(ReadAudioMonitorBlock(capture.stream->Buffer(), *capture.activeGrant.intent.monitor, now, block, pcm));
     }
 
+    namespace {
+        /** @brief Checks a detached live source without reserving again or changing the stream on failure. */
+        Result<void> CheckMonitorSource(const AudioStreamingService &service, const AudioStreamHandle stream,
+                                        const AudioCaptureBufferDescriptor &source, const AudioCaptureMonitorRoute &route) {
+            auto facts = service.PlaybackFacts(stream);
+            if (facts.HasError())
+                return Result<void>::Failure(facts.ErrorValue());
+            if (facts.Value().frameCount || facts.Value().format != source.format)
+                return Result<void>::Failure(MakeError(AudioErrors::DeviceFormatUnsupported));
+            const auto snapshot = service.Snapshot(stream);
+            if (snapshot.HasError())
+                return Result<void>::Failure(snapshot.ErrorValue());
+            const auto &state = snapshot.Value();
+            if (state.stopped || state.bufferedFrames != 0)
+                return Result<void>::Failure(MakeError(AudioErrors::RuntimeInactive));
+            const auto ageFrames = route.maximumAgeNanoseconds * source.format.sampleRate / Sdl3Detail::NanosecondsPerSecond;
+            if (state.capacityFrames < source.maximumFrames || state.capacityFrames > ageFrames)
+                return Result<void>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc Sdl3AudioBackend::BindMonitoringSource */
-    Result<AudioStreamHandle> Sdl3AudioBackend::BindMonitoringSource(const Sdl3CaptureGrant &grant,
-                                                                      const std::shared_ptr<AudioStreamingService> &service,
-                                                                      const std::uint32_t ringFrames) {
-        using Output = Result<AudioStreamHandle>;
+    Result<void> Sdl3AudioBackend::BindMonitoringSource(const Sdl3CaptureGrant &grant,
+                                                         const std::shared_ptr<AudioStreamingService> &service,
+                                                         const AudioStreamHandle stream) {
         auto &capture = impl_->capture;
         if (!capture.stream || grant.generation != capture.lastGeneration)
-            return Output::Failure(MakeError(AudioErrors::HandleStale));
+            return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
         const auto &route = capture.activeGrant.intent.monitor;
         if (!route || !service || capture.monitorSource)
-            return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
-        if (const auto current = ReconcileCapture(grant.generation, grant); current.HasError())
-            return Output::Failure(current.ErrorValue());
+            return Result<void>::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+        if (auto current = ReconcileCapture(grant.generation, grant); current.HasError())
+            return current;
         const auto &source = *capture.stream->Buffer().Descriptor();
-        const auto ageFrames = route->maximumAgeNanoseconds * source.format.sampleRate / Sdl3Detail::NanosecondsPerSecond;
-        if (ringFrames < source.maximumFrames || ringFrames > ageFrames)
-            return Output::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
-        auto admitted = service->AdmitLivePcm({source.format, ringFrames});
-        if (admitted.HasValue())
-            capture.monitorSource.emplace(service, admitted.Value());
-        return admitted;
+        auto checked = CheckMonitorSource(*service, stream, source, *route);
+        if (checked.HasValue())
+            capture.monitorSource.emplace(service, stream);
+        return checked;
     }
 
     /** @copydoc Sdl3AudioBackend::PumpMonitoringSource */

@@ -211,16 +211,15 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<AudioMonitorRead> ReadMonitoring(std::uint64_t generation, const Sdl3CaptureGrant &grant,
                                                               AudioCapturedBlock &block, std::span<AudioSample> pcm);
 
-        /** @brief Reserves the sole live playback source for an already admitted monitor generation.
+        /** @brief Binds a prepared live playback source to an already admitted monitor generation.
          * @param grant Exact current monitor admission, including the pinned output and mixer bus.
          * @param service Host-retained stream service used by that output's normal voice and mixer.
-         * @param ringFrames Playback queue capacity bounded by the admitted monitoring duration budget.
-         * @return Live source for the host to publish on the admitted bus, or a typed admission failure.
+         * @param stream Exact empty live source prepared for the admitted mixer bus before output activation.
+         * @return Success or a typed scope, format or capacity failure without consuming the source.
          * @details Capture retirement stops this source. The host retires its storage after detaching the voice.
          */
-        [[nodiscard]] Result<AudioStreamHandle> BindMonitoringSource(const Sdl3CaptureGrant &grant,
-                                                                      const std::shared_ptr<AudioStreamingService> &service,
-                                                                      std::uint32_t ringFrames);
+        [[nodiscard]] Result<void> BindMonitoringSource(const Sdl3CaptureGrant &grant,
+                                                         const std::shared_ptr<AudioStreamingService> &service, AudioStreamHandle stream);
 
         /** @brief Pumps one current, gain-limited microphone block to the bound live mixer source on control.
          * @param grant Exact refreshed monitor admission.
