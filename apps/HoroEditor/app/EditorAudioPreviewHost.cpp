@@ -211,13 +211,16 @@ namespace Horo::Editor {
 
         /** @brief Adopts the driver and binds the selected endpoint to the prepared mixer. */
         Result<PreparedLane> ComposeLane(std::unique_ptr<DrivenOutput> backend, Audio::AudioDeviceSnapshot catalog,
-                                         const Audio::AudioDeviceId device, Audio::Internal::AudioFrontendResources &prepared) {
+                                         const Audio::AudioDeviceId device, Audio::Internal::AudioFrontendResources &prepared,
+                                         const Audio::AudioDeviceRatePolicy ratePolicy = Audio::AudioDeviceRatePolicy::Exact) {
             const auto kind = backend->Kind();
             const Audio::AudioDeviceEpoch epoch{device, 1, prepared.scope.epoch};
             auto *driver = backend.get();
             Audio::Internal::AudioFrontendOutput
                 output{std::move(backend),
-                       {epoch, {device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
+                       {epoch,
+                        {device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256},
+                         ratePolicy}},
                        std::move(catalog),
                        1};
             auto frontend = Audio::Internal::AudioFrontendComposition::Create(prepared, output);
@@ -353,6 +356,11 @@ namespace Horo::Editor {
         return state_->catalog.devices;
     }
 
+    /** @copydoc EditorAudioMonitorOutput::CanSelect */
+    bool EditorAudioMonitorOutput::CanSelect(const Audio::AudioDeviceId device) const noexcept {
+        return state_->backend && state_->HasPinnedOutput(device);
+    }
+
     /** @copydoc EditorAudioMonitorOutput::Start */
     Result<Audio::AudioBusHandle> EditorAudioMonitorOutput::Start(const Audio::AudioDeviceId device,
                                                                 const std::shared_ptr<Audio::AudioStreamingService> &service,
@@ -361,13 +369,14 @@ namespace Horo::Editor {
         using Output = Result<Audio::AudioBusHandle>;
         if (!state_->backend)
             return Output::Failure(MakeError(Audio::AudioErrors::RuntimeInactive));
-        if (!state_->HasPinnedOutput(device))
+        if (!CanSelect(device))
             return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
         auto prepared = AudioPreviewHostDetail::PrepareMonitor(service, stream, state_->backend->Owner(), std::move(hostLease));
         if (prepared.HasError())
             return Output::Failure(std::move(prepared).ErrorValue());
         auto monitor = std::move(prepared).Value();
-        auto lane = ComposeLane(std::move(state_->backend), std::move(state_->catalog), device, monitor.resources);
+        auto lane = ComposeLane(std::move(state_->backend), std::move(state_->catalog), device, monitor.resources,
+                                Audio::AudioDeviceRatePolicy::AllowPreparedResampler);
         if (lane.HasError())
             return Output::Failure(std::move(lane).ErrorValue());
         auto started = std::move(lane).Value();

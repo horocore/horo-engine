@@ -31,6 +31,8 @@ namespace Horo::Editor {
 
         /** @brief Returns the session-local output identities and display names from the retained peer. */
         [[nodiscard]] std::span<const Audio::AudioDiscoveredDevice> Outputs() const noexcept;
+        /** @brief Reports whether this exact discovered device can be pinned by this closed peer. */
+        [[nodiscard]] bool CanSelect(Audio::AudioDeviceId device) const noexcept;
         /** @brief Opens exactly the confirmed private endpoint with a preadmitted, empty live source.
          * @param device Selected non-migrating output from this session. @param service Shared stream owner.
          * @param stream Dedicated microphone PCM input. @param hostLease Pins dependencies of the service.

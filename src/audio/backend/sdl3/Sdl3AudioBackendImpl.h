@@ -484,7 +484,7 @@ namespace Horo::Audio::Backend {
                                                    : AudioFormatDeviationReason::DeviceConstraint;
             negotiated.deviations.layout = format.layout == request.format.preferred.layout ? AudioFormatDeviationReason::None
                                                                                             : AudioFormatDeviationReason::DeviceConstraint;
-            negotiated.deviations.callbackPeriod = static_cast<std::uint32_t>(nativeFrames) == request.format.period.preferredFrames
+            negotiated.deviations.callbackPeriod = callbackFrames == request.format.period.preferredFrames
                                                        ? AudioFormatDeviationReason::None
                                                        : AudioFormatDeviationReason::DeviceConstraint;
             return negotiated;

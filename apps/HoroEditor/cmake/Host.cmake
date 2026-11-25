@@ -243,6 +243,7 @@ if(HORO_BUILD_EDITOR_GUI)
     if(TARGET HoroAudioSdl3)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::AudioSdl3)
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=1)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophoneMonitor.cpp)
         if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
             set(_HORO_EDITOR_MAC_SPEECH_SOURCE HoroEditor/app/MacOnDeviceSpeechProvider.mm)
             set_source_files_properties(${_HORO_EDITOR_MAC_SPEECH_SOURCE} PROPERTIES

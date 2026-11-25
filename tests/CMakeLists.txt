@@ -967,11 +967,20 @@ add_executable(HoroAudioComponentPreviewHostTests
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp")
 target_compile_features(HoroAudioComponentPreviewHostTests PRIVATE cxx_std_20)
-target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
 target_include_directories(HoroAudioComponentPreviewHostTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
 target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::EditorServices HoroAudioFrontendComposition
     HoroEngine::AudioImport HoroEngine::AudioNull)
-horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
+if(TARGET HoroAudioSdl3)
+    target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_SDL3=1)
+    target_sources(HoroAudioComponentPreviewHostTests PRIVATE unit/editor/EditorMicrophoneMonitorTests.cpp
+        "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorMicrophoneMonitor.cpp")
+    target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::AudioSdl3)
+    horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle"
+        PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
+else()
+    target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
+    horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
+endif()
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
 target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE
         support/AudioEditorDocumentPublicContract.cpp
