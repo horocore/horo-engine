@@ -610,6 +610,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                        resources_.collision_->Schema()->SemanticFingerprint()};
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::ReadAgentSceneContacts */
+        [[nodiscard]] std::optional<Editor::EditorPlayContactSnapshot> ReadAgentSceneContacts(Runtime::EntityRef object) override;
+
         Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
             if (animation_ || decisionJobs_)
                 return Result<void>::Failure(

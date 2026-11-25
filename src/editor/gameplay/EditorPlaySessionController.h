@@ -179,6 +179,8 @@ namespace Horo::Editor {
          * @return Read-only current view or absence. Never transfers mutable Scene ownership.
          */
         [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
+        /** @brief Reads completed Physics contacts through the current Play host. */
+        [[nodiscard]] std::optional<EditorPlayContactSnapshot> ReadAgentSceneContacts(Runtime::EntityRef object);
         /** @brief Reads the selected ready host's completed Decision problem. */
         [[nodiscard]] std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const;
         static constexpr std::uint64_t AgentInspectionTickSpacing = EditorPlayAgentInspectionTickSpacing;

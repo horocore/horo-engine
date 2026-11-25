@@ -127,6 +127,19 @@ namespace {
                                              node_};
         }
 
+        std::optional<EditorPlayContactSnapshot> ReadAgentSceneContacts(const Runtime::EntityRef object) override {
+            const auto scene = scenes_.ActiveScene();
+            if (!scene || scene->Get(object).HasError())
+                return std::nullopt;
+            return EditorPlayContactSnapshot{.anchor = object,
+                                             .structuralRevision = scene->StructuralRevision(),
+                                             .completedTick = 42,
+                                             .contacts = {{{contactPeer, EditorPlayContactSnapshot::Kind::TriggerEnter}}},
+                                             .count = 1};
+        }
+
+        Runtime::SceneObjectId contactPeer{1};
+
     private:
         Runtime::RuntimeSceneService scenes_;
         SceneObjectId object_;
@@ -804,6 +817,25 @@ namespace {
         static_cast<void>(subscription);
     }
 
+    /** @brief Checks that the preview screens peers and retires after its Scene changes. */
+    AgentSceneContactReview VerifyPlayContactReview(EditorWorkspaceController &workspace, DecisionNavigationTestHost &host,
+                                                    const SceneObjectId selected) {
+        const auto review = workspace.ReadAgentSceneContacts();
+        REQUIRE(review);
+        CHECK(review->object == selected.value);
+        CHECK(review->completedTick == 42);
+        REQUIRE(review->count == 1);
+        CHECK(review->contacts[0].otherObject == 1);
+        CHECK(review->contacts[0].kind == AgentSceneContactKind::TriggerEnter);
+        CHECK(workspace.AgentSceneContactsCurrent(*review));
+        for (const auto peer : {3ULL, 4ULL, 999999ULL}) {
+            host.contactPeer = Runtime::SceneObjectId{peer};
+            CHECK_FALSE(workspace.ReadAgentSceneContacts());
+        }
+        host.contactPeer = Runtime::SceneObjectId{1};
+        return *review;
+    }
+
     /** @brief Checks the read-only candidate review against a running editor scene. */
     void VerifyPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::RuntimeSceneView &play,
                                    const SceneObjectId selected) {
@@ -1084,7 +1116,9 @@ namespace {
         VerifyPlayReferenceReview(workspace, *playScene, original);
         VerifyPlayLocationReview(workspace, *playScene, original);
         VerifyMountedPlayReferenceReview(workspace, *playScene, original);
+        const auto contactReview = VerifyPlayContactReview(workspace, *activeHost, original);
         VerifyPlayPointingAfterStructuralCommit(workspace, activeHost->Scenes(), original);
+        CHECK_FALSE(workspace.AgentSceneContactsCurrent(contactReview));
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);

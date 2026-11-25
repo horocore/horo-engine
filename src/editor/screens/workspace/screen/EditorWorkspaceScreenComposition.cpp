@@ -274,6 +274,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 [this](const AgentViewportComponents components) {
             return controller_->CaptureAgentViewport(components);
         },
+            .readAgentSceneContacts =
+                [this] {
+            return controller_->ReadAgentSceneContacts();
+        },
+            .agentSceneContactsCurrent =
+                [this](const AgentSceneContactReview &review) {
+            return controller_->AgentSceneContactsCurrent(review);
+        },
         };
         if (std::ranges::any_of(contributions_.panels.GetAllPanels(), [](const auto &panel) {
             return panel->GetId() == LocalAgentWorkspacePanelId;

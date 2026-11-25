@@ -678,6 +678,25 @@ namespace Horo::Editor {
             }
             return review;
         }
+
+        /** @brief Translates a complete Physics publication after checking every peer against the authored Scene. */
+        std::optional<AgentSceneContactReview> ReviewAgentContactPeers(AgentSceneContactReview review,
+                                                                       const EditorPlayContactSnapshot &contacts,
+                                                                       const std::span<const SceneObjectSnapshot> objects,
+                                                                       const Runtime::RuntimeSceneView &play) {
+            if (contacts.structuralRevision != review.structuralRevision || contacts.completedTick == 0 ||
+                contacts.count > std::min(contacts.contacts.size(), review.contacts.size()))
+                return std::nullopt;
+            review.completedTick = contacts.completedTick;
+            for (const auto &contact : std::span{contacts.contacts}.first(contacts.count)) {
+                if (ClassifyAgentReference(objects, true, play, {contact.peer.value}) != AgentSceneReferenceState::Available)
+                    return std::nullopt;
+                const auto kind = contact.kind == EditorPlayContactSnapshot::Kind::TriggerEnter ? AgentSceneContactKind::TriggerEnter
+                                                                                                : AgentSceneContactKind::ContactBegin;
+                review.contacts[review.count++] = {contact.peer.value, kind};
+            }
+            return review;
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::ReviewAgentSceneReferences */
@@ -697,6 +716,42 @@ namespace Horo::Editor {
         if (request.source == AgentSceneReferenceSource::Location)
             return ReviewAgentReferenceLocations(request, objects, *play);
         return ReviewAgentReferenceObjects(request, objects, m_selection.Current().objects, *play);
+    }
+
+    /** @copydoc EditorWorkspaceController::AgentSceneContactsCurrent */
+    bool EditorWorkspaceController::AgentSceneContactsCurrent(const AgentSceneContactReview &review) const {
+        const auto play = ReadAgentReferenceScene();
+        const auto &selection = m_selection.Current();
+        const auto primary = selection.primary;
+        return play && primary && review.object == primary->value && review.worldGeneration == play->RuntimeId().value &&
+               review.structuralRevision == play->StructuralRevision() && review.documentEpoch == m_document.ReplacementEpoch() &&
+               review.documentRevision == m_document.Revision().value && review.selectionRevision == selection.revision.value &&
+               !m_viewModel.worldDocument && !m_mountedWorldPlaySelected;
+    }
+
+    /** @copydoc EditorWorkspaceController::ReadAgentSceneContacts */
+    std::optional<AgentSceneContactReview> EditorWorkspaceController::ReadAgentSceneContacts() {
+        const auto play = ReadAgentReferenceScene();
+        const auto &selection = m_selection.Current();
+        const auto primary = selection.primary;
+        if (!play || !primary || m_viewModel.worldDocument || m_mountedWorldPlaySelected)
+            return std::nullopt;
+        const auto objects = m_document.Objects();
+        if (ClassifyAgentReference(objects, true, *play, *primary) != AgentSceneReferenceState::Available)
+            return std::nullopt;
+        const auto entity = play->Find({primary->value});
+        if (!entity)
+            return std::nullopt;
+        const AgentSceneContactReview review{.object = primary->value,
+                                             .worldGeneration = play->RuntimeId().value,
+                                             .structuralRevision = play->StructuralRevision(),
+                                             .documentEpoch = m_document.ReplacementEpoch(),
+                                             .documentRevision = m_document.Revision().value,
+                                             .selectionRevision = selection.revision.value};
+        const auto contacts = m_playSession.ReadAgentSceneContacts(*entity);
+        if (!contacts || contacts->anchor != *entity || !AgentSceneContactsCurrent(review))
+            return std::nullopt;
+        return ReviewAgentContactPeers(review, *contacts, objects, *play);
     }
 
     /** @copydoc EditorWorkspaceController::CaptureAgentViewport */

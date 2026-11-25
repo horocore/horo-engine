@@ -306,6 +306,8 @@ namespace Horo::Editor {
                 captureSceneSelection_ = context.captureSceneSelection;
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = context.reviewAgentSceneReferences;
+                readAgentSceneContacts_ = context.readAgentSceneContacts;
+                agentSceneContactsCurrent_ = context.agentSceneContactsCurrent;
 #endif
                 captureAgentViewport_ = context.captureAgentViewport;
                 takeAgentViewportReview_ = context.takeAgentViewportReview;
@@ -430,6 +432,7 @@ namespace Horo::Editor {
                 listeningReferences_.reset();
                 requestedListeningReferences_.reset();
                 reviewingSurfaces_ = false;
+                ResetContactReview();
 #endif
             }
 
@@ -518,6 +521,7 @@ namespace Horo::Editor {
                     listeningReferences_.reset();
                     requestedListeningReferences_.reset();
                     reviewingSurfaces_ = false;
+                    ResetContactReview();
                     DrawListeningStart(context);
                     return;
                 }
@@ -530,8 +534,10 @@ namespace Horo::Editor {
                 }
                 if (const auto transcript = listening_->Transcript(); !transcript.empty())
                     Ui::WrappedText(width, transcript, Theme::Text(), fonts);
-                if (hasTranscript)
+                if (hasTranscript) {
                     DrawListeningReferences(context);
+                    DrawListeningContacts(context);
+                }
             }
 
             /** @brief Projects owner-issued reference states without selecting a candidate. */
@@ -656,6 +662,43 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Clears the explicitly requested Physics snapshot. */
+            void ResetContactReview() noexcept {
+                contactReview_.reset();
+                contactsRequested_ = false;
+            }
+
+            /** @brief Shows only local, selection-scoped contact starts and the tick that produced them. */
+            void DrawListeningContacts(const EditorGuiContext &context) {
+                const auto &locale = context.localization;
+                if (Button(locale, "xr_contacts_review", readAgentSceneContacts_ && agentSceneContactsCurrent_)) {
+                    contactReview_ = readAgentSceneContacts_();
+                    contactsRequested_ = true;
+                }
+                if (!contactsRequested_)
+                    return;
+                const auto width = ImGui::GetContentRegionAvail().x;
+                const auto &fonts = context.theme.fonts;
+                if (!contactReview_ || !agentSceneContactsCurrent_ || !agentSceneContactsCurrent_(*contactReview_)) {
+                    contactReview_.reset();
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_contacts_unavailable"), Theme::Muted(), fonts);
+                    return;
+                }
+                const auto &review = *contactReview_;
+                Ui::WrappedText(width,
+                                std::format("{} {} · #{}", LocalizedText(locale, "xr_contacts_tick"), review.completedTick, review.object),
+                                Theme::Muted(), fonts);
+                if (review.count == 0)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_contacts_empty"), Theme::Muted(), fonts);
+                for (const auto &contact : std::span{review.contacts}.first(review.count)) {
+                    const bool trigger = contact.kind == AgentSceneContactKind::TriggerEnter;
+                    Ui::WrappedText(width,
+                                    LocalizedText(locale, trigger ? "xr_contacts_trigger" : "xr_contacts_contact") + " #" +
+                                        std::to_string(contact.otherObject),
+                                    Theme::Text(), fonts);
+                }
+            }
+
             EditorImmersiveListening *listening_{};
             int listeningInput_{-1};
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
@@ -663,6 +706,10 @@ namespace Horo::Editor {
             std::optional<AgentSceneReferenceReview> listeningReferences_;
             std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
             bool reviewingSurfaces_{};
+            std::function<std::optional<AgentSceneContactReview>()> readAgentSceneContacts_;
+            std::function<bool(const AgentSceneContactReview &)> agentSceneContactsCurrent_;
+            std::optional<AgentSceneContactReview> contactReview_;
+            bool contactsRequested_{};
 #endif
 
             enum class BuildContextChoice {
@@ -727,6 +774,8 @@ namespace Horo::Editor {
                 captureSceneSelection_ = {};
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = {};
+                readAgentSceneContacts_ = {};
+                agentSceneContactsCurrent_ = {};
 #endif
                 captureAgentViewport_ = {};
                 takeAgentViewportReview_ = {};

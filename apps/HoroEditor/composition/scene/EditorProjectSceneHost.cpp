@@ -23,6 +23,92 @@
 #include <vector>
 
 namespace Horo::Application::Internal {
+    namespace {
+        /** @brief Reads one complete published tick using a short, owner-lane Physics capability. */
+        std::optional<std::size_t> ReadAgentContactRecords(Physics::PhysicsWorld &world, const Physics::PhysicsPublishedTick published,
+                                                           const std::span<Physics::PhysicsEventRecord> storage) {
+            const auto limit = std::min(storage.size(), static_cast<std::size_t>(world.Settings().Values().budgets.maximumEvents));
+            if (limit == 0 || published.eventTick == 0 || published.eventTick != published.completedTick)
+                return std::nullopt;
+            const auto access = world.IssueQueryEventCapability();
+            if (access.HasError())
+                return std::nullopt;
+            const auto &capability = access.Value();
+            const auto events = capability.ReadEvents({capability.Identity(), published.eventTick, published.publicationRevision,
+                                                       static_cast<std::uint32_t>(limit)},
+                                                      storage.first(limit));
+            const auto revoked = world.RevokeQueryEventCapability(capability);
+            if (revoked.HasError() || events.HasError() || events.Value().truncated || events.Value().droppedRecordCount)
+                return std::nullopt;
+            return events.Value().recordCount;
+        }
+
+        /** @brief Resolves a physical body only through the published Scene's exact binding. */
+        Runtime::SceneObjectId ReadContactObject(const std::span<const Physics::PhysicsSceneBodyBinding> bindings,
+                                                 const Physics::BodyHandle handle) {
+            const auto found = std::ranges::find(bindings, handle, &Physics::PhysicsSceneBodyBinding::handle);
+            return found == bindings.end() ? Runtime::SceneObjectId{} : found->object;
+        }
+
+        /** @brief Adds incident contact/trigger starts without translating solver semantics into gameplay actions. */
+        bool AppendAgentContact(Editor::EditorPlayContactSnapshot &review, const Runtime::RuntimeSceneView &scene,
+                                const Runtime::SceneObjectId anchor, const std::span<const Physics::PhysicsSceneBodyBinding> bindings,
+                                const Physics::PhysicsEventRecord &record) {
+            using enum Physics::PhysicsEventKind;
+            if (record.kind != ContactBegin && record.kind != TriggerEnter)
+                return true;
+            const auto first = ReadContactObject(bindings, record.pair.first.body);
+            const auto second = ReadContactObject(bindings, record.pair.second.body);
+            if (first != anchor && second != anchor)
+                return true;
+            const auto peer = first == anchor ? second : first;
+            if (!scene.Find(peer))
+                return false;
+            using Snapshot = Editor::EditorPlayContactSnapshot;
+            const Snapshot::Contact contact{peer,
+                                            record.kind == ContactBegin ? Snapshot::Kind::ContactBegin : Snapshot::Kind::TriggerEnter};
+            const auto observed = std::span{review.contacts}.first(review.count);
+            if (std::ranges::find(observed, contact) != observed.end())
+                return true;
+            if (review.count == review.contacts.size())
+                return false;
+            review.contacts[review.count++] = contact;
+            return true;
+        }
+    }  // namespace
+
+    /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::ReadAgentSceneContacts */
+    std::optional<Editor::EditorPlayContactSnapshot> EditorProjectSceneDetail::ProjectPlaySceneHost::ReadAgentSceneContacts(
+        const Runtime::EntityRef object) {
+        const auto scope = native_.Borrow();
+        if (scope.HasError() || scope.Value().scene != object.runtime)
+            return std::nullopt;
+        const auto scene = scenes_->ActiveScene();
+        if (!scene)
+            return std::nullopt;
+        const auto anchor = scene->Get(object);
+        if (anchor.HasError() || !anchor.Value().authoredObject)
+            return std::nullopt;
+        const auto anchorId = *anchor.Value().authoredObject;
+        const auto bindings = scope.Value().bodyBindings;
+        if (std::ranges::find(bindings, anchorId, &Physics::PhysicsSceneBodyBinding::object) == bindings.end())
+            return std::nullopt;
+
+        auto &world = scope.Value().physics;
+        const auto tick = world.PublishedTick();
+        std::array<Physics::PhysicsEventRecord, 32> records;
+        const auto copied = ReadAgentContactRecords(world, tick, records);
+        if (!copied)
+            return std::nullopt;
+        Editor::EditorPlayContactSnapshot review{.anchor = object,
+                                                 .structuralRevision = scene->StructuralRevision(),
+                                                 .completedTick = tick.eventTick};
+        for (const auto &record : std::span{records}.first(*copied))
+            if (!AppendAgentContact(review, *scene, anchorId, bindings, record))
+                return std::nullopt;
+        return review;
+    }
+
     /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices */
     Result<Gameplay::BehaviorRuntimeServiceBindings> EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices(
         const Gameplay::BehaviorRegistry &registry) {

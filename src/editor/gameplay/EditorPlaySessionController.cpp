@@ -794,6 +794,11 @@ namespace Horo::Editor {
         return sceneHost_ ? sceneHost_->Scenes().ActiveScene() : std::nullopt;
     }
 
+    /** @copydoc EditorPlaySessionController::ReadAgentSceneContacts */
+    std::optional<EditorPlayContactSnapshot> EditorPlaySessionController::ReadAgentSceneContacts(const Runtime::EntityRef object) {
+        return sceneHost_ && state_ == EditorPlaySessionState::Playing ? sceneHost_->ReadAgentSceneContacts(object) : std::nullopt;
+    }
+
     /** @copydoc EditorPlaySessionController::ReadDecisionProblem */
     std::optional<EditorPlayDecisionProblem> EditorPlaySessionController::ReadDecisionProblem() const {
         if (!sceneHost_ || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused))

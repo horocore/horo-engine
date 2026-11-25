@@ -14,6 +14,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -43,6 +44,26 @@ namespace Horo::Editor {
     /** @brief First Play identity; the divider itself is never issued. */
     inline constexpr Runtime::SceneRuntimeId EditorFirstPlayScene{EditorPlaySceneNamespace + 1};
     inline constexpr std::uint64_t EditorPlayAgentInspectionTickSpacing = 4;
+
+    /** @brief Incident event starts from one exact Scene and completed Physics tick. */
+    struct EditorPlayContactSnapshot final {
+        enum class Kind : std::uint8_t {
+            ContactBegin,
+            TriggerEnter
+        };
+
+        struct Contact final {
+            Runtime::SceneObjectId peer;
+            Kind kind{};
+            bool operator==(const Contact &) const = default;
+        };
+
+        Runtime::EntityRef anchor;
+        std::uint64_t structuralRevision{};
+        std::uint64_t completedTick{};
+        std::array<Contact, 16> contacts{};
+        std::size_t count{};
+    };
 
     /** @brief Exact live entity and authenticated cooked query requested by the active EQS document. */
     struct EditorPlayQueryInspectionSelection final {
@@ -414,6 +435,11 @@ namespace Horo::Editor {
 
         /** @brief Revokes borrowed native admission before cancelling/joining Scene work and releasing its candidates. */
         virtual void Shutdown() noexcept = 0;
+
+        /** @brief Copies complete, bounded Physics event starts incident to the exact live entity. */
+        [[nodiscard]] virtual std::optional<EditorPlayContactSnapshot> ReadAgentSceneContacts(Runtime::EntityRef) {
+            return std::nullopt;
+        }
     };
 
     /** @brief Load-time factory whose owned result pins all native/assets through Scene retirement.

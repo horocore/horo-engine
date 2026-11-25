@@ -127,4 +127,30 @@ namespace Horo::Editor {
 
         [[nodiscard]] std::span<const Candidate> Candidates() const && = delete;
     };
+
+    /** @brief Scene-owned interactions that may supply diagnostic context for an explicit selection. */
+    enum class AgentSceneContactKind : std::uint8_t {
+        ContactBegin,
+        TriggerEnter
+    };
+
+    /** @brief Complete bounded preview of a selected object's contacts in one published Physics tick. */
+    struct AgentSceneContactReview final {
+        static constexpr std::size_t MaximumContacts = 16;
+
+        struct Contact final {
+            std::uint64_t otherObject{};
+            AgentSceneContactKind kind{};
+        };
+
+        std::uint64_t object{};
+        std::uint64_t worldGeneration{};
+        std::uint64_t structuralRevision{};
+        std::uint64_t completedTick{};
+        std::uint64_t documentEpoch{};
+        std::uint64_t documentRevision{};
+        std::array<Contact, MaximumContacts> contacts{};
+        std::size_t count{};
+        std::uint64_t selectionRevision{};
+    };
 }  // namespace Horo::Editor

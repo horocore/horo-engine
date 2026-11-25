@@ -150,6 +150,10 @@ namespace Horo::Editor {
         std::function<void(EditorWorkspaceViewCommandData &)> offerAgentViewportReview{};
         /** @brief Transfers one pending viewport review to the attached chat. */
         std::function<std::optional<AgentSceneSelectionSnapshot>()> takeAgentViewportReview{};
+        /** @brief Copies the selected Play object's bounded, complete Physics event preview on request. */
+        std::function<std::optional<AgentSceneContactReview>()> readAgentSceneContacts{};
+        /** @brief Checks that a displayed preview still belongs to the live selection and Scene. */
+        std::function<bool(const AgentSceneContactReview &)> agentSceneContactsCurrent{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
