@@ -118,6 +118,8 @@ namespace Horo::Editor {
                                                      EditorWorkspaceViewCommandData &command);
         void DrawDevices(const EditorGuiContext &context);
         void DrawProfiles(const EditorGuiContext &context);
+        /** @brief Reports saved profile problems without changing active input routing. */
+        void CheckSavedProfile(const ILocalizationService &localization);
         void PollBindingCapture(const EditorGuiContext &context);
         void StartBindingCapture(const Input::ActionId &action, std::optional<std::size_t> bindingIndex, const EditorGuiContext &context);
         [[nodiscard]] Result<Input::BindingProfilePaths> ProfilePaths() const;

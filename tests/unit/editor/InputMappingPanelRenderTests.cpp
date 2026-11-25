@@ -97,16 +97,22 @@ namespace {
             REQUIRE(gui.localization.ActivatePrepared());
         }
 
-        void Draw(const float width, const bool disabled = false) {
+        void Draw(const float width, const bool disabled = false, std::string *rendered = nullptr) {
             ImGui::GetIO().DisplaySize = {width, 800};
             gui.imgui.BeginFrame();
             ImGui::SetNextWindowPos({0, 0});
             ImGui::SetNextWindowSize({width, 700});
             ImGui::Begin("Input Mapping render", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            if (rendered)
+                ImGui::LogToBuffer();
             ImGui::BeginDisabled(disabled);
             pageOrigin = ImGui::GetCursorScreenPos();
             panel.DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), model, command, gui.context);
             ImGui::EndDisabled();
+            if (rendered) {
+                *rendered = ImGui::GetCurrentContext()->LogBuffer.c_str();
+                ImGui::LogFinish();
+            }
             ImGui::End();
             gui.imgui.EndFrame();
         }
@@ -222,6 +228,38 @@ namespace {
         }
         CHECK(actionTable == (page == 0));
         CHECK(keyboardCard == (page == 1));
+    }
+
+    TEST_CASE("Input Mapping reports required actions missing from a saved profile without applying it", "[editor][input][gui]") {
+        MappingFixture fixture;
+        fixture.Locale(GENERATE("en-US", "tr-TR"));
+        const Input::ActionId jump{"test.jump"};
+        REQUIRE(fixture.gui.input
+                    .SetActionMap({{jump,
+                                    Input::ActionValueType::Digital,
+                                    Input::InputContextId{"workspace"},
+                                    true,
+                                    {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}})
+                    .HasValue());
+        const auto active = fixture.gui.input.Profile();
+        const auto paths = Input::ResolveBindingProfilePaths({}, fixture.home.directory.Path());
+        REQUIRE(paths.HasValue());
+        const Input::InputBindingProfile saved{.overrides = {{jump, {}}}};
+        REQUIRE(Input::SaveBindingProfileAtomically(paths.Value().editorUser, saved).HasValue());
+
+        constexpr float Width = 260.0F;
+        fixture.SelectPage(2, Width);
+        fixture.Draw(Width);
+        auto *window = fixture.ContentWindow();
+        ImGui::FocusWindow(window);
+        const auto &button = InputMappingPanel::kTextScope.Text(fixture.gui.localization, "check_saved_profile");
+        ImGui::ActivateItemByID(ImHashStr(button.c_str(), 0, window->IDStack.back()));
+        std::string rendered;
+        fixture.Draw(Width, false, &rendered);
+        CHECK(rendered.find(InputMappingPanel::kTextScope.Text(fixture.gui.localization, "unbound_required_action")) != std::string::npos);
+        CHECK(rendered.find(jump.Value()) != std::string::npos);
+        CHECK(fixture.gui.input.Profile() == active);
+        CHECK(Input::LoadBindingProfile(paths.Value().editorUser).Value() == saved);
     }
 
     TEST_CASE("Input Mapping replaces one composite binding and persists the other controls", "[editor][input][gui]") {

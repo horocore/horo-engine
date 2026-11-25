@@ -447,6 +447,12 @@ namespace Horo::Editor {
         ImGui::TextWrapped("%s: %s", InputMappingPanel::kTextScope.Text(context.localization, "active_profile").c_str(),
                            router_->Profile().profileId.c_str());
         ImGui::TextWrapped("%s", kTextScope.Text(context.localization, "automatic_project_profile").c_str());
+        const auto &check = kTextScope.Text(context.localization, "check_saved_profile");
+        if (Ui::Button({.label = check.c_str(),
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = context.theme.fonts.sans,
+                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
+            CheckSavedProfile(context.localization);
         const std::string &reload = InputMappingPanel::kTextScope.Text(context.localization, "reload_profile");
         if (Ui::Button({.label = reload.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
             const auto paths = ProfilePaths();
@@ -457,6 +463,28 @@ namespace Horo::Editor {
             else
                 statusMessage_ = InputMappingPanel::kTextScope.Text(context.localization, "profile_loaded");
         }
+    }
+
+    /** @copydoc InputMappingPanel::CheckSavedProfile */
+    void InputMappingPanel::CheckSavedProfile(const ILocalizationService &localization) {
+        const auto paths = ProfilePaths();
+        if (paths.HasError()) {
+            statusMessage_ = paths.ErrorValue().message;
+            return;
+        }
+        const auto checked = router_->ValidateSavedProfile(paths.Value());
+        if (checked.HasError()) {
+            statusMessage_ = checked.ErrorValue().message;
+            return;
+        }
+        statusMessage_ = kTextScope.Text(localization, checked.Value().IsValid() ? "saved_profile_valid" : "saved_profile_invalid");
+        for (const auto &diagnostic : checked.Value().diagnostics)
+            if (diagnostic.code == Input::BindingDiagnosticCode::RequiredActionUnbound) {
+                statusMessage_ += '\n';
+                statusMessage_ += kTextScope.Text(localization, "unbound_required_action");
+                statusMessage_ += ' ';
+                statusMessage_ += diagnostic.action.Value();
+            }
     }
 
     Result<Input::BindingProfilePaths> InputMappingPanel::ProfilePaths() const {

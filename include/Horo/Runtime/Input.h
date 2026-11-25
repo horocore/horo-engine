@@ -979,6 +979,11 @@ namespace Horo::Input {
          * @details Inactive editor/module/game actions remain stored in their source files and do not become router registrations.
          */
         [[nodiscard]] Result<void> ReloadProfile(const BindingProfilePaths &paths);
+        /** @brief Checks the saved layers against this router's action registry without activating them.
+         * @param paths Host-resolved project, editor-user and project-user files in reload order.
+         * @return Typed binding diagnostics or the original read or schema error.
+         */
+        [[nodiscard]] Result<BindingValidationReport> ValidateSavedProfile(const BindingProfilePaths &paths) const;
         /** @brief Resolves and consumes an action transition for an eligible matching context. */
         [[nodiscard]] ActionValue ReadAction(const InputContextToken &context, const ActionId &action,
                                              std::optional<PlayerId> player = std::nullopt);

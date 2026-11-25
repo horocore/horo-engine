@@ -976,6 +976,17 @@ namespace Horo::Input {
                 return std::ranges::find(actions, entry.action, &ActionDescriptor::id) == actions.end();
             });
         }
+
+        /** @brief Loads the candidate projected onto the active action registry in reload order. */
+        Result<InputBindingProfile> LoadRegisteredProfile(const BindingProfilePaths &paths, std::span<const ActionDescriptor> actions) {
+            const std::array ordered{paths.projectDefaults, paths.editorUser, paths.projectUser};
+            auto loaded = LoadBindingProfileLayers(ordered);
+            if (loaded.HasError())
+                return loaded;
+            auto candidate = std::move(loaded).Value();
+            RetainRegisteredOverrides(candidate, actions);
+            return Result<InputBindingProfile>::Success(std::move(candidate));
+        }
     }  // namespace
 
     /** @copydoc CommitBindingProfileChange */
@@ -1324,13 +1335,19 @@ namespace Horo::Input {
 
     /** @copydoc InputRouter::ReloadProfile */
     Result<void> InputRouter::ReloadProfile(const BindingProfilePaths &paths) {
-        const std::array ordered{paths.projectDefaults, paths.editorUser, paths.projectUser};
-        auto loaded = LoadBindingProfileLayers(ordered);
+        auto loaded = LoadRegisteredProfile(paths, Actions());
         if (loaded.HasError())
             return Result<void>::Failure(loaded.ErrorValue());
-        auto profile = std::move(loaded).Value();
-        RetainRegisteredOverrides(profile, Actions());
-        return SetProfile(std::move(profile));
+        return SetProfile(std::move(loaded).Value());
+    }
+
+    /** @copydoc InputRouter::ValidateSavedProfile */
+    Result<BindingValidationReport> InputRouter::ValidateSavedProfile(const BindingProfilePaths &paths) const {
+        const auto actions = Actions();
+        const auto candidate = LoadRegisteredProfile(paths, actions);
+        if (candidate.HasError())
+            return Result<BindingValidationReport>::Failure(candidate.ErrorValue());
+        return Result<BindingValidationReport>::Success(ValidateBindingProfile(actions, candidate.Value()));
     }
 
     namespace {

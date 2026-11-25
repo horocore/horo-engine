@@ -1179,4 +1179,32 @@ namespace {
         REQUIRE(router.Profile().overrides.size() == 1);
         REQUIRE(router.Profile().overrides.front().action == ActionId{"jump"});
     }
+
+    TEST_CASE("Saved profile validation diagnoses a higher layer without changing live routing", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-audit"};
+        const BindingProfilePaths paths{directory.Path() / "defaults.json", directory.Path() / "global.json",
+                                        directory.Path() / "project.json"};
+        const ActionId jump{"jump"};
+        const InputContextId context{"gameplay"};
+        InputRouter router;
+        REQUIRE(router.SetActionMap({{jump, ActionValueType::Digital, context, true, {KeyBinding(Key::Space)}}}).HasValue());
+        const auto active = router.Profile();
+        REQUIRE(SaveBindingProfileAtomically(paths.projectDefaults, {.overrides = {{jump, {}}}}).HasValue());
+        REQUIRE(SaveBindingProfileAtomically(paths.editorUser, {.overrides = {{jump, {KeyBinding(Key::J)}}, {ActionId{"inactive"}, {}}}})
+                    .HasValue());
+        const auto restored = router.ValidateSavedProfile(paths);
+        REQUIRE(restored.HasValue());
+        CHECK(restored.Value().IsValid());
+
+        const InputBindingProfile rejected{.overrides = {{jump, {}}}};
+        REQUIRE(SaveBindingProfileAtomically(paths.projectUser, rejected).HasValue());
+        const auto report = router.ValidateSavedProfile(paths);
+        REQUIRE(report.HasValue());
+        REQUIRE(report.Value().diagnostics.size() == 1);
+        CHECK(report.Value().diagnostics.front().code == BindingDiagnosticCode::RequiredActionUnbound);
+        CHECK(report.Value().diagnostics.front().action == jump);
+        CHECK(router.ReloadProfile(paths).HasError());
+        CHECK(router.Profile() == active);
+        CHECK(LoadBindingProfile(paths.projectUser).Value() == rejected);
+    }
 }  // namespace

@@ -745,6 +745,10 @@ migration establishes the prior valid user profile before retiring that field.
 New Settings writes omit it. A corrupt canonical file emits an error and cannot
 revive a stale embedded profile.
 
+Input Mapping offers a read-only validation of saved profile layers. The check uses the
+same layer precedence and registered action projection as reload. An explicit
+empty override of a required action appears as a missing binding in the check.
+
 Keyboard/pointer player ownership is explicit through `AssignKeyboardMouse`.
 Player zero owns those controls initially. Player-filtered reads exclude other
 owners; aggregate reads retain editor/global delivery. Gamepad bindings without
