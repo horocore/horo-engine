@@ -16,6 +16,20 @@ namespace Horo::Editor {
         Audio::AudioMonotonicTimestamp latest;
     };
 
+    /** @brief Copied authored geometry evidence associated with one measured press. */
+    struct ImmersivePointingHits final {
+        static constexpr std::size_t MaximumObjects = 16;
+
+        struct Hit final {
+            SceneSource::SceneObjectId object;
+            float distanceMeters{};
+        };
+
+        std::uint64_t worldGeneration{};
+        std::array<Hit, MaximumObjects> hits{};
+        std::size_t count{};
+    };
+
     /** @brief Closed interval measured by the host around the exact XR cutoff in the capture clock domain. */
     struct ImmersiveSpatialObservation final {
         XR::XRInteractionCutoff cutoff;
@@ -23,6 +37,7 @@ namespace Horo::Editor {
         Audio::AudioMonotonicTimestamp earliest;
         Audio::AudioMonotonicTimestamp latest;
         std::optional<ImmersiveControllerPress> controllerPress;
+        std::optional<ImmersivePointingHits> pointing;
     };
 
     /** @brief Borrowed history from one bounded editor/XR capture, in publication order. */

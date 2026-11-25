@@ -13,6 +13,17 @@ namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
+    /** @copydoc OpenXRPlayHost::QueryAuthoredPointing */
+    Result<std::size_t> OpenXRPlayHost::QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
+                                                              const std::span<Editor::EditorXrGeometryHit> hits) const {
+        const auto active = ReadWorldUiPointer(frame.source.player);
+        if (!active || active->source != frame.source || active->cutoff != frame.cutoff || !active->sample.selectDown)
+            return Result<std::size_t>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!scene_ || !scene_->geometry || !scene_->geometry->authored)
+            return Result<std::size_t>::Failure(MakeError(XRErrors::OperationUnavailable));
+        return scene_->geometry->authored->QueryPointing(active->sample.ray, hits);
+    }
+
     namespace {
         /** @brief Describes the exact selected queue's acquired/released color tuple from existing renderer policy. */
         Render::RenderGraphLogicalState ProjectionAcquired(const Render::RenderQueueId queue) noexcept {

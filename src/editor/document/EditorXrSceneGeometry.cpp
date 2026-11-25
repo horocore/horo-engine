@@ -4,8 +4,11 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
 #include <thread>
+#include <utility>
 
 namespace Horo::Editor {
     namespace XrSceneDetail {
@@ -33,6 +36,78 @@ namespace Horo::Editor {
                 return Result<std::shared_ptr<XrSceneDetail::SourceState>>::Failure(
                     GeometryError("XR geometry workspace owner is retired or on another lane."));
             return Result<std::shared_ptr<XrSceneDetail::SourceState>>::Success(std::move(state));
+        }
+
+        /** @brief Finite two-sided triangle test, with edge hits inclusive for adjacent faces. */
+        std::optional<float> IntersectTriangle(const Math::Ray &ray, Math::Vec3 a, Math::Vec3 b, Math::Vec3 c) noexcept {
+            const auto ab = b - a;
+            const auto ac = c - a;
+            const auto p = Math::Cross(ray.direction, ac);
+            const float determinant = Math::Dot(ab, p);
+            if (!std::isfinite(determinant) || determinant == 0.0F)
+                return std::nullopt;
+            const auto offset = ray.origin - a;
+            const float u = Math::Dot(offset, p) / determinant;
+            if (!(u >= 0.0F && u <= 1.0F))
+                return std::nullopt;
+            const auto q = Math::Cross(offset, ab);
+            const float v = Math::Dot(ray.direction, q) / determinant;
+            if (!(v >= 0.0F && u + v <= 1.0F))
+                return std::nullopt;
+            const float distance = Math::Dot(ac, q) / determinant;
+            if (distance < ray.minimumDistance || distance > ray.maximumDistance || !std::isfinite(distance))
+                return std::nullopt;
+            return distance;
+        }
+
+        /** @brief Tests an admitted mesh with a local-space ray, then converts its hit back to world meters. */
+        Result<std::optional<float>> IntersectPointingMesh(const Math::Ray &ray, const Render::RenderStaticMeshInstance &instance,
+                                                           const Render::RenderMeshResourceView &mesh) {
+            using Distance = Result<std::optional<float>>;
+            const auto inverse = Math::TryInverseAffine(instance.localToWorld);
+            if (inverse.HasError())
+                return Distance::Failure(inverse.ErrorValue());
+            const auto direction = Math::TransformDirection(inverse.Value(), ray.direction);
+            const auto scale = Math::Length(direction);
+            auto local = Math::TryMakeRay(Math::TransformPoint(inverse.Value(), ray.origin), direction, scale * ray.minimumDistance,
+                                          scale * ray.maximumDistance);
+            if (local.HasError())
+                return Distance::Failure(local.ErrorValue());
+            auto segment = local.Value();
+            std::optional<float> nearest;
+            for (std::size_t index = 0; index < mesh.indices.size(); index += 3) {
+                const auto triangle = mesh.indices.subspan(index, 3);
+                const auto hit = IntersectTriangle(segment, mesh.vertices[triangle[0]].position, mesh.vertices[triangle[1]].position,
+                                                   mesh.vertices[triangle[2]].position);
+                if (hit) {
+                    nearest = *hit / scale;
+                    segment.maximumDistance = *hit;
+                }
+            }
+            return Distance::Success(nearest);
+        }
+
+        /** @brief Broad-phase test and bounded narrow-phase query of one prepared draw. */
+        Result<std::optional<float>> QueryPointingDraw(const Math::Ray &ray, const Render::RenderStaticMeshInstance &instance,
+                                                       const std::span<const Render::RenderMeshResourceView> meshes,
+                                                       std::size_t &triangleBudget) {
+            using Distance = Result<std::optional<float>>;
+            const auto bounds = Math::TransformAabb(instance.localBounds, instance.localToWorld);
+            if (bounds.HasError())
+                return Distance::Failure(bounds.ErrorValue());
+            const auto overlaps = Math::IntersectRayAabb(ray, bounds.Value());
+            if (overlaps.HasError())
+                return Distance::Failure(overlaps.ErrorValue());
+            if (!overlaps.Value())
+                return Distance::Success(std::nullopt);
+            const auto mesh = std::ranges::find(meshes, instance.mesh, &Render::RenderMeshResourceView::handle);
+            if (mesh == meshes.end())
+                return Distance::Failure(GeometryError("XR pointing draw no longer has a mesh."));
+            const auto triangles = mesh->indices.size() / 3;
+            if (triangles > triangleBudget)
+                return Distance::Failure(GeometryError("XR pointing exceeded its triangle budget."));
+            triangleBudget -= triangles;
+            return IntersectPointingMesh(ray, instance, *mesh);
         }
     }  // namespace
 
@@ -147,6 +222,48 @@ namespace Horo::Editor {
     /** @copydoc PreparedEditorXrGeometry::MotionObjects */
     std::span<const Render::RenderMotionObjectId> PreparedEditorXrGeometry::MotionObjects() const noexcept {
         return impl_->motionObjects;
+    }
+
+    /** @copydoc PreparedEditorXrGeometry::QueryPointing */
+    Result<std::size_t> PreparedEditorXrGeometry::QueryPointing(const Math::Ray &ray, const std::span<EditorXrGeometryHit> output) const {
+        if (const auto valid = ValidateSource(); valid.HasError())
+            return Result<std::size_t>::Failure(valid.ErrorValue());
+        return XrSceneDetail::QueryPointingDraws(ray, Instances(), MotionObjects(), Resources(), output);
+    }
+
+    /** @copydoc XrSceneDetail::QueryPointingDraws */
+    Result<std::size_t> XrSceneDetail::QueryPointingDraws(const Math::Ray &ray,
+                                                          const std::span<const Render::RenderStaticMeshInstance> instances,
+                                                          const std::span<const Render::RenderMotionObjectId> objects,
+                                                          const std::span<const Render::RenderMeshResourceView> meshes,
+                                                          const std::span<EditorXrGeometryHit> output) {
+        using Hits = Result<std::size_t>;
+        constexpr auto MaximumInstances = PreparedEditorXrGeometry::MaximumInstances;
+        if (instances.size() > MaximumInstances || instances.size() != objects.size())
+            return Hits::Failure(GeometryError("XR pointing draw identities are incomplete."));
+        const auto segment = Math::TryMakeRay(ray.origin, ray.direction, ray.minimumDistance, ray.maximumDistance);
+        if (segment.HasError())
+            return Hits::Failure(segment.ErrorValue());
+        std::array<EditorXrGeometryHit, MaximumInstances> hits;
+        std::size_t count{};
+        // One explicit press may inspect at most this many triangles after the per-draw bounds check.
+        std::size_t triangleBudget = 16'384;
+        for (std::size_t index = 0; index < instances.size(); ++index) {
+            const auto distance = QueryPointingDraw(segment.Value(), instances[index], meshes, triangleBudget);
+            if (distance.HasError())
+                return Hits::Failure(distance.ErrorValue());
+            if (!distance.Value())
+                continue;
+            if (count == output.size())
+                return Hits::Failure(GeometryError("XR pointing exceeded its hit capacity."));
+            hits[count++] = {{objects[index].value}, *distance.Value()};
+        }
+        const auto complete = std::span{hits}.first(count);
+        std::ranges::sort(complete, {}, [](const EditorXrGeometryHit &hit) {
+            return std::pair{hit.distanceMeters, hit.object.value};
+        });
+        std::ranges::copy(complete, output.begin());
+        return Hits::Success(count);
     }
 
     /** @copydoc PreparedEditorXrGeometry::Update */

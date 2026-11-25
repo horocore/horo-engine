@@ -77,12 +77,19 @@ namespace Horo::Editor {
         OutOfScope
     };
 
+    /** @brief Source of the object IDs carried by a scene review request. */
+    enum class AgentSceneReferenceSource : std::uint8_t {
+        Selection,
+        Pointing
+    };
+
     /** @brief Read-only request to review the captured selection against its exact authoring and Play scope. */
     struct AgentSceneReferenceRequest final {
         std::uint64_t documentEpoch{};
         std::uint64_t documentRevision{};
         std::uint64_t worldGeneration{};
         std::span<const std::uint64_t> objects;
+        AgentSceneReferenceSource source{AgentSceneReferenceSource::Selection};
     };
 
     /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */

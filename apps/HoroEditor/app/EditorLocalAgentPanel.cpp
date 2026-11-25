@@ -428,7 +428,7 @@ namespace Horo::Editor {
                     listening_->Cancel();
                 ResetListeningInput();
                 listeningReferences_.reset();
-                requestedListeningReferences_ = false;
+                requestedListeningReferences_.reset();
 #endif
             }
 
@@ -515,7 +515,7 @@ namespace Horo::Editor {
                 Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(state)), Theme::Text(), fonts);
                 if (state == Idle || state == Interrupted) {
                     listeningReferences_.reset();
-                    requestedListeningReferences_ = false;
+                    requestedListeningReferences_.reset();
                     DrawListeningStart(context);
                     return;
                 }
@@ -553,23 +553,40 @@ namespace Horo::Editor {
             /** @brief Rechecks the captured selection on demand and displays its exact revision and every candidate. */
             void DrawListeningReferences(const EditorGuiContext &context) {
                 const auto &locale = context.localization;
-                if (Button(locale, "xr_reference_review", static_cast<bool>(reviewAgentSceneReferences_))) {
-                    listeningReferences_ = listening_->ReviewReferences(reviewAgentSceneReferences_);
-                    requestedListeningReferences_ = true;
-                }
+                const bool canReview = static_cast<bool>(reviewAgentSceneReferences_);
+                using enum AgentSceneReferenceSource;
+                if (Button(locale, "xr_reference_review", canReview))
+                    LoadListeningReferences(Selection);
+                if (Button(locale, "xr_pointing_review", canReview))
+                    LoadListeningReferences(Pointing);
                 if (!requestedListeningReferences_)
                     return;
+                DrawListeningReferenceResult(context, *requestedListeningReferences_);
+            }
+
+            /** @brief Refreshes the requested review using the current scoped receipt. */
+            void LoadListeningReferences(const AgentSceneReferenceSource source) {
+                listeningReferences_ = listening_->ReviewReferences(reviewAgentSceneReferences_, source);
+                requestedListeningReferences_ = source;
+            }
+
+            /** @brief Projects a complete review, an explicit empty result, or unavailable evidence. */
+            void DrawListeningReferenceResult(const EditorGuiContext &context, const AgentSceneReferenceSource source) {
+                const auto &locale = context.localization;
                 const auto width = ImGui::GetContentRegionAvail().x;
                 const auto &fonts = context.theme.fonts;
+                const bool pointing = source == AgentSceneReferenceSource::Pointing;
                 if (!listeningReferences_) {
-                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_stale"), Theme::Muted(), fonts);
+                    Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_unavailable" : "xr_reference_stale"),
+                                    Theme::Muted(), fonts);
                     return;
                 }
                 const auto &review = *listeningReferences_;
                 Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
                                 Theme::Muted(), fonts);
                 if (review.Candidates().empty())
-                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_empty"), Theme::Muted(), fonts);
+                    Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_empty" : "xr_reference_empty"), Theme::Muted(),
+                                    fonts);
                 if (review.RequiresClarification())
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
                 for (const auto &candidate : review.Candidates())
@@ -583,7 +600,7 @@ namespace Horo::Editor {
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
             std::optional<AgentSceneReferenceReview> listeningReferences_;
-            bool requestedListeningReferences_{};
+            std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
 #endif
 
             enum class BuildContextChoice {

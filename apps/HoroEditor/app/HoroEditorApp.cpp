@@ -2075,7 +2075,8 @@ namespace Horo::Editor {
 
         public:
             /** @brief Observes one committed input frame. Pointing contributes evidence only. */
-            void Update(EditorMicrophoneSpeechSession &speech, const std::optional<PointerFrame> &frame) noexcept {
+            void Update(EditorMicrophoneSpeechSession &speech, const Application::Internal::OpenXRPlayHost &xr,
+                        const std::optional<PointerFrame> &frame) {
                 if (!frame || !frame->captureTime.poses) {
                     Reset();
                     return;
@@ -2091,12 +2092,14 @@ namespace Horo::Editor {
                     return;
 
                 const auto &pointer = frame->sample;
+                const auto press = PressTime(previousAction, actionTime_, time);
                 const ImmersiveSpatialObservation observation{frame->cutoff,
                                                               {frame->source.device, XR::XRControllerInteractionPose::Aim, pointer.space,
                                                                pointer.confidence, pointer.ray},
                                                               {time.earliest.clockDomain, time.earliest.nanoseconds},
                                                               {time.latest.clockDomain, time.latest.nanoseconds},
-                                                              PressTime(previousAction, actionTime_, time)};
+                                                              press,
+                                                              press ? QueryAuthoredHits(xr, *frame) : std::nullopt};
                 static_cast<void>(speech.RecordPointing(observation, capture));
             }
 
@@ -2109,6 +2112,19 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Captures copied Scene identities at the press cutoff while both owners are live. */
+            static std::optional<ImmersivePointingHits> QueryAuthoredHits(const Application::Internal::OpenXRPlayHost &xr,
+                                                                          const PointerFrame &frame) {
+                std::array<EditorXrGeometryHit, ImmersivePointingHits::MaximumObjects> hits;
+                const auto result = xr.QueryAuthoredPointing(frame, hits);
+                if (result.HasError())
+                    return std::nullopt;
+                ImmersivePointingHits copied{.worldGeneration = frame.source.scene.value, .count = result.Value()};
+                for (std::size_t index = 0; index < copied.count; ++index)
+                    copied.hits[index] = {{hits[index].object.value}, hits[index].distanceMeters};
+                return copied;
+            }
+
             /** @brief Bounds the observed change without attributing the pose's timestamp to the button. */
             static std::optional<ImmersiveControllerPress> PressTime(const std::optional<Interval> &released,
                                                                      const std::optional<Interval> &pressed,
@@ -2733,7 +2749,7 @@ namespace Horo::Editor {
                     const auto pointer = composition.xrPlay->ReadWorldUiPointer(p_->options.xrInputPlayer->player);
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
                     if (auto *speech = screenHost_->Services().TryGet<EditorMicrophoneSpeechSession>())
-                        xrSpeechPointing_.Update(*speech, pointer);
+                        xrSpeechPointing_.Update(*speech, *composition.xrPlay, pointer);
 #endif
                     return xrWorldUiPointer_.Update(pointer, authorities_.ui, milliseconds);
                 }

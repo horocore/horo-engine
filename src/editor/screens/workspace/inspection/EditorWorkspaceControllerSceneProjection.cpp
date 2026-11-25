@@ -612,13 +612,12 @@ namespace Horo::Editor {
 
     namespace {
         /** @brief Checks candidate eligibility against authored state and committed Play membership. */
-        AgentSceneReferenceState ClassifySelectedReference(const std::span<const SceneObjectSnapshot> objects,
-                                                           const std::span<const SceneObjectId> selection,
-                                                           const Runtime::RuntimeSceneView &play, const SceneObjectId object) {
+        AgentSceneReferenceState ClassifyAgentReference(const std::span<const SceneObjectSnapshot> objects, const bool admitted,
+                                                        const Runtime::RuntimeSceneView &play, const SceneObjectId object) {
             using enum AgentSceneReferenceState;
             if (std::ranges::find(objects, object, &SceneObjectSnapshot::id) == objects.end())
                 return Deleted;
-            if (std::ranges::find(selection, object) == selection.end())
+            if (!admitted)
                 return OutOfScope;
             const auto editorState = ResolveSceneObjectEditorState(objects, object);
             if (!editorState)
@@ -644,8 +643,12 @@ namespace Horo::Editor {
         const auto objects = m_document.Objects();
         const auto &selection = m_selection.Current().objects;
         AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
-        for (const auto object : request.objects)
-            review.candidates[review.count++] = {object, ClassifySelectedReference(objects, selection, *play, {object})};
+        for (const auto object : request.objects) {
+            const SceneObjectId id{object};
+            const bool admitted =
+                request.source == AgentSceneReferenceSource::Pointing || std::ranges::find(selection, id) != selection.end();
+            review.candidates[review.count++] = {object, ClassifyAgentReference(objects, admitted, *play, id)};
+        }
         return review;
     }
 

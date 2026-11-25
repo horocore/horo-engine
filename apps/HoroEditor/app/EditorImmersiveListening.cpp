@@ -3,9 +3,43 @@
 #include "EditorMicrophonePermission.h"
 #include "MacOnDeviceSpeechProvider.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Adds distinct hits to the caller's complete candidate set. */
+        bool AppendPointedObjects(const ImmersivePointingHits &pointing, const std::span<std::uint64_t> objects, std::size_t &count) {
+            if (pointing.count > pointing.hits.size())
+                return false;
+            for (const auto &hit : std::span{pointing.hits}.first(pointing.count)) {
+                const auto previous = objects.first(count);
+                if (std::ranges::find(previous, hit.object.value) != previous.end())
+                    continue;
+                if (count == objects.size())
+                    return false;
+                objects[count++] = hit.object.value;
+            }
+            return true;
+        }
+
+        /** @brief Collects the complete union of aligned, same-world pointing candidates. */
+        std::optional<std::size_t> CollectPointedObjects(const ImmersiveCommandEnvelope &preview, std::span<std::uint64_t> objects) {
+            const auto world = preview.Speech().Context().Identity().worldGeneration;
+            std::size_t count{};
+            bool queried{};
+            for (const auto &observation : preview.Spatial()) {
+                if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
+                    continue;
+                if (!observation.controllerPress || !observation.pointing || observation.pointing->worldGeneration != world ||
+                    !AppendPointedObjects(*observation.pointing, objects, count))
+                    return std::nullopt;
+                queried = true;
+            }
+            return queried ? std::optional{count} : std::nullopt;
+        }
+    }  // namespace
+
     EditorImmersiveListening::EditorImmersiveListening(EditorMicrophonePermission &microphone, EditorMicrophoneSpeechSession &speech,
                                                        const Application::Internal::OpenXRPlayHost &xr, const Input::PlayerId player)
         : microphone_(microphone), speech_(speech), xr_(xr), player_(player) {}
@@ -24,7 +58,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorImmersiveListening::ReviewReferences */
     std::optional<AgentSceneReferenceReview> EditorImmersiveListening::ReviewReferences(
-        const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review) const {
+        const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
+        const AgentSceneReferenceSource source) const {
         if (!preview_ || !review)
             return std::nullopt;
         const auto current = Current();
@@ -32,11 +67,18 @@ namespace Horo::Editor {
             return std::nullopt;
         const auto &context = preview_->Speech().Context();
         const auto &identity = context.Identity();
+        std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
+        if (source == AgentSceneReferenceSource::Pointing) {
+            const auto count = CollectPointedObjects(*preview_, objects);
+            if (!count)
+                return std::nullopt;
+            return review(
+                {identity.documentOpening, identity.documentRevision, identity.worldGeneration, std::span{objects}.first(*count), source});
+        }
         const auto selection = context.Selection();
         if (selection.size() > AgentSceneSelectionSnapshot::MaximumObjects)
             return std::nullopt;
 
-        std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
         for (std::size_t index = 0; index < selection.size(); ++index)
             objects[index] = selection[index].value;
         return review(

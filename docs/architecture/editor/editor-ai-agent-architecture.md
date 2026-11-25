@@ -217,6 +217,11 @@ Ownership rules:
   references. The workspace checks the exact authored revision and active Play
   scene, then reports each candidate's visibility, lock, or scope status.
   Multiple captured candidates require clarification.
+- In authored XR Play, an admitted controller press can record the nearest mesh
+  triangle hit per intersected draw. The query borrows the latest committed
+  authored geometry on the owner lane and applies a fixed triangle and hit budget.
+  The Agent panel can review the same-world hits aligned to the speech interval.
+  Incomplete hit queries produce an unavailable result.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

@@ -499,6 +499,12 @@ namespace Horo::Application::Internal {
          * @param player Current Play assignment. @return Empty when disabled, blocked or no current ray/selection is available.
          */
         [[nodiscard]] std::optional<OpenXRWorldUiPointerFrame> ReadWorldUiPointer(Input::PlayerId player) const;
+        /** @brief Resolves the exact current controller press against the authored Play draws.
+         * @param frame Pointer observation issued at the current Input cutoff.
+         * @param hits Caller-owned candidate storage.
+         * @return Complete scoped hits, or an explicit stale, unavailable or capacity failure. */
+        [[nodiscard]] Result<std::size_t> QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
+                                                                std::span<Editor::EditorXrGeometryHit> hits) const;
         /** @brief Copies current reference identity and bounds from the selected Play session.
          * @param session Exact published session.
          * @return Immutable-by-copy evidence or typed stale/unavailable error.

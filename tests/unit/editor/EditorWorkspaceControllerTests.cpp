@@ -818,6 +818,11 @@ namespace {
         CHECK(references->Candidates()[0].state == AgentSceneReferenceState::Available);
         CHECK(references->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
         CHECK(references->Candidates()[2].state == AgentSceneReferenceState::Deleted);
+        request.source = AgentSceneReferenceSource::Pointing;
+        const auto pointed = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(pointed);
+        CHECK(pointed->RequiresClarification());
+        CHECK(pointed->Candidates()[1].state == AgentSceneReferenceState::Available);
         ++request.documentRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
     }

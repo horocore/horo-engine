@@ -28,9 +28,10 @@ namespace Horo::Editor {
         /** @brief Returns the current UI state and a transient preview, if the captured context remains valid. */
         [[nodiscard]] State Status() const noexcept;
         [[nodiscard]] std::string_view Transcript() const & noexcept;
-        /** @brief Reads a review of the exact captured selection on the workspace owner lane. */
+        /** @brief Reads the captured selection or aligned pointing candidates on the workspace owner lane. */
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewReferences(
-            const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review) const;
+            const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
+            AgentSceneReferenceSource source) const;
         [[nodiscard]] bool CanListen();
         [[nodiscard]] bool NeedsMicrophonePermission();
         [[nodiscard]] bool NeedsSpeechPermission() const noexcept;

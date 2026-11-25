@@ -102,6 +102,58 @@ namespace {
         }
     }
 
+    TEST_CASE_METHOD(XrGeometryFixture, "XR pointing intersects the current authored draw with bounded atomic output",
+                     "[unit][editor][xr]") {
+        using namespace Horo;
+        std::array<Editor::EditorXrGeometryHit, 1> hits;
+        const Math::Ray pointed{{2.1F, 3.1F, 4.0F}, {0, 0, -1}, 0, 8};
+        const auto result = prepared->QueryPointing(pointed, hits);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value() == 1);
+        CHECK(hits[0].object.value == objects.child.value);
+        CHECK(NearlyEqual(hits[0].distanceMeters, 3.5F));
+        CHECK(prepared->QueryPointing(pointed, {}).HasError());
+        auto shortRay = pointed;
+        shortRay.maximumDistance = 3;
+        const auto missed = prepared->QueryPointing(shortRay, hits);
+        REQUIRE(missed.HasValue());
+        CHECK(missed.Value() == 0);
+        CHECK(hits[0].object.value == objects.child.value);
+        prepared->Revoke();
+        CHECK(prepared->QueryPointing(pointed, hits).HasError());
+    }
+
+    TEST_CASE("XR pointing orders triangle hits and rejects bounds-only intersections", "[unit][editor][xr][pointing]") {
+        using namespace Horo;
+        const std::array vertices{Render::MeshVertex{.position = {0, 0, 0}}, Render::MeshVertex{.position = {1, 0, 0}},
+                                  Render::MeshVertex{.position = {0, 1, 0}}};
+        const std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const Math::Aabb bounds{{0, 0, 0}, {1, 1, 0}};
+        const Render::RenderMeshSourceHandle handle{{1}, 1};
+        const std::array meshes{Render::RenderMeshResourceView{handle, vertices, indices, bounds}};
+        const auto near = Math::Transform{.translation = {0, 0, 2}, .scale = {1, 1, 2}}.ToMatrix();
+        const std::array instances{Render::RenderStaticMeshInstance{handle, Math::Mat4::Identity(), bounds},
+                                   Render::RenderStaticMeshInstance{handle, near, bounds}};
+        const std::array objects{Render::RenderMotionObjectId{1}, Render::RenderMotionObjectId{2}};
+        Math::Ray ray{{0.2F, 0.2F, 4}, {0, 0, -1}, 0, 8};
+        std::array<Editor::EditorXrGeometryHit, 2> hits;
+        using Editor::XrSceneDetail::QueryPointingDraws;
+        const auto result = QueryPointingDraws(ray, instances, objects, meshes, hits);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value() == 2);
+        CHECK(hits[0].object.value == 2);
+        CHECK(hits[1].object.value == 1);
+        CHECK(NearlyEqual(hits[0].distanceMeters, 2));
+        CHECK(NearlyEqual(hits[1].distanceMeters, 4));
+        hits.front() = {{}, -1};
+        CHECK(QueryPointingDraws(ray, instances, objects, meshes, std::span{hits}.first(1)).HasError());
+        CHECK(hits.front().distanceMeters == -1);
+        ray.origin = {0.8F, 0.8F, 4};
+        const auto missed = QueryPointingDraws(ray, instances, objects, meshes, hits);
+        REQUIRE(missed.HasValue());
+        CHECK(missed.Value() == 0);
+    }
+
     TEST_CASE("XR strict geometry admission keeps the original desktop instance capacity", "[unit][editor][xr]") {
         using namespace Horo;
         using namespace Horo::Editor;
