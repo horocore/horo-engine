@@ -83,7 +83,7 @@ namespace Horo::Application {
     Result<std::shared_ptr<const PackagePlanSnapshot>> PackageApplication::Plan() const {
         if (const auto lane = impl_->CheckLane(); lane.HasError())
             return Result<std::shared_ptr<const PackagePlanSnapshot>>::Failure(lane.ErrorValue());
-        if (!impl_->plan)
+        if (impl_->metadataWithdrawn || !impl_->plan)
             return Result<std::shared_ptr<const PackagePlanSnapshot>>::Failure(
                 PackageOperations::Failure("packages.application.plan_unavailable"));
         return Result<std::shared_ptr<const PackagePlanSnapshot>>::Success(impl_->plan);
@@ -94,7 +94,7 @@ namespace Horo::Application {
         using Output = Result<Packages::PackageRemovalGraphPreview>;
         if (const auto lane = impl_->CheckLane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
-        if (impl_->closing || !impl_->configuration.lockedPlan)
+        if (impl_->closing || impl_->metadataWithdrawn || !impl_->configuration.lockedPlan)
             return Output::Failure(PackageOperations::Failure("packages.application.plan_unavailable"));
         if (const auto current = impl_->configuration.validateAdmission(); current.HasError())
             return Output::Failure(current.ErrorValue());
@@ -117,7 +117,7 @@ namespace Horo::Application {
         auto retained = impl_->lifecycle.RetainedRemovalPackages(graph.Value().removed);
         if (retained.HasError())
             return Output::Failure(retained.ErrorValue());
-        return Output::Success({std::move(graph).Value(), std::move(retained).Value()});
+        return Output::Success({std::move(graph).Value(), std::move(retained).Value(), bool{impl_->configuration.prepareRemoval}});
     }
 
     /** @copydoc PackageApplication::PreviewUpdate */
@@ -127,7 +127,7 @@ namespace Horo::Application {
         if (const auto lane = impl_->CheckLane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         const auto &configuration = impl_->configuration;
-        if (impl_->closing || !configuration.portableRequest || !configuration.lockedPlan)
+        if (impl_->closing || impl_->metadataWithdrawn || !configuration.portableRequest || !configuration.lockedPlan)
             return Output::Failure(PackageOperations::Failure("packages.application.plan_unavailable"));
         if (const auto current = configuration.validateAdmission(); current.HasError())
             return Output::Failure(current.ErrorValue());

@@ -54,6 +54,12 @@ namespace Horo::Editor {
          * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
         [[nodiscard]] Result<Application::PackageRemovalPreview> InspectRemoval(PackageModalGeneration generation,
                                                                                const Packages::HoroPackageId &package) const;
+        /** @brief Confirms removal against the plan shown in this opening.
+         * @param generation Expected opening. @param package Selected direct dependency.
+         * @param reviewed Snapshot shown at preview. @return Operation ID or typed rejection. */
+        [[nodiscard]] Result<Application::PackageOperationId> Remove(PackageModalGeneration generation,
+                                                                     const Packages::HoroPackageId &package,
+                                                                     const std::shared_ptr<const Application::PackagePlanSnapshot> &reviewed);
 
     private:
         /** @brief Rejects controls from a closed or replaced modal opening before application access. */

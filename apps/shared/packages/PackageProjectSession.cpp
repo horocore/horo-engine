@@ -16,6 +16,51 @@ namespace Horo::Application::Internal {
             return Error{ErrorCode{code}, ErrorDomainId{"packages.host"}};
         }
 
+        /** @brief Opens bounded root-owned inputs on the I/O lane and publishes through the journaled authority. */
+        Result<void> RemoveSavedPackage(const PackageProjectPolicy &policy, const PreparedPackageProject &expected,
+                                        const Packages::HoroPackageId &package, DurableFileSystem &files,
+                                        PackageRemovalReadAuthorities reads,
+                                        std::shared_ptr<const Packages::PackageRemovalLease> reservation,
+                                        const CancellationToken &token) {
+            const Platform::ProjectReadContext context{.projectIdentity = "editor-package-removal",
+                                                      .projectGeneration = 1,
+                                                      .cancellation = token,
+                                                      .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30}};
+            const auto read = reads.openFiles(policy.projectRoot, context.projectIdentity, context.projectGeneration);
+            if (read.HasError())
+                return Result<void>::Failure(read.ErrorValue());
+            const auto assets = reads.openAssets(read.Value(), context, {});
+            if (assets.HasError())
+                return Result<void>::Failure(assets.ErrorValue());
+            const PackageRemovalSources sources{.assets = *assets.Value(),
+                                                .files = *read.Value(),
+                                                .context = context,
+                                                .live = std::move(reservation),
+                                                .requireAssetOnly = true};
+            const auto published = PublishPackageProjectRemoval(policy, expected, package, files, sources);
+            if (published.HasError())
+                return Result<void>::Failure(published.ErrorValue());
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures only the approved project and metadata digests in the worker's immutable policy. */
+        auto MakeRemovalPreparation(const PackageProjectPolicy &policy, const PreparedPackageProject &prepared,
+                                    const PackageProjectHostServices &services) {
+            PackageProjectPolicy removalPolicy{.projectRoot = policy.projectRoot, .limits = policy.limits};
+            PreparedPackageProject removalBase{.application = {.restore = {.projectRoot = policy.projectRoot}},
+                                               .lockDigest = prepared.lockDigest,
+                                               .requestDocumentDigest = prepared.requestDocumentDigest};
+            return [removalPolicy = std::move(removalPolicy), removalBase = std::move(removalBase),
+                    &files = services.files, reads = services.removal](
+                       const Packages::HoroPackageId &package, std::shared_ptr<const Packages::PackageRemovalLease> reservation) {
+                return Result<PackageRemovalWork>::Success([removalPolicy, removalBase, package, &files, reads,
+                                                           reservation = std::move(reservation)](
+                                                               const CancellationToken &cancellation) {
+                    return RemoveSavedPackage(removalPolicy, removalBase, package, files, reads, reservation, cancellation);
+                });
+            };
+        }
+
         /** @brief Preserves previously observed behavior IDs across role reactivation for the same artifact. */
         Result<void> MergeRegistration(PackageRemovalRegistrationEvidence &evidence, Registration observed) {
             auto match = std::ranges::find_if(evidence.registrations, [&observed](const auto &previous) {
@@ -116,6 +161,8 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(lifecycle.ErrorValue());
         impl->lifecycle = std::move(lifecycle).Value();
         prepared.application.wallClock = &services.wallClock;
+        if (services.removal.openFiles && services.removal.openAssets)
+            prepared.application.prepareRemoval = MakeRemovalPreparation(policy, prepared, services);
         auto application =
             PackageApplication::Create(services.jobs, *impl->restore, *impl->install, *impl->lifecycle, std::move(prepared.application));
         if (application.HasError())
@@ -146,6 +193,11 @@ namespace Horo::Application::Internal {
         if (impl_->closed)
             return Result<std::shared_ptr<PackageApplication>>::Failure(SessionError("packages.host.closed"));
         return Result<std::shared_ptr<PackageApplication>>::Success({shared_from_this(), impl_->application.get()});
+    }
+
+    /** @copydoc PackageProjectSession::RemovalPublished */
+    bool PackageProjectSession::RemovalPublished() const noexcept {
+        return impl_->application->RemovalPublished();
     }
 
     /** @copydoc PackageProjectSession::InstalledRecord */

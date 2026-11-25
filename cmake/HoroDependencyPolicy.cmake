@@ -464,7 +464,7 @@ horo_allow_target_dependencies(TARGET HoroGuiLiveReloadInternal)
 horo_allow_target_dependencies(TARGET HoroThirdPartyRccpp)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES HoroVisualAccessibility HoroGameplayAccessibility HoroXRSimulatorPlayHost HoroXRSimulatorProjectArtifacts HoroPlatformProjectIo HoroEditorClusteredLightingAssetsInternal HoroEditorBaselineLightingAssetsInternal HoroEditorViewportLightingInternal HoroEditorTerrainHostInternal HoroEditorGuiLiveReloadHost HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost HoroShaderHotReloadHostInternal
-        HoroPlatformProjectReadFiles
+        HoroPlatformProjectReadFiles HoroProjectAssetRegistrySource
         HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroMcpEditorCommandsInternal HoroEditorAgentHistoryInternal HoroModelProviderAdapters HoroAssets
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo

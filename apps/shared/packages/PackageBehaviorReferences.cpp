@@ -227,10 +227,9 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Accepts only exact staged archives that contain no executable or extension contribution. */
-        Result<void> CheckOfflineRemovalCoverage(const Packages::StagedPackageRestoreRecord &staged,
-                                                 const Packages::ValidatedPackageLockfileV1 &lock,
-                                                 const Packages::PackageRemovalGraphPreview &removal) {
-            const auto graph = staged.Graph();
+        Result<void> CheckAssetOnlyRemovalCoverage(const std::shared_ptr<const Packages::PackageRestoreGraph> &graph,
+                                                   const Packages::ValidatedPackageLockfileV1 &lock,
+                                                   const Packages::PackageRemovalGraphPreview &removal) {
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             for (const auto &expected : lock.Packages()) {
@@ -253,6 +252,8 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             const auto install = sources.live->InstalledRecord();
             const auto graph = install->Graph();
+            if (sources.requireAssetOnly)
+                return CheckAssetOnlyRemovalCoverage(graph, lock, removal);
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
             Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
@@ -285,7 +286,7 @@ namespace Horo::Application::Internal {
         if (auto valid = ValidateWithdrawal(lock, removal); valid.HasError())
             return valid;
         if (sources.offline)
-            return CheckOfflineRemovalCoverage(*sources.offline, lock, removal);
+            return CheckAssetOnlyRemovalCoverage(sources.offline->Graph(), lock, removal);
         return CheckLiveRemovalCoverage(sources, lock, removal);
     }
 

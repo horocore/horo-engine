@@ -26,6 +26,7 @@ namespace Horo::Application::Internal {
         std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
         std::shared_ptr<const Packages::PackageRemovalLease> live; /**< Owner-issued native reservation and sealed archive evidence. */
         const Packages::StagedPackageRestoreRecord *offline{}; /**< Read-only staging evidence for an asset-only withdrawal. */
+        bool requireAssetOnly{}; /**< This host may withdraw only verified data-only packages. */
     };
 
     /** @brief Reports when a locked contribution requires a live owner for removal.

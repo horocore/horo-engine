@@ -15,7 +15,7 @@ namespace Horo::Editor {
 
         /** @brief Binds presentation and an explicit project application capability. */
         PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
-                     bool gameplayModuleOwner);
+                     bool gameplayModuleOwner, std::function<bool()> removalAllowed = {});
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -33,14 +33,19 @@ namespace Horo::Editor {
         void DrawPackageDependents() const;
         /** @brief Reads an inert removal preview for the entered package. */
         void PreviewPackageRemoval();
-        /** @brief Displays the effects on the locked graph without offering an apply action. */
-        void DrawRemovalPreview() const;
+        /** @brief Shows exact graph effects and an explicit confirmation for eligible packages. */
+        void DrawRemovalPreview();
+        /** @brief Confirms removal against the plan displayed to the user. */
+        void DrawRemovalConfirmation();
+        /** @brief Checks whether a live removal must finish before normal modal exit. */
+        [[nodiscard]] bool Removing() const;
         void DrawDiagnostic(const Error &error) const;
         void DrawActions();
         void Activate(bool gameplayModule);
         void Record(const Result<Application::PackageOperationId> &result);
         const EditorGuiContext &context_;
         std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire_;
+        std::function<bool()> removalAllowed_;
         std::unique_ptr<PackageModalSession> session_;
         PackageModalGeneration generation_;
         bool gameplayModuleOwner_{};

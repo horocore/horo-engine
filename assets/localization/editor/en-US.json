@@ -4605,6 +4605,18 @@
     "workspace.packages.removal_native_in_use": {
       "text": "These packages still own active or closing modules. Disable the modules, let them finish closing, and preview again."
     },
+    "workspace.packages.removal_assets_only": {
+      "text": "The editor can remove verified asset-only packages after checking saved references."
+    },
+    "workspace.packages.removal_save_and_stop": {
+      "text": "Save open documents and stop Play before removing packages."
+    },
+    "workspace.packages.confirm_removal": {
+      "text": "Remove reviewed package"
+    },
+    "workspace.packages.removal_committed": {
+      "text": "Package removal saved. Reconnect to load the updated package list."
+    },
     "workspace.packages.descriptor": {
       "text": "Declared extension descriptor path"
     },

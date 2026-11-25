@@ -17,6 +17,8 @@ namespace Horo::Packages {
 }
 
 namespace Horo::Platform {
+    class IProjectReadFiles;
+    struct ProjectInventoryLimits;
     struct ProjectReadContext;
 }
 
@@ -26,6 +28,15 @@ namespace Horo::Application::Internal {
     /** @brief Short-lived exact Decision declaration leases acquired on the package owner lane. */
     using PackageDecisionNodeLeaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
 
+    /** @brief Explicit product factories for root-bound saved removal evidence. */
+    struct PackageRemovalReadAuthorities final {
+        Result<std::shared_ptr<const Platform::IProjectReadFiles>> (*openFiles)(const std::filesystem::path &, std::string,
+                                                                               std::uint64_t){};
+        Result<std::shared_ptr<const Assets::IAssetRegistrySource>> (*openAssets)(std::shared_ptr<const Platform::IProjectReadFiles>,
+                                                                                  Platform::ProjectReadContext,
+                                                                                  const Platform::ProjectInventoryLimits &){};
+    };
+
     /** @brief Explicit borrowed application services; all remain alive until host Close completes. */
     struct PackageProjectHostServices final {
         JobSystem &jobs;
@@ -33,6 +44,7 @@ namespace Horo::Application::Internal {
         const Clock &clock;
         const WallClock &wallClock;
         const Packages::IPackageExtensionTrust &trust;
+        PackageRemovalReadAuthorities removal;
     };
 
     /** @brief Explicit host policy; project metadata cannot choose transport, execution approval or native loading. */
@@ -188,6 +200,8 @@ namespace Horo::Application::Internal {
         /** @brief Issues a capability retaining all concrete authorities through pending callbacks.
          * @return Aliasing application capability or typed closed/owner-lane failure; no competing lifecycle owner. */
         [[nodiscard]] Result<std::shared_ptr<PackageApplication>> Application();
+        /** @brief Reads commit evidence on the session lane. @return True when the old lock was withdrawn. */
+        [[nodiscard]] bool RemovalPublished() const noexcept;
         /** @brief Reads the existing committed availability record on the owner lane without granting native execution.
          * @return Sealed immutable graph lease, empty before installation, or typed closed/foreign-lane failure.
          * @details The record retains archive bytes after session retirement; callers separately validate current host generation,

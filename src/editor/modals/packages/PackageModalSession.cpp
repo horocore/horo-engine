@@ -64,6 +64,7 @@ namespace Horo::Editor {
             case Application::PackageOperationKind::Disable:
                 return application_->Disable();
             case Application::PackageOperationKind::Activate:
+            case Application::PackageOperationKind::Remove:
                 return Result<Application::PackageOperationId>::Failure(ViewError("editor.packages.selection_required"));
         }
         return Result<Application::PackageOperationId>::Failure(ViewError("editor.packages.action_invalid"));
@@ -128,5 +129,14 @@ namespace Horo::Editor {
         if (auto valid = Validate(generation); valid.HasError())
             return Result<Application::PackageRemovalPreview>::Failure(valid.ErrorValue());
         return application_->InspectRemoval(package);
+    }
+
+    /** @copydoc PackageModalSession::Remove */
+    Result<Application::PackageOperationId> PackageModalSession::Remove(
+        const PackageModalGeneration generation, const Packages::HoroPackageId &package,
+        const std::shared_ptr<const Application::PackagePlanSnapshot> &reviewed) {
+        if (auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
+        return application_->Remove(package, reviewed);
     }
 }  // namespace Horo::Editor

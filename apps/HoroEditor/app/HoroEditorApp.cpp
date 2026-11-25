@@ -117,6 +117,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/NativeCredentialBackend.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/PlatformServices/PlatformProjectSettings.h"
 #include "Horo/Runtime/Input.h"
@@ -4133,7 +4134,9 @@ namespace Horo::Editor {
                     policy = std::move(packages.approval->policy);
                 }
                 auto created =
-                    Application::Internal::PackageProjectHost::Create({p.background.jobs, durableFiles, clock, wallClock, *execution},
+                    Application::Internal::PackageProjectHost::Create({p.background.jobs, durableFiles, clock, wallClock, *execution,
+                                                                       {Platform::CreateNativeProjectReadFiles,
+                                                                        Application::CreateProjectAssetRegistrySource}},
                                                                       std::move(policy), Duration::FromMilliseconds(1'000), nullptr,
                                                                       publishers);
                 if (created.HasError())

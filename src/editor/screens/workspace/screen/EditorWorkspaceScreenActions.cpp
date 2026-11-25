@@ -549,7 +549,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const std::filesystem::path root{controller_->ProjectRoot()};
         const auto opened = modalHost_.OpenRoot(std::make_unique<PackageModal>(context_, [acquire, root] {
             return acquire(root);
-        }, packages_.gameplayModuleOwner));
+        }, packages_.gameplayModuleOwner, [this, root] {
+            if (!controller_ || root != std::filesystem::path{controller_->ProjectRoot()} || HasDirtyDocuments())
+                return false;
+            const auto play = controller_->ViewModel().playState;
+            return play == EditorPlayState::Idle || play == EditorPlayState::Failed;
+        }));
         if (opened.HasError())
             LOG_WARN("editor.packages", "Package modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
     }

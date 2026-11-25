@@ -117,9 +117,22 @@ namespace Horo::Application::Internal {
                 return started;
             }
         }
-        if (impl_->current)
-            return impl_->current->Pump(impl_->Fresh(now) ? boundary : Packages::PackageActivationBoundary::Running);
-        return Result<void>::Success();
+        return impl_->PumpCurrent(impl_->Fresh(now) ? boundary : Packages::PackageActivationBoundary::Running);
+    }
+
+    /** @copydoc PackageProjectHost::Impl::PumpCurrent */
+    Result<void> PackageProjectHost::Impl::PumpCurrent(const Packages::PackageActivationBoundary boundary) {
+        if (!current)
+            return Result<void>::Success();
+        auto pumped = current->Pump(boundary);
+        if (pumped.HasError() || !current->RemovalPublished())
+            return pumped;
+        retiring = true;
+        sampledAt.reset();
+        jobRoot.clear();
+        if (metadataJob)
+            static_cast<void>(metadataJob->RequestCancel());
+        return AdvanceGeneration();
     }
 
     /** @copydoc PackageProjectHost::PumpProject */

@@ -180,7 +180,8 @@ namespace {
             REQUIRE(lock.HasValue());
             Write("packages.json", intent.dump());
             Write("packages.lock", lock.Value().SerializeCanonical());
-            auto created = PackageProjectHost::Create({jobs, files, clock, wall, trust},
+            auto created = PackageProjectHost::Create({jobs, files, clock, wall, trust,
+                                                       {Platform::CreateNativeProjectReadFiles, CreateProjectAssetRegistrySource}},
                                                       {.cacheRoot = std::filesystem::canonical(content.Path()) / "cache",
                                                        .platform = {"linux", "x64", "horo-sdk-2"},
                                                        .lifecycle = {.temporaryRoot = std::filesystem::canonical(content.Path()),
@@ -269,7 +270,76 @@ namespace {
             FAIL("Metadata preparation did not complete");
             return {};
         }
+
+        PackageOperationSnapshot Wait(PackageApplication &application, const PackageOperationId operation) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (std::chrono::steady_clock::now() < deadline) {
+                REQUIRE(host->Pump(Packages::PackageActivationBoundary::Quiescent).HasValue());
+                auto current = application.Query(operation);
+                REQUIRE(current.HasValue());
+                if (current.Value().outcome != PackageOperationOutcome::Running)
+                    return std::move(current).Value();
+                std::this_thread::yield();
+            }
+            FAIL("Package operation did not finish");
+            return {};
+        }
     };
+
+    TEST_CASE("Editor package removal rejects stale plans and saved importer references, then reloads the new lock",
+              "[packages][application][host][removal]") {
+        HostFixture fixture;
+        auto application = fixture.Acquire();
+        const auto beforeInstall = application->Plan().Value();
+        const auto install = application->Install();
+        REQUIRE(install.HasValue());
+        REQUIRE(fixture.Wait(*application, install.Value()).outcome == PackageOperationOutcome::Succeeded);
+        const auto preview = application->InspectRemoval(fixture.graph.package);
+        REQUIRE(preview.HasValue());
+        REQUIRE(preview.Value().supportsApply);
+        CHECK(application->Remove(fixture.graph.package, beforeInstall).HasError());
+
+        const auto plan = application->Plan().Value();
+        const auto asset = fixture.project.Path() / "Assets" / "model.horoasset";
+        auto sidecar = asset;
+        sidecar += ".horo";
+        std::ofstream{asset} << "{}";
+        std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                 {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
+                                                 {"assetType", "core.scene"},
+                                                 {"importerPackageId", fixture.graph.package.Value()}};
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto blocked = application->Remove(fixture.graph.package, plan);
+        REQUIRE(blocked.HasValue());
+        const auto rejection = fixture.Wait(*application, blocked.Value());
+        REQUIRE(rejection.outcome == PackageOperationOutcome::Failed);
+        REQUIRE(rejection.diagnostic);
+        CHECK(rejection.diagnostic->code.Value() == "packages.host.importer_in_use");
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        REQUIRE(std::filesystem::remove(sidecar));
+        REQUIRE(std::filesystem::remove(asset));
+
+        const auto generation = fixture.host->Generation();
+        const auto removed = application->Remove(fixture.graph.package, plan);
+        REQUIRE(removed.HasValue());
+        REQUIRE(fixture.Wait(*application, removed.Value()).outcome == PackageOperationOutcome::Succeeded);
+        CHECK(application->Install().HasError());
+        CHECK(fixture.host->Generation() != generation);
+        const auto locked = Packages::ValidatedPackageLockfileV1::Parse(fixture.Read("packages.lock"));
+        REQUIRE(locked.HasValue());
+        CHECK(locked.Value().Packages().empty());
+        const auto refreshed = fixture.Acquire();
+        CHECK(refreshed != application);
+        CHECK(refreshed->Plan().Value()->packages.empty());
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto rollback = ReadPackageProjectRollback(policy, fixture.files, {});
+        REQUIRE(rollback.HasValue());
+        CHECK(rollback.Value().request == oldRequest);
+        CHECK(rollback.Value().lock == oldLock);
+    }
 
     TEST_CASE("Live removal requires the right project's reservation and revokes activation after commit", "[packages][application][host]") {
         HostFixture fixture;
@@ -299,6 +369,25 @@ namespace {
         const auto activated = fixture.removalLifecycle->Activate({}, Packages::PackageActivationBoundary::Quiescent, {});
         REQUIRE(activated.HasError());
         CHECK(activated.ErrorValue().code.Value() == "packages.activation.removal_reserved");
+    }
+
+    TEST_CASE("Editor package removal leaves executable contributions and their lock intact", "[packages][application][host][removal]") {
+        HostFixture fixture{true};
+        const auto application = fixture.Acquire();
+        const auto install = application->Install();
+        REQUIRE(install.HasValue());
+        REQUIRE(fixture.Wait(*application, install.Value()).outcome == PackageOperationOutcome::Succeeded);
+        const auto request = fixture.Read("packages.json");
+        const auto lock = fixture.Read("packages.lock");
+        const auto remove = application->Remove(fixture.graph.package, application->Plan().Value());
+        REQUIRE(remove.HasValue());
+        const auto rejected = fixture.Wait(*application, remove.Value());
+        REQUIRE(rejected.outcome == PackageOperationOutcome::Failed);
+        REQUIRE(rejected.diagnostic);
+        CHECK(rejected.diagnostic->code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        CHECK(fixture.Read("packages.json") == request);
+        CHECK(fixture.Read("packages.lock") == lock);
+        CHECK(application->Plan().HasValue());
     }
 
     TEST_CASE("Package metadata removal recovers both sides of the lock commit point", "[packages][application][host][removal-rollback]") {

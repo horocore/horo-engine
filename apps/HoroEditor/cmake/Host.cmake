@@ -40,7 +40,8 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE dwmapi)
     endif()
 
-    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal HoroEngine::Assets)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroEngine::ProjectAssetRegistrySource
+        HoroShaderHotReloadHostInternal HoroEngine::Assets)
     target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
     target_link_libraries(HoroEditor PRIVATE HoroMcpEditorCommandsInternal)
     target_link_libraries(HoroEditor PRIVATE HoroEngine::XRApi HoroEngine::SceneSourceModel)

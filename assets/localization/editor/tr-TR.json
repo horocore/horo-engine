@@ -4605,6 +4605,18 @@
     "workspace.packages.removal_native_in_use": {
       "text": "Bu paketlerin modülleri hâlâ etkin veya kapanıyor. Modülleri devre dışı bırakıp kapanmaları tamamlandığında tekrar önizleyin."
     },
+    "workspace.packages.removal_assets_only": {
+      "text": "Editör, kayıtlı referansları denetledikten sonra yalnızca doğrulanmış varlık paketlerini kaldırabilir."
+    },
+    "workspace.packages.removal_save_and_stop": {
+      "text": "Paket kaldırmadan önce açık belgeleri kaydedin ve Play oturumunu durdurun."
+    },
+    "workspace.packages.confirm_removal": {
+      "text": "Önizlenen paketi kaldır"
+    },
+    "workspace.packages.removal_committed": {
+      "text": "Paket kaldırma işlemi kaydedildi. Güncel paket listesini yüklemek için yeniden bağlanın."
+    },
     "workspace.packages.descriptor": {
       "text": "Bildirilen uzantı tanımlayıcısının yolu"
     },

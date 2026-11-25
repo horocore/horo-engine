@@ -6,13 +6,15 @@
 #include "Horo/Packages/PackageLifecycleErrors.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
                                std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
-                               const bool gameplayModuleOwner)
-        : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)), gameplayModuleOwner_(gameplayModuleOwner) {}
+                               const bool gameplayModuleOwner, std::function<bool()> removalAllowed)
+        : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)), removalAllowed_(std::move(removalAllowed)),
+          gameplayModuleOwner_(gameplayModuleOwner) {}
 
     ModalId PackageModal::Id() const {
         return ModalId{0x5041434B41474553ULL};
@@ -63,13 +65,16 @@ namespace Horo::Editor {
         }
     }
 
-    CloseDecision PackageModal::CanClose(ModalCloseReason) {
-        return CloseDecision::Allow;
+    CloseDecision PackageModal::CanClose(const ModalCloseReason reason) {
+        return Removing() && reason != ModalCloseReason::ApplicationShutdown ? CloseDecision::Deny : CloseDecision::Allow;
     }
 
     void PackageModal::OnClose(ModalCloseReason) {
-        if (session_)
+        if (session_) {
+            if (Removing())
+                static_cast<void>(session_->Cancel(generation_));
             static_cast<void>(session_->Close(generation_));
+        }
     }
 
     const std::string &PackageModal::Text(const char *key) const {
@@ -137,7 +142,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PackageModal::DrawRemovalPreview */
-    void PackageModal::DrawRemovalPreview() const {
+    void PackageModal::DrawRemovalPreview() {
         if (!removalPreview_)
             return;
         const auto &removed = removalPreview_->graph.removed;
@@ -149,7 +154,32 @@ namespace Horo::Editor {
             Ui::Hint(Text("removal_native_in_use").c_str(), context_.theme.fonts);
             for (const auto &package : removalPreview_->activeOrRetiring)
                 Ui::Hint(package.Value().c_str(), context_.theme.fonts);
+            return;
         }
+        if (removed.empty() || !removalPreview_->graph.directRoot || !removalAllowed_ || !removalPreview_->supportsApply)
+            return;
+        DrawRemovalConfirmation();
+    }
+
+    /** @copydoc PackageModal::DrawRemovalConfirmation */
+    void PackageModal::DrawRemovalConfirmation() {
+        const bool running = session_->Operation() && session_->Operation()->outcome == Application::PackageOperationOutcome::Running;
+        const bool ready = !running && removalAllowed_();
+        Ui::Hint(Text(ready ? "removal_assets_only" : "removal_save_and_stop").c_str(), context_.theme.fonts);
+        if (Ui::Button({.label = Text("confirm_removal").c_str(), .enabled = ready,
+                        .font = context_.theme.fonts.sans, .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+            const auto selected = Packages::HoroPackageId::Parse(package_);
+            if (selected.HasError())
+                error_ = selected.ErrorValue();
+            else
+                Record(session_->Remove(generation_, selected.Value(), displayedPlan_));
+        }
+    }
+
+    bool PackageModal::Removing() const {
+        const auto *operation = session_ && session_->Operation() ? &*session_->Operation() : nullptr;
+        return operation && operation->kind == Application::PackageOperationKind::Remove &&
+               operation->outcome == Application::PackageOperationOutcome::Running;
     }
 
     /** @brief Keeps the original typed cause for structured diagnostics; visible copy remains localized. */
@@ -187,8 +217,8 @@ namespace Horo::Editor {
 
     /** @brief Stacks shared controls at available width; no implicit trust toggle or package mutation occurs during drawing. */
     void PackageModal::DrawActions() {
-        const auto *operation = session_ && session_->Operation() ? &*session_->Operation() : nullptr;
-        const bool running = operation && operation->outcome == Application::PackageOperationOutcome::Running;
+        const bool running = session_ && session_->Operation() &&
+                             session_->Operation()->outcome == Application::PackageOperationOutcome::Running;
         const auto button = [this](const char *key, const bool enabled) {
             return Ui::Button({.label = Text(key).c_str(),
                                .enabled = enabled,
@@ -223,8 +253,11 @@ namespace Horo::Editor {
             if (const auto cancelled = session_->Cancel(generation_); cancelled.HasError())
                 error_ = cancelled.ErrorValue();
         }
-        if (operation) {
-            Ui::Hint(Text(running ? "running" : "terminal").c_str(), context_.theme.fonts);
+        if (session_ && session_->Operation()) {
+            const auto &operation = session_->Operation();
+            const bool removed = operation->kind == Application::PackageOperationKind::Remove &&
+                                 operation->outcome == Application::PackageOperationOutcome::Succeeded;
+            Ui::Hint(Text(removed ? "removal_committed" : running ? "running" : "terminal").c_str(), context_.theme.fonts);
             if (operation->diagnostic)
                 DrawDiagnostic(*operation->diagnostic);
         }
@@ -241,6 +274,10 @@ namespace Horo::Editor {
             if (cause->code.Value().size() <= 256)
                 Ui::Hint(cause->code.Value().c_str(), context_.theme.fonts);
         }
+        for (const auto &diagnostic : error.diagnostics | std::views::take(32)) {
+            if (diagnostic.code.Value() == "packages.host.importer_in_use")
+                Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
+        }
     }
 
     ModalFrameResult PackageModal::Draw() {
@@ -251,7 +288,7 @@ namespace Horo::Editor {
                                     .minimumWidth = 280,
                                     .minimumHeight = 240,
                                     .footerHeight = Theme::Layout::FooterH,
-                                    .showClose = true,
+                                    .showClose = !Removing(),
                                     .titleFontSize = Theme::TextPx::Title()},
                                    context_.theme.fonts);
         ImGui::BeginChild("##PackageBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
@@ -264,6 +301,7 @@ namespace Horo::Editor {
         }
         if (Ui::Button({.label = Text("retry").c_str(),
                         .variant = Ui::ButtonVariant::Secondary,
+                        .enabled = !Removing(),
                         .font = context_.theme.fonts.sans,
                         .style = {.width = Ui::StyleWidth::FillAvailable}}))
             Reconnect();
@@ -272,6 +310,7 @@ namespace Horo::Editor {
         shell.BeginFooter({16, 12});
         const bool close = Ui::Button({.label = Text("close").c_str(),
                                        .variant = Ui::ButtonVariant::Secondary,
+                                       .enabled = !Removing(),
                                        .font = context_.theme.fonts.sans,
                                        .style = {.width = Ui::StyleWidth::FillAvailable}});
         shell.EndFooter();

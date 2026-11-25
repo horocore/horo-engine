@@ -15,7 +15,8 @@ namespace Horo::Application {
         Restore,
         Install,
         Activate,
-        Disable
+        Disable,
+        Remove
     };
     /** @brief Authoritative operation disposition, separate from installed and active package state. */
     enum class PackageOperationOutcome : std::uint8_t {
@@ -30,7 +31,8 @@ namespace Horo::Application {
         Restoring,
         Installing,
         Activating,
-        Completed
+        Completed,
+        Removing
     };
 
     /** @brief Non-wrapping identity scoped to the explicitly injected application service. */
@@ -85,7 +87,11 @@ namespace Horo::Application {
     struct PackageRemovalPreview final {
         Packages::PackageRemovalGraphPreview graph;
         std::vector<Packages::HoroPackageId> activeOrRetiring; /**< Departing packages whose native owners have not drained. */
+        bool supportsApply{}; /**< The host supplies saved-reference and publication authorities. */
     };
+
+    /** @brief Host-prepared project publication work. It owns its removal reservation through completion. */
+    using PackageRemovalWork = std::function<Result<void>(const CancellationToken &)>;
 
     /** @brief Exact host policy; no portable package request can approve execution or select a native loader. */
     struct PackageApplicationConfiguration final {
@@ -95,6 +101,9 @@ namespace Horo::Application {
         std::function<Result<void>()> validateAdmission; /**< Owner-lane current metadata/policy check; retained through Close. */
         const WallClock *wallClock{};                    /**< Host clock retained through Close; mandatory for publisher verification. */
         std::size_t maximumEnabledDescriptors{64};       /**< Application bound for descriptor or module selections. */
+        /** @brief Owner-lane callback that prepares a worker against the exact current project. Absent for read-only adapters. */
+        std::function<Result<PackageRemovalWork>(const Packages::HoroPackageId &, std::shared_ptr<const Packages::PackageRemovalLease>)>
+            prepareRemoval;
     };
 
     /**
@@ -182,6 +191,17 @@ namespace Horo::Application {
          * @return Read-only graph and lifetime evidence or a stale/missing evidence failure.
          * @details The preview is a point-in-time observation. A mutation must independently recheck native owners and project references. */
         [[nodiscard]] Result<PackageRemovalPreview> InspectRemoval(const Packages::HoroPackageId &package) const;
+        /** @brief Submits explicitly confirmed package removal against a currently displayed plan.
+         * @param package Direct dependency selected in the preview.
+         * @param reviewed Exact immutable plan held when the caller showed the preview.
+         * @param cancellation Parent I/O stop token.
+         * @return Operation ID or typed admission error. Success revokes further mutations on the old plan.
+         */
+        [[nodiscard]] Result<PackageOperationId> Remove(const Packages::HoroPackageId &package,
+                                                        const std::shared_ptr<const PackagePlanSnapshot> &reviewed,
+                                                        const CancellationToken &cancellation = {});
+        /** @brief Observes durable withdrawal on the owner lane so the host can reload package metadata. @return Commit evidence. */
+        [[nodiscard]] bool RemovalPublished() const noexcept;
         /**
          * @brief Previews an explicitly resolved candidate against the current project package plan.
          * @param candidate Portable intent for the candidate.
