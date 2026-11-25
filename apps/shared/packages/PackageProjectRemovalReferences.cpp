@@ -67,4 +67,11 @@ namespace Horo::Application::Internal {
         }
         return Report::Success(std::move(capture).TakeReferences());
     }
+
+    /** @copydoc AppendPackageImporterDiagnostics */
+    void AppendPackageImporterDiagnostics(std::vector<Diagnostic> &diagnostics, const std::span<const PackageImporterReference> references) {
+        for (const auto &reference : references)
+            diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_in_use"}, DiagnosticSeverity::Error,
+                                     reference.package.Value(), SourceLocation{"packages.host"}, reference.assetPath);
+    }
 }  // namespace Horo::Application::Internal

@@ -27,8 +27,8 @@ add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.
     shared/packages/ApprovedGameplayPackageHost.cpp)
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
 target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
-target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication
-    PRIVATE HoroEngine::PackageGameplayHost HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets
+target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication HoroEngine::PackageGameplayHost
+    PRIVATE HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets
         HoroEngine::ProjectMutationGuard HoroEngine::ProjectReadFilesApi HoroEngine::SceneSource HoroEngine::PrefabAuthoring)
 
 # One application-owned signature document codec, shared by the package CLI and

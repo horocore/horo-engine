@@ -447,8 +447,9 @@ mutation lease. If repair cannot finish, the journal remains for the next
 project preparation.
 
 `horo-engine package preview-remove --project /path/to/project --package-id
-com.vendor.pack` lists the exact locked packages that would leave and returns
-an approval fingerprint. Pass that fingerprint as `--approve` to `package
+com.vendor.pack` checks saved asset importer references against the exact
+departing packages. If those references are clear, it lists the packages
+that would leave and returns an approval fingerprint. Pass that fingerprint as `--approve` to `package
 remove` together with the same project, package ID, and
 `--package-cache-root`. The command verifies the current locked archives from
 the local cache and rechecks the project inventory under the mutation lease.

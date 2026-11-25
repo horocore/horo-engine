@@ -224,6 +224,9 @@ namespace Horo::Application::Internal {
                                     std::move(removalPackage)});
         }
 
+        /** @brief Scans the exact reviewed removal graph without issuing any project or package mutation. */
+        Result<void> ReviewRemovalImporters(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
+
         class PackageUpdatePreviewAdapter final : public Cli::ICliCommandAdapter {
         public:
             PackageUpdatePreviewAdapter(Cli::CliCommandDescriptor descriptor, const PackageOperation operation)
@@ -241,6 +244,10 @@ namespace Horo::Application::Internal {
                 const auto preview = InspectUpdate(request, operation_, context.Cancellation());
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
+                if (operation_ == PackageOperation::Removal) {
+                    if (const auto references = ReviewRemovalImporters(preview.Value(), context); references.HasError())
+                        return Output::Failure(references.ErrorValue());
+                }
                 return Output::Success(EncodePreview(preview.Value(), offset.Value()));
             }
 
@@ -339,6 +346,47 @@ namespace Horo::Application::Internal {
                     .authorityStopped = [&context] { return context.IsStopRequested(); }};
         }
 
+        /** @brief Retains the same root-bound assets and file authority for preview or an approved mutation. */
+        struct RemovalInventory final {
+            Platform::ProjectReadContext admission;
+            std::shared_ptr<const Platform::IProjectReadFiles> files;
+            std::shared_ptr<const Assets::IAssetRegistrySource> assets;
+        };
+
+        /** @brief Opens the project inventory with the exact command's timeout and cancellation. */
+        Result<RemovalInventory> OpenRemovalInventory(const PackageProjectPolicy &policy, const Cli::CliExecutionContext &context) {
+            using Inventory = Result<RemovalInventory>;
+            auto admission = ReadAuthority(policy, context);
+            auto read = Platform::CreateNativeProjectReadFiles(policy.projectRoot, admission.projectIdentity, admission.projectGeneration);
+            if (read.HasError())
+                return Inventory::Failure(read.ErrorValue());
+            auto assets = CreateProjectAssetRegistrySource(read.Value(), admission);
+            if (assets.HasError())
+                return Inventory::Failure(assets.ErrorValue());
+            return Inventory::Success({std::move(admission), std::move(read).Value(), std::move(assets).Value()});
+        }
+
+        Result<void> ReviewRemovalImporters(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context) {
+            Packages::PackageRemovalGraphPreview impact;
+            for (const auto &change : update.preview.changes)
+                if (change.current && !change.candidate)
+                    impact.removed.push_back({change.current->package, change.current->version});
+            if (impact.removed.empty())
+                return Result<void>::Success();
+            const auto inventory = OpenRemovalInventory(update.policy, context);
+            if (inventory.HasError())
+                return Result<void>::Failure(inventory.ErrorValue());
+            const auto references = InspectPackageRemovalImporters(*inventory.Value().assets, impact);
+            if (references.HasError())
+                return Result<void>::Failure(references.ErrorValue());
+            if (references.Value().empty())
+                return Result<void>::Success();
+            std::vector<Diagnostic> diagnostics;
+            AppendPackageImporterDiagnostics(diagnostics, references.Value());
+            return Result<void>::Failure(Error{ErrorCode{diagnostics.front().code.Value()}, ErrorDomainId{"packages.host"},
+                                               ErrorSeverity::Error, "", std::move(diagnostics)});
+        }
+
         /** @brief Publishes an approved offline withdrawal after inspecting the real root-bound project inventory. */
         Result<Cli::CliCommandResult> ApplyRemoval(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
                                                    Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
@@ -348,17 +396,12 @@ namespace Horo::Application::Internal {
             const auto verified = StageWithCache(restore, files, cache, context);
             if (verified.HasError())
                 return Output::Failure(verified.ErrorValue());
-            const auto admission = ReadAuthority(update.policy, context);
-            const auto read =
-                Platform::CreateNativeProjectReadFiles(update.policy.projectRoot, admission.projectIdentity, admission.projectGeneration);
-            if (read.HasError())
-                return Output::Failure(read.ErrorValue());
-            const auto assets = CreateProjectAssetRegistrySource(read.Value(), admission);
-            if (assets.HasError())
-                return Output::Failure(assets.ErrorValue());
-            const PackageRemovalSources sources{.assets = *assets.Value(),
-                                                .files = *read.Value(),
-                                                .context = admission,
+            const auto inventory = OpenRemovalInventory(update.policy, context);
+            if (inventory.HasError())
+                return Output::Failure(inventory.ErrorValue());
+            const PackageRemovalSources sources{.assets = *inventory.Value().assets,
+                                                .files = *inventory.Value().files,
+                                                .context = inventory.Value().admission,
                                                 .offline = &verified.Value()};
             const auto published = PublishPackageProjectRemoval(update.policy, update.base, *update.removalPackage, files, sources);
             if (published.HasError())

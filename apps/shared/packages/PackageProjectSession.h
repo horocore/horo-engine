@@ -138,6 +138,9 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(
         const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal);
 
+    /** @brief Adds one canonical removal diagnostic for every confirmed saved importer reference. */
+    void AppendPackageImporterDiagnostics(std::vector<Diagnostic> &diagnostics, std::span<const PackageImporterReference> references);
+
     /** @brief Publishes an approved removal and retains the prior metadata pair for explicit rollback.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.

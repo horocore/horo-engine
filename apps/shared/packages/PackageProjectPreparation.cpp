@@ -493,13 +493,6 @@ namespace Horo::Application::Internal {
             std::ranges::move(failure.diagnostics, std::back_inserter(blocking->diagnostics));
         }
 
-        /** @brief Converts confirmed references to the same diagnostics used for incomplete inventory. */
-        void AppendImporterReferences(std::vector<Diagnostic> &diagnostics, std::span<const PackageImporterReference> references) {
-            for (const auto &reference : references)
-                diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_in_use"}, DiagnosticSeverity::Error,
-                                         reference.package.Value(), SourceLocation{"packages.host"}, reference.assetPath);
-        }
-
         /** @brief Retains the asset, object, and attachment identity for each confirmed use. */
         void AppendBehaviorReferences(std::vector<Diagnostic> &diagnostics, std::span<const PackageBehaviorReference> references) {
             for (const auto &reference : references)
@@ -521,7 +514,7 @@ namespace Horo::Application::Internal {
             if (importers.HasError())
                 RecordRemovalFailure(blocking, std::move(importers).ErrorValue());
             else
-                AppendImporterReferences(references, importers.Value());
+                AppendPackageImporterDiagnostics(references, importers.Value());
 
             auto behaviors =
                 InspectPackageBehaviorReferences(sources.assets, sources.files, sources.context, sources.registrations, lock, impact);

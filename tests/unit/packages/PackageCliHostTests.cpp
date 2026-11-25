@@ -306,6 +306,7 @@ namespace {
         CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
                                   .options = {NativeProject::PathOption("project", root),
                                               {"package-id", {{id, CliValueSource::Invocation, {}}}}}};
+        const auto reviewCommand = command;
         InInvocation([&](CliExecutionContext &context) {
             const auto reviewed = preview.adapter->Execute(command, context);
             REQUIRE(reviewed.HasValue());
@@ -326,17 +327,31 @@ namespace {
                 return;
             }
 
-            std::ofstream{assets / "sample.horoasset"} << "{}";
-            const auto sidecar = assets / "sample.horoasset.horo";
-            std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
-                                                     {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
-                                                     {"assetType", "core.scene"},
-                                                     {"importerPackageId", id}};
+            const auto writeReference = [&](const char *name, const char *assetId) {
+                const auto asset = assets / name;
+                auto sidecar = asset;
+                sidecar += ".horo";
+                std::ofstream{asset} << "{}";
+                std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                         {"assetId", assetId},
+                                                         {"assetType", "core.scene"},
+                                                         {"importerPackageId", id}};
+            };
+            writeReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+            writeReference("second.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff82");
+            const auto blockedReview = preview.adapter->Execute(reviewCommand, context);
+            REQUIRE(blockedReview.HasError());
+            CHECK(blockedReview.ErrorValue().code.Value() == "packages.host.importer_in_use");
+            const auto &references = blockedReview.ErrorValue().diagnostics;
+            REQUIRE(references.size() == 2);
+            CHECK(references[0].path.ends_with("sample.horoasset"));
+            CHECK(references[1].path.ends_with("second.horoasset"));
             const auto blocked = apply.adapter->Execute(command, context);
             REQUIRE(blocked.HasError());
             CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
-            REQUIRE(std::filesystem::remove(sidecar));
-            REQUIRE(std::filesystem::remove(assets / "sample.horoasset"));
+            CHECK(blocked.ErrorValue().diagnostics.size() == references.size());
+            for (const auto name : {"sample.horoasset", "sample.horoasset.horo", "second.horoasset", "second.horoasset.horo"})
+                REQUIRE(std::filesystem::remove(assets / name));
             const auto removed = apply.adapter->Execute(command, context);
             REQUIRE(removed.HasValue());
             CHECK_FALSE(std::get<bool>(removed.Value().fields.front().value));
