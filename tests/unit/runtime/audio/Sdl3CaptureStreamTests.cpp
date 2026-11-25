@@ -33,11 +33,11 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Polls within a fixed test deadline while the actual SDL recording thread supplies PCM. */
-        Sdl3CaptureReadout WaitForOverflow(Sdl3AudioBackend &backend, const std::uint64_t generation) {
+        Sdl3CaptureReadout WaitForOverflow(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
             AudioCapturedBlock ignored;
             while (std::chrono::steady_clock::now() < deadline) {
-                const auto read = backend.ReadCapture(generation, ignored, {});
+                const auto read = backend.ReadCapture(grant.generation, grant, ignored, {});
                 REQUIRE(read.HasValue());
                 if (read.Value().latestDrop)
                     return read.Value();
@@ -48,11 +48,11 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Reads the next complete live block, including a following generation or gap. */
-        AudioCapturedBlock WaitForBlock(Sdl3AudioBackend &backend, const std::uint64_t generation, std::span<AudioSample> pcm) {
+        AudioCapturedBlock WaitForBlock(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant, std::span<AudioSample> pcm) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
             AudioCapturedBlock block;
             while (std::chrono::steady_clock::now() < deadline) {
-                const auto read = backend.ReadCapture(generation, block, pcm);
+                const auto read = backend.ReadCapture(grant.generation, grant, block, pcm);
                 REQUIRE(read.HasValue());
                 if (read.Value().status == AudioCaptureRead::Copied)
                     return block;
@@ -73,8 +73,9 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Checks that live PCM and the source timeline survive a stalled reader. */
-        void VerifyOverflow(Sdl3AudioBackend &backend, const AudioCaptureBufferDescriptor &descriptor, std::span<AudioSample> pcm) {
-            const auto full = WaitForOverflow(backend, descriptor.generation);
+        void VerifyOverflow(Sdl3AudioBackend &backend, const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant,
+                            std::span<AudioSample> pcm) {
+            const auto full = WaitForOverflow(backend, grant);
             CHECK(full.status == AudioCaptureRead::InsufficientSpace);
             CHECK(full.droppedFrames > 0);
             REQUIRE(full.latestDrop);
@@ -86,7 +87,7 @@ namespace Horo::Audio::Backend {
             CHECK(activity.purpose == Sdl3CapturePurpose::Speech);
             const auto channels = descriptor.format.layout.orderedChannels.size();
             AudioCapturedBlock first;
-            const auto readFirst = backend.ReadCapture(descriptor.generation, first, pcm);
+            const auto readFirst = backend.ReadCapture(grant.generation, grant, first, pcm);
             REQUIRE(readFirst.HasValue());
             REQUIRE(readFirst.Value().status == AudioCaptureRead::Copied);
             REQUIRE(first.frames > 0);
@@ -98,7 +99,7 @@ namespace Horo::Audio::Backend {
             }));
 
             AudioCapturedBlock second;
-            const auto readSecond = backend.ReadCapture(descriptor.generation, second, pcm);
+            const auto readSecond = backend.ReadCapture(grant.generation, grant, second, pcm);
             REQUIRE(readSecond.HasValue());
             REQUIRE(readSecond.Value().status == AudioCaptureRead::Copied);
             CHECK(second.firstFrame == first.frames);
@@ -108,7 +109,7 @@ namespace Horo::Audio::Backend {
             CHECK(full.latestDrop->sequence > second.sequence);
             CHECK(full.latestDrop->start.nanoseconds - first.start.nanoseconds ==
                   full.latestDrop->firstFrame * 1'000'000'000 / descriptor.format.sampleRate);
-            const auto afterGap = WaitForBlock(backend, descriptor.generation, pcm);
+            const auto afterGap = WaitForBlock(backend, grant, pcm);
             CHECK(afterGap.sequence > second.sequence + 1);
             CHECK(afterGap.firstFrame == second.firstFrame + second.frames + afterGap.droppedFramesBefore);
             CHECK(afterGap.start.nanoseconds - first.start.nanoseconds ==
@@ -143,13 +144,13 @@ namespace Horo::Audio::Backend {
             CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
 
             std::vector pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 1.0F);
-            VerifyOverflow(*backend, descriptor, pcm);
+            VerifyOverflow(*backend, descriptor, grant, pcm);
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
             CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
             CHECK(backend->CaptureActivity().generation == 0);
             AudioCapturedBlock stopped;
-            CHECK(backend->ReadCapture(descriptor.generation, stopped, pcm).HasError());
+            CHECK(backend->ReadCapture(descriptor.generation, grant, stopped, pcm).HasError());
             CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
             auto replacement = descriptor;
             ++replacement.generation;
@@ -157,7 +158,8 @@ namespace Horo::Audio::Backend {
             ++grant.authorityRevision;
             REQUIRE(backend->StartCapture(replacement, intent, grant).HasValue());
             CHECK(backend->StopCapture(descriptor.generation).HasError());
-            const auto restarted = WaitForBlock(*backend, replacement.generation, pcm);
+            CHECK(backend->ReadCapture(descriptor.generation, std::nullopt, stopped, pcm).HasError());
+            const auto restarted = WaitForBlock(*backend, grant, pcm);
             CHECK(restarted.firstFrame == 0);
             CHECK(restarted.sequence == 1);
             CHECK(restarted.droppedFramesBefore == 0);
@@ -205,10 +207,50 @@ namespace Horo::Audio::Backend {
                 CHECK(revoked.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
             }
             AudioCapturedBlock block{};
-            CHECK(backend->ReadCapture(descriptor.generation, block, {}).HasError());
+            CHECK(backend->ReadCapture(descriptor.generation, grant, block, {}).HasError());
             CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
             CHECK(backend->CaptureActivity().purpose == Sdl3CapturePurpose::Unspecified);
             REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+        }
+
+        TEST_CASE("SDL checks current speech consent before copying already queued PCM", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant admitted{.device = descriptor.device,
+                                            .discoveryRevision = catalog.revision,
+                                            .generation = descriptor.generation,
+                                            .authorityRevision = 1,
+                                            .intent = {.purpose = Sdl3CapturePurpose::Speech},
+                                            .foreground = true};
+            REQUIRE(backend->StartCapture(descriptor, admitted.intent, admitted).HasValue());
+            WaitForActivity(*backend);
+            std::optional consent{admitted};
+            SECTION("withdrawal") {
+                consent.reset();
+            }
+            SECTION("authority replacement") {
+                ++consent->authorityRevision;
+            }
+            SECTION("foreground loss") {
+                consent->foreground = false;
+            }
+            SECTION("recording permission presented to speech") {
+                consent->intent.purpose = Sdl3CapturePurpose::Recording;
+            }
+
+            AudioCapturedBlock block{.sequence = 8};
+            const std::vector original(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 0.25F);
+            auto pcm = original;
+            const auto denied = backend->ReadCapture(descriptor.generation, consent, block, pcm);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            CHECK(block.sequence == 8);
+            CHECK(pcm == original);
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->ReadCapture(descriptor.generation, admitted, block, pcm).HasError());
         }
 
         TEST_CASE("SDL normal recording stop transfers unread PCM only under the current recording grant", "[audio][sdl3][capture]") {
@@ -268,7 +310,7 @@ namespace Horo::Audio::Backend {
             CHECK(backend->CaptureActivity().peakLevel == 0.0F);  // Dummy recorder emits silence.
             AudioCapturedBlock block{.sequence = 8};
             std::array<AudioSample, 2> pcm{0.25F, -0.5F};
-            const auto denied = backend->ReadCapture(descriptor.generation, block, pcm);
+            const auto denied = backend->ReadCapture(descriptor.generation, grant, block, pcm);
             REQUIRE(denied.HasError());
             CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
             CHECK(block.sequence == 8);
@@ -286,7 +328,7 @@ namespace Horo::Audio::Backend {
             REQUIRE(discovery.HasValue());
             CHECK(discovery.Value().snapshot.permission == AudioCapturePermission::NotRequired);
             AudioCapturedBlock block{};
-            CHECK(backend->ReadCapture(1, block, {}).HasError());
+            CHECK(backend->ReadCapture(1, std::nullopt, block, {}).HasError());
         }
     }  // namespace
 }  // namespace Horo::Audio::Backend

@@ -207,7 +207,7 @@ namespace Horo::Editor {
             using enum Audio::Backend::AudioCaptureRead;
             for (unsigned i = 0; i < 4; ++i) {
                 Audio::Backend::AudioCapturedBlock block;
-                const auto read = backend->ReadCapture(grant->generation, block, take->scratch);
+                const auto read = backend->ReadCapture(grant->generation, grant, block, take->scratch);
                 if (read.HasError() || read.Value().droppedFrames != 0)
                     return false;
                 if (read.Value().status == Empty)

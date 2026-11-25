@@ -176,16 +176,18 @@ namespace Horo::Audio::Backend {
          */
         [[nodiscard]] Sdl3CaptureActivity CaptureActivity() const noexcept;
 
-        /** @brief Copies one captured block after checking native health and permission on Audio control.
+        /** @brief Copies one captured block after checking current host admission and native health on Audio control.
          * @param generation Exact active capture generation.
+         * @param grant Current host admission for this generation, or empty if withdrawn.
          * @param block Destination written only on a successful copy. Timestamps use an SDL host-clock estimate.
          * @param pcm Consumer-owned destination for interleaved float PCM.
          * @return Copy status and loss count, or typed stale session, permission loss, device loss or callback fault.
+         * A withdrawn grant retires the stream before copying. Errors leave both destinations untouched.
          * @details Connection testing reports its level through CaptureActivity and never grants PCM access.
          * Monitoring requires ReadMonitoring so raw PCM cannot bypass its gain and queue-age policy.
          */
-        [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, AudioCapturedBlock &block,
-                                                             std::span<AudioSample> pcm);
+        [[nodiscard]] Result<Sdl3CaptureReadout> ReadCapture(std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant,
+                                                             AudioCapturedBlock &block, std::span<AudioSample> pcm);
 
         /** @brief Reads gain-limited local monitor PCM under the current exact consent and output route.
          * @param generation Exact active capture generation. @param grant Refreshed host admission for this route.

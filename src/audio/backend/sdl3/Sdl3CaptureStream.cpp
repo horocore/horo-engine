@@ -331,18 +331,16 @@ namespace Horo::Audio::Backend {
     }
 
     /** @copydoc Sdl3AudioBackend::ReadCapture */
-    Result<Sdl3CaptureReadout> Sdl3AudioBackend::ReadCapture(const std::uint64_t generation, AudioCapturedBlock &block,
-                                                             const std::span<AudioSample> pcm) {
+    Result<Sdl3CaptureReadout> Sdl3AudioBackend::ReadCapture(const std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant,
+                                                             AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
         using Output = Result<Sdl3CaptureReadout>;
         auto &capture = impl_->capture;
         if (!capture.stream || generation != capture.lastGeneration)
             return Output::Failure(MakeError(AudioErrors::HandleStale));
         if (capture.activeGrant.intent.purpose == Sdl3CapturePurpose::ConnectionTest || capture.activeGrant.intent.monitor.has_value())
             return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
-        if (const auto *failure = capture.stream->Failure()) {
-            capture.Stop();
-            return Output::Failure(MakeError(*failure));
-        }
+        if (const auto reconciled = ReconcileCapture(generation, grant); reconciled.HasError())
+            return Output::Failure(reconciled.ErrorValue());
         auto &buffer = capture.stream->Buffer();
         const auto status = buffer.TryRead(block, pcm);
         const auto latestDrop = buffer.LatestDroppedBlock();

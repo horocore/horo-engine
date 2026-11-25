@@ -219,7 +219,7 @@ namespace Horo::Audio::Backend {
             }
             REQUIRE(started.HasValue());
             AudioCapturedBlock raw;
-            CHECK(backend.ReadCapture(capture.generation, raw, {}).HasError());
+            CHECK(backend.ReadCapture(capture.generation, grant, raw, {}).HasError());
             RequireMonitorBlock(backend, grant, capture);
             static_cast<void>(Begin(backend, Quiesce{fixture.epoch}));
             REQUIRE(backend.AdvanceControl().HasValue());
