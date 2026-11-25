@@ -467,7 +467,7 @@ namespace {
         });
         unsigned withdrawn{};
         const auto notices = controller.DataBus().Subscribe<NotificationEvent>([&](const NotificationEvent &event) {
-            if (event.deduplicationKey == "agent_scene_review_withdrawn") {
+            if (event.deduplicationKey == "scene::agent_scene_review_withdrawn") {
                 CHECK(event.severity == NotificationSeverity::Warning);
                 ++withdrawn;
             }
