@@ -97,9 +97,7 @@ namespace Horo::Editor {
                     if (!decision->approve)
                         static_cast<void>(CancelAgentSceneReview(decision->id));
                     else if (const auto result = ApproveAgentSceneReview(decision->id); result.HasError())
-                        m_notifications.Publish("scene", NotificationSeverity::Warning,
-                                                Localized("workspace.viewport.agent_review.invalid",
-                                                          "This scene proposal is no longer current."));
+                        NotifyAgentSceneReviewWithdrawn();
                 }
                 break;
             case EditorWorkspaceViewCommand::PreviewLightComponent:

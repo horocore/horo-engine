@@ -208,9 +208,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ApproveAgentSceneReview */
     Result<void> EditorWorkspaceController::ApproveAgentSceneReview(const std::uint64_t review) {
-        ReconcileAgentSceneReview();
         if (!m_agentSceneReview || m_agentSceneReview->id != review)
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
+        if (!IsAgentSceneReviewCurrent(*m_agentSceneReview)) {
+            CancelObjectTransformPreview();
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
+        }
         auto proposal = std::move(*m_agentSceneReview);
         CancelObjectTransformPreview();
         std::vector<SceneObjectId> affected;
@@ -244,12 +247,24 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ReconcileAgentSceneReview */
     void EditorWorkspaceController::ReconcileAgentSceneReview() {
-        if (!m_agentSceneReview)
+        if (!m_agentSceneReview || IsAgentSceneReviewCurrent(*m_agentSceneReview))
             return;
-        const auto &review = *m_agentSceneReview;
-        if ((review.authorized && !review.authorized()) || review.context.cancellation.IsCancellationRequested() ||
-            review.owner.CheckCurrent().HasError() || review.context.revision != m_document.Revision().value || !CanReviewAgentSceneEdits())
-            CancelObjectTransformPreview();
+        CancelObjectTransformPreview();
+        NotifyAgentSceneReviewWithdrawn();
+    }
+
+    /** @copydoc EditorWorkspaceController::IsAgentSceneReviewCurrent */
+    bool EditorWorkspaceController::IsAgentSceneReviewCurrent(const AgentSceneReview &review) const {
+        return (!review.authorized || review.authorized()) && !review.context.cancellation.IsCancellationRequested() &&
+               review.owner.CheckCurrent().HasValue() && review.context.revision == m_document.Revision().value &&
+               CanReviewAgentSceneEdits();
+    }
+
+    /** @copydoc EditorWorkspaceController::NotifyAgentSceneReviewWithdrawn */
+    void EditorWorkspaceController::NotifyAgentSceneReviewWithdrawn() {
+        m_notifications.Publish("scene", NotificationSeverity::Warning,
+                                Localized("workspace.viewport.agent_review.invalid", "This scene proposal is no longer current."), {},
+                                "agent_scene_review_withdrawn");
     }
 
     void EditorWorkspaceController::HandleDocumentCommandResult(const Result<SceneCommandResult> &result, const char *operation) {

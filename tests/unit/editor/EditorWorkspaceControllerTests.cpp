@@ -465,6 +465,13 @@ namespace {
         const auto subscription = controller.DataBus().Subscribe<SceneDocumentChangedEvent>([&](const auto &event) {
             events.push_back(event);
         });
+        unsigned withdrawn{};
+        const auto notices = controller.DataBus().Subscribe<NotificationEvent>([&](const NotificationEvent &event) {
+            if (event.deduplicationKey == "agent_scene_review_withdrawn") {
+                CHECK(event.severity == NotificationSeverity::Warning);
+                ++withdrawn;
+            }
+        });
         CancellationSource proposal;
         const std::array duplicate{renames.front(), renames.front()};
         CHECK(controller.PreviewAgentSceneEdits(revision, updates, duplicate, proposal.Token()).HasError());
@@ -510,12 +517,25 @@ namespace {
             CHECK(origin() == baseline);
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
+            CHECK(withdrawn == 0);
         }
         SECTION("closing command authority retires the overlay on the owner tick") {
             controller.RevokeWorkspaceCommands();
             controller.UpdatePlayPresentation(0.0F);
+            controller.UpdatePlayPresentation(0.0F);
             CHECK(origin() == baseline);
             CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
+            CHECK(events.empty());
+            CHECK(withdrawn == 1);
+        }
+        SECTION("approval of a cancelled proposal reports withdrawal once") {
+            proposal.RequestCancellation();
+            EditorWorkspaceViewCommandData approval;
+            approval.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
+            approval.agentSceneReviewDecision = {preview.Value(), true};
+            controller.ProcessCommand(approval);
+            CHECK(origin() == baseline);
+            CHECK(withdrawn == 1);
             CHECK(events.empty());
         }
         SECTION("a lost runtime scene cannot leave the retired preview visible") {
@@ -527,6 +547,7 @@ namespace {
             CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             CHECK(events.empty());
             CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK(withdrawn == 1);
         }
     }
 

@@ -16,7 +16,10 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CommitObjectTransform &&
             cmd.command != EditorWorkspaceViewCommand::ResolveAgentSceneReview &&
             cmd.command != EditorWorkspaceViewCommand::CancelObjectTransformPreview) {
+            const bool hadReview = m_agentSceneReview.has_value();
             CancelObjectTransformPreview();
+            if (hadReview)
+                NotifyAgentSceneReviewWithdrawn();
         }
         if (m_viewport.Current().lightPreview.has_value() && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewLightComponent &&
