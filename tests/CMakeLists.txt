@@ -3699,7 +3699,7 @@ find_program(HORO_TEST_OPENSSL_EXECUTABLE openssl)
 if(Python3_Interpreter_FOUND AND HORO_TEST_OPENSSL_EXECUTABLE)
     add_executable(HoroNpcDialogueHttpsClient integration/NpcDialogueHttpsClient.cpp)
     target_compile_features(HoroNpcDialogueHttpsClient PRIVATE cxx_std_20)
-    target_link_libraries(HoroNpcDialogueHttpsClient PRIVATE HoroNpcDialogueHttpsHostInternal)
+    target_link_libraries(HoroNpcDialogueHttpsClient PRIVATE HoroNpcDialogueHttpsHostInternal HoroNpcDialogueScenePresentationInternal)
     add_test(NAME HoroNpcDialogueHttpsIntegration COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/integration/npc_dialogue_https_server.py" "$<TARGET_FILE:HoroNpcDialogueHttpsClient>")
     set_tests_properties(HoroNpcDialogueHttpsIntegration PROPERTIES LABELS "ai;integration" TIMEOUT 30)

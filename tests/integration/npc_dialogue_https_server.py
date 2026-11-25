@@ -40,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(reply)))
             self.end_headers()
             self.wfile.write(reply)
-        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+        except (ConnectionError, ssl.SSLEOFError):
             if mode not in ("timeout", "oversize"):
                 raise
 
@@ -55,12 +55,13 @@ def run_client(client: Path, endpoint: str, ca_bundle: str, mode: str) -> None:
 
 def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> None:
     endpoint = f"https://127.0.0.1:{server.server_port}/dialogue"
-    for mode in ("approved", "denied", "unknown", "text", "oversize", "redirect", "untrusted", "timeout"):
+    modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "untrusted", "timeout", "offline", "retired", "queued-retire")
+    for mode in modes:
         server.mode = mode
         server.requests.clear()
         ca_bundle = "" if mode == "untrusted" else str(certificate)
         run_client(client, endpoint, ca_bundle, mode)
-        expected = [] if mode == "untrusted" else [("/dialogue", MEDIA_TYPE, b"2,20\n")]
+        expected = [] if mode in ("untrusted", "offline", "retired", "queued-retire") else [("/dialogue", MEDIA_TYPE, b"2,20\n")]
         if server.requests != expected:
             raise AssertionError(f"wrong request sequence for {mode}")
     for invalid in (endpoint.replace("https:", "http:"), endpoint.replace("127.0.0.1", "user@127.0.0.1"), endpoint + "?x=1"):

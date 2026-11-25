@@ -2331,8 +2331,14 @@ approved fact, with unsigned decimal IDs. The response must use the same media
 type and contain `allow`, one nonzero decimal cue ID, and line endings after both
 lines. Any other response fails closed. The approved endpoint supplies the
 moderation decision and the local turn still requires the cue to be authored.
-Game host composition and production provider qualification remain separate
-delivery work. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
+The Scene presentation channel owns one in-flight turn and an immutable mapping
+from cue IDs to the semantic caption catalog. It accepts increasing turn IDs
+for its exact Scene incarnation, follows the latest agent identity on each
+presentation update, and drains through the standard HUD caption timeline.
+Scene retirement cancels pending work and drops undelivered captions. The HUD
+owner resets the old caption session when switching Scenes. Project-authored
+activation, gameplay triggers, and production provider qualification remain
+open. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 
 ### AI Runtime Ownership And Scene Generation Safety
 
