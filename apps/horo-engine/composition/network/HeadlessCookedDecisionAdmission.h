@@ -37,6 +37,12 @@ namespace Horo::Application::Internal {
     using HeadlessDecisionRelevanceSource =
         std::function<Result<std::span<const HeadlessDecisionRelevance>>(const Runtime::RuntimeSceneView &, std::uint64_t)>;
 
+    /** @brief Explicit committed source and structural budget for an authority-owned reduced population. */
+    struct HeadlessReducedPopulationSelection final {
+        std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
+        std::size_t maximumPromotions{};
+    };
+
     /** @brief Provider ownership chosen by the composing host before opening any candidate. */
     enum class HeadlessDecisionProvider {
         Captured,
@@ -57,6 +63,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayQueryTests;
         HeadlessDecisionRelevanceSource relevance; /**< Optional owner source for a live best-effort simulation profile. */
         Runtime::SceneObjectId simulationAnchor; /**< Optional authored anchor, exclusive with an injected relevance source. */
+        std::optional<HeadlessReducedPopulationSelection> reducedPopulation;
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

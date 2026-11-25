@@ -272,6 +272,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && SelectsLiveMount())
                     if (auto advanced = AdvanceLiveMount(); advanced.HasError())
                         return advanced;
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && record_->reducedPopulation)
+                    if (auto reconciled = AdvanceReducedPromotions(phase); reconciled.HasError())
+                        return reconciled;
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && previous == record_->perception.Current())
                     return PublishConfiguredPerception();
             }
@@ -532,7 +535,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (auto added = record_->scenes->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
                 return added;
             // Live CoreEcs admits no gameplay module. Scene itself rejects any component that needs an absent owner.
-            if (SelectsLiveMount())
+            if (SelectsLiveMount() || (!selectedGameplay_ && OwnsCookedDecisionExecution() && input.cookedDecisions->reducedPopulation))
                 return Result<void>::Success();
             if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                 added.HasError())
@@ -644,11 +647,94 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, catalog, std::move(activation)));
                 added.HasError())
                 return added;
-            if (auto added =
-                    record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(catalog, std::move(structural)));
-                added.HasError())
-                return added;
-            return Result<void>::Success();
+            return InstallStructuralAi(catalog, std::move(structural));
+        }
+
+        /** @brief Installs the optional reduced transfer owner in the same canonical AI structural adapter. */
+        Result<void> InstallStructuralAi(const std::span<const AI::AiControllerDescriptor> catalog,
+                                          std::optional<AI::AiScenePerceptionGroupInput> structural) const {
+            const auto &input = *owners_->configured;
+            if (!OwnsCookedDecisionExecution() || !input.cookedDecisions->reducedPopulation)
+                return record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(catalog, std::move(structural)));
+            const auto initialOrigin = ReducedOrigin();
+            if (initialOrigin.HasError())
+                return Result<void>::Failure(initialOrigin.ErrorValue());
+            const auto &selection = *input.cookedDecisions;
+            auto reduced = HeadlessReducedPopulation::Create(*selection.reducedPopulation, *owners_->definition,
+                                                               *selection.execution->scheduler.simulationProfile, initialOrigin.Value());
+            if (reduced.HasError())
+                return Result<void>::Failure(reduced.ErrorValue());
+            record_->reducedPopulation.emplace(std::move(reduced).Value());
+            auto participant = record_->ai->MakeReducedPopulationStructuralParticipant(
+                catalog, record_->reducedPopulation->population,
+                [world = std::weak_ptr<WorldRecord>{record_}, initial = initialOrigin.Value()](const Runtime::RuntimeSceneView &scene,
+                                                                                             const Runtime::EntityRef entity) {
+                    const auto record = world.lock();
+                    if (!record)
+                        return Result<Math::WorldCoordinate64>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+                    const auto origin = ReducedOriginAtMount(*record, initial);
+                    return origin.HasError() ? Result<Math::WorldCoordinate64>::Failure(origin.ErrorValue()) :
+                                               CaptureProjectSceneWorldPosition(scene, entity, origin.Value().Origin());
+                },
+                std::move(structural));
+            return participant.HasError() ? Result<void>::Failure(participant.ErrorValue()) :
+                                            record_->scenes->AddStructuralParticipant(std::move(participant).Value());
+        }
+
+        /** @brief Returns the current mounted frame, or the exact configured startup origin for an unmounted Scene. */
+        Result<WorldStreaming::OriginFrame> ReducedOrigin() const {
+            using namespace WorldStreaming;
+            const auto &world = owners_->configured->mountedWorld;
+            const auto initial =
+                OriginFrame::Create({OriginFrameId::Create(request_.scene.value).Value(), OriginFrameRevision::Create(1).Value(),
+                                     OriginGeneration::Create(1).Value()},
+                                    world ? world->origin : Math::WorldCoordinate64{});
+            return initial.HasError() ? initial : ReducedOriginAtMount(*record_, initial.Value());
+        }
+
+        /** @brief Samples a fresh origin lease without depending on the lifetime of an individual world facade. */
+        static Result<WorldStreaming::OriginFrame> ReducedOriginAtMount(const WorldRecord &record,
+                                                                        const WorldStreaming::OriginFrame &initial) {
+            using Output = Result<WorldStreaming::OriginFrame>;
+            if (!record.mountedWorld)
+                return Output::Success(initial);
+            const auto lease = record.mountedWorld->Origin().Lease();
+            return lease.HasError() ? Output::Failure(lease.ErrorValue()) : lease.Value().Get();
+        }
+
+        /** @brief Fills only free canonical scheduler capacity using the current authoritative anchor. */
+        Result<void> QueueReducedPromotions() const {
+            if (!record_->scenes->CanQueueStructuralCommands())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene || record_->sceneCancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            auto &handles = record_->decisionRelevance.agents;
+            const auto scheduled = scheduler.Value()->CopyLiveRegistrationsAtSafePoint(handles);
+            if (scheduled.HasError())
+                return Result<void>::Failure(scheduled.ErrorValue());
+            const auto origin = ReducedOrigin();
+            if (origin.HasError())
+                return Result<void>::Failure(origin.ErrorValue());
+            const auto &input = *owners_->configured;
+            return record_->reducedPopulation->QueuePromotions(
+                *record_->scenes, *scene, origin.Value(), input.cookedDecisions->simulationAnchor, handles.size() - scheduled.Value(),
+                {scene->RuntimeId(), input.registry.Snapshot().Revision(), record_->sceneCancellation});
+        }
+
+        /** @brief Gives existing owners first use of the cutoff, then commits the bounded group against the sampled origin. */
+        Result<void> AdvanceReducedPromotions(const Runtime::RuntimePhase phase) {
+            if (auto queued = QueueReducedPromotions(); queued.HasError())
+                return queued;
+            if (!record_->reducedPopulation->pending)
+                return Result<void>::Success();
+            const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
+            if (auto committed = record_->scenes->OnPhase(phase, frame); committed.HasError())
+                return committed;
+            return record_->reducedPopulation->ReconcilePublication();
         }
 
         /** @brief Adds this world's explicit query owner to the selected immutable scheduler policy. */

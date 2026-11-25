@@ -357,6 +357,14 @@ namespace Horo::Application::Internal {
             auto bindings = ConfigureSceneLocalPolicies(launch.cookedDecisionBindings, resources.localPolicy.get(), target.Value());
             if (bindings.HasError())
                 return Result<void>::Failure(bindings.ErrorValue());
+            std::optional<HeadlessReducedPopulationSelection> reduced;
+            if (launch.reducedPopulation.IsValid()) {
+                auto definition = resources.committed->DecodeScene(launch.reducedPopulation);
+                if (definition.HasError())
+                    return Result<void>::Failure(definition.ErrorValue());
+                reduced.emplace(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value()),
+                                launch.maximumReducedPromotions);
+            }
             input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
                 HeadlessCookedDecisionInput{.committed = *resources.committed,
                                             .bindings = std::move(bindings).Value(),
@@ -365,7 +373,8 @@ namespace Horo::Application::Internal {
                                             .querySchema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value()),
                                             .queryWorkUnitsLimit = resources.queryWorkUnitsLimit,
                                             .queryCacheLimits = resources.queryCacheLimits,
-                                            .simulationAnchor = launch.aiSimulationAnchor});
+                                            .simulationAnchor = launch.aiSimulationAnchor,
+                                            .reducedPopulation = std::move(reduced)});
             return Result<void>::Success();
         }
 

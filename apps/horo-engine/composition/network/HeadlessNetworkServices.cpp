@@ -760,6 +760,12 @@ namespace Horo::Application::Internal {
             if (decisions && decisions->relevance && decisions->simulationAnchor.IsValid())
                 return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                        "Select either an authored simulation anchor or an external relevance source."));
+            if (decisions && decisions->reducedPopulation &&
+                (!decisions->reducedPopulation->definition || !decisions->simulationAnchor.IsValid() ||
+                 decisions->reducedPopulation->maximumPromotions == 0 ||
+                 decisions->reducedPopulation->maximumPromotions > Runtime::SceneRestoreStructuralLimits{}.maximumEntities))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                       "A reduced population requires a cooked manifest, anchor, and bounded group size."));
             if (decisions && (decisions->relevance || decisions->simulationAnchor.IsValid()) &&
                 (!decisions->execution || decisions->execution->scheduler.mode != AI::AiSchedulingMode::BestEffort ||
                  !decisions->execution->scheduler.simulationProfile ||

@@ -4124,6 +4124,16 @@ re-promotion creates a fresh canonical runtime generation. The reduced populatio
 ceiling is 1,048,576 identities and the transfer limit is at most 65,536 per
 batch. Full agents have their own Scene and scheduler budgets.
 
+The headless product selects a committed population with
+`--ai-reduced-population <cooked-scene-uuid> <promotions-per-frame>` alongside
+`--ai-simulation-anchor`. The selected Scene contains independent assetless
+agent templates with distinct Scene and AI identities and controllers already
+admitted for the authority. The product proposes nearby agents at the structural
+cutoff, limits the batch to free scheduler slots and yields the command slot to
+pending structural work. On a mounted World it retains global positions and
+projects them through the current origin before creating entities. The ordinary
+Scene transaction captures position when it retires one of these agents.
+
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through

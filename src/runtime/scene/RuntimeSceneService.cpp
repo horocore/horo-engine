@@ -400,7 +400,7 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (!active_.scene)
             return Result<void>::Failure(MakeError(SceneErrors::NoActiveScene));
-        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
+        if (!CanQueueStructuralCommands())
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const LifecycleMutation mutation{*this};
         const auto revision = StructuralRegistryRevision(assetPreparationServices_.registry);
@@ -411,6 +411,12 @@ namespace Horo::Runtime {
         if (!commands.Empty())
             structuralCommands_ = std::move(commands);
         return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::CanQueueStructuralCommands */
+    bool RuntimeSceneService::CanQueueStructuralCommands() const noexcept {
+        return !shutdown_ && active_.scene && !mutatingLifecycle_ && transition_ == TransitionKind::None &&
+               !structuralCommands_ && !preparation_;
     }
 
     /** @copydoc RuntimeSceneService::QueueTrackedStructuralCommands */

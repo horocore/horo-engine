@@ -6,6 +6,7 @@
 #include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessPrefabReplica.h"
+#include "HeadlessReducedPopulation.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -99,6 +100,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<SceneDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         DecisionRelevanceBuffer decisionRelevance;
+        std::optional<HeadlessReducedPopulation> reducedPopulation;
         CookedSceneLocalPolicyCatalog localPolicies;
         std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;

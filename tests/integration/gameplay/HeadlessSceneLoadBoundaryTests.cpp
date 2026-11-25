@@ -426,10 +426,15 @@ namespace {
         namespace Decision = AI::DecisionGraphTestSupport;
         namespace Output = Assets::OutputTestSupport;
         const bool outOfRange = GENERATE(false, true);
-        enum class Relevance { None, Injected, AuthoredAnchor, MissingAnchor };
-        const auto relevanceMode = GENERATE(Relevance::None, Relevance::Injected, Relevance::AuthoredAnchor, Relevance::MissingAnchor);
+        enum class Relevance { None, Injected, AuthoredAnchor, MissingAnchor, ReducedPopulation };
+        const auto relevanceMode =
+            GENERATE(Relevance::None, Relevance::Injected, Relevance::AuthoredAnchor, Relevance::MissingAnchor, Relevance::ReducedPopulation);
         const Runtime::SceneObjectId anchorId{10};
-        const bool authoredAnchor = relevanceMode == Relevance::AuthoredAnchor || relevanceMode == Relevance::MissingAnchor;
+        const Runtime::SceneObjectId nearAgentId{11};
+        const Runtime::SceneObjectId farAgentId{12};
+        const Runtime::SceneObjectId nextNearAgentId{13};
+        const bool reducedPopulation = relevanceMode == Relevance::ReducedPopulation;
+        const bool authoredAnchor = relevanceMode == Relevance::AuthoredAnchor || relevanceMode == Relevance::MissingAnchor || reducedPopulation;
         Decision::Fixture fixture;
         const auto score = Decision::MakeIdentity<BlackboardKeyId>(101);
         const auto feature = Decision::MakeIdentity<BlackboardKeyId>(102);
@@ -469,6 +474,7 @@ namespace {
         const auto sceneId = Output::Id("00000000-0000-0000-0000-000000000011");
         const auto graphId = Output::Id("00000000-0000-0000-0000-000000000012");
         const auto modelId = Output::Id("00000000-0000-0000-0000-000000000042");
+        const auto reducedId = Output::Id("00000000-0000-0000-0000-000000000043");
         const auto target = Output::Target("headless-null");
         Runtime::SceneDefinitionBuilder authored{SceneCook::SceneDefinitionIdForAsset(sceneId), {1}};
         Runtime::RuntimeEntityDefinition actor{.object = {9}};
@@ -478,9 +484,9 @@ namespace {
                                                               .blackboardSchema = Decision::SchemaId(),
                                                               .decisionKind = DecisionPlanKind::Utility};
         authored.Add(actor);
-        if (relevanceMode == Relevance::AuthoredAnchor) {
+        if (relevanceMode == Relevance::AuthoredAnchor || reducedPopulation) {
             Runtime::RuntimeEntityDefinition anchor{.object = anchorId};
-            anchor.localTransform.translation.x = 31;
+            anchor.localTransform.translation.x = reducedPopulation ? 0 : 31;
             authored.Add(anchor);
         }
         const auto definition = std::move(authored).Build();
@@ -524,6 +530,28 @@ namespace {
         addAsset(sceneId, "core.scene", "Assets/guard.horoasset", scene.Value());
         addAsset(graphId, DecisionAssetType(DecisionPlanKind::Utility), "Assets/guard.horo_utility", graph.Value());
         addAsset(modelId, LocalPolicyAssetType, "Assets/guard.horo_policy", payload.Value());
+        if (reducedPopulation) {
+            Runtime::SceneDefinitionBuilder catalogue{SceneCook::SceneDefinitionIdForAsset(reducedId), {1}};
+            const auto addAgent = [&](const Runtime::SceneObjectId object, const float x) {
+                auto entry = actor;
+                entry.object = object;
+                entry.components.aiAgent->agent = Decision::MakeIdentity<AgentId>(object.value);
+                entry.localTransform.translation.x = x;
+                catalogue.Add(std::move(entry));
+            };
+            addAgent(nearAgentId, 1);
+            addAgent(farAgentId, 100);
+            addAgent(nextNearAgentId, 2);
+            constexpr std::uint64_t firstDistant = 1000;
+            constexpr std::uint64_t distantCount = 4093;
+            for (std::uint64_t object = firstDistant; object < firstDistant + distantCount; ++object)
+                addAgent({object}, 100);
+            const auto built = std::move(catalogue).Build();
+            REQUIRE(built.HasValue());
+            const auto encoded = SceneCook::EncodeCookedSceneDefinition(built.Value());
+            REQUIRE(encoded.HasValue());
+            addAsset(reducedId, "core.scene", "Assets/population.horoasset", encoded.Value());
+        }
         Horo::Tests::OwnedTestDirectory directory{"headless-local-policy"};
         REQUIRE(Output::PublishFixture(directory.Path(), target, manifest, artifacts).HasValue());
         Assets::AssetRegistry registry;
@@ -532,6 +560,12 @@ namespace {
         REQUIRE(committed.HasValue());
         auto decoded = committed.Value()->DecodeScene(sceneId);
         REQUIRE(decoded.HasValue());
+        std::optional<HeadlessReducedPopulationSelection> reduced;
+        if (reducedPopulation) {
+            auto catalogue = committed.Value()->DecodeScene(reducedId);
+            REQUIRE(catalogue.HasValue());
+            reduced.emplace(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(catalogue).Value()), 1);
+        }
         const std::array requested{CookedDecisionSceneBinding{controller, graphId}};
         auto bindings = ConfigureSceneLocalPolicies(requested, &policy, target);
         REQUIRE(bindings.HasValue());
@@ -575,7 +609,8 @@ namespace {
                                                                                  .execution = execution,
                                                                                  .relevance = std::move(relevance),
                                                                                  .simulationAnchor =
-                                                                                     authoredAnchor ? anchorId : Runtime::SceneObjectId{}})},
+                                                                                     authoredAnchor ? anchorId : Runtime::SceneObjectId{},
+                                                                                 .reducedPopulation = std::move(reduced)})},
                                                 {}, std::nullopt, replication);
         REQUIRE(composed.HasValue());
         const auto service = [&](const NetworkModeServiceKind kind) {
@@ -625,6 +660,27 @@ namespace {
         const auto diagnostic = InspectHeadlessDecisionFailure(*physics.Value());
         REQUIRE(diagnostic.HasValue());
         CHECK_FALSE(diagnostic.Value());
+        if (reducedPopulation) {
+            REQUIRE(InspectHeadlessScene(*world.Value()));
+            CHECK(InspectHeadlessScene(*world.Value())->SlotCount() == 2);
+            CHECK_FALSE(InspectHeadlessScene(*world.Value())->Find(nearAgentId));
+            const auto promoted = physics.Value()->RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges);
+            if (promoted.HasError())
+                UNSCOPED_INFO(promoted.ErrorValue().message);
+            REQUIRE(promoted.HasValue());
+            REQUIRE(InspectHeadlessScene(*world.Value()));
+            CHECK(InspectHeadlessScene(*world.Value())->SlotCount() == 3);
+            CHECK(InspectHeadlessScene(*world.Value())->Find(nearAgentId));
+            CHECK_FALSE(InspectHeadlessScene(*world.Value())->Find(farAgentId));
+            CHECK_FALSE(InspectHeadlessScene(*world.Value())->Find(nextNearAgentId));
+            runTick(3);
+            CHECK(fixture.probe.starts == 2);
+            REQUIRE(physics.Value()->RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            REQUIRE(InspectHeadlessScene(*world.Value()));
+            CHECK(InspectHeadlessScene(*world.Value())->SlotCount() == 4);
+            CHECK(InspectHeadlessScene(*world.Value())->Find(nextNearAgentId));
+            CHECK_FALSE(InspectHeadlessScene(*world.Value())->Find(farAgentId));
+        }
         physics.Value()->Shutdown();
         world.Value()->Shutdown();
     }

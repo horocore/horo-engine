@@ -1234,6 +1234,11 @@ namespace Horo::Runtime {
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
          * @return Success or a typed state/pending-operation error. */
         [[nodiscard]] Result<void> QueueStructuralCommands(SceneCommandBuffer commands);
+        /** @brief Reports whether the owner lane can queue one structural batch now.
+         * @return False when no Scene is active, the service is closed, or another lifecycle operation owns the slot.
+         * @details This does not validate a particular command buffer or reserve the slot.
+         */
+        [[nodiscard]] bool CanQueueStructuralCommands() const noexcept;
         /** @brief Queues a Scene transaction with dedicated completion evidence without consuming global host notifications.
          * @param commands Complete owner-lane command batch.
          * @return Retainable read-only receipt or rejection without queued work. No callback is invoked by observation.

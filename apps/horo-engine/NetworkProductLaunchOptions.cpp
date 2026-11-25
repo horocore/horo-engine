@@ -405,6 +405,9 @@ namespace Horo::Application::Internal {
             if (launch.aiSimulationAnchor.IsValid() && (launch.cookedDecisionBindings.empty() || launch.decisionReplay))
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "An AI simulation anchor requires live cooked controllers."));
+            if (launch.reducedPopulation.IsValid() && !launch.aiSimulationAnchor.IsValid())
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "A reduced population requires --ai-simulation-anchor."));
             if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "Native Perception requires explicit native cooked controller selection."));
@@ -430,6 +433,23 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool ReadPositiveNumber(const std::string_view text, std::uint64_t &value) noexcept {
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
             return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && value != 0;
+        }
+
+        /** @brief Selects one committed affiliate Scene and an ordinary Scene group limit. */
+        Result<void> ReadReducedPopulation(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            constexpr auto usage = "Use --ai-reduced-population <cooked-scene-uuid> <promotions per frame, 1..256> once.";
+            constexpr auto maximum = Runtime::SceneRestoreStructuralLimits{}.maximumEntities;
+            std::uint64_t count{};
+            if (launch.reducedPopulation.IsValid() || arguments.size() - index < 3 ||
+                !ReadPositiveNumber(arguments[index + 2], count) || count > maximum)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, usage));
+            const auto asset = Assets::AssetId::Parse(arguments[index + 1]);
+            if (asset.HasError())
+                return Result<void>::Failure(asset.ErrorValue());
+            launch.reducedPopulation = asset.Value();
+            launch.maximumReducedPromotions = static_cast<std::size_t>(count);
+            index += 3;
+            return Result<void>::Success();
         }
 
         /** @brief Selects one stable agent and a bounded contiguous fixed-tick window. */
@@ -550,6 +570,11 @@ namespace Horo::Application::Internal {
                 }
                 if (key == "--ai-decision" || key == "--ai-prefab-decision") {
                     if (auto selected = ReadCookedDecision(arguments, index, launch, key == "--ai-prefab-decision"); selected.HasError())
+                        return selected;
+                    continue;
+                }
+                if (key == "--ai-reduced-population") {
+                    if (auto selected = ReadReducedPopulation(arguments, index, launch); selected.HasError())
                         return selected;
                     continue;
                 }
