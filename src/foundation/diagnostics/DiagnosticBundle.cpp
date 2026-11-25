@@ -145,12 +145,9 @@ namespace Horo::Diagnostics {
 
         constexpr std::array DiagnosticNamespaceFields{"category", "subsystem", "domain"};
 
-        /** @brief Identifies a structured log, operation or error that may repeat structured details in its message. */
-        [[nodiscard]] bool IsDiagnosticRecord(const Json &value) {
-            return std::ranges::any_of(DiagnosticNamespaceFields, [&value](const char *key) {
-                const auto field = value.find(key);
-                return field != value.end() && field->is_string();
-            });
+        /** @brief Identifies direct text that could repeat a sibling's private diagnostic values. */
+        [[nodiscard]] bool HasInlineText(const Json &value) {
+            return std::ranges::any_of(value, &Json::is_string);
         }
 
         /** @brief Reports whether the record belongs to a host-owned summary rather than the raw export. */
@@ -196,7 +193,7 @@ namespace Horo::Diagnostics {
         /** @brief Withholds records that may repeat private descendant values, while preserving unrelated aggregate entries. */
         DiagnosticRedaction RedactObject(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
-            const bool record = !namespaces.empty() && IsDiagnosticRecord(value);
+            const bool hasInlineText = !namespaces.empty() && HasInlineText(value);
             bool privateDescendant = false;
             for (auto &[childKey, child] : value.items()) {
                 const auto redaction = RedactJson(child, namespaces);
@@ -204,7 +201,7 @@ namespace Horo::Diagnostics {
                     child = "[REDACTED]";
                 if (redaction == Kept)
                     continue;
-                if (record || IsCausalField(childKey)) {
+                if (hasInlineText || IsCausalField(childKey)) {
                     value = nullptr;
                     return Withheld;
                 }
@@ -213,12 +210,16 @@ namespace Horo::Diagnostics {
             return privateDescendant ? DescendantWithheld : Kept;
         }
 
-        /** @brief Redacts every array entry and makes private descendants visible to the enclosing record. */
+        /** @brief Retains independent structured entries and withholds text mixed with private entries. */
         DiagnosticRedaction RedactArray(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
             bool privateDescendant = false;
             for (Json &child : value)
                 privateDescendant = RedactJson(child, namespaces) != Kept || privateDescendant;
+            if (privateDescendant && HasInlineText(value)) {
+                value = nullptr;
+                return Withheld;
+            }
             return privateDescendant ? DescendantWithheld : Kept;
         }
 

@@ -1873,7 +1873,9 @@ unclassified count.
 Editor and CLI bundles withhold both the Save telemetry namespace and the Save
 error domain from their raw JSON evidence. A Save error in a nested cause or
 a flattened causal list suppresses each wrapping causal record, since wrappers
-can copy private text or fields. Independent sibling evidence remains available.
+can copy private text or fields. An object or array that directly mixes free
+text with a private descendant is withheld even without a diagnostic label.
+Independent structured sibling records remain available.
 Raw diagnostic JSON and JSONL records with duplicate object members or
 excessive nesting fail bundle preparation before any archive is published.
 
