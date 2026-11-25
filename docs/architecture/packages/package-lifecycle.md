@@ -447,12 +447,13 @@ mutation lease. If repair cannot finish, the journal remains for the next
 project preparation.
 
 `horo-engine package preview-remove --project /path/to/project --package-id
-com.vendor.pack` checks saved asset importer references against the exact
-departing packages. If those references are clear, it lists the packages
-that would leave and returns an approval fingerprint. Pass that fingerprint as `--approve` to `package
+com.vendor.pack` checks saved asset importer references and reports any locked
+contributions that require a live lifecycle owner. When those checks pass, it
+lists the departing packages and returns an approval fingerprint. Pass that fingerprint as `--approve` to `package
 remove` together with the same project, package ID, and
 `--package-cache-root`. The command verifies the current locked archives from
-the local cache and rechecks the project inventory under the mutation lease.
+the local cache, matches the departing archive entries to the exact lock, and
+rechecks the project inventory under the mutation lease.
 Offline withdrawal supports asset-only archives. Extensions and other
 executable contributions require their live lifecycle owner.
 

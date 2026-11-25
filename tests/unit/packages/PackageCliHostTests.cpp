@@ -4,7 +4,6 @@
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
 
-#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <iterator>
 
@@ -100,6 +99,19 @@ namespace {
             std::ofstream output{project.Path() / ".horo" / name, std::ios::binary};
             output << text;
             REQUIRE(output.good());
+        }
+
+        void WriteImporterReference(const char *name, const char *assetId) const {
+            const auto folder = project.Path() / "Assets";
+            std::filesystem::create_directories(folder);
+            const auto asset = folder / name;
+            auto sidecar = asset;
+            sidecar += ".horo";
+            std::ofstream{asset} << "{}";
+            std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                     {"assetId", assetId},
+                                                     {"assetType", "core.scene"},
+                                                     {"importerPackageId", graph.package.Value()}};
         }
 
         static CliParsedOption PathOption(const char *name, const std::filesystem::path &path) {
@@ -284,9 +296,35 @@ namespace {
         CHECK(read(metadata / "packages.lock") == originalLock);
     }
 
+    TEST_CASE("Headless package removal previews show when an extension requires a live owner", "[packages][application][cli][remove]") {
+        NativeProject fixture{true};
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto id = fixture.graph.package.Value();
+        auto preview = MakePackageRemovalPreviewCommandAdapter();
+        const CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    {"package-id", {{id, CliValueSource::Invocation, {}}}}}};
+        std::filesystem::create_directories(root / "Assets");
+        InInvocation([&](CliExecutionContext &context) {
+            const auto reviewed = preview.adapter->Execute(command, context);
+            REQUIRE(reviewed.HasError());
+            CHECK(reviewed.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+            REQUIRE(reviewed.ErrorValue().diagnostics.size() == 1);
+            CHECK(reviewed.ErrorValue().diagnostics.front().path == id);
+
+            fixture.WriteImporterReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+            const auto blocked = preview.adapter->Execute(command, context);
+            REQUIRE(blocked.HasError());
+            const auto &diagnostics = blocked.ErrorValue().diagnostics;
+            REQUIRE(diagnostics.size() == 2);
+            CHECK(diagnostics[0].code.Value() == "packages.host.removal_requires_lifecycle_owner");
+            CHECK(diagnostics[1].code.Value() == "packages.host.importer_in_use");
+            CHECK(diagnostics[1].path == "Assets/sample.horoasset");
+        });
+    }
+
     TEST_CASE("Headless package removal requires exact approval and checks saved references", "[packages][application][cli][remove]") {
-        const auto native = GENERATE(false, true);
-        NativeProject fixture{native};
+        NativeProject fixture;
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto assets = root / "Assets";
         std::filesystem::create_directories(assets);
@@ -320,25 +358,8 @@ namespace {
             REQUIRE(wrongApproval.HasError());
             CHECK(wrongApproval.ErrorValue().code.Value() == "packages.host.update_approval_mismatch");
             command.options.back().values.front().value = approval;
-            if (native) {
-                const auto blocked = apply.adapter->Execute(command, context);
-                REQUIRE(blocked.HasError());
-                CHECK(blocked.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
-                return;
-            }
-
-            const auto writeReference = [&](const char *name, const char *assetId) {
-                const auto asset = assets / name;
-                auto sidecar = asset;
-                sidecar += ".horo";
-                std::ofstream{asset} << "{}";
-                std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
-                                                         {"assetId", assetId},
-                                                         {"assetType", "core.scene"},
-                                                         {"importerPackageId", id}};
-            };
-            writeReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
-            writeReference("second.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff82");
+            fixture.WriteImporterReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+            fixture.WriteImporterReference("second.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff82");
             const auto blockedReview = preview.adapter->Execute(reviewCommand, context);
             REQUIRE(blockedReview.HasError());
             CHECK(blockedReview.ErrorValue().code.Value() == "packages.host.importer_in_use");

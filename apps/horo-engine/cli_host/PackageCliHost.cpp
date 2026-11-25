@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <format>
+#include <iterator>
 #include <map>
 #include <thread>
 
@@ -224,8 +225,8 @@ namespace Horo::Application::Internal {
                                     std::move(removalPackage)});
         }
 
-        /** @brief Scans the exact reviewed removal graph without issuing any project or package mutation. */
-        Result<void> ReviewRemovalImporters(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
+        /** @brief Reports saved importer references and lock-level blockers before issuing an offline approval. */
+        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
 
         class PackageUpdatePreviewAdapter final : public Cli::ICliCommandAdapter {
         public:
@@ -245,7 +246,7 @@ namespace Horo::Application::Internal {
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
                 if (operation_ == PackageOperation::Removal) {
-                    if (const auto references = ReviewRemovalImporters(preview.Value(), context); references.HasError())
+                    if (const auto references = ReviewOfflineRemoval(preview.Value(), context); references.HasError())
                         return Output::Failure(references.ErrorValue());
                 }
                 return Output::Success(EncodePreview(preview.Value(), offset.Value()));
@@ -366,23 +367,37 @@ namespace Horo::Application::Internal {
             return Inventory::Success({std::move(admission), std::move(read).Value(), std::move(assets).Value()});
         }
 
-        Result<void> ReviewRemovalImporters(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context) {
+        /** @brief Reads the saved importer inventory through the same filesystem authority used during removal. */
+        Result<std::vector<PackageImporterReference>> ReadRemovalImporters(const PackageProjectPolicy &policy,
+                                                                            const Packages::PackageRemovalGraphPreview &impact,
+                                                                            const Cli::CliExecutionContext &context) {
+            const auto inventory = OpenRemovalInventory(policy, context);
+            if (inventory.HasError())
+                return Result<std::vector<PackageImporterReference>>::Failure(inventory.ErrorValue());
+            return InspectPackageRemovalImporters(*inventory.Value().assets, impact);
+        }
+
+        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context) {
             Packages::PackageRemovalGraphPreview impact;
-            for (const auto &change : update.preview.changes)
-                if (change.current && !change.candidate)
-                    impact.removed.push_back({change.current->package, change.current->version});
+            std::vector<Diagnostic> diagnostics;
+            for (const auto &change : update.preview.changes) {
+                if (!change.current || change.candidate)
+                    continue;
+                impact.removed.push_back({change.current->package, change.current->version});
+                if (auto blocker = OfflineRemovalContributionBlocker(*change.current))
+                    diagnostics.push_back(std::move(*blocker));
+            }
             if (impact.removed.empty())
                 return Result<void>::Success();
-            const auto inventory = OpenRemovalInventory(update.policy, context);
-            if (inventory.HasError())
-                return Result<void>::Failure(inventory.ErrorValue());
-            const auto references = InspectPackageRemovalImporters(*inventory.Value().assets, impact);
-            if (references.HasError())
-                return Result<void>::Failure(references.ErrorValue());
-            if (references.Value().empty())
-                return Result<void>::Success();
-            std::vector<Diagnostic> diagnostics;
+            auto references = ReadRemovalImporters(update.policy, impact, context);
+            if (references.HasError()) {
+                auto failure = std::move(references).ErrorValue();
+                std::ranges::move(diagnostics, std::back_inserter(failure.diagnostics));
+                return Result<void>::Failure(std::move(failure));
+            }
             AppendPackageImporterDiagnostics(diagnostics, references.Value());
+            if (diagnostics.empty())
+                return Result<void>::Success();
             return Result<void>::Failure(Error{ErrorCode{diagnostics.front().code.Value()}, ErrorDomainId{"packages.host"},
                                                ErrorSeverity::Error, "", std::move(diagnostics)});
         }

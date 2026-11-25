@@ -24,6 +24,13 @@ namespace Horo::Application::Internal {
         const Packages::StagedPackageRestoreRecord *offline{}; /**< Read-only staging evidence for an asset-only withdrawal. */
     };
 
+    /** @brief Reports when a locked contribution requires a live owner for removal.
+     * @param package Exact departing lock entry.
+     * @return A blocker for unsupported contributions or no lock-level blocker for an asset-only entry.
+     * @details The caller must still verify the actual archive before an offline mutation.
+     */
+    [[nodiscard]] std::optional<Diagnostic> OfflineRemovalContributionBlocker(const Packages::LockedPackage &package);
+
     /** @brief Requires exact observations for departing runtime roles and for retained roles that could consume a departing service. */
     [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,
                                                                 const Packages::ValidatedPackageLockfileV1 &lock,

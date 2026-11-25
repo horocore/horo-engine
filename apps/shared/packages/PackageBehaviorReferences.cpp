@@ -186,16 +186,21 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Checks that a verified graph contains the entire locked identity and its archive. */
+        const Packages::PackageRestorePackage *FindExactArchive(const Packages::PackageRestoreGraph &graph,
+                                                                 const Packages::LockedPackage &locked) {
+            const auto actual = std::ranges::find_if(graph.packages, [&locked](const auto &entry) {
+                return entry.lock.package == locked.package;
+            });
+            return actual != graph.packages.end() && actual->archive && actual->lock == locked ? &*actual : nullptr;
+        }
+
         /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
         Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
                                             const Packages::LockedPackage &locked, std::vector<Diagnostic> &missing) {
             if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
                 return authority;
-            if (const auto actual = std::ranges::find_if(graph.packages,
-                                                         [&locked](const auto &entry) {
-                return entry.lock.package == locked.package;
-            });
-                actual == graph.packages.end() || actual->lock != locked)
+            if (!FindExactArchive(graph, locked))
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
             const auto declared = Packages::InspectPackageRuntimeRoles(*sources.install, locked.package);
             if (declared.HasError())
@@ -214,8 +219,6 @@ namespace Horo::Application::Internal {
 
         /** @brief Allows only data files in the asset namespace along with the package manifest. */
         bool IsOfflineAssetArchive(const Packages::PackageRestorePackage &package) {
-            if (!std::ranges::equal(package.lock.contributions, std::array<std::string_view, 1>{"assets"}))
-                return false;
             return std::ranges::all_of(package.archive->Manifest().Entries(), [](const auto &file) {
                 const auto &path = file.id.path.Value();
                 return !file.executable && (path == "horo-package.toml" || path.starts_with("assets/"));
@@ -229,33 +232,41 @@ namespace Horo::Application::Internal {
             const auto graph = staged.Graph();
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
-            for (const auto &reference : removal.removed) {
-                const auto package = std::ranges::find_if(graph->packages, [&reference](const auto &entry) {
-                    return entry.lock.package == reference.package;
-                });
-                if (package == graph->packages.end() || !package->archive || package->lock.version != reference.version)
+            for (const auto &expected : lock.Packages()) {
+                if (!IsDeparting(removal, expected.package))
+                    continue;
+                const auto *package = FindExactArchive(*graph, expected);
+                if (!package)
                     return Result<void>::Failure(
-                        ReferenceError("packages.host.removal_archive_evidence_unavailable", reference.package.Value()));
-                if (!IsOfflineAssetArchive(*package))
+                        ReferenceError("packages.host.removal_archive_evidence_unavailable", expected.package.Value()));
+                if (OfflineRemovalContributionBlocker(expected) || !IsOfflineAssetArchive(*package))
                     return Result<void>::Failure(
-                        ReferenceError("packages.host.removal_requires_lifecycle_owner", reference.package.Value()));
+                        ReferenceError("packages.host.removal_requires_lifecycle_owner", expected.package.Value()));
             }
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc OfflineRemovalContributionBlocker */
+    std::optional<Diagnostic> OfflineRemovalContributionBlocker(const Packages::LockedPackage &package) {
+        if (std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"}))
+            return std::nullopt;
+        return Diagnostic{DiagnosticCode{"packages.host.removal_requires_lifecycle_owner"}, DiagnosticSeverity::Error,
+                          package.package.Value(), SourceLocation{"packages.host"}, package.package.Value()};
+    }
 
     /** @copydoc CheckRemovalRegistrationCoverage */
     Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
                                                   const Packages::PackageRemovalGraphPreview &removal) {
         if (removal.removed.empty())
             return Result<void>::Success();
+        if (auto valid = ValidateWithdrawal(lock, removal); valid.HasError())
+            return valid;
         if (sources.offline)
             return CheckOfflineRemovalCoverage(*sources.offline, lock, removal);
         const auto graph = sources.install ? sources.install->Graph() : nullptr;
         if (!graph || graph->requestHash != lock.RequestHash())
             return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
-        if (auto valid = ValidateWithdrawal(lock, removal); valid.HasError())
-            return valid;
         Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
         const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
         for (const auto &entry : lock.Packages()) {
