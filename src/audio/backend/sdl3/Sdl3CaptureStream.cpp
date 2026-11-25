@@ -1,5 +1,6 @@
 #include "Sdl3AudioBackendImpl.h"
 
+#include <algorithm>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -221,6 +222,11 @@ namespace Horo::Audio::Backend::Sdl3Detail {
 
     /** @copydoc CaptureControl::Stop */
     void CaptureControl::Stop() noexcept {
+        if (monitorSource) {
+            if (const auto output = monitorSource->service.lock())
+                (void)output->RevokeLivePcm(monitorSource->stream);
+            monitorSource.reset();
+        }
         stream.reset();
         activeGrant = {};
     }
@@ -368,6 +374,14 @@ namespace Horo::Audio::Backend {
     /** @copydoc Sdl3AudioBackend::ReadMonitoring */
     Result<AudioMonitorRead> Sdl3AudioBackend::ReadMonitoring(const std::uint64_t generation, const Sdl3CaptureGrant &grant,
                                                               AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
+        if (const auto &capture = impl_->capture; capture.monitorSource && generation == capture.lastGeneration)
+            return Result<AudioMonitorRead>::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+        return ReadMonitoringBlock(generation, grant, block, pcm);
+    }
+
+    /** @copydoc Sdl3AudioBackend::ReadMonitoringBlock */
+    Result<AudioMonitorRead> Sdl3AudioBackend::ReadMonitoringBlock(const std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                                   AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
         using Output = Result<AudioMonitorRead>;
         auto &capture = impl_->capture;
         if (!capture.stream || generation != capture.lastGeneration)
@@ -378,6 +392,56 @@ namespace Horo::Audio::Backend {
             return Output::Failure(reconciled.ErrorValue());
         const AudioMonotonicTimestamp now{impl_->config.clockDomain, SDL_GetTicksNS()};
         return Output::Success(ReadAudioMonitorBlock(capture.stream->Buffer(), *capture.activeGrant.intent.monitor, now, block, pcm));
+    }
+
+    /** @copydoc Sdl3AudioBackend::BindMonitoringSource */
+    Result<AudioStreamHandle> Sdl3AudioBackend::BindMonitoringSource(const Sdl3CaptureGrant &grant,
+                                                                      const std::shared_ptr<AudioStreamingService> &service,
+                                                                      const std::uint32_t ringFrames) {
+        using Output = Result<AudioStreamHandle>;
+        auto &capture = impl_->capture;
+        if (!capture.stream || grant.generation != capture.lastGeneration)
+            return Output::Failure(MakeError(AudioErrors::HandleStale));
+        const auto &route = capture.activeGrant.intent.monitor;
+        if (!route || !service || capture.monitorSource)
+            return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+        if (const auto current = ReconcileCapture(grant.generation, grant); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        const auto &source = *capture.stream->Buffer().Descriptor();
+        const auto ageFrames = route->maximumAgeNanoseconds * source.format.sampleRate / Sdl3Detail::NanosecondsPerSecond;
+        if (ringFrames < source.maximumFrames || ringFrames > ageFrames)
+            return Output::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        auto admitted = service->AdmitLivePcm({source.format, ringFrames});
+        if (admitted.HasValue())
+            capture.monitorSource.emplace(service, admitted.Value());
+        return admitted;
+    }
+
+    /** @copydoc Sdl3AudioBackend::PumpMonitoringSource */
+    Result<AudioMonitorRead> Sdl3AudioBackend::PumpMonitoringSource(const Sdl3CaptureGrant &grant, const std::span<AudioSample> pcm) {
+        using Output = Result<AudioMonitorRead>;
+        auto &capture = impl_->capture;
+        if (!capture.monitorSource || grant.generation != capture.lastGeneration)
+            return Output::Failure(MakeError(AudioErrors::HandleStale));
+        const auto service = capture.monitorSource->service.lock();
+        if (!service) {
+            capture.Stop();
+            return Output::Failure(MakeError(AudioErrors::RuntimeInactive));
+        }
+        AudioCapturedBlock block;
+        const auto read = ReadMonitoringBlock(grant.generation, grant, block, pcm);
+        if (read.HasError() || read.Value() != AudioMonitorRead::Copied)
+            return read;
+        const auto channels = capture.stream->Buffer().Descriptor()->format.layout.orderedChannels.size();
+        const auto copied = pcm.first(block.frames * channels);
+        const auto submitted = service->SubmitLivePcm(capture.monitorSource->stream, copied);
+        std::ranges::fill(copied, 0.0F);
+        if (submitted.HasError()) {
+            if (submitted.ErrorValue().code.Value() != AudioErrors::StreamCapacityExceeded.code.Value())
+                capture.Stop();
+            return Output::Failure(submitted.ErrorValue());
+        }
+        return read;
     }
 
     /** @copydoc Sdl3AudioBackend::StopCapture */

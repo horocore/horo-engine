@@ -59,6 +59,15 @@ namespace Horo::Audio {
         return Result<void>::Success();
     }
 
+    /** @copydoc AudioStreamingService::RevokeLivePcm */
+    bool AudioStreamingService::RevokeLivePcm(const AudioStreamHandle handle) noexcept {
+        auto *state = Find(handle);
+        if (!state || !state->IsLivePcm())
+            return false;
+        state->stopped.store(true);
+        return true;
+    }
+
     /** @copydoc AudioStreamingService::PlaybackFacts */
     Result<AudioStreamPlaybackFacts> AudioStreamingService::PlaybackFacts(const AudioStreamHandle handle) const {
         using Output = Result<AudioStreamPlaybackFacts>;

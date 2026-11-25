@@ -165,7 +165,7 @@ namespace Horo::Audio::Backend {
               capture{.snapshot = {.owner = value.owner, .backend = AudioBackendKind::SDL3Audio, .revision = 1}} {}
 
         ~Impl() {
-            capture.stream.reset();
+            capture.Stop();
             if (stream) {
                 if (logicalDevice)
                     SDL_PauseAudioDevice(logicalDevice);

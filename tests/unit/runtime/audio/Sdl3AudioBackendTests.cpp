@@ -166,12 +166,11 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Waits for one bounded dummy callback block without involving output or capture callbacks directly. */
-        void RequireMonitorBlock(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant, const AudioCaptureBufferDescriptor &capture) {
+        template <class Read> void RequireMonitorBlock(const AudioCaptureBufferDescriptor &capture, Read readBlock) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
             std::vector<AudioSample> pcm(capture.maximumFrames * capture.format.layout.orderedChannels.size());
-            AudioCapturedBlock block;
             while (std::chrono::steady_clock::now() < deadline) {
-                const auto read = backend.ReadMonitoring(capture.generation, grant, block, pcm);
+                const auto read = readBlock(pcm);
                 REQUIRE(read.HasValue());
                 if (read.Value() == AudioMonitorRead::Copied)
                     return;
@@ -180,13 +179,53 @@ namespace Horo::Audio::Backend {
             FAIL("The local monitor did not receive a current dummy capture block.");
         }
 
+        /** @brief Independently exercised reasons for stopping the bound live source. */
+        enum class MonitorRetirement { QuiesceOutput, WithdrawConsent };
+
+        /** @brief Pipes real SDL capture through the sole live stream and proves both routes close together. */
+        void VerifyMonitorStream(Sdl3AudioBackend &backend, Sdl3CaptureGrant grant, const AudioCaptureBufferDescriptor &capture,
+                                 const AudioDeviceEpoch &epoch, const MonitorRetirement retirement) {
+            JobSystem jobs({.workerCount = 1});
+            auto live = AudioStreamingService::CreateLive(jobs);
+            REQUIRE(live.HasValue());
+            std::shared_ptr<AudioStreamingService> service{std::move(live).Value()};
+            CHECK(backend.BindMonitoringSource(grant, service, MaximumAudioCallbackFrames * 64).HasError());
+            const auto bound = backend.BindMonitoringSource(grant, service, capture.maximumFrames);
+            REQUIRE(bound.HasValue());
+            const auto stream = bound.Value();
+            CHECK(backend.BindMonitoringSource(grant, service, capture.maximumFrames).HasError());
+            auto port = service->RenderPort(stream);
+            REQUIRE(port.HasValue());
+            AudioCapturedBlock raw;
+            CHECK(backend.ReadMonitoring(capture.generation, grant, raw, {}).HasError());
+            RequireMonitorBlock(capture, [&](const std::span<AudioSample> pcm) { return backend.PumpMonitoringSource(grant, pcm); });
+            CHECK(port.Value().AvailableFrames() > 0);
+
+            if (retirement == MonitorRetirement::QuiesceOutput) {
+                static_cast<void>(Begin(backend, Quiesce{epoch}));
+                REQUIRE(backend.AdvanceControl().HasValue());
+            } else {
+                grant.foreground = false;
+                CHECK(backend.PumpMonitoringSource(grant, {}).HasError());
+            }
+            CHECK(backend.CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(port.Value().IsStopped());
+            CHECK(port.Value().AvailableFrames() == 0);
+            CHECK(backend.PumpMonitoringSource(grant, {}).HasError());
+        }
+
         TEST_CASE("SDL local monitoring requires a pinned output and retires before output quiescence", "[audio][sdl3][monitor]") {
             auto selection = PlaybackSelection::FollowDefault;
+            auto retirement = MonitorRetirement::QuiesceOutput;
             SECTION("automatically migrating system output cannot be monitored") {
                 selection = PlaybackSelection::FollowDefault;
             }
             SECTION("pinned physical output has an exact local route") {
                 selection = PlaybackSelection::PinPhysical;
+            }
+            SECTION("consent withdrawal retires the pinned route") {
+                selection = PlaybackSelection::PinPhysical;
+                retirement = MonitorRetirement::WithdrawConsent;
             }
             auto fixture = CreateOpenedBackend(selection);
             auto &backend = *fixture.backend;
@@ -220,11 +259,10 @@ namespace Horo::Audio::Backend {
             REQUIRE(started.HasValue());
             AudioCapturedBlock raw;
             CHECK(backend.ReadCapture(capture.generation, grant, raw, {}).HasError());
-            RequireMonitorBlock(backend, grant, capture);
-            static_cast<void>(Begin(backend, Quiesce{fixture.epoch}));
-            REQUIRE(backend.AdvanceControl().HasValue());
-            CHECK(backend.CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
-            CHECK(backend.ReadMonitoring(capture.generation, grant, raw, {}).HasError());
+            RequireMonitorBlock(capture, [&](const std::span<AudioSample> pcm) {
+                return backend.ReadMonitoring(capture.generation, grant, raw, pcm);
+            });
+            VerifyMonitorStream(backend, grant, capture, fixture.epoch, retirement);
         }
 
         TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {

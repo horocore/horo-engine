@@ -135,6 +135,13 @@ fresh admission. An opt-in echo reference is eligible only from the program
 tap before microphone monitor mixing, in the same output epoch and clock
 domain. An echo-canceller owns its alignment and processing separately.
 
+The SDL control owner can bind one admitted monitor to a live PCM source. The
+host publishes that source on the admitted mixer bus. The playback queue is
+bounded in frames by the route's duration budget. Each control pump copies at
+most one current, gain-limited block, then clears its scratch. Capture
+retirement stops the live source before detaching the microphone. The host
+releases the playback storage after its voice detaches.
+
 ### 6. Recording publishes through AST
 
 Editor/game code submits start/stop/cancel through an application recording use

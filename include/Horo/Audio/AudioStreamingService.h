@@ -285,6 +285,13 @@ namespace Horo::Audio {
          * @details The host owns admission and timing. Stop discards the generation and prevents subsequent writes.
          */
         [[nodiscard]] Result<void> SubmitLivePcm(AudioStreamHandle handle, std::span<const AudioSample> samples);
+
+        /** @brief Stops one exact live source from a control-side revoke or teardown path.
+         * @param handle Generation to stop.
+         * @return True for a live slot, including one already stopped. False for stale or package handles.
+         * @details The ordinary detached Retire path releases storage. This operation never waits or allocates.
+         */
+        bool RevokeLivePcm(AudioStreamHandle handle) noexcept;
         /**
          * @brief Prepares a separate unpublished replacement using a pinned new package generation.
          * @param previous Live last-known-good stream, never stopped or modified by staging.

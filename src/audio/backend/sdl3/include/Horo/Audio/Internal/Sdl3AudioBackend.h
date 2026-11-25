@@ -7,6 +7,7 @@
 #include "Horo/Audio/Internal/AudioBackend.h"
 #include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
 #include "Horo/Audio/Internal/AudioCaptureMonitor.h"
+#include "Horo/Audio/AudioStreamingService.h"
 
 #include <cstdint>
 #include <memory>
@@ -210,6 +211,24 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<AudioMonitorRead> ReadMonitoring(std::uint64_t generation, const Sdl3CaptureGrant &grant,
                                                               AudioCapturedBlock &block, std::span<AudioSample> pcm);
 
+        /** @brief Reserves the sole live playback source for an already admitted monitor generation.
+         * @param grant Exact current monitor admission, including the pinned output and mixer bus.
+         * @param service Host-retained stream service used by that output's normal voice and mixer.
+         * @param ringFrames Playback queue capacity bounded by the admitted monitoring duration budget.
+         * @return Live source for the host to publish on the admitted bus, or a typed admission failure.
+         * @details Capture retirement stops this source. The host retires its storage after detaching the voice.
+         */
+        [[nodiscard]] Result<AudioStreamHandle> BindMonitoringSource(const Sdl3CaptureGrant &grant,
+                                                                      const std::shared_ptr<AudioStreamingService> &service,
+                                                                      std::uint32_t ringFrames);
+
+        /** @brief Pumps one current, gain-limited microphone block to the bound live mixer source on control.
+         * @param grant Exact refreshed monitor admission.
+         * @param pcm Caller-owned, preallocated scratch; copied microphone samples are cleared before returning.
+         * @return Bounded read or typed route, health or queue-capacity failure. A full playback queue drops that block.
+         */
+        [[nodiscard]] Result<AudioMonitorRead> PumpMonitoringSource(const Sdl3CaptureGrant &grant, std::span<AudioSample> pcm);
+
         /** @brief Stops an explicitly approved recording, transferring its private unread tail to the caller.
          * @param generation Exact active capture generation.
          * @param grant Current owner admission for the same recording. Revocation discards PCM.
@@ -243,6 +262,9 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept override;
 
     private:
+        /** @brief Reads monitored input for the sole admitted consumer. */
+        [[nodiscard]] Result<AudioMonitorRead> ReadMonitoringBlock(std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                                   AudioCapturedBlock &block, std::span<AudioSample> pcm);
         /** @brief Shares validated PCM copying while keeping network-voice and local capture consumers separate. */
         [[nodiscard]] Result<Sdl3CaptureReadout> ReadBufferedCapture(std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant,
                                                                      AudioCapturedBlock &block, std::span<AudioSample> pcm,

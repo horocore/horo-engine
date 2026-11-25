@@ -66,6 +66,12 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         std::unique_ptr<CaptureStream> stream;
         std::uint64_t lastGeneration{};
         Sdl3CaptureGrant activeGrant;
+        /** @brief Playback storage belongs to the host and outlives its render port. */
+        struct MonitorSource final {
+            std::weak_ptr<AudioStreamingService> service;
+            AudioStreamHandle stream;
+        };
+        std::optional<MonitorSource> monitorSource;
 
         /** @brief Resolves an explicit endpoint with the advertised semantic PCM format. */
         [[nodiscard]] Result<SDL_AudioDeviceID> ResolveEndpoint(const AudioCaptureBufferDescriptor &descriptor) const;
