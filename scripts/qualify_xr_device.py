@@ -155,6 +155,9 @@ def validate_record(value: object) -> dict:
     if record["status"] == "Passed":
         require(check_statuses == {"Passed"}, "A fully passed record requires every check to pass")
     if record["status"] == "PassedWithLimitations":
+        require("Failed" not in check_statuses, "A failed check requires a Failed record")
+        require(bool(check_statuses & {"Passed", "PassedWithLimitations"}),
+                "A record passed with limitations requires a passing observation")
         require(check_statuses != {"Passed"}, "Record the limitation in the affected check")
     if record["status"] == "NotRun":
         require(check_statuses == {"NotRun"}, "A NotRun record cannot contain completed checks")

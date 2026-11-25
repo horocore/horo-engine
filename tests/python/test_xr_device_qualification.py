@@ -88,9 +88,18 @@ def test_optional_limitation_is_visible_and_required_claims_are_enforced(smoke):
     xr.check_physical_gate(xr.validate_record(smoke), declared(smoke), set())
     with pytest.raises(ValueError, match="haptics did not pass"):
         xr.check_physical_gate(smoke, declared(smoke), {"haptics"})
-    smoke["checks"]["recovery"].update(status="Failed", issue="XR-123")
+    smoke["checks"]["recovery"].update(status="PassedWithLimitations", issue="XR-123")
     with pytest.raises(ValueError, match="recovery did not pass"):
         xr.check_physical_gate(xr.validate_record(smoke), declared(smoke), set())
+
+
+def test_a_limited_record_requires_a_passing_observation(smoke):
+    smoke["status"] = "PassedWithLimitations"
+    for check in smoke["checks"].values():
+        check.update(status="Blocked", evidenceSha256=None, issue="missing-test-device")
+    smoke["display"] = None
+    with pytest.raises(ValueError, match="requires a passing observation"):
+        xr.validate_record(smoke)
 
 
 def test_cli_rejects_duplicate_record_members(tmp_path, smoke):

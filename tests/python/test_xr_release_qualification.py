@@ -92,6 +92,18 @@ def test_reference_pair_and_optional_planning_owner(release):
     assert "XR 1.0 matrix evidence passed" in result.stdout
 
 
+def test_a_failed_unclaimed_capability_cannot_be_reported_as_limited(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    record["status"] = "PassedWithLimitations"
+    record["checks"]["optionalMR"].update(status="Failed", issue="XR-123")
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): A failed check requires a Failed record" in result.stderr
+
+
 def test_a_nonreference_pcvr_claim_cannot_fill_the_reference_requirement(release):
     matrix, evidence = release
     matrix["tuples"][1] = make_claim(evidence, "WirelessStreaming", "Compatibility")

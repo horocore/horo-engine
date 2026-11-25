@@ -59,6 +59,9 @@ Use `Passed` for completed passing checks, `PassedWithLimitations` for an
 observed limited outcome, `Failed` for an observed failure, `Blocked` for
 a run prevented by a prerequisite and `NotRun` for a pending run. A missing
 headset is `Blocked` or `NotRun` depending on whether the run was attempted.
+A `PassedWithLimitations` record requires at least one passing observation
+and a documented limitation. A failed check requires a `Failed` record,
+including failures in optional checks that were exercised.
 If a runtime cannot enumerate refresh rates, leave the refresh list empty and
 record the reason on the display check. Use its recommended width and height
 values if the view enumeration succeeded.
