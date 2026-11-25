@@ -1,5 +1,6 @@
 #include "Horo/Extensions/ExtensionAbi.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
+#include "Horo/Packages/PackageMigration.h"
 #include "PackageActivationComposition.h"
 
 #include <algorithm>
@@ -238,7 +239,7 @@ namespace Horo::Packages {
         /** @brief Identifies resources controlled by the exact native gameplay declaration. */
         bool IsGameplayRemovalFile(const PackageFileEntry &file, const std::set<std::string, std::less<>> &artifacts) {
             const auto &path = file.id.path.Value();
-            if (path == "horo-package.toml" || path.starts_with("assets/"))
+            if (path == "horo-package.toml" || path == PackageAssetRenameDeclarationPath || path.starts_with("assets/"))
                 return !file.executable;
             if (!file.contributionRoot || file.contributionRoot->Value() != GameplayRoot)
                 return false;

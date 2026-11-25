@@ -2,6 +2,7 @@
 
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Packages/PackageLifecycle.h"
+#include "Horo/Packages/PackageMigration.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
 
@@ -199,7 +200,8 @@ namespace Horo::Application::Internal {
         bool IsOfflineAssetArchive(const Packages::PackageRestorePackage &package) {
             return std::ranges::all_of(package.archive->Manifest().Entries(), [](const auto &file) {
                 const auto &path = file.id.path.Value();
-                return !file.executable && (path == "horo-package.toml" || path.starts_with("assets/"));
+                return !file.executable &&
+                       (path == "horo-package.toml" || path == Packages::PackageAssetRenameDeclarationPath || path.starts_with("assets/"));
             });
         }
 

@@ -1,5 +1,7 @@
 #include "PackageUpdateReferences.h"
 
+#include "Horo/Packages/PackageMigration.h"
+
 #include <algorithm>
 #include <array>
 #include <map>
@@ -63,7 +65,9 @@ namespace Horo::Application::Internal {
         std::map<std::string_view, const Packages::PackageFileEntry *, std::less<>> byPath;
         for (const auto &file : candidate.Manifest().Entries()) {
             const std::string_view path = file.id.path.Value();
-            if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
+            if (path == Packages::PackageAssetRenameDeclarationPath && !file.executable)
+                ReportUpdateBlocker(diagnostics, "packages.host.update_migration_execution_required", package, path);
+            else if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
                 ReportUpdateBlocker(diagnostics, "packages.host.update_archive_requires_owner", package, path);
             byPath.emplace(path, &file);
         }
@@ -120,6 +124,18 @@ namespace Horo::Application::Internal {
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
             return Result<void>::Failure(previous.ErrorValue());
+        const auto renames = Packages::InspectPackageAssetRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
+        if (renames.HasError())
+            return Result<void>::Failure(renames.ErrorValue());
+        for (const auto &rename : renames.Value()) {
+            if (diagnostics.size() == MaximumUpdateDiagnostics)
+                break;
+            const auto *code = rename.preservesBytes ? "packages.host.update_declared_asset_rename"
+                                                     : "packages.host.update_declared_asset_rename_changes_bytes";
+            diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Note,
+                                     change.current->package.Value() + " -> " + rename.candidate.Value(), SourceLocation{"packages.host"},
+                                     rename.previous.Value());
+        }
         ReviewAssetFiles(change.current->package, previous.Value(), candidate.Value(), diagnostics);
         return Result<void>::Success();
     }

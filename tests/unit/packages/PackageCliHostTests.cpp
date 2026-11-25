@@ -1,9 +1,11 @@
 #include "CliOutputContractFixture.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Packages/PackageMigration.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <iterator>
 
@@ -127,6 +129,31 @@ namespace {
         }
     };
 
+    /** @brief Writes a resolved asset candidate bound to the fixture's source and archive. */
+    void WriteAssetCandidate(NativeProject &fixture, const Packages::PackageVersion &version,
+                             const Packages::ValidatedPackageArchive &archive) {
+        const auto intent = nlohmann::json{
+            {"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+            {"dependencies", {{fixture.graph.package.Value(), {{"source", "fixture.source"}, {"version", version.ToString()}}}}}}.dump();
+        const auto request = Packages::ValidatedPackageRequest::Parse(intent);
+        REQUIRE(request.HasValue());
+        const Packages::PackageResolutionPlan plan{
+            .packages = {{fixture.graph.package, version, fixture.graph.source, archive.Digest(), {}}}};
+        const Packages::PackageLockArtifact entry{.package = fixture.graph.package,
+                                                 .version = version,
+                                                 .source = fixture.graph.source,
+                                                 .artifactDigest = archive.Digest(),
+                                                 .manifestDigest = archive.PackageManifestDigest(),
+                                                 .fileManifestDigest = archive.Manifest().Digest(),
+                                                 .packageFormatVersion = 1,
+                                                 .contributions = {"assets"}};
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate(
+            plan, std::span{&fixture.graph.package, 1}, request.Value().Digest(), std::span{&entry, 1});
+        REQUIRE(lock.HasValue());
+        fixture.Write("candidate.json", intent);
+        fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
+    }
+
     TEST_CASE("Headless package update preview reads candidate documents without repairing or modifying the project",
               "[packages][application][cli][update]") {
         NativeProject fixture;
@@ -217,26 +244,8 @@ namespace {
         }
         SECTION("a cache-backed review reports a version change even when archive bytes match") {
             const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
-            auto changed = nlohmann::json::parse(originalRequest);
-            changed["dependencies"][fixture.graph.package.Value()]["version"] = version.ToString();
-            auto request = Packages::ValidatedPackageRequest::Parse(changed.dump());
-            REQUIRE(request.HasValue());
             const auto &archive = fixture.graph.archive;
-            const Packages::PackageResolutionPlan plan{
-                .packages = {{fixture.graph.package, version, fixture.graph.source, archive.Digest(), {}}}};
-            const Packages::PackageLockArtifact entry{.package = fixture.graph.package,
-                                                     .version = version,
-                                                     .source = fixture.graph.source,
-                                                     .artifactDigest = archive.Digest(),
-                                                     .manifestDigest = archive.PackageManifestDigest(),
-                                                     .fileManifestDigest = archive.Manifest().Digest(),
-                                                     .packageFormatVersion = 1,
-                                                     .contributions = {"assets"}};
-            const auto next = Packages::ValidatedPackageLockfileV1::Generate(
-                plan, std::span{&fixture.graph.package, 1}, request.Value().Digest(), std::span{&entry, 1});
-            REQUIRE(next.HasValue());
-            fixture.Write("candidate.json", changed.dump());
-            fixture.Write("candidate.lock", next.Value().SerializeCanonical());
+            WriteAssetCandidate(fixture, version, archive);
             const auto missing = execute(true);
             REQUIRE(missing.Outcome().HasError());
             CHECK(missing.Outcome().ErrorValue().code.Value() == "packages.host.update_archive_evidence_unavailable");
@@ -356,6 +365,78 @@ namespace {
         }
         CHECK(read(metadata / "packages.json") == originalRequest);
         CHECK(read(metadata / "packages.lock") == originalLock);
+    }
+
+    TEST_CASE("Cached update previews bind asset rename declarations to the exact previous artifact",
+              "[packages][application][cli][update]") {
+        NativeProject fixture;
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, Duplicate };
+        const auto mode = GENERATE(Source::Verified, Source::ChangedBytes, Source::Stale, Source::OutsideAssets, Source::MissingTarget,
+                                   Source::Duplicate);
+        const auto id = fixture.graph.package.Value();
+        const auto previousDigest = FormatSha256(fixture.graph.archive.Digest());
+        const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
+        nlohmann::json transition{{"fromVersion", "1.0.0"},
+                                   {"fromArtifactSha256", mode == Source::Stale ? FormatSha256(Sha256Digest{}) : previousDigest},
+                                   {"renames", {{{"from", mode == Source::OutsideAssets ? "../data.bin" : "assets/data.bin"},
+                                                  {"to", mode == Source::MissingTarget ? "assets/not-in-archive.bin" : "assets/moved.bin"}}}}};
+        nlohmann::json transitions = nlohmann::json::array({transition});
+        if (mode == Source::Duplicate)
+            transitions.push_back(transition);
+        const nlohmann::json declaration{{"schemaVersion", 1}, {"packageId", id}, {"toVersion", version.ToString()},
+                                         {"transitions", std::move(transitions)}};
+        const std::vector<std::pair<std::string, std::string>> entries{
+            {"horo-package.toml", "schemaVersion = 1\n"},
+            {"assets/moved.bin", mode == Source::ChangedBytes ? "replaced bytes" : "verified bytes"},
+            {std::string{Packages::PackageAssetRenameDeclarationPath}, declaration.dump()}};
+        const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
+        REQUIRE(archive.HasValue());
+        WriteAssetCandidate(fixture, version, archive.Value());
+        NativeDurableFileSystem files;
+        auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+        REQUIRE(cache.HasValue());
+        auto published = std::move(cache).Value();
+        REQUIRE(published.Publish(fixture.graph.archive).HasValue());
+        REQUIRE(published.Publish(archive.Value()).HasValue());
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const auto metadata = root / ".horo";
+        const auto unchanged = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
+        REQUIRE(unchanged.HasValue());
+        const CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
+                                                    NativeProject::PathOption("candidate-lock", metadata / "candidate.lock"),
+                                                    NativeProject::PathOption("package-cache-root", cacheRoot)}};
+        InInvocation([&](CliExecutionContext &context) {
+            const auto result = preview.adapter->Execute(command, context);
+            REQUIRE(result.HasError());
+            const auto &error = result.ErrorValue();
+            if (mode == Source::OutsideAssets) {
+                CHECK(error.code.Value() == "packages.migration.invalid_path");
+            } else if (mode == Source::MissingTarget) {
+                CHECK(error.code.Value() == "packages.migration.archive_paths_mismatch");
+            } else if (mode == Source::Duplicate) {
+                CHECK(error.code.Value() == "packages.migration.duplicate_transition");
+            } else {
+                CHECK(error.code.Value() == "packages.host.update_requires_migration_review");
+                const auto proposed = std::ranges::find_if(error.diagnostics, [](const auto &diagnostic) {
+                    return diagnostic.code.Value().starts_with("packages.host.update_declared_asset_rename");
+                });
+                if (mode == Source::Stale) {
+                    CHECK(proposed == error.diagnostics.end());
+                } else {
+                    REQUIRE(proposed != error.diagnostics.end());
+                    CHECK(proposed->path == "assets/data.bin");
+                    CHECK(proposed->message.ends_with("assets/moved.bin"));
+                    CHECK(proposed->code.Value().ends_with("_changes_bytes") == (mode == Source::ChangedBytes));
+                }
+            }
+        });
+        const auto after = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
+        REQUIRE(after.HasValue());
+        CHECK(after.Value() == unchanged.Value());
     }
 
     TEST_CASE("Headless package removal previews show when an extension requires a live owner", "[packages][application][cli][remove]") {

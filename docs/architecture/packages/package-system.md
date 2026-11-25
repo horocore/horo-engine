@@ -210,6 +210,7 @@ package.horopkg
   behaviors/
   services/
   extensions/
+  migrations/
   samples/
   docs/
   NOTICE.md

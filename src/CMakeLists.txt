@@ -419,6 +419,7 @@ add_library(HoroPackages STATIC
         packages/cache/PackageCachePublisherEnvelope.cpp
         packages/resolver/PackageDependencyResolver.cpp
         packages/resolver/PackageLockfile.cpp
+        packages/resolver/PackageMigration.cpp
         packages/resolver/PackageRequest.cpp
         packages/validation/PackagePath.cpp
         packages/validation/PackageArchive.cpp

@@ -541,6 +541,32 @@ requiresUserReview = true
 Migration plans must be previewable. Any migration that changes project-owned
 scene or asset files uses editor document commands/transactions where applicable.
 
+The cache-backed update preview reads the optional `migrations/asset-renames.json`
+file from the candidate's verified inventory. A version-one declaration binds
+the candidate package ID and version and lists exact prior artifact selectors.
+
+```json
+{
+  "schemaVersion": 1,
+  "packageId": "com.vendor.weapon-pack",
+  "toVersion": "2.0.0",
+  "transitions": [
+    {
+      "fromVersion": "1.0.0",
+      "fromArtifactSha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renames": [{"from": "assets/rifle.mesh", "to": "assets/weapons/rifle.mesh"}]
+    }
+  ]
+}
+```
+
+The preview checks each applicable mapping against both verified inventories and
+reports whether the destination also changes bytes. Path collisions, links,
+executables, duplicate selectors and missing paths invalidate the applicable
+review. This declaration supplies evidence for review. Applying the mapping to
+project files and producing an approval for that migration require a document
+transaction.
+
 Legacy extension directories and `.horo/plugins.json` use the bounded ADR-054
 migration. It parses legacy metadata only to build a preview, generates a
 canonical `horo-package.toml`, `files.manifest.json` and package-scoped extension

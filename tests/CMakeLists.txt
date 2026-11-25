@@ -158,7 +158,7 @@ target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicod
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiInspectionPublicContract.cpp)
 target_sources(HoroInputPublicHeaderConsumer PRIVATE support/InputCollectionPublicContract.cpp)
 target_sources(HoroInputPublicHeaderConsumer PRIVATE support/InputRebindingPublicContract.cpp)
-target_sources(HoroPackagesPublicHeaderConsumer PRIVATE support/PackageCachePublicContract.cpp)
+target_sources(HoroPackagesPublicHeaderConsumer PRIVATE support/PackageCachePublicContract.cpp support/PackageMigrationPublicContract.cpp)
 target_sources(HoroSecurityEnvelopePublicHeaderConsumer PRIVATE support/SecurityEnvelopePublicContract.cpp)
 add_test(NAME HoroSecurityEnvelopeSdkContract COMMAND "${CMAKE_COMMAND}"
     "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
