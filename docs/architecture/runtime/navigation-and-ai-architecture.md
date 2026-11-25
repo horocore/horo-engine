@@ -1798,6 +1798,8 @@ A copied observation or an Audio playback event cannot supply that proof.
 For each hearing source and listener at one simulation tick, the captured batch
 selects the newest admissible emission. Later producer entries break ties.
 Delivery order and rejected or expired entries do not change the selected sound.
+The Scene sensing pass publishes each winner once at its position in the batch,
+so superseded records cannot evict observations from other sources.
 Scene hosts with an authoritative Gameplay producer can pass the captured
 source's `Feed()` to `PollPerceptionAtSensePoll`. The same Scene and spatial
 owner admit only addressed, registered hearing listeners. The feed is borrowed

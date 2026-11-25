@@ -447,7 +447,7 @@ namespace Horo::AI {
                                                 .blackboardSchema = controller.blackboardSchema->Identity(),
                                                 .requiredCapabilities = AiCapabilitySet::Of(AiCapability::Perception)};
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
-            for (std::uint64_t id : {1U, 2U}) {
+            for (std::uint64_t id : {1U, 2U, 3U}) {
                 const AiAgentComponent agent{.agent = MakeIdentity<AgentId>(id)};
                 builder.Add({.object = Runtime::SceneObjectId{id}, .components = {.aiAgent = agent, .aiController = binding}});
             }
@@ -456,13 +456,17 @@ namespace Horo::AI {
             const auto view = scene->View();
             const auto listener = *view.Find(Runtime::SceneObjectId{1});
             const auto source = *view.Find(Runtime::SceneObjectId{2});
+            const auto independentSource = *view.Find(Runtime::SceneObjectId{3});
             const auto soundPosition = Math::WorldCoordinate64::FromMillimeters(500, 0, 0);
+            const auto independentPosition = Math::WorldCoordinate64::FromMillimeters(600, 0, 0);
             PerceptionSpatialBroadphase spatial;
             const auto generation = PerceptionSenseGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true)).Value();
             const auto positions = [&](const Runtime::RuntimeSceneView &) {
-                return Result<std::vector<AiScenePerceptionPosition>>::Success({{listener, {}}, {source, soundPosition}});
+                return Result<std::vector<AiScenePerceptionPosition>>::Success(
+                    {{listener, {}}, {source, soundPosition}, {independentSource, independentPosition}});
             };
-            const AiScenePerceptionExecution execution{.generation = generation, .visibleLayers = 1, .workUnitsPerTick = 1};
+            const AiScenePerceptionExecution execution{
+                .generation = generation, .memory = {.listenerMaximumEntries = 1}, .visibleLayers = 1, .workUnitsPerTick = 1};
             AiSceneActivationParticipant participant{runtime, std::span{&controller, 1},
                                                       AiScenePerceptionActivationInput{spatial, {}, positions, execution}};
             auto activation = participant.Prepare(definition, view);
@@ -474,6 +478,14 @@ namespace Horo::AI {
             const CommittedPerceptionDelivery sound{
                 {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(source), soundPosition, 0.5, 1, 77, 1, 1}, 1},
                 PerceptionFilterDecision::Accept};
+            const CommittedPerceptionDelivery independentSound{
+                {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(independentSource), independentPosition, 0.5, 1, 77, 1, 1}, 1},
+                PerceptionFilterDecision::Accept};
+            auto superseded = sound;
+            auto &older = std::get<HearingPerceptionEvent>(superseded.delivery.event);
+            older.emittedTick = 0;
+            older.lifetimeTicks = 2;
+            const std::array batch{sound, independentSound, superseded};
             const auto quantum = Duration::FromNanoseconds(execution.memory.fixedStep.count());
             PerceptionSpatialBroadphase foreignSpatial;
             const auto inputs = spatial.Current()->Inputs();
@@ -498,7 +510,7 @@ namespace Horo::AI {
                 ++captures;
                 CHECK(tick == sound.delivery.simulationTick);
                 auto captured = PerceptionEventSource::Capture(current, owner, host, Network::NetworkModeWorldKind::AuthorityServer,
-                                                                *registry, filter, std::span{&sound, 1});
+                                                                *registry, filter, batch);
                 if (captured.HasError())
                     return Window::Failure(captured.ErrorValue());
                 return Window::Success(std::move(captured).Value());
@@ -514,14 +526,15 @@ namespace Horo::AI {
             const auto perceived = runtime.ReadPerceptionAtSafePoint(view, listener);
             REQUIRE(perceived.HasValue());
             REQUIRE(perceived.Value().count == 1);
-            CHECK(perceived.Value().entries[0].lastKnownPosition == soundPosition);
+            CHECK(perceived.Value().entries[0].lastKnownPosition == independentPosition);
             CHECK(runtime.ReadPerceptionAtSafePoint(view, source).Value().count == 0);
+            CHECK(runtime.ReadPerceptionAtSafePoint(view, independentSource).Value().count == 0);
             const auto projected = runtime.CapabilityAtSafePoint().ReadBlackboard(recipient, projection.positions);
             REQUIRE(projected.HasValue());
             REQUIRE(projected.Value());
             const auto &positionsValue = std::get<BlackboardCollectionValue>(*projected.Value());
             REQUIRE(positionsValue.count == 1);
-            CHECK(std::get<Math::WorldCoordinate64>(positionsValue.elements[0]) == soundPosition);
+            CHECK(std::get<Math::WorldCoordinate64>(positionsValue.elements[0]) == independentPosition);
             runtime.BeginShutdown();
         }
 

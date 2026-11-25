@@ -116,6 +116,12 @@ namespace Horo::Gameplay {
             AI::AiSceneActivationBinding binding;
         };
 
+        /** @brief Distinguishes indexed delivery from an ordered traversal of all records. */
+        enum class DeliveryMode : std::uint8_t {
+            ResolveSelected,
+            SelectedOnly
+        };
+
         PerceptionEventSource(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
                               const Network::NetworkModeComposition &host,
                               const CapturedAuthority &authority, const AI::PerceptionDescriptorRegistry &registry,
@@ -127,6 +133,8 @@ namespace Horo::Gameplay {
         /** @brief Binds a declared recipient to the current active AI owner and exact memory. */
         [[nodiscard]] Result<void> ValidateRecipient(const AI::PerceptionEventDelivery &delivery,
                                                      const AI::AIPerceptionMemory &memory) const;
+        /** @brief Routes a sound individually or skips superseded records during a complete sensing pass. */
+        [[nodiscard]] Result<void> DeliverRecord(std::size_t index, AI::AIPerceptionMemory &memory, DeliveryMode mode) const;
         /** @brief Consumes admitted hearing for one exact Scene-owned listener at this fixed tick. */
         [[nodiscard]] Result<void> DeliverSensingWindow(std::uint64_t tick, const AI::AiControllerPerceptionEndpoints &endpoints,
                                                         AI::AIPerceptionMemory &memory) const;

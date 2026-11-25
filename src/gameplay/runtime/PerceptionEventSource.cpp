@@ -240,6 +240,11 @@ namespace Horo::Gameplay {
 
     /** @copydoc PerceptionEventSource::Deliver */
     Result<void> PerceptionEventSource::Deliver(const std::size_t index, AI::AIPerceptionMemory &memory) const {
+        return DeliverRecord(index, memory, DeliveryMode::ResolveSelected);
+    }
+
+    /** @copydoc PerceptionEventSource::DeliverRecord */
+    Result<void> PerceptionEventSource::DeliverRecord(const std::size_t index, AI::AIPerceptionMemory &memory, const DeliveryMode mode) const {
         if (index >= deliveries_.size())
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
         if (const auto current = ValidateCurrent(); current.HasError())
@@ -257,6 +262,8 @@ namespace Horo::Gameplay {
         if (!std::visit(filter, record.delivery.event))
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
         const auto &selected = CoalesceHearing(deliveries_, index, filter).delivery;
+        if (mode == DeliveryMode::SelectedOnly && &selected != &record.delivery)
+            return Result<void>::Success();
         const AI::PerceptionEventAdmission admission{selected, memory};
         return AI::RouteGameplayPerceptionEvent(selected, *registry_, admission, memory);
     }
@@ -284,7 +291,8 @@ namespace Horo::Gameplay {
                 continue;
             if (registry_ != endpoints.registry.get())
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
-            if (auto delivered = Deliver(index, memory); delivered.HasError() && !IsRejectedDelivery(delivered.ErrorValue()))
+            if (auto delivered = DeliverRecord(index, memory, DeliveryMode::SelectedOnly);
+                delivered.HasError() && !IsRejectedDelivery(delivered.ErrorValue()))
                 return delivered;
         }
         return Result<void>::Success();
