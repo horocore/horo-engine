@@ -169,7 +169,7 @@ namespace Horo::AI {
             CallbackScope scope(invoking_);
             node->operation = operation;
             node->aborted = false;
-            return node->instance->Start(context, operation);
+            return AdmitTaskResult(node->instance->Start(context, operation));
         }
 
         Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context,
@@ -180,7 +180,7 @@ namespace Horo::AI {
             if (!node || node->node != context.node || node->aborted)
                 return Failure<AiTaskState>(AIErrors::TaskContextInvalid);
             CallbackScope scope(invoking_);
-            return node->instance->Resume(context, operation);
+            return AdmitTaskResult(node->instance->Resume(context, operation));
         }
 
         void Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason reason) noexcept override {
@@ -212,7 +212,7 @@ namespace Horo::AI {
             if (!node)
                 return Failure<bool>(AIErrors::DecisionAssetDescriptorMissing);
             CallbackScope scope(invoking_);
-            return node->instance->Check(context);
+            return AdmitResult(node->instance->Check(context));
         }
 
         Result<void> Service(const BehaviorTreeEvaluationContext &context) noexcept override {
@@ -222,10 +222,24 @@ namespace Horo::AI {
             if (!node)
                 return Failure<void>(AIErrors::DecisionAssetDescriptorMissing);
             CallbackScope scope(invoking_);
-            return node->instance->Service(context);
+            return AdmitResult(node->instance->Service(context));
         }
 
     private:
+        /** @brief Routes withdrawn task results through the behavior tree's abort and cleanup path. */
+        Result<AiTaskState> AdmitTaskResult(Result<AiTaskState> result) const noexcept {
+            if (!generation_->CanAdmit())
+                return Result<AiTaskState>::Success(AiTaskState::Cancelled);
+            return result;
+        }
+
+        /** @brief Rejects condition and service results when their generation is withdrawn during the callback. */
+        template <typename T> Result<T> AdmitResult(Result<T> result) const noexcept {
+            if (!generation_->CanAdmit())
+                return Failure<T>(AIErrors::RuntimeUnavailable);
+            return result;
+        }
+
         static Result<void> ValidateConfiguration(const DecisionAssetPlan &plan, std::span<const DecisionNodeConfiguration> configuration) {
             if (configuration.size() > plan.Nodes().size())
                 return Failure<void>(AIErrors::DecisionAssetLimitExceeded);

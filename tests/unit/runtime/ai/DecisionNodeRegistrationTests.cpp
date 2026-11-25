@@ -119,6 +119,38 @@ namespace Horo::AI {
             CHECK(weak.expired());
         }
 
+        TEST_CASE("Decision task results cannot complete a tree after callback admission is withdrawn", "[ai][decision-node]") {
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            const auto registration = Registration(fixture.probe);
+            auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            auto plan = fixture.Plan();
+            auto executor = generation->CreateExecutor(generation, *plan, {});
+            REQUIRE(executor.HasValue());
+            const BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            auto created = BehaviorTreeInstance::Create(plan, binding, std::move(executor).Value());
+            REQUIRE(created.HasValue());
+            auto tree = std::move(created).Value();
+            std::uint64_t tick = 1;
+            SECTION("revocation inside start") {
+                fixture.probe->withdrawOnStart = admission.get();
+            }
+            SECTION("revocation inside resume") {
+                fixture.probe->outcome[1] = AiTaskState::Running;
+                REQUIRE(fixture.Evaluate(*tree, tick++) == AiTaskState::Running);
+                fixture.probe->outcome[1] = AiTaskState::Succeeded;
+                fixture.probe->withdrawOnResume = admission.get();
+            }
+            CHECK(fixture.Evaluate(*tree, tick) == AiTaskState::Cancelled);
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            tree->Shutdown();
+            CHECK(fixture.probe->cleanups[1] == 1);
+        }
+
         TEST_CASE("Bound decision executor replacement prepares new node callbacks before cancelling the old tree", "[ai][decision-node]") {
             using enum BehaviorTreeOperation;
             using enum AiTaskState;

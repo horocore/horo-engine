@@ -4,6 +4,7 @@
 #include "Horo/AI/BehaviorTreeRuntime.h"
 
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 #include <utility>
@@ -55,6 +56,8 @@ namespace Horo::AI::BehaviorTreeTestSupport {
         std::uint64_t failCheck{};
         std::uint64_t cancelService{};
         CancellationSource *cancellation{};
+        std::atomic_bool *withdrawOnStart{};
+        std::atomic_bool *withdrawOnResume{};
         bool invalidOutput{};
 
         Probe() {
@@ -80,6 +83,8 @@ namespace Horo::AI::BehaviorTreeTestSupport {
             ++probe_->starts[id];
             probe_->handles[id] = operation.task;
             probe_->order[probe_->orderCount++] = id;
+            if (probe_->withdrawOnStart)
+                probe_->withdrawOnStart->store(false);
             if (id == probe_->failTask)
                 return Result<AiTaskState>::Failure(MakeError(AIErrors::RuntimeUnavailable));
             return Result<AiTaskState>::Success(probe_->invalidOutput ? AiTaskState::Idle : probe_->outcome[id]);
@@ -87,6 +92,8 @@ namespace Horo::AI::BehaviorTreeTestSupport {
 
         Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context, const AiTaskOperationContext &) noexcept override {
             ++probe_->resumes[context.node.Value()];
+            if (probe_->withdrawOnResume)
+                probe_->withdrawOnResume->store(false);
             return Result<AiTaskState>::Success(probe_->outcome[context.node.Value()]);
         }
 
