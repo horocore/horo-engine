@@ -477,10 +477,15 @@ publishes metadata. Dropping an uncommitted reservation reopens admission.
 Once the lock commits, admission on the old session remains revoked until
 the host composes from the new lock.
 
-When a departing archive contains declarations or files outside the editor's
-gameplay removal owner, the review identifies the blocked contribution,
-module, or archive path from its verified manifest. The same rejection keeps
-any confirmed references found in saved project sources.
+When the same lifecycle also owns a native backend through the concrete
+importer host, a withdrawal reservation can admit a sealed importer-only
+backend alongside gameplay roles. The backend may declare only importer
+contributions, with no service imports, exports, local module dependencies,
+or additional capability requirements. This path excludes mounted assets. The project still checks
+importer sidecars and observes gameplay registrations, and the reservation
+waits for live and retiring role receipts to drain. Otherwise, the review
+identifies the blocked contribution, module, or archive path and keeps any
+confirmed references found in saved sources.
 
 The desktop editor can apply a reviewed removal for verified asset packages
 and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before

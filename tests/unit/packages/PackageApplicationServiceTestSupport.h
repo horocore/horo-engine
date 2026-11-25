@@ -29,7 +29,7 @@ namespace Horo::Tests::PackageApplicationService {
         return std::move(verified).Value();
     }
 
-    enum class NativeArchiveContributions { WithImporter, ModuleOnly };
+    enum class NativeArchiveContributions { WithImporter, ModuleOnly, WithBackendImporter };
     inline constexpr std::string_view FixturePackageId = "com.horo.application-fixture";
 
     /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
@@ -54,9 +54,17 @@ namespace Horo::Tests::PackageApplicationService {
                                            {"entry", image}}}}};
         if (contributions == NativeArchiveContributions::WithImporter)
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", moduleId}}};
-        const std::array files{std::pair{std::string{"horo-package.toml"}, std::string{"schemaVersion = 1\n"}},
-                               std::pair{std::string{root} + "/extension.json", descriptor.dump()},
-                               std::pair{std::string{root} + '/' + image, std::string{"unloadable fixture image"}}};
+        std::vector<std::pair<std::string, std::string>> files{{"horo-package.toml", "schemaVersion = 1\n"},
+                                                               {std::string{root} + '/' + image, "unloadable fixture image"}};
+        if (contributions == NativeArchiveContributions::WithBackendImporter) {
+            const auto backendId = std::string{id} + ".backend";
+            const auto backendImage = "backend-" + std::string{image};
+            descriptor["modules"].push_back({{"id", backendId}, {"version", "1.0.0"}, {"kind", "native"},
+                                             {"roles", {"backend-capability"}}, {"entry", backendImage}});
+            descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", backendId}}};
+            files.emplace_back(std::string{root} + '/' + backendImage, "unloadable backend fixture image");
+        }
+        files.emplace_back(std::string{root} + "/extension.json", descriptor.dump());
         mz_zip_archive zip{};
         REQUIRE(mz_zip_writer_init_heap(&zip, 0, 0));
         auto inventory = nlohmann::json::array();

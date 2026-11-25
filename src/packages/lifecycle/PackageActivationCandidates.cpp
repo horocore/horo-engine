@@ -254,16 +254,41 @@ namespace Horo::Packages {
             return name == GameplayDescriptor || name.ends_with(".horo_script");
         }
 
-        /** @brief Names each declared owner outside the editor's gameplay-only removal route. */
-        void CollectGameplayArtifacts(const Extensions::ExtensionManifest &manifest, std::set<std::string, std::less<>> &artifacts,
-                                      std::vector<Diagnostic> &blockers) {
+        /** @brief Tests a single native role with no intermodule service or dependency contract. */
+        bool IsStandaloneNativeRole(const Extensions::ExtensionModuleManifest &module, const Extensions::ExtensionModuleRole role) {
+            return module.kind == "native" && module.imports.empty() && module.exports.empty() &&
+                   std::ranges::equal(module.roles, std::array{role});
+        }
+
+        /** @brief Recognizes the backend surface covered by the project importer sidecar scan. */
+        bool IsImporterOnlyModule(const Extensions::ExtensionModuleManifest &module, const Extensions::ExtensionManifest &manifest) {
+            if (!IsStandaloneNativeRole(module, Extensions::ExtensionModuleRole::BackendCapability) || !module.dependencies.empty() ||
+                !module.requiredCapabilities.empty())
+                return false;
+            bool hasImporter = false;
+            for (const auto &contribution : manifest.contributions) {
+                if (contribution.owningModule != module.id)
+                    continue;
+                if (contribution.type != "asset.importer")
+                    return false;
+                hasImporter = true;
+            }
+            return hasImporter;
+        }
+
+        /** @brief Accounts for executable entries and names owners outside the admitted withdrawal routes. */
+        std::vector<PackageRuntimeRoleDeclaration> CollectRemovalArtifacts(
+            const Extensions::ExtensionManifest &manifest, const PackagePath &descriptorPath, const bool allowImporters,
+            std::set<std::string, std::less<>> &artifacts, std::vector<Diagnostic> &blockers) {
             const SourceLocation descriptor{std::string{GameplayDescriptor}};
-            for (const auto &contribution : manifest.contributions)
-                blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"}, DiagnosticSeverity::Error,
-                                      contribution.type + " / " + contribution.owningModule, descriptor, contribution.id);
+            std::set<std::string_view, std::less<>> importerModules;
+            std::vector<PackageRuntimeRoleDeclaration> roles;
             for (const auto &module : manifest.modules) {
-                if (module.kind != "native" || !module.imports.empty() || !module.exports.empty() ||
-                    !std::ranges::equal(module.roles, std::array{Extensions::ExtensionModuleRole::RuntimeParticipant})) {
+                if (IsStandaloneNativeRole(module, Extensions::ExtensionModuleRole::RuntimeParticipant)) {
+                    roles.emplace_back(descriptorPath, module.id);
+                } else if (allowImporters && IsImporterOnlyModule(module, manifest)) {
+                    importerModules.insert(module.id);
+                } else {
                     blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_module_owner_required"}, DiagnosticSeverity::Error,
                                           "Module requires its registered lifecycle owner.", descriptor, module.id);
                     continue;
@@ -273,6 +298,12 @@ namespace Horo::Packages {
                 for (const auto &variant : module.entries)
                     artifacts.emplace(std::string{GameplayRoot} + '/' + variant.entry);
             }
+            for (const auto &contribution : manifest.contributions)
+                if (!importerModules.contains(contribution.owningModule))
+                    blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"},
+                                          DiagnosticSeverity::Error, contribution.type + " / " + contribution.owningModule,
+                                          descriptor, contribution.id);
+            return roles;
         }
 
         /** @brief Identifies each archive member outside the gameplay owner's file authority. */
@@ -289,8 +320,9 @@ namespace Horo::Packages {
         }
     }  // namespace
 
-    /** @copydoc InspectGameplayRemovalRoles */
-    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
+    /** @brief Verifies every archived executable member before allowing its role-specific reference review. */
+    static Result<std::vector<PackageRuntimeRoleDeclaration>> InspectRemovalRoles(const PackageRestorePackage &package,
+                                                                                  const bool allowImporters) {
         using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
         auto outsideOwner = MakeError(PackageLifecycleErrors::InvalidCandidate);
         if (!package.archive)
@@ -307,14 +339,26 @@ namespace Horo::Packages {
                                                                      WithCause(std::move(outsideOwner), std::move(declared).ErrorValue()));
         std::set<std::string, std::less<>> artifacts;
         const auto &manifest = declared.Value().manifest;
-        CollectGameplayArtifacts(manifest, artifacts, outsideOwner.diagnostics);
+        // The importer sidecar scan identifies importer use, not references to mounted assets contributed by this archive.
+        const bool hasMountedAssets = allowImporters && std::ranges::any_of(package.archive->Manifest().Entries(), [](const auto &file) {
+            return file.id.path.Value().starts_with("assets/");
+        });
+        auto roles = CollectRemovalArtifacts(manifest, descriptor, allowImporters && !hasMountedAssets, artifacts, outsideOwner.diagnostics);
         CollectUnownedFiles(*package.archive, artifacts, outsideOwner.diagnostics);
         if (artifacts.empty() || !outsideOwner.diagnostics.empty())
             return Roles::Failure(std::move(outsideOwner));
-        std::vector<PackageRuntimeRoleDeclaration> roles;
-        for (const auto &module : manifest.modules)
-            roles.emplace_back(descriptor, module.id);
         return Roles::Success(std::move(roles));
+    }
+
+    /** @copydoc InspectGameplayRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
+        return InspectRemovalRoles(package, false);
+    }
+
+    /** @copydoc InspectLivePackageRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(const PackageRestorePackage &package,
+                                                                                      const PackageRemovalLease &reservation) {
+        return InspectRemovalRoles(package, reservation.AllowsNativeImporterReview(package));
     }
 
     /** @copydoc InspectPackageRuntimeRoles */

@@ -1,6 +1,7 @@
 #include "Horo/Packages/PackageLifecycle.h"
 
 #include "Horo/Packages/PackageLifecycleErrors.h"
+#include "Horo/Packages/NativePackageModuleHost.h"
 #include "PackageActivationComposition.h"
 #include "PackageModuleComposition.h"
 
@@ -18,6 +19,7 @@ namespace Horo::Packages {
         std::filesystem::path projectRoot;
         std::vector<LockedPackageReference> departing;
         std::shared_ptr<const VerifiedPackageInstallRecord> install;
+        bool nativeImporterOwner{};
         std::atomic<Status> status{Status::Reserved}; /**< Only lease abandonment and durable publication change admission. */
     };
 
@@ -39,6 +41,18 @@ namespace Horo::Packages {
     /** @copydoc PackageRemovalLease::InstalledRecord */
     std::shared_ptr<const VerifiedPackageInstallRecord> PackageRemovalLease::InstalledRecord() const noexcept {
         return state_->install;
+    }
+
+    /** @copydoc PackageRemovalLease::AllowsNativeImporterReview */
+    bool PackageRemovalLease::AllowsNativeImporterReview(const PackageRestorePackage &package) const {
+        if (!state_->nativeImporterOwner || state_->status.load() != State::Status::Reserved || !package.archive)
+            return false;
+        if (std::ranges::find(state_->departing, LockedPackageReference{package.lock.package, package.lock.version}) ==
+            state_->departing.end())
+            return false;
+        return std::ranges::any_of(state_->install->Graph()->packages, [&](const auto &installed) {
+            return installed.archive == package.archive && installed.lock == package.lock;
+        });
     }
 
     /** @copydoc PackageRemovalLease::MarkPublished */
@@ -417,6 +431,11 @@ namespace Horo::Packages {
         state->projectRoot = impl_->install.ProjectRoot();
         state->departing.assign(departing.begin(), departing.end());
         state->install = installed;
+        const auto &hosts = impl_->configuration.moduleHosts;
+        const auto backend = std::ranges::find_if(hosts, [](const auto &host) {
+            return host && host->Supports(Extensions::ExtensionModuleRole::BackendCapability);
+        });
+        state->nativeImporterOwner = backend != hosts.end() && dynamic_cast<const NativePackageModuleHost *>(backend->get());
         auto lease = std::shared_ptr<const PackageRemovalLease>{new PackageRemovalLease{state}};
         impl_->removal = std::move(state);
         return Output::Success(std::move(lease));

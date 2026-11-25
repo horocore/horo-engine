@@ -504,13 +504,13 @@ namespace Horo::Application::Internal {
         /** @brief Separates data archives from executable ones and verifies the editor's supported executable owner. */
         Result<std::vector<Packages::PackageRuntimeRoleDeclaration>> DeclaredRemovalRoles(const Packages::VerifiedPackageInstallRecord &install,
                                                                                        const Packages::PackageRestorePackage &package,
-                                                                                       const bool requireGameplayOwner) {
+                                                                                       const Packages::PackageRemovalLease *reservation) {
             using Roles = Result<std::vector<Packages::PackageRuntimeRoleDeclaration>>;
-            if (!requireGameplayOwner)
+            if (!reservation)
                 return Packages::InspectPackageRuntimeRoles(install, package.lock.package);
             if (!OfflineRemovalContributionBlocker(package.lock) && IsOfflineAssetArchive(package))
                 return Roles::Success({});
-            auto roles = Packages::InspectGameplayRemovalRoles(package);
+            auto roles = Packages::InspectLivePackageRemovalRoles(package, *reservation);
             if (roles.HasError()) {
                 auto cause = std::move(roles).ErrorValue();
                 auto error = ReferenceError("packages.host.removal_requires_lifecycle_owner", package.lock.package.Value());
@@ -545,7 +545,8 @@ namespace Horo::Application::Internal {
             const auto *package = FindExactArchive(graph, locked);
             if (!package)
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
-            const auto declared = DeclaredRemovalRoles(install, *package, departing && sources.requireGameplayOwner);
+            const auto declared = DeclaredRemovalRoles(install, *package,
+                                                       departing && sources.requireGameplayOwner ? sources.live.get() : nullptr);
             if (declared.HasError())
                 return Result<void>::Failure(declared.ErrorValue());
             if (!declared.Value().empty() && sources.registrationFailure)

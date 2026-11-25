@@ -36,6 +36,11 @@ namespace Horo::Packages {
         [[nodiscard]] bool Matches(const std::filesystem::path &projectRoot, std::span<const LockedPackageReference> departing) const;
         /** @brief Returns the verified availability used when reserving removal. @return Owning immutable archive evidence. */
         [[nodiscard]] std::shared_ptr<const VerifiedPackageInstallRecord> InstalledRecord() const noexcept;
+        /** @brief Checks whether the reserved archive can be reviewed through the configured native importer owner.
+         * @param package Exact member of the sealed install being withdrawn.
+         * @return True only for a pending reservation, an exact departing archive and the native backend owner.
+         */
+        [[nodiscard]] bool AllowsNativeImporterReview(const PackageRestorePackage &package) const;
         /** @brief Revokes activation on the old session once the lock replacement commits.
          * @pre The transaction reached its durable commit point while holding the project mutation lease. */
         void MarkPublished() const noexcept;
@@ -66,6 +71,13 @@ namespace Horo::Packages {
      * @details Recognizes only native runtime modules and their owned resources. It never loads an artifact.
      */
     [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package);
+    /** @brief Verifies gameplay and importer-only backend withdrawal under the exact owner reservation.
+     * @param package Exact sealed archive and lock being withdrawn.
+     * @param reservation Owner-issued withdrawal claim after active and retiring roles have drained.
+     * @return Runtime roles requiring observed reference coverage, or the exact unsupported ownership diagnostic.
+     */
+    [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(
+        const PackageRestorePackage &package, const PackageRemovalLease &reservation);
 
     /** @brief Explicit portable enablement selection; it carries no execution trust or host path. */
     struct EnabledPackageExtension final {

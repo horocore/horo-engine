@@ -3,6 +3,7 @@
 #include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Packages/NativePackageModuleHost.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
@@ -217,7 +218,8 @@ namespace {
             return {std::istreambuf_iterator<char>{input}, {}};
         }
 
-        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource(std::vector<Packages::PackageRestorePackage> installed = {}) {
+        std::shared_ptr<const Assets::IAssetRegistrySource> AssetSource(std::vector<Packages::PackageRestorePackage> installed = {},
+                                                                       const bool withNativeImporterOwner = false) {
             const auto root = std::filesystem::canonical(project.Path());
             const auto lock = Packages::ValidatedPackageLockfileV1::Parse(Read("packages.lock"));
             REQUIRE(lock.HasValue());
@@ -232,9 +234,13 @@ namespace {
                                               .packages = std::move(installed)});
             removalInstall.emplace(std::move(install).Value());
             REQUIRE(removalInstall->Install(verified, {}).HasValue());
-            auto lifecycle = Packages::PackageLifecycleService::Create(
-                *removalInstall, trust, {.temporaryRoot = std::filesystem::canonical(content.Path()),
-                                        .artifactGate = Horo::Tests::CreateAcceptingArtifactGate()});
+            Packages::PackageLifecycleConfiguration config{.temporaryRoot = std::filesystem::canonical(content.Path()),
+                                                           .artifactGate = Horo::Tests::CreateAcceptingArtifactGate()};
+            if (withNativeImporterOwner) {
+                config.moduleHosts.push_back(std::make_shared<Packages::NativePackageModuleHost>(config));
+                config.moduleRetirements = std::make_shared<Packages::PackageModuleRetirementQueue>();
+            }
+            auto lifecycle = Packages::PackageLifecycleService::Create(*removalInstall, trust, std::move(config));
             REQUIRE(lifecycle.HasValue());
             removalLifecycle = std::move(lifecycle).Value();
             const auto request = Packages::ValidatedPackageRequest::Parse(Read("packages.json"));
@@ -1089,6 +1095,57 @@ namespace {
                                                      static_cast<std::streamsize>(encoded.Value().size()));
         path += ".horo";
         std::ofstream{path} << nlohmann::json{{"schemaVersion", 1}, {"assetId", id}, {"assetType", AI::DecisionAssetType(family)}};
+    }
+
+    TEST_CASE("Mixed package withdrawal uses the drained native importer owner and saved reference checks",
+              "[packages][application][host][removal-coverage]") {
+        using namespace Packages;
+        HostFixture fixture{true, NativeArchiveContributions::WithBackendImporter};
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto prepared = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(prepared.HasValue());
+        const auto withOwner = GENERATE(false, true);
+        const auto assets = fixture.AssetSource({}, withOwner);
+        const auto &locked = prepared.Value().application.lockedPlan->Packages().front();
+        auto sources = fixture.RemovalSources(*assets);
+        sources.requireGameplayOwner = true;
+        const std::array observations{ObserveFixtureRuntime(locked)};
+        sources.registrations = observations;
+        const auto originalRequest = fixture.Read("packages.json");
+        const auto originalLock = fixture.Read("packages.lock");
+        const auto publish = [&] { return PublishPackageProjectRemoval(policy, prepared.Value(), locked.package, fixture.files, sources); };
+        if (!withOwner) {
+            const auto blocked = publish();
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+            CHECK(fixture.Read("packages.lock") == originalLock);
+            return;
+        }
+
+        const auto asset = policy.projectRoot / "Assets/Imported.horoasset";
+        auto sidecar = asset;
+        sidecar += ".horo";
+        std::ofstream{asset} << "{}";
+        std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                 {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
+                                                 {"assetType", "core.scene"},
+                                                 {"importerPackageId", locked.package.Value()}};
+        const auto blocked = publish();
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+        CHECK(fixture.Read("packages.json") == originalRequest);
+        CHECK(fixture.Read("packages.lock") == originalLock);
+        REQUIRE(std::filesystem::remove(sidecar));
+        REQUIRE(std::filesystem::remove(asset));
+        REQUIRE(publish().HasValue());
+        const auto finalLock = ValidatedPackageLockfileV1::Parse(fixture.Read("packages.lock"));
+        REQUIRE(finalLock.HasValue());
+        CHECK(finalLock.Value().Packages().empty());
+        const auto rollback = ReadPackageProjectRollback(policy, fixture.files, {});
+        REQUIRE(rollback.HasValue());
+        CHECK(rollback.Value().request == originalRequest);
+        CHECK(rollback.Value().lock == originalLock);
     }
 
     TEST_CASE("Package removal verifies authored Decision subplan targets", "[packages][application][host][removal]") {

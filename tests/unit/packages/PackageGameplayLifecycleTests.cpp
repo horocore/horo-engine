@@ -276,6 +276,30 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     CHECK(decisionNodes.Value().empty());
 }
 
+TEST_CASE("Live mixed package withdrawal waits for the retained importer catalog", "[packages][gameplay][hybrid]") {
+    GameplayFixture fixture(true, true, true, true);
+    REQUIRE(fixture.Activate().HasValue());
+    auto &lifecycle = *fixture.base.service;
+    const auto installed = fixture.base.install.InstalledRecord();
+    REQUIRE(installed);
+    const auto &package = installed->Graph()->packages.front();
+    const std::array departing{LockedPackageReference{package.lock.package, package.lock.version}};
+    auto importers = fixture.backend->Importers(fixture.enabled.package, "fixture.backend", lifecycle.Active()->generation);
+    REQUIRE(importers);
+    CHECK(lifecycle.ReserveRemoval(departing).HasError());
+    REQUIRE(lifecycle.ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    lifecycle.FinalizeRetirements();
+    CHECK(lifecycle.ReserveRemoval(departing).HasError());
+    importers.reset();
+    lifecycle.FinalizeRetirements();
+    const auto lease = lifecycle.ReserveRemoval(departing);
+    REQUIRE(lease.HasValue());
+    const auto roles = InspectLivePackageRemovalRoles(package, *lease.Value());
+    REQUIRE(roles.HasValue());
+    REQUIRE(roles.Value().size() == 1);
+    CHECK(roles.Value().front().moduleId == "game.tests");
+}
+
 TEST_CASE("Verified package registrations copy behavior and service ownership without retaining native execution", "[packages][gameplay]") {
     GameplayFixture fixture;
     const auto before = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
