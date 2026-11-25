@@ -2,6 +2,9 @@
 #include "../runtime/ai/AITaskSchedulerTestSupport.h"
 #include "../runtime/ai/AiSceneTestSupport.h"
 #include "../runtime/physics/PhysicsSceneActivationTestSupport.h"
+#include "CommittedSceneAssets.h"
+#include "DecisionGraphCompilerTestSupport.h"
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -99,11 +102,86 @@ namespace Horo::WorldCook {
             S::RuntimeSceneService &scene_;
         };
 
+        /** @brief Owns the committed population asset and the exact captured controller for the mounted product fixture. */
+        struct MountedReducedPopulation final {
+            static constexpr S::SceneObjectId Anchor{11}, Agent{51}, DistantAgent{52};
+            AI::DecisionGraphTestSupport::Fixture decisions;
+            std::array<AI::AiControllerDescriptor, 1> controllers;
+            std::unique_ptr<CommittedSceneAssets> assets;
+            std::shared_ptr<const HeadlessCookedDecisionInput> input;
+            T::TempDir storage;
+
+            MountedReducedPopulation(A::AssetRegistry &registry, JobSystem &jobs) {
+                namespace D = AI::DecisionGraphTestSupport;
+                auto source = D::TaskTree(10);
+                source.executionTask = D::MakeIdentity<AI::TaskId>(9000);
+                const auto plan = decisions.Compile(std::span{&source, 1}, 10);
+                const auto controller = D::MakeIdentity<AI::ControllerTypeId>(4);
+                controllers.front() = {.controller = controller,
+                                       .decisionAsset = plan->Root(),
+                                       .blackboardSchema = decisions.schema,
+                                       .decisionPlan = plan->Graphs().front().bindings,
+                                       .cookedPlan = plan};
+                const auto manifestId = Asset(90);
+                S::SceneDefinitionBuilder builder{SceneCook::SceneDefinitionIdForAsset(manifestId), {1}};
+                for (const auto member : {Agent, DistantAgent}) {
+                    S::RuntimeEntityDefinition entity{.object = member};
+                    entity.localTransform.translation.x = member == Agent ? -2.0F : 20.0F;
+                    entity.components.aiAgent = AI::AiAgentComponent{.agent = D::MakeIdentity<AI::AgentId>(member.value)};
+                    entity.components.aiController = AI::AiControllerComponent{.controller = controller,
+                                                                                 .decisionAsset = plan->Root(),
+                                                                                 .blackboardSchema = decisions.schema->Identity(),
+                                                                                 .enabled = true};
+                    builder.Add(std::move(entity));
+                }
+                const auto definition = std::move(builder).Build();
+                REQUIRE(definition.HasValue());
+                const auto payload = SceneCook::EncodeCookedSceneDefinition(definition.Value());
+                REQUIRE(payload.HasValue());
+                const auto target = T::Target("headless-null");
+                const auto type = A::AssetTypeId::Parse("core.scene").Value();
+                const auto envelope = A::EncodeCookedArtifact(
+                    {.id = manifestId, .type = type, .target = target, .payloadDigest = T::DigestOf(payload.Value()), .payload = payload.Value()});
+                REQUIRE(envelope.HasValue());
+                const std::array entries{A::AssetCookManifestEntry{manifestId, type, manifestId.ToString() + ".cooked",
+                                                                    T::DigestOf(envelope.Value())}};
+                const std::array artifacts{envelope.Value()};
+                REQUIRE(T::PublishFixture(storage.path, target, entries, artifacts).HasValue());
+                REQUIRE(registry.Publish({A::AssetRecord{manifestId, type, ProjectPath::Parse("Assets/population.horo").Value(),
+                                                         ProjectPath::Parse("Assets/population.horo.horo").Value()}}).status ==
+                        A::AssetRegistryBuildStatus::Complete);
+                auto committed = CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {storage.path, target}, registry.Snapshot());
+                REQUIRE(committed.HasValue());
+                assets = std::move(committed).Value();
+                auto population = assets->DecodeScene(manifestId);
+                REQUIRE(population.HasValue());
+                AI::AiSceneCookedDecisionExecution execution{jobs, {}, {}};
+                execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
+                execution.scheduler.simulationProfile = AI::AiDecisionSimulationProfile{200, 400, 600, 2, 1};
+                input = std::make_shared<const HeadlessCookedDecisionInput>(HeadlessCookedDecisionInput{
+                    .committed = *assets,
+                    .environment = decisions.Environment(),
+                    .execution = execution,
+                    .simulationAnchor = Anchor,
+                    .reducedPopulation = HeadlessReducedPopulationSelection{
+                        std::make_shared<const S::RuntimeSceneDefinition>(std::move(population).Value()), 1}});
+            }
+        };
+
         /** @brief Composes the ordinary standalone product over a durable cooked World and observes its exact Scene facade. */
         class MountedCellProduct final {
         public:
-            explicit MountedCellProduct(const bool enableLive, const bool firstDemand, const std::size_t maximumResidents = 1) {
+            explicit MountedCellProduct(const bool enableLive, const bool firstDemand, const std::size_t maximumResidents = 1,
+                                        const bool withReducedPopulation = false) {
                 namespace N = Network;
+                if (withReducedPopulation) {
+                    reduced_.emplace(registry_, jobs_);
+                    // These two mutually exclusive cells represent the same moving gameplay anchor.
+                    fixture_.entities.front().localTransform.translation.x = -2;
+                    fixture_.entities.back().localTransform.translation.x = -1;
+                    fixture_.entities.back().object = MountedReducedPopulation::Anchor;
+                    std::get<SpatialObjectBinding>(fixture_.objects.back()).entity = MountedReducedPopulation::Anchor;
+                }
                 const auto published = fixture_.Publish();
                 REQUIRE(published.HasValue());
                 REQUIRE(published.Value().publication);
@@ -117,7 +195,7 @@ namespace Horo::WorldCook {
                                                   published.Value().publication->manifestDigest,
                                                   release.indexArtifact,
                                                   release.dependencyArtifact,
-                                                  Math::WorldCoordinate64::FromMillimeters(0, 0, 0)};
+                                                  Math::WorldCoordinate64::FromMillimeters(withReducedPopulation ? 1000 : 0, 0, 0)};
                 if (enableLive) {
                     const MountedWorldLiveLimits limits{.maximumFrameNanoseconds = 20'000'000,
                                                         .maximumUnitNanoseconds = 1'000'000,
@@ -134,6 +212,9 @@ namespace Horo::WorldCook {
                                                    .registry = registry_,
                                                    .loads = loads_,
                                                    .load = load_,
+                                                   .aiControllers = reduced_ ? std::span<const AI::AiControllerDescriptor>{reduced_->controllers}
+                                                                             : std::span<const AI::AiControllerDescriptor>{},
+                                                   .cookedDecisions = reduced_ ? reduced_->input : nullptr,
                                                    .mountedWorld = std::make_shared<const CommittedWorldSelection>(std::move(selection)),
                                                    .worldJobs = &jobs_};
                 auto composition =
@@ -206,6 +287,27 @@ namespace Horo::WorldCook {
                 return InspectHeadlessWorldCell(*scene_, demand_.occurrence);
             }
 
+            std::optional<S::EntityRef> Find(const S::SceneObjectId object) const {
+                const auto scene = InspectHeadlessScene(*scene_);
+                REQUIRE(scene);
+                return scene->Find(object);
+            }
+
+            Result<Math::WorldCoordinate64> WorldPosition(const S::EntityRef entity) const {
+                const auto scene = InspectHeadlessScene(*scene_);
+                const auto lease = InspectHeadlessWorldOrigin(*scene_);
+                REQUIRE(scene);
+                REQUIRE(lease);
+                const auto origin = lease->Get();
+                REQUIRE(origin.HasValue());
+                return CaptureProjectSceneWorldPosition(*scene, entity, origin.Value().Origin());
+            }
+
+            const AI::DecisionGraphTestSupport::Probe &ReducedDecisions() const {
+                REQUIRE(reduced_);
+                return reduced_->decisions.probe;
+            }
+
             void CheckTravelRefusal() {
                 const auto *original = scene_;
                 const std::array replacements{Network::World(Network::NetworkModeWorldKind::Standalone, runtime_.value + 1)};
@@ -274,6 +376,7 @@ namespace Horo::WorldCook {
             A::AssetRegistry registry_;
             A::AssetLoadService loads_{jobs_, provider_};
             HeadlessSceneLoadBoundary load_{{}, std::chrono::steady_clock::now() + std::chrono::seconds(30)};
+            std::optional<MountedReducedPopulation> reduced_;
             const Network::INetworkModeService *scene_{};
             std::unique_ptr<NetworkProductHost> host_;
         };
@@ -613,6 +716,54 @@ namespace Horo::WorldCook {
         REQUIRE(scheduler.Value()->CommitAtIntentDispatch(2).HasValue());
         CHECK(newDecision->committed == 1);
         CHECK(oldDecision->cancelled == 1);
+    }
+
+    TEST_CASE("Mounted headless World transfers reduced agents as the streamed anchor moves",
+              "[world_cook][native][mounted_world][live_cell][product][reduced-population]") {
+        using Population = MountedReducedPopulation;
+        MountedCellProduct product{true, false, 1, true};
+        REQUIRE_FALSE(product.Find(Population::Anchor));
+        REQUIRE_FALSE(product.Find(Population::Agent));
+        product.Request();
+        static_cast<void>(product.UntilAttached(true));
+        for (int frame = 0; frame < 3; ++frame)
+            static_cast<void>(product.RunFrame());
+        const auto leftAnchor = product.Find(Population::Anchor);
+        REQUIRE(leftAnchor);
+        const auto leftPosition = product.WorldPosition(*leftAnchor);
+        REQUIRE(leftPosition.HasValue());
+        CHECK(leftPosition.Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
+        const auto first = product.Find(Population::Agent);
+        REQUIRE(first);
+        REQUIRE_FALSE(product.Find(Population::DistantAgent));
+        REQUIRE(product.ReducedDecisions().starts == 1);
+        CHECK(product.WorldPosition(*first).Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
+
+        product.Withdraw();
+        static_cast<void>(product.UntilAttached(false));
+        static_cast<void>(product.RunFrame());
+        CHECK_FALSE(product.Find(Population::Anchor));
+        CHECK(product.Find(Population::Agent) == first);
+        product.RequestSibling();
+        static_cast<void>(product.UntilAttached(true, true));
+        for (int frame = 0; frame < 3; ++frame)
+            static_cast<void>(product.RunFrame());
+        REQUIRE(product.Find(Population::Anchor));
+        CHECK_FALSE(product.Find(Population::Agent));
+
+        product.Withdraw();
+        static_cast<void>(product.UntilAttached(false, true));
+        static_cast<void>(product.RunFrame());
+        product.Request();
+        static_cast<void>(product.UntilAttached(true));
+        for (int frame = 0; frame < 3; ++frame)
+            static_cast<void>(product.RunFrame());
+        const auto replacement = product.Find(Population::Agent);
+        REQUIRE(replacement);
+        CHECK(replacement != first);
+        CHECK(product.WorldPosition(*replacement).Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
+        CHECK(product.ReducedDecisions().starts == 2);
+        CHECK_FALSE(product.Find(Population::DistantAgent));
     }
 
     TEST_CASE("Standalone mounted CoreEcs demand starts in the product frame and withdraws through the same Scene owner",
