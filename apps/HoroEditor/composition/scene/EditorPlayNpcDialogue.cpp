@@ -137,8 +137,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         auto &timeline = *state.selection.timeline;
         timeline.BeginFrame(tick);
         static_cast<void>(state.channel->Pump(state.activation.Grant(), tick));
-        DispatchCommittedNpcDialogue(state, frame);
         static_cast<void>(state.channel->Drain(timeline));
+        DispatchCommittedNpcDialogue(state, frame);
         return Result<void>::Success();
     }
 

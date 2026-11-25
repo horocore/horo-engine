@@ -128,17 +128,30 @@ namespace {
         return CheckTimeline(scene, true, 0) ? 0 : 10;
     }
 
-    /** @brief Drives a live NPC turn to HUD publication, then optionally retires its Scene. */
+    /** @brief Applies the selected owner change after queue admission and before the HUD takes the cue. */
+    bool WithdrawBeforeDrain(AiSceneRuntime &runtime, AgentHandle owner, CancellationSource &turn, std::string_view mode) {
+        if (mode == "disable-before-drain")
+            return runtime.DisableAtSafePoint(owner).HasValue();
+        if (mode == "cancel-before-drain")
+            turn.RequestCancellation();
+        if (mode == "retired")
+            runtime.BeginShutdown();
+        return true;
+    }
+
+    /** @brief Drives a live NPC turn to HUD publication, then optionally withdraws the cue. */
     int RunTurn(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner, const NpcDialogueGrant &grant,
                 NpcDialogueTriggerId trigger, std::string_view mode) {
         const auto deadline = std::chrono::steady_clock::now() + (mode == "timeout" ? 500ms : 5s);
-        if (scene.Start(owner, trigger, grant, 1, 10, deadline, {}).HasError())
+        CancellationSource turn;
+        if (scene.Start(owner, trigger, grant, 1, 10, deadline, turn.Token()).HasError())
             return 7;
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
-        if (mode == "retired")
-            runtime.BeginShutdown();
-        return CheckTimeline(scene, mode == "retired", mode == "approved" ? 1 : 0) ? 0 : 9;
+        if (!WithdrawBeforeDrain(runtime, owner, turn, mode))
+            return 14;
+        const bool withdrawn = mode == "retired" || mode == "disable-before-drain" || mode == "cancel-before-drain";
+        return CheckTimeline(scene, withdrawn, mode == "approved" ? 1 : 0) ? 0 : 9;
     }
 
     /** @brief Verifies that an unknown or mismatched trigger cannot schedule or publish a turn. */

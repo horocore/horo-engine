@@ -24,7 +24,7 @@ namespace Horo::App {
         /** @brief Pins authored cues and claims a semantic caption queue for the lifetime of this channel.
          * @param jobs Host scheduler, which outlives the channel.
          * @param runtime Active Scene AI owner, which outlives the channel and stays at a stable address.
-         * @param queue Host-assigned caption session and immutable text catalog, owned exclusively after admission.
+         * @param queue Empty semantic queue with the host-assigned session and immutable text catalog.
          * @param captions Increasing cue IDs with valid catalog references. @param fallback Cue used without an admitted reply.
          * @param triggers Validated project interaction catalog in increasing trigger ID order, copied during admission.
          * @param provider Optional approved provider binding. An empty binding selects authored offline dialogue.
@@ -67,8 +67,9 @@ namespace Horo::App {
          */
         [[nodiscard]] std::optional<Accessibility::CaptionAdmission> Pump(const AI::NpcDialogueGrant &grant, std::uint64_t tick);
 
-        /** @brief Feeds this channel's already authored cues to the existing HUD timeline.
+        /** @brief Delivers the queued caption if the same NPC generation and turn remain active.
          * @param timeline UI owner prepared for the same caption session. @return Number lost at timeline capacity.
+         * @details Drain the caption before starting the next turn.
          */
         [[nodiscard]] std::size_t Drain(Runtime::Ui::CaptionTimeline &timeline);
 
@@ -85,6 +86,8 @@ namespace Horo::App {
         [[nodiscard]] bool AgentIsActive(AI::AgentHandle agent, AI::AgentId subject) const;
         /** @brief Finds the admitted trigger or returns null when the ID is absent. */
         [[nodiscard]] const Application::ProjectNpcDialogueTrigger *FindTrigger(Application::NpcDialogueTriggerId trigger) const;
+        /** @brief Retains the single turn slot until its caption is drained. */
+        [[nodiscard]] bool CanStartTurn() const noexcept;
         const JobSystem *jobs_;
         const AI::AiSceneRuntime *runtime_;
         AI::AiSceneActivationBinding scene_;
@@ -99,6 +102,7 @@ namespace Horo::App {
         AI::NpcDialogueRequestIdentity request_;
         AI::AgentId subject_;
         CancellationToken cancellation_;
+        std::optional<CancellationToken> queuedCancellation_; /**< Retains request_ and subject_ until the HUD consumes this cue. */
         std::variant<std::monostate, AI::NpcDialogueTurn, AI::NpcDialogueJob> pending_;
     };
 }  // namespace Horo::App

@@ -29,6 +29,8 @@ class Handler(BaseHTTPRequestHandler):
             "oversize": (200, b"x" * 256),
             "redirect": (307, b""),
             "timeout": (200, b"allow\n5\n"),
+            "disable-before-drain": (200, b"allow\n5\n"),
+            "cancel-before-drain": (200, b"allow\n5\n"),
         }[mode]
         if mode == "timeout":
             time.sleep(1)
@@ -59,7 +61,8 @@ def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> Non
     endpoint = f"https://127.0.0.1:{server.server_port}/dialogue"
     offline = ("untrusted", "offline", "retired", "queued-retire", "disabled-agent", "different-agent", "missing-trigger",
                "stale-grant", "other-route", "copied-project")
-    modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout", *offline)
+    modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout",
+             "disable-before-drain", "cancel-before-drain", *offline)
     for mode in modes:
         server.mode = mode
         server.requests.clear()

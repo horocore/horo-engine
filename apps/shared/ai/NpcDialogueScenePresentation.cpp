@@ -57,6 +57,12 @@ namespace Horo::App {
         return found != triggers_.end() && found->id == trigger ? &*found : nullptr;
     }
 
+    /** @copydoc NpcDialogueScenePresentation::CanStartTurn */
+    bool NpcDialogueScenePresentation::CanStartTurn() const noexcept {
+        return !queuedCancellation_ && std::holds_alternative<std::monostate>(pending_) &&
+               lastTurn_ != std::numeric_limits<std::uint64_t>::max();
+    }
+
     /** @copydoc NpcDialogueScenePresentation::Create */
     Result<NpcDialogueScenePresentation> NpcDialogueScenePresentation::Create(
         const JobSystem &jobs, const AI::AiSceneRuntime &runtime, std::unique_ptr<Runtime::Ui::CaptionCueQueue> queue,
@@ -68,6 +74,9 @@ namespace Horo::App {
         if (scene.HasError())
             return Channel::Failure(scene.ErrorValue());
         if (!queue || queue->Producer() != Accessibility::CaptionProducerKind::Semantic || !ValidTriggerCatalog(triggers))
+            return Channel::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
+        Accessibility::CaptionCue queued;
+        if (queue->TryDequeue(queued))
             return Channel::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (!ValidCaptions(captions, queue->Catalog()->size()) ||
             !std::ranges::binary_search(captions, fallback, {}, &NpcDialogueCaption::cue))
@@ -91,7 +100,7 @@ namespace Horo::App {
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (!queue_ || !SceneIsCurrent() || !AgentIsActive(agent, binding->agent))
             return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
-        if (!std::holds_alternative<std::monostate>(pending_) || lastTurn_ == std::numeric_limits<std::uint64_t>::max())
+        if (!CanStartTurn())
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
         const AI::NpcDialogueRequestIdentity request{agent, grant.providerGeneration, lastTurn_ + 1};
         auto captured = AI::NpcDialogueTurn::Capture(request, grant.route, grant, binding->facts, std::span{cues_}.first(count_), fallback_,
@@ -154,26 +163,38 @@ namespace Horo::App {
         if (!outcome)
             return std::nullopt;
         pending_.emplace<std::monostate>();
-        cancellation_ = {};
+        auto cancellation = std::exchange(cancellation_, {});
         const auto captions = std::span{captions_}.first(count_);
         const auto cue = std::ranges::lower_bound(captions, outcome->cue, {}, &NpcDialogueCaption::cue);
         if (cue == captions.end() || cue->cue != outcome->cue)
             return std::nullopt;
-        return queue_->TryEnqueue({{queue_->Session(), current.turn}, Accessibility::CaptionCueKind::Dialogue,
-                                    cue->text, cue->speaker, tick, cue->durationTicks});
+        const auto admitted = queue_->TryEnqueue({{queue_->Session(), current.turn}, Accessibility::CaptionCueKind::Dialogue,
+                                                 cue->text, cue->speaker, tick, cue->durationTicks});
+        if (admitted == Accessibility::CaptionAdmission::Accepted)
+            queuedCancellation_.emplace(std::move(cancellation));
+        return admitted;
     }
 
     /** @copydoc NpcDialogueScenePresentation::Drain */
     std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline) {
         if (queue_ && !SceneIsCurrent())
             Retire();
-        return queue_ ? timeline.Drain(*queue_) : 0;
+        if (!queuedCancellation_)
+            return 0;
+        const auto cancellation = std::exchange(queuedCancellation_, std::nullopt);
+        if (cancellation->IsCancellationRequested() || !AgentIsActive(request_.agent, subject_)) {
+            Accessibility::CaptionCue withdrawn;
+            static_cast<void>(queue_->TryDequeue(withdrawn));
+            return 0;
+        }
+        return timeline.Drain(*queue_);
     }
 
     /** @copydoc NpcDialogueScenePresentation::Retire */
     void NpcDialogueScenePresentation::Retire() noexcept {
         pending_.emplace<std::monostate>();
         cancellation_ = {};
+        queuedCancellation_.reset();
         queue_.reset();
         provider_.reset();
     }
