@@ -1399,6 +1399,56 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
+    TEST_CASE("Native Vulkan viewport applies color vision preview at the next frame boundary",
+              "[native-smoke][vulkan][gui][color-preview]") {
+        const auto *root = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
+        if (!root || !std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
+            SKIP("Supply the installed Vulkan viewport and accessibility ColorOutput shader packages.");
+        auto package = Render::Internal::LoadColorOutputCookPackage(std::filesystem::path{root}, ShaderTargetBackend::Vulkan);
+        Check(package);
+        REQUIRE(package.Value().accessibilityEncoder);
+        const EditorViewportColorInputs inputs{
+            .package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(package).Value())};
+
+        Host host{false, true};
+        CameraViewportFixture subject;
+        const auto scene = subject.View(0.0F);
+        host.CreateViewport(scene, &inputs);
+        const auto sampler = host.frontend->CreateSampler({});
+        Check(sampler);
+        Check(host.frontend->ProcessResourceRequests());
+        const auto extent = host.ViewportPass(scene).extent;
+        const auto offset = (extent.width * (extent.height / 2) + extent.width / 2) * 4;
+
+        const auto present = [&](std::uint64_t number) {
+            auto frame = host.Frame(number);
+            host.ExecuteSceneAndGui(frame, scene);
+            Check(frame.Present());
+            host.viewport->FinishColorFrame(true);
+            const auto pixels = ReadViewportColor(host, sampler.Value().handle);
+            REQUIRE(offset + 3 < pixels.size());
+            CHECK(pixels[offset + 3] == 255);
+            return std::array{int{pixels[offset]}, int{pixels[offset + 1]}, int{pixels[offset + 2]}};
+        };
+
+        host.PrepareScene(scene);
+        Check(host.viewport->RequestColorAccessibilityPreview(
+            Accessibility::ColorblindSettings{.mode = Accessibility::ColorblindMode::Achromatopsia}));
+        const auto normal = present(1);
+        const auto originalRange = std::ranges::minmax(normal);
+        REQUIRE(originalRange.max - originalRange.min > 8);
+
+        host.PrepareScene(scene);
+        Check(host.viewport->RequestColorAccessibilityPreview(std::nullopt));
+        const auto preview = present(2);
+        const auto previewRange = std::ranges::minmax(preview);
+        CHECK(previewRange.max - previewRange.min <= 1);
+
+        host.PrepareScene(scene);
+        CHECK(present(3) == normal);
+        REQUIRE(host.Drain());
+    }
+
     TEST_CASE("Native Vulkan viewport composes signed spatial and ColorOutput in its ordinary GUI frame",
               "[native-smoke][vulkan][gui][signed-spatial]") {
         const auto *productRoot = std::getenv("HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT");

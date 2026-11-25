@@ -439,6 +439,13 @@ and trusted-publisher paths in `HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT` and
 `HORO_EDITOR_VULKAN_ASSET_ROOT` for the normal installed raster assets and
 `HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE` for the exact Vulkan manual package.
 
+The Vulkan Editor smoke case `[color-preview]` uses the same two shader roots
+with a GPU-enabled test build and a Vulkan presentation surface. The ColorOutput
+package must include the accessibility encoder. It reads the encoded viewport
+attachment across three accepted frames to check that preview changes take effect
+at the next preparation boundary and that clearing the preview restores the
+original color.
+
 The same-size temporal viewport uses `--activate-image-provider=taa` with the
 same Vulkan, trust, product and color arguments. The signed inventory supplies
 scene color, both motion and depth guides, and the seed and history kernels.
