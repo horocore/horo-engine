@@ -74,6 +74,12 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<void> Deliver(std::size_t index, AI::AIPerceptionMemory &memory) const;
 
+        /** @brief Borrows this captured window for synchronous consumption during the Scene's sensing phase.
+         * @return A feed valid while this source remains alive and unmoved. Closing this source revokes the feed.
+         */
+        [[nodiscard]] AI::PerceptionEventFeed Feed() const & noexcept;
+        AI::PerceptionEventFeed Feed() const && = delete;
+
         /** @brief Revokes this window before producer/Scene/host replacement or teardown; repeated calls are safe. */
         void Close() noexcept;
 
@@ -92,6 +98,9 @@ namespace Horo::Gameplay {
         /** @brief Binds a declared recipient to the current active AI owner and exact memory. */
         [[nodiscard]] Result<void> ValidateRecipient(const AI::PerceptionEventDelivery &delivery,
                                                      const AI::AIPerceptionMemory &memory) const;
+        /** @brief Consumes admitted hearing for one exact Scene-owned listener at this fixed tick. */
+        [[nodiscard]] Result<void> DeliverSensingWindow(std::uint64_t tick, const AI::AiControllerPerceptionEndpoints &endpoints,
+                                                        AI::AIPerceptionMemory &memory) const;
 
         const Runtime::RuntimeScene *scene_;
         const AI::AiSceneRuntime *ai_;

@@ -37,6 +37,7 @@ namespace Horo::AI {
     class PerceptionSpatialBroadphase;
     class PerceptionSpatialSnapshot;
     class PerceptionSenseGeneration;
+    class PerceptionEventFeed;
     struct PerceptionQueryInput;
 
     /** @brief Host-captured absolute position of an exact live Perception endpoint. */
@@ -536,6 +537,16 @@ namespace Horo::AI {
                                                              const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
                                                              Duration fixedStep);
 
+        /** @brief Runs the same sensing phase with an explicit, borrowed authoritative Gameplay feed.
+         * @param scene Current Scene. @param spatial Current endpoint publication owner.
+         * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.
+         * @param events Feed captured for this window and borrowed for this call only.
+         * @return Success or a typed sensing failure. Admitted events enter the same memory and Decision wake batch.
+         */
+        [[nodiscard]] Result<void> PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                             const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
+                                                             Duration fixedStep, const PerceptionEventFeed &events);
+
         /** @brief Reads owned memory for one exact existing recipient, filtering stale subjects and emitters.
          * @param scene Current Scene publication. @param recipient Exact recipient entity generation.
          * @return Bounded snapshot, the original provider error for a suspended recipient, or a typed unavailable/stale error.
@@ -745,6 +756,13 @@ namespace Horo::AI {
     private:
         friend class AiSceneActivationCandidate;
         friend class Detail::AiSceneStructuralParticipant;
+
+        struct PerceptionPollWindow;
+
+        /** @brief Runs one Scene sensing tick with the optional authoritative Gameplay window. */
+        [[nodiscard]] Result<void> PollScenePerception(const Runtime::RuntimeSceneView &scene,
+                                                        const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
+                                                        Duration fixedStep, const PerceptionEventFeed *events);
 
         [[nodiscard]] Result<void> ArmCookedDecisionEvidence(AgentHandle agent, std::uint64_t tick, bool replay) const;
 

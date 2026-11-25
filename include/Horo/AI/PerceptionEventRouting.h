@@ -16,6 +16,10 @@ namespace Horo::Gameplay {
 }
 
 namespace Horo::AI {
+    class AiSceneRuntime;
+    class PerceptionSpatialBroadphase;
+    struct AiControllerPerceptionEndpoints;
+
     /** @brief Gameplay-owned damage fact; the instigator is a weak, generation-fenced scene reference. */
     struct DamagePerceptionEvent final {
         PerceptionSourceRef instigator;
@@ -75,6 +79,27 @@ namespace Horo::AI {
 
         const PerceptionEventDelivery *delivery_;
         const AIPerceptionMemory *memory_;
+    };
+
+    /** @brief A synchronous feed issued by the authoritative Gameplay source for one Scene sensing window. */
+    class PerceptionEventFeed final {
+    private:
+        friend class AiSceneRuntime;
+        friend class Horo::Gameplay::PerceptionEventSource;
+
+        using Validate = Result<void> (*)(const void *owner);
+        using Deliver = Result<void> (*)(const void *owner, std::uint64_t tick, const AiControllerPerceptionEndpoints &endpoints,
+                                         AIPerceptionMemory &memory);
+
+        PerceptionEventFeed(const void *owner, const AiSceneRuntime &runtime, const PerceptionSpatialBroadphase &spatial,
+                            Validate validate, Deliver deliver) noexcept
+            : owner_(owner), runtime_(&runtime), spatial_(&spatial), validate_(validate), deliver_(deliver) {}
+
+        const void *owner_;
+        const AiSceneRuntime *runtime_;
+        const PerceptionSpatialBroadphase *spatial_;
+        Validate validate_;
+        Deliver deliver_;
     };
 
     /**

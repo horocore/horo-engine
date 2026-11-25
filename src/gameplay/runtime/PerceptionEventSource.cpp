@@ -2,6 +2,7 @@
 
 #include "Horo/AI/AIErrors.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -135,6 +136,13 @@ namespace Horo::Gameplay {
             return role.role == Network::ReplicationExecutionRole::Standalone ||
                    role.role == Network::ReplicationExecutionRole::AuthorityServer;
         }
+
+        /** @brief Individual bad input is drops-only. Invalidating the authority still fails the sensing window. */
+        [[nodiscard]] bool IsRejectedDelivery(const Error &failure) noexcept {
+            const auto code = failure.code.Value();
+            return code == AI::AIErrors::PerceptionEventInvalid.code.Value() || code == AI::AIErrors::PerceptionEventFiltered.code.Value() ||
+                   code == AI::AIErrors::PerceptionEventStale.code.Value();
+        }
     }  // namespace
 
     PerceptionEventSource::PerceptionEventSource(const Runtime::RuntimeScene &scene, const AI::AiSceneRuntime &ai,
@@ -215,6 +223,35 @@ namespace Horo::Gameplay {
         const auto &selected = CoalesceHearing(deliveries_, index, filter).delivery;
         const AI::PerceptionEventAdmission admission{selected, memory};
         return AI::RouteGameplayPerceptionEvent(selected, *registry_, admission, memory);
+    }
+
+    /** @copydoc PerceptionEventSource::Feed */
+    AI::PerceptionEventFeed PerceptionEventSource::Feed() const & noexcept {
+        return {this, *ai_, *filtering_,
+                [](const void *owner) { return static_cast<const PerceptionEventSource *>(owner)->ValidateCurrent(); },
+                [](const void *owner, std::uint64_t tick, const AI::AiControllerPerceptionEndpoints &endpoints,
+                   AI::AIPerceptionMemory &memory) {
+                    return static_cast<const PerceptionEventSource *>(owner)->DeliverSensingWindow(tick, endpoints, memory);
+                }};
+    }
+
+    /** @copydoc PerceptionEventSource::DeliverSensingWindow */
+    Result<void> PerceptionEventSource::DeliverSensingWindow(std::uint64_t tick, const AI::AiControllerPerceptionEndpoints &endpoints,
+                                                             AI::AIPerceptionMemory &memory) const {
+        if (const auto current = ValidateCurrent(); current.HasError())
+            return current;
+        for (std::size_t index = 0; index < deliveries_.size(); ++index) {
+            const auto &delivery = deliveries_[index].delivery;
+            if (delivery.simulationTick != tick || delivery.recipient != memory.Agent() ||
+                !std::holds_alternative<AI::HearingPerceptionEvent>(delivery.event) ||
+                !std::ranges::binary_search(endpoints.listeners, delivery.listener))
+                continue;
+            if (registry_ != endpoints.registry.get())
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
+            if (auto delivered = Deliver(index, memory); delivered.HasError() && !IsRejectedDelivery(delivered.ErrorValue()))
+                return delivered;
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc PerceptionEventSource::Close */

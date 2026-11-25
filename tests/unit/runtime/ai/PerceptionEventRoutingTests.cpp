@@ -1,10 +1,12 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <limits>
@@ -150,14 +152,25 @@ namespace Horo::AI {
             return composition;
         }
 
-        [[nodiscard]] AiControllerDescriptor Controller() {
+        [[nodiscard]] AiControllerDescriptor Controller(const std::optional<PerceptionBlackboardProjection> projection = {}) {
             BlackboardSchemaDescriptor schemaInput;
             schemaInput.identity = MakeIdentity<BlackboardSchemaId>(1);
             schemaInput.version = 1;
-            const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
-                                                          .kind = BlackboardValueKind::Boolean,
-                                                          .maximumCollectionElements = 1,
-                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{false}}}};
+            std::vector keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
+                                                     .kind = BlackboardValueKind::Boolean,
+                                                     .maximumCollectionElements = 1,
+                                                     .defaultValue = BlackboardValue{BlackboardScalarValue{false}}}};
+            if (projection) {
+                const auto collection = [](BlackboardKeyId key, BlackboardValueKind kind) {
+                    return BlackboardKeyDescriptor{.key = key,
+                                                   .kind = kind,
+                                                   .cardinality = BlackboardValueCardinality::Collection,
+                                                   .maximumCollectionElements = 1,
+                                                   .defaultValue = BlackboardValue{BlackboardCollectionValue{.elementKind = kind}}};
+                };
+                keys.push_back(collection(projection->sources, BlackboardValueKind::EntityReference));
+                keys.push_back(collection(projection->positions, BlackboardValueKind::WorldCoordinate));
+            }
             schemaInput.keys = keys;
             auto captured = BlackboardSchema::Capture(schemaInput);
             REQUIRE(captured.HasValue());
@@ -304,6 +317,85 @@ namespace Horo::AI {
             CHECK(snapshot.entries[0].lastKnownPosition == latest.location);
             ExpectError(other.Observe({.key = snapshot.entries[0].key}, 4), AIErrors::PerceptionEventUnauthorized);
             CHECK(other.StoredCount() == 0);
+        }
+
+        TEST_CASE("Authoritative Gameplay hearing enters owned memory during the Scene sensing phase", "[unit][ai][perception][hearing]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto host = Host(Network::NetworkProjectRole::DedicatedServer);
+            auto registry = std::make_shared<const PerceptionDescriptorRegistry>(Registry());
+            const PerceptionBlackboardProjection projection{MakeIdentity<BlackboardKeyId>(3), MakeIdentity<BlackboardKeyId>(4)};
+            auto controller = Controller(projection);
+            const auto hearing = MakeIdentity<PerceptionListenerTypeId>(13);
+            controller.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
+                AiControllerPerceptionEndpoints{.registry = registry,
+                                                .listeners = {hearing},
+                                                .sources = {SenseTypeIds::Hearing},
+                                                .blackboardProjection = projection});
+            const AiControllerComponent binding{.controller = controller.controller,
+                                                .decisionAsset = controller.decisionAsset,
+                                                .blackboardSchema = controller.blackboardSchema->Identity(),
+                                                .requiredCapabilities = AiCapabilitySet::Of(AiCapability::Perception)};
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+            for (std::uint64_t id : {1U, 2U}) {
+                const AiAgentComponent agent{.agent = MakeIdentity<AgentId>(id)};
+                builder.Add({.object = Runtime::SceneObjectId{id}, .components = {.aiAgent = agent, .aiController = binding}});
+            }
+            const auto definition = std::move(builder).Build().Value();
+            const auto scene = Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{99}).Value();
+            const auto view = scene->View();
+            const auto listener = *view.Find(Runtime::SceneObjectId{1});
+            const auto source = *view.Find(Runtime::SceneObjectId{2});
+            const auto soundPosition = Math::WorldCoordinate64::FromMillimeters(500, 0, 0);
+            PerceptionSpatialBroadphase spatial;
+            const auto generation = PerceptionSenseGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true)).Value();
+            const auto positions = [&](const Runtime::RuntimeSceneView &) {
+                return Result<std::vector<AiScenePerceptionPosition>>::Success({{listener, {}}, {source, soundPosition}});
+            };
+            const AiScenePerceptionExecution execution{.generation = generation, .visibleLayers = 1, .workUnitsPerTick = 1};
+            AiSceneActivationParticipant participant{runtime, std::span{&controller, 1},
+                                                      AiScenePerceptionActivationInput{spatial, {}, positions, execution}};
+            auto activation = participant.Prepare(definition, view);
+            REQUIRE(activation.HasValue());
+            REQUIRE(activation.Value()->ValidatePublication().HasValue());
+            activation.Value()->Publish();
+
+            const auto recipient = runtime.CapabilityAtSafePoint().ResolveAgent(MakeIdentity<AgentId>(1)).Value();
+            const CommittedPerceptionDelivery sound{
+                {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(source), soundPosition, 0.5, 1, 77, 1, 1}, 1},
+                PerceptionFilterDecision::Accept};
+            auto captured = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                            *registry, spatial, std::span{&sound, 1});
+            REQUIRE(captured.HasValue());
+            const auto quantum = Duration::FromNanoseconds(execution.memory.fixedStep.count());
+            PerceptionSpatialBroadphase foreignSpatial;
+            const auto inputs = spatial.Current()->Inputs();
+            REQUIRE(foreignSpatial.Publish(view, 1, inputs.listeners, inputs.sources, inputs.filtering).HasValue());
+            const auto foreign = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                                 *registry, foreignSpatial, std::span{&sound, 1});
+            REQUIRE(foreign.HasValue());
+            ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, foreign.Value().Feed()),
+                        AIErrors::PerceptionEventStale);
+            auto closed = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                          *registry, spatial, std::span{&sound, 1});
+            REQUIRE(closed.HasValue());
+            auto closedWindow = std::move(closed).Value();
+            const auto expiredFeed = closedWindow.Feed();
+            closedWindow.Close();
+            ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, expiredFeed), AIErrors::PerceptionEventUnauthorized);
+            REQUIRE(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, captured.Value().Feed()).HasValue());
+            REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, 1).HasValue());
+            const auto perceived = runtime.ReadPerceptionAtSafePoint(view, listener);
+            REQUIRE(perceived.HasValue());
+            REQUIRE(perceived.Value().count == 1);
+            CHECK(perceived.Value().entries[0].lastKnownPosition == soundPosition);
+            CHECK(runtime.ReadPerceptionAtSafePoint(view, source).Value().count == 0);
+            const auto projected = runtime.CapabilityAtSafePoint().ReadBlackboard(recipient, projection.positions);
+            REQUIRE(projected.HasValue());
+            REQUIRE(projected.Value());
+            const auto &positionsValue = std::get<BlackboardCollectionValue>(*projected.Value());
+            REQUIRE(positionsValue.count == 1);
+            CHECK(std::get<Math::WorldCoordinate64>(positionsValue.elements[0]) == soundPosition);
+            runtime.BeginShutdown();
         }
 
         TEST_CASE("Hearing coalesces by emission tick before producer order and only among admitted sounds",

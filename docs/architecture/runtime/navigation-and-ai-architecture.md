@@ -1798,6 +1798,11 @@ A copied observation or an Audio playback event cannot supply that proof.
 For each hearing source and listener at one simulation tick, the captured batch
 selects the newest admissible emission. Later producer entries break ties.
 Delivery order and rejected or expired entries do not change the selected sound.
+Scene hosts with an authoritative Gameplay producer can pass the captured
+source's `Feed()` to `PollPerceptionAtSensePoll`. The same Scene and spatial
+owner admit only addressed, registered hearing listeners. The feed is borrowed
+for that poll, before Blackboard publication and the Decision phase. Hearing
+listeners use this event path without a per-agent native provider instance.
 Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without
