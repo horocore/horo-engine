@@ -1520,6 +1520,10 @@ if(HORO_BUILD_AUDIO_SDL3)
     target_link_libraries(HoroAudioSdl3
             PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands HoroAudioCaptureBuffer
             PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
+    if(WIN32)
+        target_sources(HoroAudioSdl3 PRIVATE audio/backend/sdl3/Sdl3WindowsCaptureDefaults.cpp)
+        target_link_libraries(HoroAudioSdl3 PRIVATE ole32)
+    endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         set(_HORO_SDL3_MAC_CAPTURE_SOURCE audio/backend/sdl3/Sdl3MacCapturePermission.mm)
         set_source_files_properties(${_HORO_SDL3_MAC_CAPTURE_SOURCE} PROPERTIES

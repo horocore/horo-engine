@@ -132,6 +132,7 @@ namespace Horo::Audio {
         std::optional<AudioCaptureDeviceId> console;
         std::optional<AudioCaptureDeviceId> multimedia;
         std::optional<AudioCaptureDeviceId> communications;
+        friend bool operator==(const AudioDefaultCaptureDevices &, const AudioDefaultCaptureDevices &) noexcept = default;
     };
 
     /** @brief Complete immutable control-thread recording inventory, independent of playback.

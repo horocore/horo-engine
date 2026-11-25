@@ -2353,7 +2353,11 @@ Withdrawal has an empty current binding. A default change does not retire the
 old endpoint while it remains in the catalog. Opening a capture stream still
 requires the host's permission and consent decision.
 
-SDL3 binds the multimedia default to an enumerated physical input only when
+SDL3 binds a single system default as Multimedia on drivers that provide one route.
+On Windows with WASAPI or DirectSound it reads the Console, Multimedia and
+Communications capture roles independently through MMDevice. SDL's single Windows default alias follows
+Console, so it does not supply evidence for the other Windows roles.
+A role resolves to an enumerated input only when
 the complete native name and supported preferred PCM uniquely match. If that
 evidence is missing, ambiguous or changes during discovery, the role stays
 unresolved and callers can still choose an explicit input. A resolved name

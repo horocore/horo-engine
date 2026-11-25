@@ -84,6 +84,33 @@ namespace Horo::Audio::Backend {
             CHECK(AudioCaptureDiscovery::Between(current, previous).HasError());
         }
 
+        TEST_CASE("Capture discovery detects a communications-only change without rerouting other roles", "[audio][backend][capture]") {
+            const auto owner = Epoch().device.owner;
+            const AudioCaptureDeviceId desktop{owner, 1, 1};
+            const AudioCaptureDeviceId headset{owner, 2, 1};
+            const AudioCaptureDeviceId webcam{owner, 3, 1};
+            const AudioCaptureDeviceSnapshot previous{.owner = owner,
+                                                      .backend = AudioBackendKind::SDL3Audio,
+                                                      .revision = 3,
+                                                      .devices = {{desktop, "Desktop"}, {headset, "Headset"}, {webcam, "Webcam"}},
+                                                      .defaults = {.console = webcam, .multimedia = desktop, .communications = desktop}};
+            auto current = previous;
+            ++current.revision;
+            current.defaults.communications = headset;
+            CHECK(current.defaults != previous.defaults);
+
+            const auto changed = AudioCaptureDiscovery::Between(previous, current);
+            REQUIRE(changed.HasValue());
+            CHECK(changed.Value().changes.empty());
+            CHECK_FALSE(changed.Value().defaultChanges[0]);
+            CHECK_FALSE(changed.Value().defaultChanges[1]);
+            REQUIRE(changed.Value().defaultChanges[2]);
+            CHECK(changed.Value().defaultChanges[2]->current == headset);
+            CHECK(ResolveAudioCaptureDevice(current, AudioDefaultDeviceRole::Console).device == webcam);
+            CHECK(ResolveAudioCaptureDevice(current, AudioDefaultDeviceRole::Multimedia).device == desktop);
+            CHECK(ResolveAudioCaptureDevice(current, AudioDefaultDeviceRole::Communications).device == headset);
+        }
+
         TEST_CASE("Audio backend requested and actual facts remain distinct for every peer", "[audio][backend]") {
             auto request = OpenRequest();
             request.access = AccessMode::Shared;

@@ -1,4 +1,5 @@
 #include "Sdl3AudioBackendImpl.h"
+#include "Sdl3CaptureDefaults.h"
 
 #include <cstddef>
 #include <string_view>
@@ -25,7 +26,7 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Copies the exact bounded SDL default name and its current preferred PCM. */
-        std::optional<std::pair<std::string, AudioProcessingFormat>> ObserveDefaultCapture() {
+        std::optional<Sdl3Detail::CaptureDefaultRoute> ObserveDefaultCapture() {
             constexpr auto Route = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
             const auto *name = SDL_GetAudioDeviceName(Route);
             SDL_AudioSpec preferred{};
@@ -35,18 +36,16 @@ namespace Horo::Audio::Backend {
             const std::string_view label{name};
             if (!format || label.empty() || label.size() > 256)
                 return std::nullopt;
-            return std::pair{std::string{label}, std::move(*format)};
+            return Sdl3Detail::CaptureDefaultRoute{std::string{label}, std::move(*format)};
         }
 
         /** @brief Matches the observed default to exactly one physical endpoint without opening the SDL default alias. */
-        std::optional<AudioCaptureDeviceId> ResolveDefaultCapture(const std::span<const Sdl3Detail::CaptureDeviceBinding> bindings,
+        std::optional<AudioCaptureDeviceId> ResolveDefaultCapture(const Sdl3Detail::CaptureDefaultRoute &route,
+                                                                  const std::span<const Sdl3Detail::CaptureDeviceBinding> bindings,
                                                                   const AudioCaptureDeviceSnapshot &candidate) {
-            const auto route = ObserveDefaultCapture();
-            if (!route)
-                return std::nullopt;
             const auto matches = [&route](const Sdl3Detail::CaptureDeviceBinding &binding, const AudioDiscoveredCaptureDevice &device) {
                 const auto *nativeName = SDL_GetAudioDeviceName(binding.native);
-                return nativeName && route->first == nativeName && device.preferredFormat == route->second;
+                return nativeName && route.name == nativeName && device.preferredFormat == route.format;
             };
             std::optional<AudioCaptureDeviceId> selected;
             for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -56,9 +55,50 @@ namespace Horo::Audio::Backend {
                     return std::nullopt;
                 selected = bindings[i].horo;
             }
-            return selected && ObserveDefaultCapture() == route ? selected : std::nullopt;
+            return selected;
         }
 
+#if defined(_WIN32)
+        /** @brief Binds each Windows default independently and discards paths that changed during discovery. */
+        AudioDefaultCaptureDevices ResolveWindowsDefaults(const std::span<const Sdl3Detail::CaptureDeviceBinding> bindings,
+                                                          const AudioCaptureDeviceSnapshot &candidate) {
+            const auto before = Sdl3Detail::ObserveWindowsCaptureDefaults();
+            const auto bind = [&](const std::size_t index) {
+                return before[index] ? ResolveDefaultCapture(before[index]->route, bindings, candidate) : std::nullopt;
+            };
+            constexpr std::size_t Console = 0;
+            constexpr std::size_t Multimedia = 1;
+            constexpr std::size_t Communications = 2;
+            AudioDefaultCaptureDevices defaults{bind(Console), bind(Multimedia), bind(Communications)};
+            const auto after = Sdl3Detail::ObserveWindowsCaptureDefaults();
+            if (before[Console] != after[Console])
+                defaults.console.reset();
+            if (before[Multimedia] != after[Multimedia])
+                defaults.multimedia.reset();
+            if (before[Communications] != after[Communications])
+                defaults.communications.reset();
+            return defaults;
+        }
+#endif
+
+        /** @brief Uses platform role evidence when SDL's default alias represents only one of several system roles. */
+        AudioDefaultCaptureDevices ResolveCaptureDefaults(const std::span<const Sdl3Detail::CaptureDeviceBinding> bindings,
+                                                          const AudioCaptureDeviceSnapshot &candidate) {
+#if defined(_WIN32)
+            if (const auto *name = SDL_GetCurrentAudioDriver()) {
+                const std::string_view driver{name};
+                if (driver == "wasapi" || driver == "directsound")
+                    return ResolveWindowsDefaults(bindings, candidate);
+            }
+#endif
+            const auto route = ObserveDefaultCapture();
+            if (!route)
+                return {};
+            const auto selected = ResolveDefaultCapture(*route, bindings, candidate);
+            if (!selected || ObserveDefaultCapture() != route)
+                return {};
+            return {std::nullopt, selected, std::nullopt};
+        }
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::Impl::BindCaptureEndpoint */
@@ -90,7 +130,7 @@ namespace Horo::Audio::Backend {
             const auto preferredFormat = SDL_GetAudioDeviceFormat(native, &preferred, nullptr) ? CaptureFormat(preferred) : std::nullopt;
             candidate.devices.emplace_back(id, CaptureLabel(name), AudioDeviceClass::Unknown, preferredFormat);
         }
-        candidate.defaults.multimedia = ResolveDefaultCapture(bindings, candidate);
+        candidate.defaults = ResolveCaptureDefaults(bindings, candidate);
         return Result<void>::Success();
     }
 
@@ -127,7 +167,7 @@ namespace Horo::Audio::Backend {
                                                                                   const std::uint32_t nextSlot) {
         using Output = Result<AudioCaptureDiscovery>;
         if (candidate.devices == capture.snapshot.devices && candidate.permission == capture.snapshot.permission &&
-            candidate.defaults.multimedia == capture.snapshot.defaults.multimedia)
+            candidate.defaults == capture.snapshot.defaults)
             return Output::Success({std::move(candidate), {}});
         if (candidate.revision == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(MakeError(AudioErrors::HandleGenerationExhausted));
