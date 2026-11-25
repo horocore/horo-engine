@@ -78,36 +78,59 @@ namespace Horo::Application::Internal {
             current.erase(duplicates.begin(), duplicates.end());
         }
 
-        /** @brief Preserves previously observed behavior and decision IDs for the same artifact. */
-        Result<void> MergeRegistration(PackageRemovalRegistrationEvidence &evidence, Registration observed) {
-            auto match = std::ranges::find_if(evidence.registrations, [&observed](const auto &previous) {
-                return std::tie(previous.package, previous.version, previous.artifact, previous.moduleId, previous.descriptorPath) ==
-                       std::tie(observed.package, observed.version, observed.artifact, observed.moduleId, observed.descriptorPath);
-            });
-            if (match != evidence.registrations.end()) {
-                MergeObservedIds(observed.behaviors, match->behaviors);
-                MergeObservedIds(observed.decisionNodes, match->decisionNodes);
-                MergeObservedIds(observed.components, match->components);
-                MergeObservedIds(observed.componentUses, match->componentUses);
-                observed.hasCustomSenses = observed.hasCustomSenses || match->hasCustomSenses;
-                observed.hasAdditionalReferenceClasses =
-                    observed.hasAdditionalReferenceClasses || match->hasAdditionalReferenceClasses;
+        /** @brief Keeps all previously observed descriptor identities and their service dependencies. */
+        template <typename Descriptor, typename Ids>
+        void MergeObservedServiceDependencies(std::vector<Descriptor> &current, const std::vector<Descriptor> &previous, Ids dependencies) {
+            std::ranges::sort(current, {}, &Descriptor::id);
+            for (const auto &old : previous) {
+                const auto match = std::ranges::lower_bound(current, old.id, {}, &Descriptor::id);
+                if (match == current.end() || match->id != old.id)
+                    current.insert(match, old);
+                else
+                    MergeObservedIds((*match).*dependencies, old.*dependencies);
             }
-            if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors ||
-                observed.components.size() > Registration::MaximumComponentIds ||
-                observed.componentUses.size() > Registration::MaximumComponentUses ||
-                observed.decisionNodes.size() > AI::DecisionNodeGeneration::MaximumNodes)
-                return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
-            if (match != evidence.registrations.end())
-                *match = std::move(observed);
-            else {
-                if (evidence.registrations.size() == MaximumObservedRoles)
-                    return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
-                evidence.registrations.push_back(std::move(observed));
-            }
-            return Result<void>::Success();
+        }
+
+        /** @brief Caps the aggregate service and system history before publishing the observation. */
+        bool FitsServiceEvidence(const Registration &observed) {
+            constexpr auto fits = [](const auto &dependencies) { return dependencies.size() <= Gameplay::MaximumGameplayDependencies; };
+            return observed.services.size() <= Gameplay::MaximumGameplayServices &&
+                   observed.systems.size() <= Gameplay::MaximumGameplaySystems &&
+                   std::ranges::all_of(observed.services, fits, &Gameplay::GameplayServiceDescriptor::dependencies) &&
+                   std::ranges::all_of(observed.systems, fits, &Gameplay::GameplaySystemDescriptor::requiredServices);
         }
     }  // namespace
+
+    /** @copydoc PackageRemovalRegistrationEvidence::Observe */
+    Result<void> PackageRemovalRegistrationEvidence::Observe(Registration observed) {
+        auto match = std::ranges::find_if(registrations, [&observed](const auto &previous) {
+            return std::tie(previous.package, previous.version, previous.artifact, previous.moduleId, previous.descriptorPath) ==
+                   std::tie(observed.package, observed.version, observed.artifact, observed.moduleId, observed.descriptorPath);
+        });
+        if (match != registrations.end()) {
+            MergeObservedIds(observed.behaviors, match->behaviors);
+            MergeObservedIds(observed.decisionNodes, match->decisionNodes);
+            MergeObservedIds(observed.components, match->components);
+            MergeObservedIds(observed.componentUses, match->componentUses);
+            MergeObservedServiceDependencies(observed.services, match->services, &Gameplay::GameplayServiceDescriptor::dependencies);
+            MergeObservedServiceDependencies(observed.systems, match->systems, &Gameplay::GameplaySystemDescriptor::requiredServices);
+            observed.hasCustomSenses = observed.hasCustomSenses || match->hasCustomSenses;
+            observed.hasAdditionalReferenceClasses = observed.hasAdditionalReferenceClasses || match->hasAdditionalReferenceClasses;
+        }
+        if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors ||
+            observed.components.size() > Registration::MaximumComponentIds ||
+            observed.componentUses.size() > Registration::MaximumComponentUses ||
+            observed.decisionNodes.size() > AI::DecisionNodeGeneration::MaximumNodes || !FitsServiceEvidence(observed))
+            return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
+        if (match != registrations.end())
+            *match = std::move(observed);
+        else {
+            if (registrations.size() == MaximumObservedRoles)
+                return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
+            registrations.push_back(std::move(observed));
+        }
+        return Result<void>::Success();
+    }
 
     struct PackageProjectSession::Impl final {
         std::thread::id owner{std::this_thread::get_id()};
@@ -138,7 +161,7 @@ namespace Horo::Application::Internal {
                 auto next = removalEvidence ? std::make_shared<PackageRemovalRegistrationEvidence>(*removalEvidence)
                                             : std::make_shared<PackageRemovalRegistrationEvidence>();
                 for (auto &entry : std::move(observed).Value()) {
-                    if (auto merged = MergeRegistration(*next, std::move(entry)); merged.HasError()) {
+                    if (auto merged = next->Observe(std::move(entry)); merged.HasError()) {
                         registrationFailure = std::move(merged).ErrorValue();
                         return;
                     }

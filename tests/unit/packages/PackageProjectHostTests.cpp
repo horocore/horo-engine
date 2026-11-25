@@ -1255,12 +1255,33 @@ namespace {
                       .systems = {{.id = systemId, .requiredServices = {serviceId}}},
                       .componentUses = {{component, behaviorId}, {component, systemId}}},
         };
-        sources.registrations = registrations;
-
+        PackageRemovalRegistrationEvidence evidence;
+        REQUIRE(evidence.Observe(registrations.front()).HasValue());
+        REQUIRE(evidence.Observe(registrations.back()).HasValue());
+        auto providerReactivated = registrations.front();
+        ++providerReactivated.activationGeneration;
+        providerReactivated.services.clear();
+        REQUIRE(evidence.Observe(std::move(providerReactivated)).HasValue());
+        auto consumerReactivated = registrations.back();
+        ++consumerReactivated.activationGeneration;
+        consumerReactivated.services.front().dependencies.clear();
+        consumerReactivated.systems.clear();
+        REQUIRE(evidence.Observe(consumerReactivated).HasValue());
+        REQUIRE(evidence.Observe(consumerReactivated).HasValue());
+        auto overflowing = consumerReactivated;
+        ++overflowing.activationGeneration;
+        for (std::size_t index = 0; index < Gameplay::MaximumGameplayDependencies; ++index)
+            overflowing.services.front().dependencies.push_back(
+                Gameplay::GameplayServiceId::Parse("game.tests.new" + std::to_string(index)).Value());
+        const auto rejectedHistory = evidence.Observe(std::move(overflowing));
+        REQUIRE(rejectedHistory.HasError());
+        CHECK(rejectedHistory.ErrorValue().code.Value() == "packages.host.registration_evidence_limit");
+        sources.registrations = evidence.registrations;
         const auto references = InspectPackageNativeReferences(sources, lock.Value(), removal);
         REQUIRE(references.HasValue());
         CheckRetainedNativeReferences(references.Value(), retired.Value());
 
+        sources.registrations = registrations;
         SECTION("stale retained artifact") {
             registrations[1].artifact = retiredDigest;
         }

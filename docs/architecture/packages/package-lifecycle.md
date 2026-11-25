@@ -527,9 +527,12 @@ Offline withdrawal supports asset-only archives. Extensions and other
 executable contributions require their live lifecycle owner.
 
 Observed native package registrations include service dependencies and system
-service requirements. The uninstall transaction checks retained observations
-against the exact current lock and reports which retained registration requires
-a service owned by a departing package. When a departing package provides a
+service requirements. Within one project session, reactivating the same
+verified archive and role retains previously observed service IDs and required
+service edges. A failed or over-limit capture prevents removal. The uninstall
+transaction checks retained observations against the exact current lock and
+reports which retained registration requires a service owned by a departing
+package. When a departing package provides a
 gameplay service or component, every retained runtime role needs a registration
 observation from its exact locked archive, including roles declared by packages
 with additional extension contributions. The gameplay-only withdrawal rule

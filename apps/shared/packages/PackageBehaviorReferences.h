@@ -34,9 +34,15 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
-     * @details Retains observed behavior and decision IDs and the latest service and system descriptors per exact artifact and role. */
+     * @details Retains observed identities and dependency edges across activations of the exact artifact and role. */
     struct PackageRemovalRegistrationEvidence final {
         std::vector<Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
+
+        /** @brief Adds one exact role observation without discarding previously observed references.
+         * @param observed Owned metadata from the published activation.
+         * @return Success or a typed evidence limit error. Failure preserves the prior observations.
+         */
+        [[nodiscard]] Result<void> Observe(Packages::GameplayPackageModuleHost::RegistrationInventory observed);
     };
 
     /** @brief Borrowed project inputs for the saved-reference checks within the mutation lease. */
