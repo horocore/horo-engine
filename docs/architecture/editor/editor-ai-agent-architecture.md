@@ -164,6 +164,12 @@ Ownership rules:
 - A provider-neutral speech service owns partial/final transcription, locale,
   confidence, cancellation, and local/cloud adapters. A transcript is evidence,
   never approval.
+- The worker transcription session accepts one admitted Audio capture generation
+  and one explicitly selected provider. It bounds input duration and transcript
+  updates, rejects gaps and provider timestamps outside the admitted PCM window,
+  and issues final evidence only after input is explicitly sealed. The Editor
+  rechecks context and cancellation when it adopts evidence. PCM is borrowed
+  for one provider call and is never replayed into a replacement provider.
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.

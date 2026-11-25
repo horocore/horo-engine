@@ -1,0 +1,245 @@
+#include "../../../apps/HoroEditor/app/ImmersiveSpeechTranscription.h"
+
+#include <catch2/catch_test_macros.hpp>
+#include <limits>
+
+namespace Horo::Editor {
+    namespace {
+        using Status = SpeechTranscriptionStatus;
+        using Kind = SpeechHypothesisKind;
+        namespace Capture = Audio::Backend;
+
+        /** @brief Records only operation counts and supplies controlled provider updates to the test session. */
+        struct SpeechFixtureProvider final : ISpeechProvider {
+            struct Stream final : ISpeechProviderStream {
+                explicit Stream(SpeechFixtureProvider &state) : fixture(state) {}
+
+                bool Append(const Capture::AudioCapturedBlock &, std::span<const Audio::AudioSample>, std::stop_token) noexcept override {
+                    ++fixture.blocks;
+                    return fixture.available;
+                }
+
+                bool FinishInput(std::stop_token) noexcept override {
+                    ++fixture.finished;
+                    return fixture.available;
+                }
+
+                SpeechProviderPoll Poll(std::stop_token) noexcept override {
+                    if (fixture.stopDuringPoll)
+                        fixture.stopDuringPoll->request_stop();
+                    return fixture.next;
+                }
+
+                void Cancel() noexcept override {
+                    ++fixture.cancelled;
+                }
+
+                SpeechFixtureProvider &fixture;
+            };
+
+            std::unique_ptr<ISpeechProviderStream> Open(std::string_view locale, const Audio::AudioProcessingFormat &format,
+                                                        std::stop_token) noexcept override {
+                ++opens;
+                CHECK(locale == "tr-TR");
+                CHECK(format.sampleRate == 48'000);
+                if (!available)
+                    return {};
+                return std::make_unique<Stream>(*this);
+            }
+
+            std::stop_source *stopDuringPoll{};
+            SpeechProviderPoll next;
+            unsigned opens{};
+            unsigned blocks{};
+            unsigned finished{};
+            unsigned cancelled{};
+            bool available{true};
+        };
+
+        /** @brief Owns one true authoring generation and one checked microphone source. */
+        struct SpeechFixture final {
+            ImmersiveAuthoringContext owner;
+            const Capture::AudioCaptureBufferDescriptor source{.device = {Audio::AudioRuntimeId::Create(2).Value(), 3, 1},
+                                                               .generation = 4,
+                                                               .clockDomain = 5,
+                                                               .format = {48'000,
+                                                                          Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Mono)},
+                                                               .slots = 2,
+                                                               .maximumFrames = 2,
+                                                               .budgetBytes = 4096};
+            std::stop_source stop;
+            SpeechFixtureProvider provider;
+            std::unique_ptr<ImmersiveSpeechTranscription> stream;
+
+            /** @brief Publishes a real context whose live owner can revoke it while the worker holds a copy. */
+            ImmersivePlanningContext Context() {
+                const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
+                const ImmersiveContextIdentity identity{1,
+                                                        1,
+                                                        1,
+                                                        session,
+                                                        {session, {0, 1}},
+                                                        1,
+                                                        1,
+                                                        1,
+                                                        XR::XRCapabilityRevision::Create(1).Value(),
+                                                        ImmersiveAuthoringMode::Edit,
+                                                        0,
+                                                        true,
+                                                        true};
+                const auto context = owner.Publish(identity, {});
+                REQUIRE(context);
+                return *context;
+            }
+
+            void Prepare() {
+                auto prepared = ImmersiveSpeechTranscription::Prepare(owner, Context(), source, "tr-TR", 0.5F, stop.get_token());
+                REQUIRE(prepared.status == Status::Accepted);
+                REQUIRE(prepared.stream);
+                stream = std::move(prepared.stream);
+            }
+
+            void StartWithAudio() {
+                Prepare();
+                REQUIRE(stream->Start(provider) == Status::Accepted);
+                REQUIRE(stream->Append(source, FirstBlock(), Samples) == Status::Accepted);
+            }
+
+            /** @brief Returns the first sample at a nonzero point on the admitted clock. */
+            static Capture::AudioCapturedBlock FirstBlock() {
+                return {.start = {5, 1'000'000}, .sequence = 1, .frames = 2};
+            }
+
+            static constexpr std::array<Audio::AudioSample, 2> Samples{0.125F, -0.125F};
+        };
+
+        /** @brief Uses a tight provider window inside the admitted PCM. */
+        SpeechHypothesisView Transcript(const Kind kind = Kind::Partial) {
+            return {kind, {5, 1'000'000}, {5, 1'040'000}, 0.8F, "Seçili nesne"};
+        }
+
+        TEST_CASE("Immersive speech issues owned partial and final evidence after sealing PCM", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            CHECK(fixture.stream->Poll().status == Status::Pending);
+            std::string recognizerText{"Seçili nesne"};
+            auto transcript = Transcript();
+            transcript.text = recognizerText;
+            fixture.provider.next = transcript;
+            const auto partial = fixture.stream->Poll();
+            REQUIRE(partial.evidence);
+            recognizerText.front() = 'X';
+            CHECK(partial.evidence->Hypothesis().text == "Seçili nesne");
+            CHECK(partial.evidence->Locale() == "tr-TR");
+            CHECK(partial.evidence->Context().Generation() == fixture.Context().Generation());
+
+            REQUIRE(fixture.stream->FinishInput() == Status::Accepted);
+            REQUIRE(fixture.stream->FinishInput() == Status::Accepted);
+            CHECK(fixture.provider.finished == 1);
+            fixture.provider.next = Transcript(Kind::Final);
+            const auto completed = fixture.stream->Poll();
+            REQUIRE(completed.status == Status::Finished);
+            REQUIRE(completed.evidence);
+            CHECK(completed.evidence->Hypothesis().kind == Kind::Final);
+            CHECK_FALSE(fixture.stream->Poll().evidence);
+            fixture.stream.reset();
+            CHECK(completed.evidence->IsCurrent());
+            fixture.owner.Revoke();
+            CHECK_FALSE(completed.evidence->IsCurrent());
+        }
+
+        TEST_CASE("Immersive speech ends on a changed capture or revoked context", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            fixture.provider.next = Transcript();
+            const auto partial = fixture.stream->Poll();
+            REQUIRE(partial.evidence);
+            auto expected = Status::CaptureInterrupted;
+            auto source = fixture.source;
+            auto block = Capture::AudioCapturedBlock{.start = {5, 1'041'666}, .firstFrame = 2, .sequence = 2, .frames = 2};
+            SECTION("device generation changed") {
+                ++source.generation;
+            }
+            SECTION("source discontinuity") {
+                block.missingSourceFramesBefore = 1;
+            }
+            SECTION("ring dropped PCM") {
+                block.droppedFramesBefore = 2;
+            }
+            SECTION("editor context revoked") {
+                fixture.owner.Revoke();
+                expected = Status::StaleContext;
+            }
+            SECTION("host muted or withdrew capture permission") {
+                fixture.stop.request_stop();
+                expected = Status::Cancelled;
+            }
+            CHECK(fixture.stream->Append(source, block, fixture.Samples) == expected);
+            CHECK(fixture.provider.blocks == 1);
+            CHECK(fixture.provider.cancelled == 1);
+            CHECK_FALSE(partial.evidence->IsCurrent());
+        }
+
+        TEST_CASE("Immersive speech rejects stale, malformed and low confidence updates", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            auto transcript = Transcript();
+            auto expected = Status::InvalidTranscript;
+            const std::string oversized(ImmersiveSpeechEvidence::MaximumTextBytes + 1, 'x');
+            SECTION("future transcript") {
+                transcript.end.nanoseconds += 100'000;
+            }
+            SECTION("foreign clock") {
+                ++transcript.start.clockDomain;
+            }
+            SECTION("invalid UTF-8") {
+                transcript.text = "\xff";
+            }
+            SECTION("text exceeds budget") {
+                transcript.text = oversized;
+            }
+            SECTION("unsealed final") {
+                transcript.kind = Kind::Final;
+            }
+            SECTION("missing confidence") {
+                transcript.confidence = std::numeric_limits<float>::quiet_NaN();
+            }
+            SECTION("low confidence") {
+                transcript.confidence = 0.2F;
+                expected = Status::LowConfidence;
+            }
+            SECTION("revoked while provider was polling") {
+                fixture.provider.stopDuringPoll = &fixture.stop;
+                expected = Status::Cancelled;
+            }
+            fixture.provider.next = transcript;
+            const auto update = fixture.stream->Poll();
+            CHECK(update.status == expected);
+            CHECK_FALSE(update.evidence);
+        }
+
+        TEST_CASE("Immersive speech bounds provider attempts, hypotheses and audio time", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            SECTION("provider unavailable") {
+                fixture.Prepare();
+                fixture.provider.available = false;
+                CHECK(fixture.stream->Start(fixture.provider) == Status::ProviderUnavailable);
+                CHECK(fixture.stream->Start(fixture.provider) == Status::ProviderUnavailable);
+                CHECK(fixture.provider.opens == 1);
+            }
+            SECTION("update flood") {
+                fixture.StartWithAudio();
+                fixture.provider.next = Transcript();
+                for (unsigned update = 0; update < 64; ++update)
+                    REQUIRE(fixture.stream->Poll().evidence.has_value());
+                CHECK(fixture.stream->Poll().status == Status::LimitExceeded);
+            }
+            SECTION("PCM window exceeded") {
+                fixture.StartWithAudio();
+                const Capture::AudioCapturedBlock late{.start = {5, 16'000'000'000}, .firstFrame = 2, .sequence = 2, .frames = 2};
+                CHECK(fixture.stream->Append(fixture.source, late, fixture.Samples) == Status::LimitExceeded);
+                CHECK(fixture.provider.blocks == 1);
+            }
+        }
+    }  // namespace
+}  // namespace Horo::Editor

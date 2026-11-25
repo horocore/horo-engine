@@ -17,6 +17,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
         HoroEditor/app/EditorLocalAgentContext.cpp
         HoroEditor/app/ImmersiveAuthoringContext.cpp
+        HoroEditor/app/ImmersiveSpeechTranscription.cpp
         HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -214,7 +215,7 @@ if(HORO_BUILD_EDITOR_GUI)
             nlohmann_json::nlohmann_json
     )
 
-    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull)
+    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull HoroAudioCaptureBuffer)
     if(HORO_BUILD_XR_OPENXR)
         set(HORO_EDITOR_XR_BOOTSTRAP_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_bootstrap_headers")
         file(MAKE_DIRECTORY "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
