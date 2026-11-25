@@ -821,14 +821,29 @@ namespace Horo::Tests::OpenXRApplication {
     TEST_CASE("XR setup hands sealed packaged compatibility to the current device qualification", "[xr][application][setup]") {
         using enum Editor::EditorXrSetupTestState;
         ApplicationFixture fixture;
+        constexpr std::array<std::string_view, 1> displayExtensions{XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME};
+        constexpr std::array displayRates{72.0F, 90.0F};
+        fixture.script.native.extraExtensions = displayExtensions;
+        ++fixture.script.native.extensionCount;
+        fixture.script.census.displayRates = displayRates;
         fixture.script.census.implementationVersion = XR_MAKE_VERSION(9, 8, 70'000);
         fixture.CreatePlay();
         REQUIRE(fixture.play->ReadDeviceQualificationPreflight().HasError());
+        CHECK_FALSE(fixture.play->ReadSetup().display);
         RequireValue(fixture.play->RequestSetupTest());
         fixture.play->PumpSetupTest();
         REQUIRE(fixture.play->ReadSetup().test == Passed);
         const auto admitted = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
         const auto &row = admitted.Compatibility();
+        const auto display = fixture.play->ReadSetup().display;
+        REQUIRE(display);
+        CHECK(display->refreshRateState == XR::XRCapabilityState::Available);
+        REQUIRE(display->refreshRateCount == 2);
+        CHECK(display->refreshMilliHertz[0] == 72'000);
+        CHECK(display->refreshMilliHertz[1] == 90'000);
+        REQUIRE(display->viewCount == 2);
+        CHECK(display->viewExtents[0] == Editor::EditorXrDisplayObservation::ViewExtent{1024, 1024});
+        CHECK(row.display.refreshMilliHertz == display->refreshMilliHertz);
         CHECK(row.loader.LoaderSource() == XR::XRLoaderSourcePolicy::BundledVerified);
         CHECK(row.loader.RuntimeSelection() == XR::XRRuntimeSelectionPolicy::SystemDefault);
         const Host::OpenXRRuntimeVersion implementation{9, 8, 70'000};
@@ -868,6 +883,7 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->CancelSetupTest(request);
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Cancelled);
+            CHECK(fixture.play->ReadSetup().display.has_value());
             CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
             const auto retained = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
             CHECK(fixture.session->ValidateDeviceQualification(retained, fixture.frontend->Capabilities().support).HasValue());
@@ -882,6 +898,7 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Failed);
             CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Stale);
+            CHECK_FALSE(fixture.play->ReadSetup().display);
             CHECK(fixture.script.native.liveSessions == 0);
         }
         SECTION("a failed replacement probe revokes the old result and retires the test session") {
@@ -890,6 +907,7 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Failed);
             CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
+            CHECK_FALSE(fixture.play->ReadSetup().display);
             CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasError());
             CHECK(fixture.script.native.liveSessions == 0);
             CHECK(fixture.script.native.liveInstances == 1);
@@ -1286,6 +1304,13 @@ namespace Horo::Tests::OpenXRApplication {
         const auto receipt = fixture.play->ReadDeviceQualificationPreflight();
         if (mode == Case::Supported) {
             CHECK(setup.test == Passed);
+            REQUIRE(setup.display);
+            CHECK(setup.display->viewCount == 4);
+            CHECK(setup.display->refreshRateState == XR::XRCapabilityState::Unsupported);
+            constexpr std::array quadExtents{
+                Editor::EditorXrDisplayObservation::ViewExtent{1024, 1024}, Editor::EditorXrDisplayObservation::ViewExtent{896, 1024},
+                Editor::EditorXrDisplayObservation::ViewExtent{768, 1024}, Editor::EditorXrDisplayObservation::ViewExtent{640, 1024}};
+            CHECK(setup.display->viewExtents == quadExtents);
             REQUIRE(receipt.HasValue());
             CHECK(receipt.Value().Compatibility().profile == XR::XRFeatureProfile::FoveatedInsetProjection);
             auto renderer = fixture.frontend->Capabilities().support;
@@ -1297,6 +1322,7 @@ namespace Horo::Tests::OpenXRApplication {
         } else {
             CHECK(setup.test == Failed);
             CHECK(setup.issue == (mode == Case::StereoRenderer ? Renderer : Unsupported));
+            CHECK_FALSE(setup.display);
             CHECK(receipt.HasError());
         }
         REQUIRE(RequireValue(fixture.ClosePlay()));

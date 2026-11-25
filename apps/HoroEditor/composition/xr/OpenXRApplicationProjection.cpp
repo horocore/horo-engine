@@ -262,32 +262,45 @@ namespace Horo::Application::Internal {
         return ValidateProjectionProtocol(getProc_, instance);
     }
 
-    /** @copydoc OpenXRApplicationSession::ValidatePackagedProjectionTargets */
-    Result<void> OpenXRApplicationSession::ValidatePackagedProjectionTargets(const NativeSystemCensus &system,
-                                                                             const NativeSessionCensus &session,
-                                                                             const Render::RenderCapabilitySnapshot &renderer) const {
+    /** @copydoc OpenXRApplicationSession::CollectPackagedDisplay */
+    Result<Editor::EditorXrDisplayObservation> OpenXRApplicationSession::CollectPackagedDisplay(
+        const NativeSystemCensus &system, const NativeSessionCensus &session, const Render::RenderCapabilitySnapshot &renderer) const {
+        using Display = Editor::EditorXrDisplayObservation;
+        using Outcome = Result<Display>;
         const auto targets = ObserveNativeProjectionTargets(system, session);
         if (targets.HasError())
-            return Result<void>::Failure(targets.ErrorValue());
+            return Outcome::Failure(targets.ErrorValue());
+        Display display{.refreshRateState = session.displayRates.state,
+                        .refreshMilliHertz = session.displayRates.milliHertz,
+                        .refreshRateCount = session.displayRates.count};
         if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
             const auto quad = native_->DiscoverQuadViews(selection_.attempt, system);
             if (quad.HasError())
-                return Result<void>::Failure(quad.ErrorValue());
+                return Outcome::Failure(quad.ErrorValue());
             const auto color = ObserveQuadColor(quad.Value(), session);
             if (!color)
-                return Result<void>::Failure(
+                return Outcome::Failure(
                     MakeError(XRErrors::OperationUnsupported, "The selected runtime cannot provide an opaque four-view target."));
             if (!SupportsProjectionTargets(renderer, *color))
-                return Result<void>::Failure(
+                return Outcome::Failure(
                     MakeError(XRErrors::OperationIncompatible, "The selected renderer cannot render the four-view projection target."));
-            return Result<void>::Success();
+            display.viewCount = static_cast<std::uint32_t>(quad.Value().views.size());
+            std::ranges::transform(quad.Value().views, display.viewExtents.begin(), [](const NativeQuadView &view) {
+                return Display::ViewExtent{view.recommendedExtent.width, view.recommendedExtent.height};
+            });
+            return Outcome::Success(display);
         }
         if (!targets.Value().stereo)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo."));
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo."));
         if (!targets.Value().colorAvailable)
-            return Result<void>::Failure(
+            return Outcome::Failure(
                 MakeError(XRErrors::OperationUnsupported, "The installed runtime does not offer RGBA8 UNORM stereo swapchains for Play."));
-        return Result<void>::Success();
+        display.viewCount = system.primaryViewCount;
+        std::ranges::transform(std::span{system.primaryViews}.first(display.viewCount), display.viewExtents.begin(),
+                               [](const XrViewConfigurationView &view) {
+                                   return Display::ViewExtent{view.recommendedImageRectWidth, view.recommendedImageRectHeight};
+                               });
+        return Outcome::Success(display);
     }
 
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */

@@ -14,6 +14,10 @@ Repeat the procedure for each tethered, wireless-streaming or standalone mode
 the product declares. A runtime, driver, extension, test plan or binary change
 requires a new exact declaration and matching evidence.
 
+XR Setup shows the rates and ordered view sizes measured by its session test.
+The session test can inform setup and troubleshooting. Record physical display
+measurements for the exact product run in the release display capture.
+
 Use the existing package inspection and launch receipt to populate package and
 loader provenance. Hash that receipt into `packageReceiptSha256` and the exact
 tested binary into `buildSha256`. Package provenance and loader discovery can

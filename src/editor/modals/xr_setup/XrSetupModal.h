@@ -20,6 +20,8 @@ namespace Horo::Editor {
         void OnClose(ModalCloseReason) override;
 
     private:
+        /** @brief Shows measured rates and ordered view dimensions from the last admitted Setup test. */
+        void DrawDisplayObservation(const EditorXrDisplayObservation &display, float width) const;
         /** @brief Draws the owned redacted inspection report. */
         void DrawInspection(const EditorXrInspectionSnapshot &report) const;
         /** @brief Projects and submits one explicit preview request without invoking native output. */

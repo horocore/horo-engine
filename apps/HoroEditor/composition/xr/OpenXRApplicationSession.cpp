@@ -270,8 +270,9 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(discovery.ErrorValue());
 
         const auto &observed = *system_;
-        if (const auto targets = ValidatePackagedProjectionTargets(observed, session, renderer); targets.HasError())
-            return Outcome::Failure(targets.ErrorValue());
+        const auto display = CollectPackagedDisplay(observed, session, renderer);
+        if (display.HasError())
+            return Outcome::Failure(display.ErrorValue());
         const auto spaces = std::span{session.spaces}.first(session.spaceCount);
         if (std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_VIEW) == spaces.end() ||
             std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_LOCAL) == spaces.end())
@@ -325,7 +326,8 @@ namespace Horo::Application::Internal {
                                  deployment.OsAbiDependencyCount(),
                                  EyeGazeAvailability(),
                                  renderer.deviceIncarnation,
-                                 renderer.capabilityRevision});
+                                 renderer.capabilityRevision,
+                                 display.Value()});
     }
 
     /** @copydoc OpenXRApplicationSession::RunPackagedPreflight */

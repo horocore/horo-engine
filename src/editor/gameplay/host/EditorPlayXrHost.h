@@ -89,6 +89,21 @@ namespace Horo::Editor {
         Cleanup
     };
 
+    /** @brief Redacted, ordered display measurements from a completed Setup session probe. */
+    struct EditorXrDisplayObservation final {
+        struct ViewExtent final {
+            std::uint32_t width{};
+            std::uint32_t height{};
+            constexpr bool operator==(const ViewExtent &) const noexcept = default;
+        };
+
+        XR::XRCapabilityState refreshRateState{};
+        std::array<std::uint32_t, 32> refreshMilliHertz{};
+        std::uint32_t refreshRateCount{};
+        std::array<ViewExtent, 4> viewExtents{};
+        std::uint32_t viewCount{};
+    };
+
     /** @brief Fixed-size setup evidence from the selected application owner. */
     struct EditorXrSetupReport final {
         std::uint16_t loaderMajor{}; /**< Nonzero only after real loader/runtime/system discovery. */
@@ -99,6 +114,7 @@ namespace Horo::Editor {
         bool mayRequestTest{}; /**< Ownership and idle state permit a test or cleanup retry. */
         EditorXrSetupTestState test{EditorXrSetupTestState::NotRun};
         EditorXrSetupIssue issue{EditorXrSetupIssue::Unavailable};
+        std::optional<EditorXrDisplayObservation> display; /**< Latest unrevoked measurement, including across a queued retry. */
     };
 
     /** @brief Completeness of the exact selected session's inspection evidence. */

@@ -7,6 +7,7 @@
 #include "Horo/XR/XRInputProjection.h"
 #include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRProjectSettings.h"
+#include "EditorPlayXrHost.h"
 #include "OpenXRApplicationBindings.h"
 #include "OpenXRHandTracking.h"
 #include "OpenXRInputClock.h"
@@ -157,6 +158,7 @@ namespace Horo::Application::Internal {
         XR::XRCapabilityState eyeGaze{XR::XRCapabilityState::Unsupported}; /**< Policy-gated diagnostic state without gaze samples. */
         std::uint64_t renderDeviceIncarnation{};                           /**< Selected renderer device at the time of preflight. */
         std::uint64_t renderCapabilityRevision{}; /**< Selected renderer capability snapshot used to admit the profile. */
+        Editor::EditorXrDisplayObservation display;
     };
 
     /** @brief Runtime-reported HMD selection admitted by the local Desktop probe. */
@@ -555,10 +557,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
         [[nodiscard]] Result<void> PrepareHands();
         [[nodiscard]] Result<void> RetireHands();
-        /** @brief Validates the selected projection target shared with live Play without allocating swapchains. */
-        [[nodiscard]] Result<void> ValidatePackagedProjectionTargets(const XR::OpenXRInternal::NativeSystemCensus &system,
-                                                                     const XR::OpenXRInternal::NativeSessionCensus &session,
-                                                                     const Render::RenderCapabilitySnapshot &renderer) const;
+        /** @brief Validates the selected projection target without allocation and projects its ordered display measurements. */
+        [[nodiscard]] Result<Editor::EditorXrDisplayObservation> CollectPackagedDisplay(
+            const XR::OpenXRInternal::NativeSystemCensus &system, const XR::OpenXRInternal::NativeSessionCensus &session,
+            const Render::RenderCapabilitySnapshot &renderer) const;
         /** @brief Validates the same selected profile and static capacity required by Play. */
         [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 

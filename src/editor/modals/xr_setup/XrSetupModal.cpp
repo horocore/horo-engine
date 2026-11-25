@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <iterator>
 #include <utility>
 
 namespace Horo::Editor {
@@ -452,6 +453,26 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc XrSetupModal::DrawDisplayObservation */
+    void XrSetupModal::DrawDisplayObservation(const EditorXrDisplayObservation &display, const float width) const {
+        const auto &fonts = context_.theme.fonts;
+        const auto refreshCount = std::min<std::size_t>(display.refreshRateCount, display.refreshMilliHertz.size());
+        if (refreshCount != 0) {
+            std::string rates = Text("display_refresh_rates");
+            for (const auto rate : std::span{display.refreshMilliHertz}.first(refreshCount))
+                std::format_to(std::back_inserter(rates), " {:.3f}", static_cast<double>(rate) / 1000.0);
+            Ui::WrappedText(width, rates, Theme::Text(), fonts);
+        } else {
+            Ui::WrappedText(width, Text("display_refresh_unavailable"), Theme::Muted(), fonts);
+        }
+
+        std::string views = Text("display_view_extents");
+        const auto viewCount = std::min<std::size_t>(display.viewCount, display.viewExtents.size());
+        for (const auto &extent : std::span{display.viewExtents}.first(viewCount))
+            std::format_to(std::back_inserter(views), " {}×{}", extent.width, extent.height);
+        Ui::WrappedText(width, views, Theme::Text(), fonts);
+    }
+
     ModalFrameResult XrSetupModal::Draw() {
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "XrSetup",
@@ -475,6 +496,8 @@ namespace Horo::Editor {
         if (report.requestedProfile)
             Ui::WrappedText(width, Text(ProfileKey(*report.requestedProfile)), Theme::Text(), fonts);
         Ui::WrappedText(width, Text(TestKey(report.test)), Theme::Text(), fonts);
+        if (report.display)
+            DrawDisplayObservation(*report.display, width);
         const auto issue = rejected_ && report.issue == EditorXrSetupIssue::None ? EditorXrSetupIssue::Unavailable : report.issue;
         Ui::WrappedText(width, Text(IssueKey(issue)), Theme::Muted(), fonts);
         DrawInspection(setup_ ? setup_->ReadInspection() : EditorXrInspectionSnapshot{});
