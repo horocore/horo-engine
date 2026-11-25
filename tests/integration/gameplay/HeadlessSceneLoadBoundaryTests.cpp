@@ -2,6 +2,7 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessReducedPopulation.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
@@ -9,6 +10,7 @@
 #include "OwnedTestDirectory.h"
 #include "PhysicsSceneActivationTestSupport.h"
 #include "assets/AssetCookOutputFixture.h"
+#include "../../unit/runtime/ai/AITaskSchedulerTestSupport.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -21,6 +23,144 @@ namespace {
     using namespace Horo;
     using namespace Horo::Application::Internal;
     using namespace std::chrono_literals;
+
+    TEST_CASE("Headless reduced transfers retire only suspended independent agents", "[gameplay][decision][reduced-population]") {
+        using namespace AI;
+        using namespace WorldStreaming;
+        const auto origin = OriginFrame::Create({OriginFrameId::Create(7).Value(), OriginFrameRevision::Create(1).Value(),
+                                                 OriginGeneration::Create(1).Value()},
+                                                Math::WorldCoordinate64::FromMillimeters(1'000'000, 0, 0));
+        REQUIRE(origin.HasValue());
+        const auto binding = AI::TestSupport::MakeFixture(20, 21, 7, 0);
+        const auto identity = binding.agent.agent.agent;
+        constexpr Runtime::SceneObjectId Anchor{2}, Member{3}, Child{4};
+        Runtime::SceneDefinitionBuilder sceneBuilder{{7}, {1}};
+        sceneBuilder.Add({.object = Anchor});
+        const auto root = std::move(sceneBuilder).Build();
+        REQUIRE(root.HasValue());
+        Runtime::SceneDefinitionBuilder populationBuilder{{8}, {1}};
+        Runtime::RuntimeEntityDefinition entry{.object = Member, .components = {.aiAgent = binding.agent.agent,
+                                                                                .aiController = binding.agent.controller}};
+        entry.localTransform.translation.x = 1;
+        populationBuilder.Add(std::move(entry));
+        auto authored = std::move(populationBuilder).Build();
+        REQUIRE(authored.HasValue());
+        auto settings = AiTaskSchedulerSettings{.maximumAgents = 4, .evaluationsPerTick = 4, .mode = AiSchedulingMode::BestEffort,
+                                               .simulationProfile = AiDecisionSimulationProfile{1000, 2000, 3000, 2, 1}};
+        auto provider = HeadlessReducedPopulation::Create(
+            {std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(authored).Value()), 1},
+            root.Value(), *settings.simulationProfile, origin.Value());
+        REQUIRE(provider.HasValue());
+        auto reduced = std::move(provider).Value();
+        JobSystem jobs{{1, 4}};
+        Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish(std::vector<Assets::AssetRecord>{}).status == Assets::AssetRegistryBuildStatus::Complete);
+        Assets::MemoryAssetProvider assets;
+        Assets::AssetLoadService loads{jobs, assets};
+        auto runtime = std::move(AiSceneRuntime::Create()).Value();
+        Runtime::RuntimeSceneService scenes{registry, loads, {}, {7}};
+        const std::array descriptors{binding.descriptor};
+        REQUIRE(scenes.AddActivationParticipant(std::make_unique<AiSceneActivationParticipant>(runtime, descriptors)).HasValue());
+        auto participant = runtime.MakeReducedPopulationStructuralParticipant(
+            descriptors, reduced.population, [&](const Runtime::RuntimeSceneView &view, const Runtime::EntityRef entity) {
+                return CaptureProjectSceneWorldPosition(view, entity, origin.Value().Origin());
+            });
+        REQUIRE(participant.HasValue());
+        REQUIRE(scenes.AddStructuralParticipant(std::move(participant).Value()).HasValue());
+        const CancellationToken cancellation;
+        REQUIRE(scenes.Startup(cancellation).HasValue());
+        REQUIRE(scenes.QueuePreparation(root.Value()).HasValue());
+        std::uint64_t frame{};
+        const auto commit = [&] {
+            REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                   {.frameNumber = ++frame, .cancellation = cancellation}).HasValue());
+            REQUIRE(reduced.ReconcilePublication().HasValue());
+        };
+        commit();
+        REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs, settings).HasValue());
+        const auto scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+        const Runtime::SceneStructuralAdmission admission{{7}, registry.Snapshot().Revision(), {}};
+        const auto anchor = origin.Value().Origin();
+        REQUIRE(reduced.QueuePromotions(scenes, origin.Value(), anchor, 1, admission).HasValue());
+        commit();
+        const auto capability = runtime.CapabilityAtSafePoint();
+        const auto handle = capability.ResolveAgent(identity);
+        REQUIRE(handle.HasValue());
+        const auto entity = capability.ResolveAgentOwner(handle.Value());
+        REQUIRE(entity.HasValue());
+        const auto image = std::make_shared<const int>(0);
+        REQUIRE(scheduler->Register(handle.Value(), identity, {}, image, std::make_shared<SchedulerTestSupport::Probe>()).HasValue());
+        const auto moveAnchor = [&](const float x) {
+            const auto anchorEntity = scenes.ActiveScene()->Find(Anchor);
+            REQUIRE(anchorEntity);
+            Runtime::SceneCommandBuffer movement;
+            Math::Transform transform;
+            transform.translation.x = x;
+            movement.SetLocalTransform(*anchorEntity, transform);
+            REQUIRE(scenes.QueueStructuralCommands(std::move(movement)).HasValue());
+            commit();
+        };
+        const auto demote = [&] {
+            const auto view = scenes.ActiveScene();
+            REQUIRE(view);
+            const auto anchorEntity = view->Find(Anchor);
+            REQUIRE(anchorEntity);
+            const auto anchorPose = CaptureProjectSceneWorldPosition(*view, *anchorEntity, anchor);
+            REQUIRE(anchorPose.HasValue());
+            const std::array handles{handle.Value()};
+            const auto outside = [&](const Runtime::EntityRef member) {
+                const auto pose = CaptureProjectSceneWorldPosition(*view, member, anchor);
+                REQUIRE(pose.HasValue());
+                const auto distance = pose.Value().Millimeters()[0] - anchorPose.Value().Millimeters()[0];
+                return distance < -3000 || distance > 3000;
+            };
+            REQUIRE(reduced.QueueDemotions(scenes, *view, handles, *scheduler, capability, admission, outside).HasValue());
+        };
+        const auto tick = [&](std::uint64_t value) {
+            REQUIRE(scheduler->EvaluateAtDecision(value).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(value).HasValue());
+        };
+        moveAnchor(10);
+        REQUIRE(scheduler->SetRelevanceAtSafePoint(handle.Value(), {.anchorDistanceMillimeters = 9000}).HasValue());
+        tick(1);
+        demote();
+        CHECK_FALSE(reduced.pending);
+        tick(2);
+        moveAnchor(0);
+        demote();
+        CHECK_FALSE(reduced.pending);
+
+        moveAnchor(10);
+        Runtime::SceneCommandBuffer attach;
+        static_cast<void>(attach.Create({.parent = entity.Value(), .authoredObject = Child}));
+        REQUIRE(scenes.QueueStructuralCommands(std::move(attach)).HasValue());
+        commit();
+        demote();
+        CHECK_FALSE(reduced.pending);
+        const auto child = scenes.ActiveScene()->Find(Child);
+        REQUIRE(child);
+        Runtime::SceneCommandBuffer detach;
+        detach.Destroy(*child);
+        REQUIRE(scenes.QueueStructuralCommands(std::move(detach)).HasValue());
+        commit();
+
+        demote();
+        REQUIRE(reduced.pending);
+        CHECK(capability.ResolveAgent(identity).HasValue());
+        commit();
+        CHECK_FALSE(scenes.ActiveScene()->Find(Member));
+        CHECK(capability.ResolveAgent(identity).HasError());
+        std::array<AiReducedAgent, 1> row{};
+        REQUIRE(reduced.population->EvaluatePromotions(anchor.Millimeters(), row).Value() == 1);
+        CHECK(row.front().positionMillimeters[0] == 1'001'000);
+        moveAnchor(0);
+        REQUIRE(reduced.QueuePromotions(scenes, origin.Value(), anchor, 1, admission).HasValue());
+        commit();
+        const auto next = capability.ResolveAgent(identity);
+        REQUIRE(next.HasValue());
+        CHECK(next.Value() != handle.Value());
+        scenes.Shutdown();
+    }
 
     /** @brief Gates a real deterministic provider to observe owned pending/cancellation paths.
      * @details Only atomics cross the provider worker/owner/releaser lanes; all lanes join before fixture destruction.

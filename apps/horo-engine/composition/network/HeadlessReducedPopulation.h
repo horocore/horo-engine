@@ -1,6 +1,6 @@
 #pragma once
 /** @file HeadlessReducedPopulation.h
- * @brief Committed cooked templates and bounded Scene promotion for the authoritative headless product.
+ * @brief Committed cooked templates and bounded Scene transfers for the authoritative headless product.
  */
 #include "HeadlessCookedDecisionAdmission.h"
 #include "Horo/AI/AiReducedPopulation.h"
@@ -57,22 +57,16 @@ namespace Horo::Application::Internal {
                 return Output::Failure(created.ErrorValue());
             return Output::Success(HeadlessReducedPopulation{selection.definition, std::move(templates),
                                                               std::make_shared<AI::AiReducedPopulation>(std::move(created).Value()),
-                                                              std::vector<AI::AiReducedAgent>(maximum), {}});
+                                                              std::vector<AI::AiReducedAgent>(maximum), {}, {}});
         }
 
         /** @brief Queues a bounded promotion using the existing aggregate Scene transaction. */
-        Result<void> QueuePromotions(Runtime::RuntimeSceneService &scenes, const Runtime::RuntimeSceneView &view,
-                                      const WorldStreaming::OriginFrame &origin, const Runtime::SceneObjectId anchor,
+        Result<void> QueuePromotions(Runtime::RuntimeSceneService &scenes, const WorldStreaming::OriginFrame &origin,
+                                      const Math::WorldCoordinate64 &anchor,
                                       const std::size_t available, const Runtime::SceneStructuralAdmission &admission) {
             if (pending || available == 0 || !scenes.CanQueueStructuralCommands())
                 return Result<void>::Success();
-            const auto entity = view.Find(anchor);
-            if (!entity)
-                return Result<void>::Success();
-            const auto position = CaptureProjectSceneWorldPosition(view, *entity, origin.Origin());
-            if (position.HasError())
-                return Result<void>::Success();
-            const auto evaluated = population->EvaluatePromotions(position.Value().Millimeters(), candidates);
+            const auto evaluated = population->EvaluatePromotions(anchor.Millimeters(), candidates);
             if (evaluated.HasError())
                 return Result<void>::Failure(evaluated.ErrorValue());
             const auto count = std::min(evaluated.Value(), available);
@@ -85,11 +79,40 @@ namespace Horo::Application::Internal {
             const auto created = commands.CreateGroup(std::move(entries).Value(), {}, admission);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
-            auto queued = scenes.QueueTrackedStructuralCommands(std::move(commands));
-            if (queued.HasError())
-                return Result<void>::Failure(queued.ErrorValue());
-            pending = std::move(queued).Value();
-            return Result<void>::Success();
+            return QueueGroup(scenes, std::move(commands));
+        }
+
+        /** @brief Retires only exact suspended manifest owners that still qualify at the structural cutoff. */
+        Result<void> QueueDemotions(Runtime::RuntimeSceneService &scenes, const Runtime::RuntimeSceneView &view,
+                                     const std::span<const AI::AgentHandle> scheduled, AI::AiTaskScheduler &scheduler,
+                                     const AI::AiRuntimeCapability &capability, const Runtime::SceneStructuralAdmission &admission,
+                                     const auto &outsideSuspensionRadius) {
+            if (pending || !scenes.CanQueueStructuralCommands())
+                return Result<void>::Success();
+            demotionCandidates.clear();
+            for (const auto agent : scheduled) {
+                const auto tier = scheduler.SimulationTier(agent);
+                if (tier.HasError() || tier.Value() != AI::AiSimulationTier::Suspended)
+                    continue;
+                const auto entity = capability.ResolveAgentOwner(agent);
+                if (entity.HasValue() && OwnsTemplate(view, entity.Value()) && outsideSuspensionRadius(entity.Value()))
+                    demotionCandidates.push_back({entity.Value()});
+            }
+            if (demotionCandidates.empty())
+                return Result<void>::Success();
+            ProtectParents(view);
+            std::vector<Runtime::EntityRef> entities;
+            for (const auto &candidate : demotionCandidates) {
+                if (entities.size() == candidates.size())
+                    break;
+                if (!candidate.hasChild)
+                    entities.push_back(candidate.entity);
+            }
+            if (entities.empty())
+                return Result<void>::Success();
+            Runtime::SceneCommandBuffer commands;
+            const auto destroyed = commands.DestroyGroup(std::move(entities), admission);
+            return destroyed.HasError() ? destroyed : QueueGroup(scenes, std::move(commands));
         }
 
         /** @brief Reads the exact aggregate outcome and frees admission for the next frame. */
@@ -105,8 +128,45 @@ namespace Horo::Application::Internal {
         std::shared_ptr<AI::AiReducedPopulation> population;
         std::vector<AI::AiReducedAgent> candidates;
         std::shared_ptr<const Runtime::SceneStructuralReceipt> pending;
+        struct DemotionCandidate final {
+            Runtime::EntityRef entity;
+            bool hasChild{};
+        };
+        std::vector<DemotionCandidate> demotionCandidates;
 
     private:
+        /** @brief Records the actual structural operation instead of mutating reduced state during selection. */
+        Result<void> QueueGroup(Runtime::RuntimeSceneService &scenes, Runtime::SceneCommandBuffer commands) {
+            auto queued = scenes.QueueTrackedStructuralCommands(std::move(commands));
+            if (queued.HasError())
+                return Result<void>::Failure(queued.ErrorValue());
+            pending = std::move(queued).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Ensures an exact independent entity belongs to this cooked population template. */
+        bool OwnsTemplate(const Runtime::RuntimeSceneView &scene, const Runtime::EntityRef entity) const {
+            const auto live = scene.Get(entity);
+            if (live.HasError() || live.Value().parent || !live.Value().authoredObject || !live.Value().components->aiAgent)
+                return false;
+            const auto agent = live.Value().components->aiAgent->agent;
+            const auto found = std::ranges::lower_bound(templates, agent, {}, AgentIdentity);
+            return found != templates.end() && AgentIdentity(*found) == agent && (*found)->object == live.Value().authoredObject;
+        }
+
+        /** @brief A descendant acquired during gameplay keeps its parent canonical. */
+        void ProtectParents(const Runtime::RuntimeSceneView &scene) {
+            std::ranges::sort(demotionCandidates, {}, &DemotionCandidate::entity);
+            for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
+                const auto entity = scene.EntityAt(slot);
+                if (!entity || !entity->parent)
+                    continue;
+                const auto parent = std::ranges::lower_bound(demotionCandidates, *entity->parent, {}, &DemotionCandidate::entity);
+                if (parent != demotionCandidates.end() && parent->entity == *entity->parent)
+                    parent->hasChild = true;
+            }
+        }
+
         /** @brief Identifies supported independent canonical agent templates. */
         static bool IsIndependentAgent(const Runtime::RuntimeEntityDefinition &entity) noexcept {
             return !entity.parent && entity.components.aiAgent && entity.components.aiController &&

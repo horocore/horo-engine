@@ -273,7 +273,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     if (auto advanced = AdvanceLiveMount(); advanced.HasError())
                         return advanced;
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && record_->reducedPopulation)
-                    if (auto reconciled = AdvanceReducedPromotions(phase); reconciled.HasError())
+                    if (auto reconciled = AdvanceReducedTransfers(phase); reconciled.HasError())
                         return reconciled;
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && previous == record_->perception.Current())
                     return PublishConfiguredPerception();
@@ -702,13 +702,23 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return lease.HasError() ? Output::Failure(lease.ErrorValue()) : lease.Value().Get();
         }
 
-        /** @brief Fills only free canonical scheduler capacity using the current authoritative anchor. */
-        Result<void> QueueReducedPromotions() const {
+        /** @brief Transfers suspended owners first, then fills free canonical capacity on a later cutoff. */
+        Result<void> QueueReducedTransfers() const {
             if (!record_->scenes->CanQueueStructuralCommands())
                 return Result<void>::Success();
             const auto scene = record_->scenes->ActiveScene();
             if (!scene || record_->sceneCancellation.IsCancellationRequested())
                 return JobCancelled();
+            const auto &input = *owners_->configured;
+            const auto anchorOwner = scene->Find(input.cookedDecisions->simulationAnchor);
+            if (!anchorOwner)
+                return Result<void>::Success();
+            const auto origin = ReducedOrigin();
+            if (origin.HasError())
+                return Result<void>::Failure(origin.ErrorValue());
+            const auto anchor = CaptureProjectSceneWorldPosition(*scene, *anchorOwner, origin.Value().Origin());
+            if (anchor.HasError())
+                return Result<void>::Success();
             const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
             if (scheduler.HasError())
                 return Result<void>::Failure(scheduler.ErrorValue());
@@ -716,18 +726,35 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto scheduled = scheduler.Value()->CopyLiveRegistrationsAtSafePoint(handles);
             if (scheduled.HasError())
                 return Result<void>::Failure(scheduled.ErrorValue());
-            const auto origin = ReducedOrigin();
-            if (origin.HasError())
-                return Result<void>::Failure(origin.ErrorValue());
-            const auto &input = *owners_->configured;
+            const auto admission =
+                Runtime::SceneStructuralAdmission{scene->RuntimeId(), input.registry.Snapshot().Revision(), record_->sceneCancellation};
+            const auto &profile = *input.cookedDecisions->execution->scheduler.simulationProfile;
+            if (auto demoted = record_->reducedPopulation->QueueDemotions(
+                    *record_->scenes, *scene, std::span(handles).first(scheduled.Value()), *scheduler.Value(),
+                    record_->ai->CapabilityAtSafePoint(), admission, [&](const Runtime::EntityRef entity) {
+                        if (entity == *anchorOwner)
+                            return false;
+                        const auto position = CaptureProjectSceneWorldPosition(*scene, entity, origin.Value().Origin());
+                        return position.HasValue() && OutsideReducedRadius(anchor.Value(), position.Value(),
+                                                                            profile.suspensionDistanceMillimeters);
+                    });
+                demoted.HasError())
+                return demoted;
             return record_->reducedPopulation->QueuePromotions(
-                *record_->scenes, *scene, origin.Value(), input.cookedDecisions->simulationAnchor, handles.size() - scheduled.Value(),
-                {scene->RuntimeId(), input.registry.Snapshot().Revision(), record_->sceneCancellation});
+                *record_->scenes, origin.Value(), anchor.Value(), handles.size() - scheduled.Value(), admission);
+        }
+
+        /** @brief Tests the same axis-aligned metric as reduced promotion, using the outer hysteresis radius. */
+        static bool OutsideReducedRadius(const Math::WorldCoordinate64 &anchor, const Math::WorldCoordinate64 &position,
+                                         const std::uint64_t radius) noexcept {
+            const auto a = anchor.Millimeters();
+            const auto p = position.Millimeters();
+            return std::max({AxisDistance(a[0], p[0]), AxisDistance(a[1], p[1]), AxisDistance(a[2], p[2])}) > radius;
         }
 
         /** @brief Gives existing owners first use of the cutoff, then commits the bounded group against the sampled origin. */
-        Result<void> AdvanceReducedPromotions(const Runtime::RuntimePhase phase) {
-            if (auto queued = QueueReducedPromotions(); queued.HasError())
+        Result<void> AdvanceReducedTransfers(const Runtime::RuntimePhase phase) {
+            if (auto queued = QueueReducedTransfers(); queued.HasError())
                 return queued;
             if (!record_->reducedPopulation->pending)
                 return Result<void>::Success();

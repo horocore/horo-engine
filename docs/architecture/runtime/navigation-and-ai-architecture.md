@@ -4131,8 +4131,12 @@ agent templates with distinct Scene and AI identities and controllers already
 admitted for the authority. The product proposes nearby agents at the structural
 cutoff, limits the batch to free scheduler slots and yields the command slot to
 pending structural work. On a mounted World it retains global positions and
-projects them through the current origin before creating entities. The ordinary
-Scene transaction captures position when it retires one of these agents.
+projects them through the current origin before creating entities. An agent
+already suspended by the scheduler can return to the reduced population when
+it remains outside the outer axis-aligned suspension radius. Unknown poses
+keep the agent canonical, as do attached children. The same structural budget
+limits both directions, with retirements given priority. The Scene transaction
+captures the last world position upon retirement.
 
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
