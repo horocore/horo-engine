@@ -15,7 +15,7 @@ namespace Horo::Editor {
         using enum SpeechTranscriptionStatus;
         using Clock = std::chrono::steady_clock;
         constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
-        constexpr std::uint64_t MaximumInputSeconds = 15;
+        constexpr auto MaximumInputSeconds = static_cast<std::uint64_t>(ImmersiveSpeechTranscription::MaximumInputDuration.count());
         constexpr std::uint32_t MaximumHypotheses = 64;
 
         /** @brief Accepts a bounded ASCII language tag with nonempty hyphen-separated subtags. */

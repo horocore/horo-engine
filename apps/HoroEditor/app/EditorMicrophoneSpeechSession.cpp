@@ -15,6 +15,12 @@ namespace Horo::Editor {
         bool IsFailure(const SpeechTranscriptionStatus status) noexcept {
             return status != Accepted && status != Pending && status != DraftWithdrawn && status != Finished;
         }
+
+        /** @brief Preserves expiration as a user-visible limit across the native capture boundary. */
+        SpeechTranscriptionStatus CaptureFailure(const Error &error) noexcept {
+            const auto &limit = EditorSpeechCaptureDurationLimit;
+            return ErrorChainContains(error, limit.domain, limit.code) ? LimitExceeded : CaptureInterrupted;
+        }
     }  // namespace
 
     EditorMicrophoneSpeechSession::EditorMicrophoneSpeechSession(EditorMicrophonePermission &microphone) noexcept
@@ -76,7 +82,7 @@ namespace Horo::Editor {
         if (generation_ == 0 || sealed_ || !worker_.Busy())
             return Closed;
         auto tail = microphone_.SealSpeechCapture(generation_, foreground);
-        const auto status = tail.HasValue() ? worker_.Seal(std::move(tail).Value()) : CaptureInterrupted;
+        const auto status = tail.HasValue() ? worker_.Seal(std::move(tail).Value()) : CaptureFailure(tail.ErrorValue());
         if (status == Accepted) {
             sealed_ = true;
             spatial_.Seal();
@@ -100,9 +106,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorMicrophoneSpeechSession::Advance */
     SpeechTranscriptionUpdate EditorMicrophoneSpeechSession::Advance(const bool foreground) {
-        if (generation_ != 0 && microphone_.ReconcileSpeechLease(generation_, foreground).HasError()) {
-            Cancel();
-            return {CaptureInterrupted, {}};
+        if (generation_ != 0) {
+            const auto current = microphone_.ReconcileSpeechLease(generation_, foreground);
+            if (current.HasError()) {
+                Cancel();
+                return {CaptureFailure(current.ErrorValue()), {}};
+            }
         }
         auto update = worker_.Poll();
         if (IsFailure(update.status)) {
@@ -127,7 +136,7 @@ namespace Horo::Editor {
         Audio::Backend::AudioCapturedBlock block{};
         const auto read = microphone_.ReadSpeechCapture(generation_, foreground, block, scratch_);
         if (read.HasError())
-            return CaptureInterrupted;
+            return CaptureFailure(read.ErrorValue());
         using enum Audio::Backend::AudioCaptureRead;
         if (read.Value() == Empty)
             return Pending;

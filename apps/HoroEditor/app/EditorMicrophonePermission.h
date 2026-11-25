@@ -21,6 +21,9 @@ namespace Horo::Editor {
     class ImmersiveAuthoringContext;
     class ImmersivePlanningContext;
 
+    /** @brief Identifies the editor's foreground speech capture deadline in a typed Audio result. */
+    extern const ErrorCodeDescriptor EditorSpeechCaptureDurationLimit;
+
     /** @brief One foreground speech generation. Audio retains the native input and can revoke this token. */
     struct EditorSpeechCaptureLease final {
         Audio::Backend::AudioCaptureBufferDescriptor source;

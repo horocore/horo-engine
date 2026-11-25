@@ -736,5 +736,23 @@ namespace Horo::Editor {
                 CHECK(fixture.provider.blocks == 1);
             }
         }
+
+        TEST_CASE("Immersive speech never sends PCM beyond the capture deadline", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            constexpr std::uint64_t duration =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(ImmersiveSpeechTranscription::MaximumInputDuration).count();
+            constexpr std::uint64_t secondBlockLength = 41'667; // Two frames at 48 kHz, rounded up to nanoseconds.
+            const auto lastStart = SpeechFixture::FirstBlock().start.nanoseconds + duration - secondBlockLength;
+            Capture::AudioCapturedBlock last{.start = {5, lastStart}, .firstFrame = 2, .sequence = 2, .frames = 2};
+            auto expected = Status::Accepted;
+            SECTION("PCM ends exactly at the deadline") {}
+            SECTION("PCM ends one nanosecond after the deadline") {
+                ++last.start.nanoseconds;
+                expected = Status::LimitExceeded;
+            }
+            CHECK(fixture.stream->Append(fixture.source, last, fixture.Samples) == expected);
+            CHECK(fixture.provider.blocks == (expected == Status::Accepted ? 2 : 1));
+        }
     }  // namespace
 }  // namespace Horo::Editor

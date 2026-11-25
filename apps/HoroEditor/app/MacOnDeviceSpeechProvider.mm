@@ -16,7 +16,7 @@ namespace Horo::Editor {
         // The authorization callback owns no Editor state. It only clears this process-wide prompt flag.
         std::atomic<bool> permissionPending{};
         constexpr double NanosecondsPerSecond = 1'000'000'000.0;
-        constexpr double MaximumTimestampSeconds = 20.0;
+        constexpr double MaximumTimestampSeconds = ImmersiveSpeechTranscription::MaximumInputDuration.count();
         constexpr NSUInteger MaximumSegments = 256;
 
         /** @brief Avoids touching Speech on executables that cannot display the OS consent explanation. */
@@ -201,7 +201,8 @@ namespace Horo::Editor {
 
             /** @brief Admits only the negotiated block shape and the same Audio clock. */
             bool ValidBlock(const Audio::Backend::AudioCapturedBlock &block, const std::size_t samples) const noexcept {
-                const auto maximumFrames = static_cast<std::uint64_t>(format_.sampleRate) * 15;
+                const auto maximumFrames = static_cast<std::uint64_t>(format_.sampleRate) *
+                                           static_cast<std::uint64_t>(ImmersiveSpeechTranscription::MaximumInputDuration.count());
                 return block.frames != 0 && block.frames <= Audio::MaximumAudioCallbackFrames && block.start.clockDomain != 0 &&
                        (!origin_ || block.start.clockDomain == origin_->clockDomain) &&
                        samples == static_cast<std::size_t>(block.frames) * format_.channelCount &&

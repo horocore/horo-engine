@@ -162,6 +162,8 @@ namespace Horo::Editor {
         };
 
     public:
+        /** @brief Maximum duration of live microphone input, independent of provider finalization time. */
+        static constexpr std::chrono::seconds MaximumInputDuration{15};
         static constexpr std::chrono::milliseconds MaximumProviderDuration{20'000};
 
         /** @brief Factory-only construction for an admitted context and checked source. */

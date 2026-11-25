@@ -3,7 +3,7 @@
 #include "EditorMicrophoneRecording.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 #include "Horo/Security/SecureMemory.h"
-#include "ImmersiveAuthoringContext.h"
+#include "ImmersiveSpeechTranscription.h"
 #include "MacOnDeviceSpeechProvider.h"
 
 #include <SDL3/SDL_timer.h>
@@ -15,6 +15,11 @@
 #include <vector>
 
 namespace Horo::Editor {
+    const ErrorCodeDescriptor EditorSpeechCaptureDurationLimit{ErrorDomainId{"horo.editor.speech_capture"},
+                                                               ErrorCode{"horo.editor.speech_capture.duration_limit"},
+                                                               ErrorSeverity::Warning, "The speech recording reached its duration limit.",
+                                                               "Start a shorter recording."};
+
     namespace {
         /** @brief Requires foreground admission and both independent native permissions. */
         bool SpeechCaptureAllowed(const bool foreground) noexcept {
@@ -30,7 +35,6 @@ namespace Horo::Editor {
         static constexpr Audio::Backend::Sdl3CaptureIntent Intent{.purpose = Audio::Backend::Sdl3CapturePurpose::ConnectionTest};
         static constexpr std::uint64_t ClockDomain = 1;
         static constexpr auto TestDuration = std::chrono::seconds(5);
-        static constexpr auto SpeechDuration = std::chrono::seconds(15);
         static constexpr auto HealthInterval = std::chrono::milliseconds(100);
 
         std::unique_ptr<Audio::Backend::Sdl3AudioBackend> backend;
@@ -50,6 +54,7 @@ namespace Horo::Editor {
 
         std::optional<SpeechAdmission> speech;
         std::uint64_t generation{};
+        std::uint64_t expiredSpeechGeneration{};
         Clock::time_point deadline{};
         Clock::time_point nextHealth{};
         EditorMicrophoneTestStatus status{EditorMicrophoneTestStatus::Idle};
@@ -87,7 +92,18 @@ namespace Horo::Editor {
 
         /** @brief Rejects stale editor scope and expires a live microphone independently of worker polling. */
         [[nodiscard]] bool SpeechCurrent(const Clock::time_point now) const noexcept {
-            return speech && speech->context.IsCurrent() && (!grant || now < deadline);
+            return speech && speech->context.IsCurrent() && !SpeechExpired(now);
+        }
+
+        /** @brief The live capture deadline does not withdraw an already detached input. */
+        [[nodiscard]] bool SpeechExpired(const Clock::time_point now) const noexcept {
+            return grant && now >= deadline;
+        }
+
+        /** @brief Releases expired PCM immediately while preserving its reason for the exact caller. */
+        void ExpireSpeech() noexcept {
+            expiredSpeechGeneration = generation;
+            Stop();
         }
 
         /** @brief Creates an inert capture-only backend when the user first requests discovery. */
@@ -178,7 +194,7 @@ namespace Horo::Editor {
                 return Output::Failure(opened.ErrorValue());
             grant = admission;
             speech.emplace(std::move(cancellation), context);
-            deadline = Clock::now() + SpeechDuration;
+            deadline = Clock::now() + ImmersiveSpeechTranscription::MaximumInputDuration;
             return result;
         }
 
@@ -444,22 +460,31 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorMicrophonePermission::CheckSpeechCapture(const std::uint64_t generation, const bool foreground) {
+        auto current = ReconcileSpeechLease(generation, foreground);
+        if (current.HasError())
+            return current;
         if (!check_->grant)
             return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleStale));
-        return ReconcileSpeechLease(generation, foreground);
+        return current;
     }
 
     /** @copydoc EditorMicrophonePermission::ReconcileSpeechLease */
     Result<void> EditorMicrophonePermission::ReconcileSpeechLease(const std::uint64_t generation, const bool foreground) {
+        if (generation != 0 && generation == check_->expiredSpeechGeneration)
+            return Result<void>::Failure(MakeError(EditorSpeechCaptureDurationLimit));
         if (!check_->OwnsSpeech(generation))
             return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleStale));
         if (!SpeechCaptureAllowed(foreground)) {
             CancelSpeechCapture(generation);
             return Result<void>::Failure(MakeError(Audio::AudioErrors::CapturePermissionDenied));
         }
-        if (!check_->SpeechCurrent(CaptureCheck::Clock::now())) {
+        if (!check_->speech->context.IsCurrent()) {
             CancelSpeechCapture(generation);
             return Result<void>::Failure(MakeError(Audio::AudioErrors::OperationCancelled));
+        }
+        if (check_->SpeechExpired(CaptureCheck::Clock::now())) {
+            check_->ExpireSpeech();
+            return Result<void>::Failure(MakeError(EditorSpeechCaptureDurationLimit));
         }
         return Result<void>::Success();
     }
@@ -512,8 +537,10 @@ namespace Horo::Editor {
         try {
             check_->PollPublication();
             if (check_->speech) {
-                if (!check_->SpeechCurrent(CaptureCheck::Clock::now()))
+                if (!check_->speech->context.IsCurrent())
                     check_->Stop();
+                else if (check_->SpeechExpired(CaptureCheck::Clock::now()))
+                    check_->ExpireSpeech();
             } else if (check_->scanning || check_->pending || check_->grant) {
                 check_->Advance(foreground, CaptureCheck::Clock::now());
             }
