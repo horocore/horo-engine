@@ -152,6 +152,10 @@ namespace Horo::Audio {
         AudioVoiceMixRenderResult RenderResident(std::uint32_t frames) noexcept;
         /** @brief Feed retained stream PCM to its sole spatial converter, retaining every unconsumed input frame. */
         AudioVoiceMixRenderResult RenderStream(std::uint32_t frames) noexcept;
+        /** @brief Cancels live playback and suppresses all PCM staged for this callback. */
+        AudioVoiceMixRenderResult CancelLiveStream(std::uint32_t frames) noexcept;
+        /** @brief Clears private live PCM after native callback detachment, before releasing storage. */
+        void ScrubLiveScratch() noexcept;
         /** @brief Feed the physical stream converter only after canonical execution-state admission. */
         AudioVoiceMixRenderResult RenderStreamPcm(std::uint32_t frames) noexcept;
         /** @brief Fill empty callback scratch once; return true when the sole port reports cancellation. */

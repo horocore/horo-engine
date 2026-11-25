@@ -63,8 +63,11 @@ namespace Horo::Audio::StreamingTests {
         CHECK((output.left == std::array{3.0F, 4.0F, 5.0F, 0.0F}));
         CHECK((output.right == std::array{-3.0F, -4.0F, -5.0F, 0.0F}));
         REQUIRE(service->SubmitLivePcm(handle, initial).HasValue());
-        REQUIRE(service->Stop(handle).HasValue());
-        CHECK(output.Render(port, 4).stopped);
+        REQUIRE(service->RevokeLivePcm(handle));
+        const auto revoked = output.Render(port, 4);
+        CHECK(revoked.stopped);
+        CHECK(revoked.availableFrames == 0);
+        CHECK(revoked.silentFrames == 4);
         CHECK((output.left == std::array{0.0F, 0.0F, 0.0F, 0.0F}));
         CHECK(service->SubmitLivePcm(handle, initial).HasError());
         REQUIRE(service->Retire(handle).HasValue());

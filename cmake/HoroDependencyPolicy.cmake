@@ -141,7 +141,7 @@ horo_allow_target_dependencies(TARGET HoroAudioSafetyHooks)
 horo_allow_target_dependencies(TARGET HoroAudioMemory DEPENDENCIES HoroAudioApi HoroAudioSafetyHooks)
 horo_allow_target_dependencies(TARGET HoroAudioCommands DEPENDENCIES HoroAudioMemory HoroAudioSafetyHooks)
 horo_allow_target_dependencies(TARGET HoroAudioMixer DEPENDENCIES HoroAudioDsp HoroAudioCommands)
-horo_allow_target_dependencies(TARGET HoroAudioVoiceRender DEPENDENCIES HoroAudioPlayback HoroAudioMixer)
+horo_allow_target_dependencies(TARGET HoroAudioVoiceRender DEPENDENCIES HoroAudioPlayback HoroAudioMixer HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroAudioFrontend
     DEPENDENCIES HoroAudioCommands HoroAudioVoiceRender HoroAudioBackendContract)
 horo_allow_target_dependencies(TARGET HoroAudioFrontendComposition
@@ -156,7 +156,7 @@ endif()
 horo_allow_target_dependencies(TARGET HoroAudioNull DEPENDENCIES HoroAudioBackendContract HoroAudioCommands HoroAudioWatchdog)
 if(TARGET HoroAudioSdl3)
     horo_allow_target_dependencies(TARGET HoroAudioSdl3
-        DEPENDENCIES HoroAudioBackendContract HoroAudioCommands HoroAudioWatchdog HoroAudioCaptureBuffer)
+        DEPENDENCIES HoroAudioBackendContract HoroAudioCommands HoroAudioWatchdog HoroAudioCaptureBuffer HoroSecurity)
 endif()
 horo_allow_target_dependencies(TARGET HoroPhysicsModel DEPENDENCIES HoroFoundation HoroAssets HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroPhysics DEPENDENCIES HoroFoundation HoroAssets HoroPhysicsModel)

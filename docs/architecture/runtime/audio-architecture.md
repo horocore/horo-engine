@@ -2422,6 +2422,9 @@ The macOS Audio Settings page also offers local monitoring through the optional
 discovery and capture. A user selects both endpoints and confirms headphone use
 before starting. Leaving the page or losing foreground focus or permission
 withdraws capture, and output retirement continues on the control lane.
+A live source revocation stops the ring reader and discards PCM already staged in
+the voice converter. The callback checks revocation again before publishing its
+mix input. The detached voice owner scrubs its render scratch before release.
 The macOS SDL3 editor bundle carries the usage description. Xcode uses the
 editor capture entitlements file when signing. Packaging with other generators
 must apply the equivalent entitlements when signing the executable.

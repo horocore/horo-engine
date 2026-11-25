@@ -1521,7 +1521,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
     target_link_libraries(HoroAudioSdl3
             PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands HoroAudioCaptureBuffer
-            PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
+            PRIVATE HoroAudioWatchdog HoroEngine::Security ${HORO_SDL3_TARGET})
     if(WIN32)
         target_sources(HoroAudioSdl3 PRIVATE audio/backend/sdl3/Sdl3WindowsCaptureDefaults.cpp)
         target_link_libraries(HoroAudioSdl3 PRIVATE ole32)
@@ -1603,7 +1603,7 @@ add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderState.h)
 add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
+target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer PRIVATE HoroEngine::Security)
 
 add_library(HoroAudioOffline STATIC
         audio/backend/offline/OfflineAudioRender.cpp

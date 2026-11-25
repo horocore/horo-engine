@@ -184,11 +184,27 @@ namespace Horo::Audio {
             streamPlayback.terminalReported = true;
             return {.terminal = first};
         }
+        if (!sourceFrames && stream->IsStopped())
+            return CancelLiveStream(frames);
         if (callback.streamState == AudioVoiceState::Virtual)
             return RenderVirtualStream(frames);
         if (callback.streamState != AudioVoiceState::Playing)
             return {};
-        return RenderStreamPcm(frames);
+        const auto rendered = RenderStreamPcm(frames);
+        return !sourceFrames && stream->IsStopped() ? CancelLiveStream(frames) : rendered;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::CancelLiveStream */
+    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::CancelLiveStream(const std::uint32_t frames) noexcept {
+        if (callback.streamState != AudioVoiceState::Cancelled)
+            (void)registry->TryCancel(voice);
+        callback.streamState = AudioVoiceState::Cancelled;
+        callback.buffered = 0;
+        callback.sourceEnded = true;
+        streamPlayback.terminalReported = true;
+        for (auto &plane : scratch.output)
+            std::fill_n(plane.samples.begin(), frames, 0.0F);
+        return {.terminal = true};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderStreamPcm */

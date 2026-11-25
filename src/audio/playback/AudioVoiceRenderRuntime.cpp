@@ -1,4 +1,5 @@
 #include "AudioVoiceRenderState.h"
+#include "Horo/Security/SecureMemory.h"
 
 #include <algorithm>
 #include <array>
@@ -22,10 +23,22 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::~State */
     AudioVoiceRenderRuntime::State::~State() {
+        ScrubLiveScratch();
         if (streamVoice && registry) {
             (void)registry->TryCancel(voice);
             (void)registry->Release(voice);
         }
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::ScrubLiveScratch */
+    void AudioVoiceRenderRuntime::State::ScrubLiveScratch() noexcept {
+        if (!stream || sourceFrames)
+            return;
+        Security::SecureZero(std::as_writable_bytes(std::span{scratch.raw}));
+        Security::SecureZero(std::as_writable_bytes(std::span{scratch.converted}));
+        Security::SecureZero(std::as_writable_bytes(std::span{scratch.output}));
+        if (spatial)
+            spatial->Reset();
     }
 
     /** @copydoc AudioVoiceRenderRuntime::CreateResident */
@@ -508,6 +521,7 @@ namespace Horo::Audio {
         s.terminalVoice = AudioVoiceSnapshot{s.voice, terminal, AudioVoiceTerminalReasonForState(terminal)};
         s.publications.candidate.store(nullptr);
         s.callback.active = nullptr;
+        s.ScrubLiveScratch();
         s.stream.reset();  // Releases the retirement pin on control, before the retained service can be destroyed.
         s.spatial.reset();
         s.resident.reset();

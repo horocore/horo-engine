@@ -1,4 +1,5 @@
 #include "Sdl3AudioBackendImpl.h"
+#include "Horo/Security/SecureMemory.h"
 
 #include <algorithm>
 #include <limits>
@@ -395,6 +396,15 @@ namespace Horo::Audio::Backend {
     }
 
     namespace {
+        /** @brief Scrubs monitor transfer scratch on every exit after a successful capture read. */
+        struct MonitorScratchScrub final {
+            std::span<AudioSample> samples;
+
+            ~MonitorScratchScrub() {
+                Security::SecureZero(std::as_writable_bytes(samples));
+            }
+        };
+
         /** @brief Checks a detached live source without reserving again or changing the stream on failure. */
         Result<void> CheckMonitorSource(const AudioStreamingService &service, const AudioStreamHandle stream,
                                         const AudioCaptureBufferDescriptor &source, const AudioCaptureMonitorRoute &route) {
@@ -452,8 +462,8 @@ namespace Horo::Audio::Backend {
             return read;
         const auto channels = capture.stream->Buffer().Descriptor()->format.layout.orderedChannels.size();
         const auto copied = pcm.first(block.frames * channels);
+        const MonitorScratchScrub scrub{copied};
         const auto submitted = service->SubmitLivePcm(capture.monitorSource->stream, copied);
-        std::ranges::fill(copied, 0.0F);
         if (submitted.HasError()) {
             if (submitted.ErrorValue().code.Value() != AudioErrors::StreamCapacityExceeded.code.Value())
                 capture.Stop();

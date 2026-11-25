@@ -15,6 +15,17 @@ namespace Horo::Audio {
             });
         }
 
+        /** @brief Overwrites the exact output quantum with canonical silence. */
+        void SilenceOutput(const std::span<AudioSample *const> planes, const std::uint32_t frames) noexcept {
+            for (auto *plane : planes)
+                std::fill_n(plane, frames, 0.0F);
+        }
+
+        /** @brief Rechecks the live source after copying PCM it had not yet delivered. */
+        bool LiveCopyRevoked(const AudioStreamState &state, const std::uint32_t copiedFrames) noexcept {
+            return copiedFrames != 0 && state.IsLivePcm() && state.stopped.load(std::memory_order_seq_cst);
+        }
+
         /** @brief Copies acquired ring samples and pads the remainder with positive zero. */
         void CopyOutput(const AudioStreamState &state, const std::span<AudioSample *const> planes, const std::uint64_t read,
                         const std::uint32_t available, const std::uint32_t frames) noexcept {
@@ -57,8 +68,7 @@ namespace Horo::Audio {
         if (!ValidOutput(state_, planes, frames))
             return result;
         if (!state_->transport.positionReady.load()) {
-            for (auto *plane : planes)
-                std::fill_n(plane, frames, 0.0F);
+            SilenceOutput(planes, frames);
             return {.silentFrames = frames, .stopped = state_->stopped.load()};
         }
         const bool stopped = state_->stopped.load(std::memory_order_seq_cst);
@@ -68,6 +78,10 @@ namespace Horo::Audio {
         const auto available = stopped || written < read ? 0U : static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, written - read));
         CopyOutput(*state_, planes, read, available, frames);
         state_->transport.consumed.store(read + available, std::memory_order_seq_cst);
+        if (LiveCopyRevoked(*state_, available)) {
+            SilenceOutput(planes, frames);
+            return {.silentFrames = frames, .stopped = true};
+        }
 
         const bool ended = (publication & EndMarker) != 0 && read + available == written;
         const std::uint32_t missing = frames - available;
