@@ -108,7 +108,8 @@ namespace Horo::Editor {
         InvalidSpatialEvidence,
         AmbiguousTiming,
         CapacityExceeded,
-        SpatialCaptureOpen
+        SpatialCaptureOpen,
+        SpeechOnlySpatialRejected
     };
 
     struct ImmersiveCommandAssembly;
@@ -158,7 +159,7 @@ namespace Horo::Editor {
         std::size_t count_{};
     };
 
-    /** @brief Evidence alignment outcome. Only Aligned and SpeechOnly carry a command. */
+    /** @brief Alignment outcome. SpeechOnlySpatialRejected carries only a local transcript preview. */
     struct ImmersiveCommandAssembly final {
         ImmersiveCommandStatus status;
         std::optional<ImmersiveCommandEnvelope> envelope;
@@ -192,6 +193,10 @@ namespace Horo::Editor {
         /** @brief Assembles final evidence using the latest cutoff from the same XR owner. */
         [[nodiscard]] ImmersiveCommandAssembly Assemble(const ImmersiveSpeechEvidence &speech,
                                                         const XR::XRInteractionCutoff &cutoff) const noexcept;
+
+        /** @brief Retains eligible final speech for local display when optional spatial evidence cannot be used. */
+        [[nodiscard]] ImmersiveCommandAssembly AssemblePreview(const ImmersiveSpeechEvidence &speech,
+                                                               const XR::XRInteractionCutoff &cutoff) const noexcept;
 
         /** @brief Discards the captured generation and its stored observations. */
         void Reset() noexcept;

@@ -455,6 +455,8 @@ namespace Horo::Editor {
                         return "xr_listening_finishing";
                     case SpeechOnly:
                         return "xr_listening_speech_only";
+                    case SpeechOnlySpatialRejected:
+                        return "xr_listening_spatial_rejected";
                     case Spatial:
                         return "xr_listening_spatial";
                     case Interrupted:
@@ -527,14 +529,14 @@ namespace Horo::Editor {
                 }
                 if (state == Listening && Button(locale, "xr_listening_finish", true))
                     listening_->Finish();
-                const bool hasTranscript = state == SpeechOnly || state == Spatial;
+                const auto transcript = listening_->Transcript();
+                const bool hasTranscript = !transcript.empty();
                 if (Button(locale, hasTranscript ? "xr_listening_discard" : "xr_listening_cancel", true)) {
                     CancelListening();
                     return;
                 }
-                if (const auto transcript = listening_->Transcript(); !transcript.empty())
-                    Ui::WrappedText(width, transcript, Theme::Text(), fonts);
                 if (hasTranscript) {
+                    Ui::WrappedText(width, transcript, Theme::Text(), fonts);
                     DrawListeningReferences(context);
                     DrawListeningContacts(context);
                 }

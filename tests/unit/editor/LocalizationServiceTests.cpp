@@ -196,6 +196,7 @@ namespace {
             "workspace.local_agent.xr_listening_active",
             "workspace.local_agent.xr_listening_finishing",
             "workspace.local_agent.xr_listening_speech_only",
+            "workspace.local_agent.xr_listening_spatial_rejected",
             "workspace.local_agent.xr_listening_spatial",
             "workspace.local_agent.xr_listening_interrupted",
             "workspace.local_agent.xr_listening_microphone_permission",

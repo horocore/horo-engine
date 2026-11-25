@@ -288,6 +288,26 @@ namespace Horo::Editor {
                                                   ImmersiveSpatialHistoryView{*context_, cutoff, std::span{observations_}.first(count_)});
     }
 
+    /** @copydoc ImmersiveSpatialCapture::AssemblePreview */
+    ImmersiveCommandAssembly ImmersiveSpatialCapture::AssemblePreview(const ImmersiveSpeechEvidence &speech,
+                                                                      const XR::XRInteractionCutoff &cutoff) const noexcept {
+        if (!context_ || context_->Identity().xrSession != cutoff.session)
+            return {StaleEvidence, {}};
+        auto preview = Assemble(speech, cutoff);
+        switch (preview.status) {
+            case InvalidSpatialEvidence:
+            case AmbiguousTiming:
+            case CapacityExceeded:
+                preview = ImmersiveCommandEnvelope::Assemble(*context_, speech);
+                if (preview.envelope)
+                    preview.status = SpeechOnlySpatialRejected;
+                break;
+            default:
+                break;
+        }
+        return preview;
+    }
+
     /** @copydoc ImmersiveSpatialCapture::Reset */
     void ImmersiveSpatialCapture::Reset() noexcept {
         std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});

@@ -487,6 +487,10 @@ namespace Horo::Editor {
             const auto overflow = capture.Assemble(speech, samples.back().cutoff);
             CHECK(overflow.status == CommandStatus::CapacityExceeded);
             CHECK_FALSE(overflow.envelope);
+            const auto preview = capture.AssemblePreview(speech, samples.back().cutoff);
+            REQUIRE(preview.status == CommandStatus::SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Spatial().empty());
 
             capture.Reset();
             CHECK(capture.Assemble(speech, samples.back().cutoff).status == CommandStatus::StaleEvidence);
@@ -496,6 +500,35 @@ namespace Horo::Editor {
             REQUIRE(restarted.status == CommandStatus::SpeechOnly);
             REQUIRE(restarted.envelope);
             CHECK(restarted.envelope->Spatial().empty());
+        }
+
+        TEST_CASE("Immersive local preview keeps speech only when optional XR evidence is rejected", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 995'000, 1'005'000);
+            SECTION("measurement straddles the phrase start") {}
+            SECTION("measurement belongs to a different clock domain") {
+                ++sample.latest.clockDomain;
+            }
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            REQUIRE(capture.RecordPointing(sample) == ImmersiveSpatialCaptureStatus::Recorded);
+            CHECK(capture.AssemblePreview(speech, sample.cutoff).status == SpatialCaptureOpen);
+            capture.Seal();
+            const auto preview = capture.AssemblePreview(speech, sample.cutoff);
+            REQUIRE(preview.status == SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Speech().Hypothesis().text == Transcript().text);
+            CHECK(preview.envelope->Spatial().empty());
+
+            auto foreign = sample.cutoff;
+            ++foreign.session.slot.generation;
+            CHECK_FALSE(capture.AssemblePreview(speech, foreign).envelope);
+            fixture.owner.Revoke();
+            CHECK_FALSE(preview.envelope->IsCurrent(sample.cutoff));
+            CHECK_FALSE(capture.AssemblePreview(speech, sample.cutoff).envelope);
         }
 
         TEST_CASE("Immersive speech issues owned partial and final evidence after sealing PCM", "[agent][immersive][speech]") {

@@ -17,6 +17,7 @@ namespace Horo::Editor {
             Listening,
             Finishing,
             SpeechOnly,
+            SpeechOnlySpatialRejected,
             Spatial,
             Interrupted
         };

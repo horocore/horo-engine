@@ -95,7 +95,7 @@ namespace Horo::Editor {
         }
         if (!worker_.OwnsEvidence(speech))
             return {ImmersiveCommandStatus::StaleEvidence, {}};
-        return spatial_.Assemble(speech, cutoff);
+        return spatial_.AssemblePreview(speech, cutoff);
     }
 
     /** @copydoc EditorMicrophoneSpeechSession::Advance */

@@ -149,6 +149,7 @@
     "workspace.local_agent.xr_listening_active": {"text": "Bu cihazda dinleniyor…"},
     "workspace.local_agent.xr_listening_finishing": {"text": "Konuşma metne dönüştürülüyor…"},
     "workspace.local_agent.xr_listening_speech_only": {"text": "Konuşma metni hazır. Eşleşen XR gözlemi bulunamadı."},
+    "workspace.local_agent.xr_listening_spatial_rejected": {"text": "Konuşma metni hazır. XR gözlemleri kullanılamadı."},
     "workspace.local_agent.xr_listening_spatial": {"text": "Konuşma metni ve eşleşen XR gözlemleri hazır."},
     "workspace.local_agent.xr_listening_interrupted": {"text": "Dinleme başlatılamadı veya kesildi. İzinleri, XR odağını ve Play sahnesini kontrol edin."},
     "workspace.local_agent.xr_listening_microphone_permission": {"text": "Mikrofon erişimine izin ver"},

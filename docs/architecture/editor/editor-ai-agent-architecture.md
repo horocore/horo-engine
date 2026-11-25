@@ -203,6 +203,9 @@ Ownership rules:
   and the listening generation before the editor retains it.
   Command assembly accepts finite World-space points, positive-radius spheres,
   and nonempty ray segments from that cutoff.
+  The local panel retains eligible final speech when spatial geometry or timing
+  is unusable, or when the spatial history exceeds its capacity. It marks the
+  spatial evidence as unavailable and carries no rejected coordinates forward.
 - The editor observes the existing player-scoped XR pointer after Input commits.
   A new selection press during the same listening operation retains its measured
   ray. Held buttons and source replacement do not create new observations.

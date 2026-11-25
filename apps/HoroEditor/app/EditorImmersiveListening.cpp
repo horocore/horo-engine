@@ -193,7 +193,17 @@ namespace Horo::Editor {
             Fail();
             return;
         }
-        state_ = result.status == ImmersiveCommandStatus::SpeechOnly ? State::SpeechOnly : State::Spatial;
+        switch (result.status) {
+            case ImmersiveCommandStatus::SpeechOnlySpatialRejected:
+                state_ = State::SpeechOnlySpatialRejected;
+                break;
+            case ImmersiveCommandStatus::SpeechOnly:
+                state_ = State::SpeechOnly;
+                break;
+            default:
+                state_ = State::Spatial;
+                break;
+        }
         preview_ = std::move(result.envelope);
     }
 
