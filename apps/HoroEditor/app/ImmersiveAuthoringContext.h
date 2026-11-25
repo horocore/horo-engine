@@ -3,6 +3,7 @@
 /** @file ImmersiveAuthoringContext.h @brief Editor-owned immersive planning generations. */
 
 #include "AgentTurn.h"
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Scene/SceneSourceModel.h"
 #include "Horo/XR/XRIdentity.h"
 
@@ -92,6 +93,7 @@ namespace Horo::Editor {
         std::size_t selectionCount_{};
         std::uint64_t generation_{};
         std::shared_ptr<const ImmersiveContextEpoch> epoch_;
+        CancellationToken sourceLifetime_;
     };
 
     /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
@@ -176,9 +178,15 @@ namespace Horo::Editor {
         ImmersiveAuthoringContext(const ImmersiveAuthoringContext &) = delete;
         ImmersiveAuthoringContext &operator=(const ImmersiveAuthoringContext &) = delete;
 
-        /** @brief Publishes the current owner observation. Invalid observations revoke the last generation. */
+        /** @brief Publishes the current owner observation. Invalid observations revoke the last generation.
+         * @param identity Owner-issued XR and editor scope.
+         * @param selection Bounded selection copied from the document owner.
+         * @param sourceLifetime Optional upstream scope that can revoke the snapshot before the next owner update.
+         * @return The current snapshot or empty if the observation is invalid or already cancelled.
+         */
         [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(const ImmersiveContextIdentity &identity,
-                                                                      std::span<const SceneSource::SceneObjectId> selection) noexcept;
+                                                                      std::span<const SceneSource::SceneObjectId> selection,
+                                                                      const CancellationToken &sourceLifetime = {}) noexcept;
         /** @brief Revokes all previously issued contexts before project, document or XR teardown. */
         void Revoke() noexcept;
         /** @brief Rechecks one captured request before any tool authority is consulted.

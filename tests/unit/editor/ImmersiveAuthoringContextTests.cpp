@@ -193,6 +193,37 @@ namespace Horo::Editor {
             CHECK_FALSE(worker.get());
         }
 
+        TEST_CASE("Immersive inference follows upstream document cancellation without republishing", "[agent][immersive][turn]") {
+            ImmersiveAuthoringContext owner;
+            CancellationSource document;
+            const auto context = owner.Publish(Opening(), {}, document.Token());
+            REQUIRE(context);
+            const auto same = owner.Publish(Opening(), {}, document.Token());
+            REQUIRE(same);
+            CHECK(same->SharesGeneration(*context));
+            auto request = owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            SECTION("document cancelled during inference") {
+                model.duringInference = [&] {
+                    document.RequestCancellation();
+                };
+                CHECK(request->Run(model, 1).status == Agent::AgentTurnStatus::ContextDenied);
+                CHECK(model.calls == 1);
+                CHECK_FALSE(owner.Publish(Opening(), {}, document.Token()));
+            }
+            SECTION("same identity with a new upstream scope") {
+                CancellationSource replacement;
+                const auto next = owner.Publish(Opening(), {}, replacement.Token());
+                REQUIRE(next);
+                CHECK_FALSE(next->SharesGeneration(*context));
+                CHECK(request->Run(model, 1).status == Agent::AgentTurnStatus::ContextDenied);
+                CHECK(model.calls == 0);
+            }
+            CHECK_FALSE(request->IsCurrent());
+            CHECK(owner.Admit(*context, ImmersiveRequestKind::Diagnostics) == ImmersiveAdmission::StaleContext);
+        }
+
         TEST_CASE("Immersive inference requires an admitted owner context and excludes tools", "[agent][immersive][turn]") {
             ImmersiveAuthoringContext owner;
             ImmersiveAuthoringContext other;

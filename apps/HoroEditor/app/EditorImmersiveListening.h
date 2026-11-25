@@ -78,7 +78,7 @@ namespace Horo::Editor {
         Input::PlayerId player_;
         ImmersiveAuthoringContext owner_;
         std::optional<Scope> scope_;
-        CancellationToken selectionLifetime_;
+        std::optional<ImmersivePlanningContext> context_;
         std::optional<ImmersiveSpeechEvidence> partial_;
         std::optional<ImmersiveCommandEnvelope> preview_;
         State state_{State::Idle};

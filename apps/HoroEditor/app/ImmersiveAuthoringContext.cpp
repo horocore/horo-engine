@@ -78,7 +78,8 @@ namespace Horo::Editor {
     }  // namespace
 
     bool ImmersivePlanningContext::IsCurrent() const noexcept {
-        return epoch_ && generation_ != 0 && epoch_->current.load(std::memory_order_acquire) == generation_;
+        return epoch_ && generation_ != 0 && epoch_->current.load(std::memory_order_acquire) == generation_ &&
+               !sourceLifetime_.IsCancellationRequested();
     }
 
     ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, const bool reviewOnly,
@@ -166,13 +167,16 @@ namespace Horo::Editor {
         Revoke();
     }
 
-    std::optional<ImmersivePlanningContext> ImmersiveAuthoringContext::Publish(
-        const ImmersiveContextIdentity &identity, const std::span<const SceneSource::SceneObjectId> selection) noexcept {
-        if (!ValidIdentity(identity) || !ValidSelection(selection)) {
+    /** @copydoc ImmersiveAuthoringContext::Publish */
+    std::optional<ImmersivePlanningContext> ImmersiveAuthoringContext::Publish(const ImmersiveContextIdentity &identity,
+                                                                               const std::span<const SceneSource::SceneObjectId> selection,
+                                                                               const CancellationToken &sourceLifetime) noexcept {
+        if (sourceLifetime.IsCancellationRequested() || !ValidIdentity(identity) || !ValidSelection(selection)) {
             Revoke();
             return std::nullopt;
         }
-        if (current_ && identity == current_->Identity() && std::ranges::equal(selection, current_->Selection()))
+        if (current_ && identity == current_->Identity() && current_->sourceLifetime_ == sourceLifetime &&
+            std::ranges::equal(selection, current_->Selection()))
             return current_;
         Revoke();
         if (generation_ == std::numeric_limits<std::uint64_t>::max())
@@ -183,6 +187,7 @@ namespace Horo::Editor {
         context.selectionCount_ = selection.size();
         context.generation_ = ++generation_;
         context.epoch_ = epoch_;
+        context.sourceLifetime_ = sourceLifetime;
         epoch_->current.store(context.generation_, std::memory_order_release);
         return current_;
     }

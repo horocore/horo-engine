@@ -53,14 +53,14 @@ namespace Horo::Editor {
     }
 
     std::string_view EditorImmersiveListening::Transcript() const & noexcept {
-        if (!preview_ || selectionLifetime_.IsCancellationRequested())
+        if (!preview_)
             return {};
         return preview_->Speech().PreviewText(SpeechHypothesisKind::Final);
     }
 
     /** @copydoc EditorImmersiveListening::PartialTranscript */
     std::string_view EditorImmersiveListening::PartialTranscript() const & noexcept {
-        if (!partial_ || selectionLifetime_.IsCancellationRequested())
+        if (!partial_)
             return {};
         return partial_->PreviewText(SpeechHypothesisKind::Partial);
     }
@@ -140,25 +140,24 @@ namespace Horo::Editor {
                                          const std::uint64_t projectOpening, const AgentSceneSelectionSnapshot &selection) {
         Cancel();
         const auto scope = xr_.ReadListeningScope(player_);
-        if (!scope || selection.truncated || selection.lifetime.IsCancellationRequested() ||
-            selection.objectCount > selection.objects.size()) {
+        if (!scope || selection.truncated || selection.objectCount > selection.objects.size()) {
             Fail();
             return;
         }
         std::array<SceneSource::SceneObjectId, AgentSceneSelectionSnapshot::MaximumObjects> selected;
         for (std::size_t index = 0; index < selection.objectCount; ++index)
             selected[index] = {selection.objects[index]};
-        const auto context = owner_.Publish({.projectOpening = projectOpening,
-                                             .documentOpening = selection.documentEpoch,
-                                             .documentRevision = selection.documentRevision,
-                                             .xrSession = scope->interaction.cutoff.session,
-                                             .referenceSpace = scope->reference,
-                                             .capabilities = scope->capabilities,
-                                             .mode = ImmersiveAuthoringMode::Play,
-                                             .worldGeneration = scope->interaction.scene.value,
-                                             .diagnosticsAllowed = true,
-                                             .localSpeechOnly = true},
-                                            std::span{selected}.first(selection.objectCount));
+        auto context = owner_.Publish({.projectOpening = projectOpening,
+                                       .documentOpening = selection.documentEpoch,
+                                       .documentRevision = selection.documentRevision,
+                                       .xrSession = scope->interaction.cutoff.session,
+                                       .referenceSpace = scope->reference,
+                                       .capabilities = scope->capabilities,
+                                       .mode = ImmersiveAuthoringMode::Play,
+                                       .worldGeneration = scope->interaction.scene.value,
+                                       .diagnosticsAllowed = true,
+                                       .localSpeechOnly = true},
+                                      std::span{selected}.first(selection.objectCount), selection.lifetime);
         if (!context) {
             Fail();
             return;
@@ -170,7 +169,7 @@ namespace Horo::Editor {
             return;
         }
         scope_ = scope;
-        selectionLifetime_ = selection.lifetime;
+        context_ = std::move(context);
         state_ = State::Listening;
     }
 
@@ -243,7 +242,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorImmersiveListening::Current */
     std::optional<EditorImmersiveListening::Scope> EditorImmersiveListening::Current() const {
-        if (!scope_ || selectionLifetime_.IsCancellationRequested())
+        if (!scope_ || !context_ || !context_->IsCurrent())
             return std::nullopt;
         const auto current = xr_.ReadListeningScope(player_);
         if (!current || !scope_->SharesLineage(*current))
@@ -262,7 +261,7 @@ namespace Horo::Editor {
         partial_.reset();
         preview_.reset();
         scope_.reset();
-        selectionLifetime_ = {};
+        context_.reset();
         owner_.Revoke();
         speech_.Cancel();
         failureReason_ = SpeechTranscriptionStatus::CaptureInterrupted;
