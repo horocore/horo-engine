@@ -456,7 +456,8 @@ namespace Horo::AI {
                                                                                           AiWorkBudget &budget,
                                                                                           const LocalPolicyUtilityInput &policy,
                                                                                           DecisionStepTrace *trace) {
-        return StepBudgetedImpl(input, budget, trace, nullptr, &policy);
+        const auto *admitted = &policy.work == &budget ? nullptr : &policy;
+        return StepBudgetedImpl(input, budget, trace, nullptr, admitted);
     }
 
     /** @copydoc DecisionGraphInstance::StepBudgeted */

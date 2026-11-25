@@ -1727,11 +1727,8 @@ namespace Horo::AI {
             CHECK(fixture.probe.factories == 0);
         }
 
-        TEST_CASE("Scene-owned Utility runs an eligible learned task or its authored fallback",
-                  "[ai][decision_reservation][local-policy]") {
-            const auto scenario =
-                GENERATE("preferred", "stale tensor", "no work", "shared work", "unknown action", "cancelled", "ineligible");
-            Fixture fixture;
+        /** @brief Builds the two-option plan and gives the learned task an optional eligibility requirement. */
+        auto BuildUtilityPolicyPlan(Fixture &fixture, TaskId learned, bool eligible) {
             auto source = UtilitySource();
             auto &utility = std::get<UtilityDecisionSource>(source.body);
             const auto scalar = utility.requirements.front().key;
@@ -1746,35 +1743,22 @@ namespace Horo::AI {
             REQUIRE(schema.HasValue());
             fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
             const auto fallback = utility.options.front().option.action;
-            const auto learned = MakeIdentity<TaskId>(5003);
             auto preference = utility.options.front();
             preference.option.id = preference.provider.id = Node(3);
             preference.option.action = learned;
             preference.option.priority = 0.5;
-            const std::string_view choice = scenario;
-            if (choice == "ineligible") {
+            if (!eligible) {
                 auto requirement = utility.requirements.front();
                 requirement.key = absent;
                 utility.requirements.push_back(requirement);
                 preference.option.considerations.front().key = absent;
             }
             utility.options.push_back(std::move(preference));
-            const auto plan = fixture.Compile(std::span{&source, 1}, 1);
-            auto runtime = std::move(AiSceneRuntime::Create()).Value();
-            const auto publication = TestSupport::Publish(runtime, SceneFixture(fixture, *plan));
-            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
-            const auto parentTask = MakeIdentity<TaskId>(9000);
-            const auto parent = runtime.StartTaskAtSafePoint(agent, parentTask);
-            REQUIRE(parent.HasValue());
-            auto reserved = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, static_cast<std::uint32_t>(plan->Storage().taskSlots));
-            REQUIRE(reserved.HasValue());
-            auto instance = DecisionGraphInstance::Create(plan, fixture.providers, std::move(reserved).Value(),
-                                                          {.taskDefinition = parentTask, .task = parent.Value(), .agent = agent});
-            REQUIRE(instance.HasValue());
-            const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
-            REQUIRE(snapshot.HasValue());
+            return std::pair{fixture.Compile(std::span{&source, 1}, 1), fallback};
+        }
 
-            const auto modelTask = choice == "unknown action" ? MakeIdentity<TaskId>(7000) : learned;
+        /** @brief Prepares one model row and its exact registered task declaration. */
+        auto CookUtilityPolicy(TaskId modelTask) {
             AiCapabilityDescriptorRegistry declarations;
             REQUIRE(declarations.Register({modelTask, SchemaId()}).HasValue());
             const auto tasks = declarations.Freeze();
@@ -1783,42 +1767,92 @@ namespace Horo::AI {
             const std::array features{MakeIdentity<LocalPolicyFeatureId>(1)};
             const std::array<std::int16_t, 1> weights{1};
             const std::array rows{LocalPolicyRowSource{modelTask, 0, weights}};
-            const auto model = LocalLearnedPolicy::Cook({MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows},
+            auto model = LocalLearnedPolicy::Cook({MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows},
                                                         {target, true, sizeof(LocalLearnedPolicy), 3}, tasks, SchemaId());
             REQUIRE(model.HasValue());
-            const std::array tensor{LocalPolicyFeature{features.front(), 10}};
-            const auto revision = snapshot.Value().CapturedRevision();
-            AiWorkBudget modelBudget{choice == "no work" ? 0U : 3U};
-            AiWorkBudget agentBudget{100};
-            AiWorkBudget globalBudget{100};
-            CancellationSource inference;
-            if (choice == "cancelled")
-                inference.RequestCancellation();
-            const LocalPolicyUtilityInput policy{model.Value(),
-                                                 tasks,
-                                                 tensor,
-                                                 model.Value().Digest(),
-                                                 target,
-                                                 1,
-                                                 revision + (choice == "stale tensor" ? 1 : 0),
-                                                 choice == "shared work" ? agentBudget : modelBudget,
-                                                 inference.Token()};
-            const auto step = [&](const std::uint64_t tick) {
-                return instance.Value()
-                    ->StepWithLocalPolicy({tick, snapshot.Value().Binding(), snapshot.Value(), {}, &agentBudget, &globalBudget}, policy);
-            };
+            return std::pair{std::move(model).Value(), tasks};
+        }
+
+        /** @brief Verifies selection and continuation without allowing inference to replace a running task. */
+        void CheckUtilityPolicySteps(const auto &step, const auto &probe, TaskId expectedTask, const AiWorkBudget &modelBudget) {
             const auto first = step(1);
             REQUIRE(first.HasValue());
             CHECK(first.Value() == AiTaskState::Running);
-            REQUIRE(fixture.probe.calls.size() == 1);
-            CHECK(fixture.probe.calls.front() == "start:" + std::to_string((choice == "preferred" ? learned : fallback).Value()));
+            REQUIRE(probe.calls.size() == 1);
+            CHECK(probe.calls.front() == "start:" + std::to_string(expectedTask.Value()));
             const auto spent = modelBudget.Remaining();
             const auto next = step(2);
             REQUIRE(next.HasValue());
             CHECK(next.Value() == AiTaskState::Succeeded);
             CHECK(modelBudget.Remaining() == spent);
-            CHECK(fixture.probe.starts == 1);
-            CHECK(fixture.probe.resumes == 1);
+            CHECK(probe.starts == 1);
+            CHECK(probe.resumes == 1);
+        }
+
+        /** @brief Binds the Utility plan to a real Scene task and keeps its reservation alive in the instance. */
+        auto BindUtilityPolicy(Fixture &fixture, AiSceneRuntime &runtime, AgentHandle agent,
+                               const std::shared_ptr<const CookedDecisionPlan> &plan) {
+            const auto parentTask = MakeIdentity<TaskId>(9000);
+            const auto parent = runtime.StartTaskAtSafePoint(agent, parentTask);
+            REQUIRE(parent.HasValue());
+            auto reserved = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, static_cast<std::uint32_t>(plan->Storage().taskSlots));
+            REQUIRE(reserved.HasValue());
+            auto instance = DecisionGraphInstance::Create(plan, fixture.providers, std::move(reserved).Value(),
+                                                          {.taskDefinition = parentTask, .task = parent.Value(), .agent = agent});
+            REQUIRE(instance.HasValue());
+            return std::move(instance).Value();
+        }
+
+        TEST_CASE("Scene-owned Utility runs an eligible learned task or its authored fallback",
+                  "[ai][decision_reservation][local-policy]") {
+            const auto scenario = GENERATE("preferred", "stale tensor", "no work", "shared work", "scheduler work", "unknown action",
+                                           "cancelled", "ineligible");
+            Fixture fixture;
+            const std::string_view choice = scenario;
+            const auto learned = MakeIdentity<TaskId>(5003);
+            const auto [plan, fallback] = BuildUtilityPolicyPlan(fixture, learned, choice != "ineligible");
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            const auto publication = TestSupport::Publish(runtime, SceneFixture(fixture, *plan));
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            const auto instance = BindUtilityPolicy(fixture, runtime, agent, plan);
+            const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(snapshot.HasValue());
+
+            const auto modelTask = choice == "unknown action" ? MakeIdentity<TaskId>(7000) : learned;
+            const auto [model, tasks] = CookUtilityPolicy(modelTask);
+            const std::array tensor{LocalPolicyFeature{model.Features().front(), 10}};
+            const auto revision = snapshot.Value().CapturedRevision();
+            AiWorkBudget modelBudget{choice == "no work" ? 0U : 3U};
+            AiWorkBudget agentBudget{100};
+            AiWorkBudget globalBudget{100};
+            const auto graphWork = plan->MaximumDecisionWorkUnits();
+            REQUIRE(graphWork);
+            AiWorkBudget schedulerBudget{2 * *graphWork + 3};
+            auto &utilityModelBudget = choice == "shared work" ? agentBudget : modelBudget;
+            CancellationSource inference;
+            if (choice == "cancelled")
+                inference.RequestCancellation();
+            const LocalPolicyUtilityInput policy{model,
+                                                 tasks,
+                                                 tensor,
+                                                 model.Digest(),
+                                                 model.Target(),
+                                                 1,
+                                                 revision + (choice == "stale tensor" ? 1 : 0),
+                                                 choice == "scheduler work" ? schedulerBudget : utilityModelBudget,
+                                                 inference.Token()};
+            const auto step = [&](const std::uint64_t tick) {
+                const DecisionGraphStepInput input{tick, snapshot.Value().Binding(), snapshot.Value(), {}, &agentBudget, &globalBudget};
+                if (choice != "scheduler work")
+                    return instance->StepWithLocalPolicy(input, policy);
+                const auto stepped = instance->StepBudgetedWithLocalPolicy(input, schedulerBudget, policy);
+                REQUIRE(stepped.HasValue());
+                REQUIRE(stepped.Value());
+                return Result<AiTaskState>::Success(*stepped.Value());
+            };
+            CheckUtilityPolicySteps(step, fixture.probe, choice == "preferred" ? learned : fallback, modelBudget);
+            if (choice == "scheduler work")
+                CHECK(schedulerBudget.Remaining() == 3);
         }
 
         TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",

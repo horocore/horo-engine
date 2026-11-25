@@ -109,7 +109,9 @@ namespace Horo::AI {
          * unchanged. Already revoked work is retired even when the slice has no allowance.
          */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget);
-        /** @brief Advances one fully reserved root Utility slice with optional model preference. */
+        /** @brief Advances one fully reserved root Utility slice with optional model preference.
+         * @details Using the scheduler allowance as the inference allowance selects the authored Utility fallback.
+         */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedWithLocalPolicy(const DecisionGraphStepInput &input,
                                                                                      AiWorkBudget &budget,
                                                                                      const LocalPolicyUtilityInput &policy,
