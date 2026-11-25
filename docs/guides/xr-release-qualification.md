@@ -74,6 +74,14 @@ revision. Older records without this field remain readable by the device
 validator. To qualify them for a release, recover the revision from the original
 build provenance or repeat the device test with a traceable package.
 
+For each passing display check, store a separate runtime display capture as
+JSON. Use `schemaVersion: 1`, the smoke record's exact `tuple` and `provenance`,
+and the observed `refreshMilliHertz` and ordered `viewExtents` arrays. Reference
+its digest in both `display.evidenceSha256` and the `displayEnumeration` check.
+The release checker compares the values and rejects captures from another run
+or connection mode. If an older record points to a generic artifact, transcribe
+the original runtime capture into this format or repeat the display check.
+
 The packaged PCVR route requires Windows or Linux with Vulkan and a
 successful Desktop OpenXR preflight receipt. Use Windows or Linux for
 `hostPlatform` and keep the operating system version in `hostVersion`.

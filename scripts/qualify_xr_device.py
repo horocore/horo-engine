@@ -118,6 +118,12 @@ def validate_check(value: object, name: str) -> None:
 def validate_display(value: object) -> dict:
     display = fields(value, {"evidenceSha256", "refreshMilliHertz", "viewExtents"}, "display enumeration")
     require(is_digest(display["evidenceSha256"]), "Display must reference a runtime capture")
+    validate_display_values(display)
+    return display
+
+
+def validate_display_values(display: dict) -> None:
+    """Validate the bounded display values shared by the capture and smoke record."""
     refresh = display["refreshMilliHertz"]
     require(isinstance(refresh, list) and len(refresh) <= 32, "Invalid refresh inventory")
     require(all(type(rate) is int and 0 < rate <= 1_000_000 for rate in refresh),
@@ -128,7 +134,23 @@ def validate_display(value: object) -> dict:
     for view in views:
         extent = fields(view, {"width", "height"}, "view extent")
         require(all(type(size) is int and 0 < size <= 65536 for size in extent.values()), "Invalid runtime view extent")
-    return display
+
+
+def check_display_capture(data: bytes, record: dict) -> None:
+    """Bind runtime display values to the exact physical smoke tuple and run."""
+    display = record["display"]
+    require(len(data) <= MAX_RECORD_BYTES, "Display capture exceeds the size limit")
+    require(hashlib.sha256(data).hexdigest() == display["evidenceSha256"], "Display capture digest does not match")
+    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "refreshMilliHertz", "viewExtents"},
+                     "display capture")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported display capture schema")
+    validate_identity(capture["tuple"], complete=True)
+    validate_provenance(capture["provenance"], capture["tuple"], observed=True)
+    require(capture["tuple"] == record["tuple"], "Display capture is from a different product tuple")
+    require(capture["provenance"] == record["provenance"], "Display capture is from a different smoke run")
+    validate_display_values(capture)
+    require(capture["refreshMilliHertz"] == display["refreshMilliHertz"] and capture["viewExtents"] == display["viewExtents"],
+            "Display report does not match the captured runtime values")
 
 
 def validate_summary(status: str, checks: dict) -> None:

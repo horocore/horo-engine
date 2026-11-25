@@ -9,7 +9,7 @@ from pathlib import Path
 from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_preflight, validate_android_preflight
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
-    check_desktop_preflight, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
+    check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
     is_source_revision, is_standalone_android, load_record, require, validate_identity, validate_record,
 )
 
@@ -59,6 +59,10 @@ class Evidence:
             data = source.read(MAX_RECORD_BYTES + 1)
         require(hashlib.sha256(data).hexdigest() == digest, f"Smoke record content does not match {digest}")
         return validate_record(decode_record(data))
+
+    def display_capture(self, record: dict) -> None:
+        with self.path(record["display"]["evidenceSha256"]).open("rb") as source:
+            check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
 
 
 def validate_preflight_declarations(row: dict) -> None:
@@ -142,7 +146,8 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     verify_desktop_route(row, evidence, identity)
     if "androidPreflight" in row:
         verify_android_route(row["androidPreflight"], evidence, record, revision)
-    for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None}:
+    evidence.display_capture(record)
+    for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None, record["display"]["evidenceSha256"]}:
         evidence.verify(digest)
     return record["status"]
 

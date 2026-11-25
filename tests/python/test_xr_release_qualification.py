@@ -29,6 +29,19 @@ def store(root, content):
     return digest
 
 
+def display_capture(record):
+    return {"schemaVersion": 1, "tuple": record["tuple"], "provenance": record["provenance"],
+            "refreshMilliHertz": record["display"]["refreshMilliHertz"], "viewExtents": record["display"]["viewExtents"]}
+
+
+def store_display_capture(root, record, content=None):
+    if content is None:
+        content = json.dumps(display_capture(record)).encode()
+    digest = store(root, content)
+    record["display"]["evidenceSha256"] = digest
+    record["checks"]["displayEnumeration"]["evidenceSha256"] = digest
+
+
 def make_claim(root, mode, category="Reference"):
     identity = dict.fromkeys(IDENTITY_FIELDS, "synthetic")
     identity.update(buildSha256=store(root, f"{mode} executable".encode()),
@@ -47,6 +60,7 @@ def make_claim(root, mode, category="Reference"):
         "display": {"evidenceSha256": observation, "refreshMilliHertz": [90000],
                     "viewExtents": [{"width": 1024, "height": 800}, {"width": 1032, "height": 808}]},
     }
+    store_display_capture(root, record)
     row = {
         "id": mode, "category": category, "owner": "xr-platform", "releaseClaim": True,
         "declaration": {"tuple": identity, "testPlan": plan}, "requiredOptionalChecks": ["haptics"],
@@ -169,6 +183,7 @@ def update_claim_identity(row, evidence, **changes):
     identity.update(changes)
     record = json.loads((evidence / row["recordSha256"]).read_bytes())
     record["tuple"] = identity
+    store_display_capture(evidence, record)
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
@@ -177,7 +192,43 @@ def capture_android_smoke(row, evidence, *, runtime_version="1.2.3", build=ANDRO
     if build is not None:
         record = json.loads((evidence / row["recordSha256"]).read_bytes())
         record["provenance"]["androidDeviceBuildSha256"] = build
+        store_display_capture(evidence, record)
         row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+
+@pytest.mark.parametrize(("field", "value", "reason"), [
+    ("refreshMilliHertz", [120000], "Display report does not match the captured runtime values"),
+    ("viewExtents", [{"width": 1032, "height": 808}, {"width": 1024, "height": 800}],
+     "Display report does not match the captured runtime values"),
+    ("provenance", {"testPlan": "xr-smoke-v1", "runId": "previous-run", "sourceRevision": REVISION},
+     "Display capture is from a different smoke run"),
+    ("rawRoomGeometry", "private fixture data", "Unexpected fields in display capture"),
+])
+def test_display_capture_must_match_runtime_values_and_smoke_run(release, field, value, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    capture = display_capture(record)
+    capture[field] = value
+    store_display_capture(evidence, record, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Standalone (xr-platform): {reason}" in result.stderr
+    assert "private fixture data" not in result.stderr
+
+
+def test_display_capture_cannot_be_reused_for_a_different_connection(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    capture = display_capture(record)
+    capture["tuple"] = {**capture["tuple"], "connectionMode": "Tethered"}
+    store_display_capture(evidence, record, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Display capture is from a different product tuple" in result.stderr
 
 
 def android_receipt(row, evidence):
