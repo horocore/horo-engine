@@ -38,6 +38,12 @@ reason codes for unsuccessful or limited checks. Omit serial numbers, personal
 identifiers, raw poses, biometric signals and physical room geometry from the
 record. Exporting evidence follows the product's consent and retention rules.
 
+For standalone Android, record `provenance.androidDeviceBuildSha256` when the
+release plan pairs this run with a cold-discovery receipt. Capture the active
+system build during the physical run. Use the same SHA-256 encoding as the
+deployment probe, hashing the ASCII `ro.build.fingerprint` value without its
+trailing newline. Retain only the digest in the smoke record.
+
 | Check | Record the observed behavior |
 | --- | --- |
 | `setup` | Launch with the selected package and XR configuration. Confirm the active system, renderer, permissions and admitted extensions. |

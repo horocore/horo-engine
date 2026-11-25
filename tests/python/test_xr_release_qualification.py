@@ -20,6 +20,7 @@ finally:
 
 REVISION = "a" * 40
 COMPONENT = "1" * 64
+ANDROID_BUILD = "c" * 64
 
 
 def store(root, content):
@@ -171,10 +172,18 @@ def update_claim_identity(row, evidence, **changes):
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
+def capture_android_smoke(row, evidence, *, runtime_version="1.2.3", build=ANDROID_BUILD):
+    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion=runtime_version)
+    if build is not None:
+        record = json.loads((evidence / row["recordSha256"]).read_bytes())
+        record["provenance"]["androidDeviceBuildSha256"] = build
+        row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+
 def android_receipt(row, evidence):
     profile = "qualification-openxr-quest-development"
     expected = {"apkSha256": store(evidence, b"separate Android diagnostic APK"),
-                "deviceBuildSha256": "c" * 64, "profile": profile, "adbConnection": "usb"}
+                "deviceBuildSha256": ANDROID_BUILD, "profile": profile, "adbConnection": "usb"}
     row["androidPreflight"] = expected
     return {
         "schema": 1, "status": "diagnostic_complete", "stage": "diagnostics",
@@ -196,7 +205,7 @@ def android_receipt(row, evidence):
 def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(release):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
     result = run_matrix(release)
@@ -209,10 +218,35 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
     assert "Standalone (xr-platform): Missing or invalid artifact digest" in result.stderr
 
 
+@pytest.mark.parametrize(("build", "reason"), [
+    (None, "Physical smoke record does not identify its Android system build"),
+    ("9" * 64, "Android preflight and physical smoke use different system builds"),
+])
+def test_android_preflight_requires_the_system_build_observed_in_physical_smoke(release, build, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence, build=build)
+    receipt = android_receipt(row, evidence)
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Standalone (xr-platform): {reason}" in result.stderr
+
+
+def test_android_smoke_without_preflight_can_use_the_original_provenance(release):
+    matrix, evidence = release
+    capture_android_smoke(matrix["tuples"][0], evidence, build=None)
+
+    result = run_matrix(release)
+    assert result.returncode == 0, result.stderr
+    assert "Standalone (xr-platform): Passed" in result.stdout
+
+
 def test_android_discovery_accepts_the_redacted_fields_emitted_by_deployment(release):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
     receipt["artifact"].update(applicationId="org.horocore.packagequalification.openxr.quest",
                                declaredRenderer="none", abis=["arm64-v8a"],
@@ -228,7 +262,7 @@ def test_android_discovery_accepts_the_redacted_fields_emitted_by_deployment(rel
 def test_android_discovery_rejects_unclassified_nested_evidence_without_echoing_it(release, path):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
     nested = receipt
     for field in path:
@@ -257,7 +291,7 @@ def test_android_discovery_rejects_unclassified_nested_evidence_without_echoing_
 def test_android_matrix_rejects_wrong_or_partial_discovery(release, section, key, value, message):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
     receipt[section][key] = value
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
@@ -269,7 +303,7 @@ def test_android_matrix_rejects_wrong_or_partial_discovery(release, section, key
 def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_tuple(release):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.4")
+    capture_android_smoke(row, evidence, runtime_version="1.2.4")
     receipt = android_receipt(row, evidence)
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
     result = run_matrix(release)
@@ -290,7 +324,7 @@ def test_android_preflight_does_not_apply_to_pcvr(release):
 def test_android_preflight_rejects_received_bytes_with_the_wrong_digest(release):
     matrix, evidence = release
     row = matrix["tuples"][0]
-    update_claim_identity(row, evidence, hostPlatform="Android", runtimeVersion="1.2.3")
+    capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
     digest = store(evidence, json.dumps(receipt).encode())
     row["androidPreflight"]["receiptSha256"] = digest

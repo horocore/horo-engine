@@ -10,7 +10,7 @@ from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_prefligh
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_physical_gate, decode_record, fields, in_set, is_digest, is_token,
-    is_source_revision, load_record, require, validate_identity, validate_record,
+    is_source_revision, is_standalone_android, load_record, require, validate_identity, validate_record,
 )
 
 
@@ -119,6 +119,17 @@ def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
     evidence.desktop_preflight(digest, identity, component)
 
 
+def verify_android_route(expected: dict, evidence: Evidence, record: dict, revision: str) -> None:
+    """Require the physical smoke and cold discovery to identify the same Android system build."""
+    identity = record["tuple"]
+    require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
+    observed_build = record["provenance"].get("androidDeviceBuildSha256")
+    require(observed_build is not None, "Physical smoke record does not identify its Android system build")
+    require(observed_build == expected["deviceBuildSha256"],
+            "Android preflight and physical smoke use different system builds")
+    evidence.android_preflight(expected, revision, identity["runtimeVersion"])
+
+
 def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
@@ -131,9 +142,7 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     evidence.verify(identity["packageReceiptSha256"])
     verify_desktop_route(row, evidence, identity)
     if "androidPreflight" in row:
-        require(identity["connectionMode"] == "Standalone" and identity["hostPlatform"].lower() == "android",
-                "Android preflight requires a standalone Android tuple")
-        evidence.android_preflight(row["androidPreflight"], revision, identity["runtimeVersion"])
+        verify_android_route(row["androidPreflight"], evidence, record, revision)
     for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None}:
         evidence.verify(digest)
     return record["status"]

@@ -40,6 +40,17 @@ def declared(smoke):
     return {"tuple": deepcopy(smoke["tuple"]), "testPlan": smoke["provenance"]["testPlan"]}
 
 
+def test_android_system_build_digest_is_scoped_to_standalone_android(smoke):
+    smoke["provenance"]["androidDeviceBuildSha256"] = DIGEST
+    with pytest.raises(ValueError, match="requires a standalone Android tuple"):
+        xr.validate_record(smoke)
+    smoke["tuple"].update(connectionMode="Standalone", hostPlatform="Android")
+    assert xr.validate_record(smoke)["provenance"]["androidDeviceBuildSha256"] == DIGEST
+    smoke["provenance"]["androidDeviceBuildSha256"] = "raw-build-fingerprint"
+    with pytest.raises(ValueError, match="Invalid Android system build digest"):
+        xr.validate_record(smoke)
+
+
 @pytest.mark.parametrize("mode", sorted(xr.CONNECTION_MODES))
 def test_each_connection_matches_only_its_own_complete_tuple(smoke, mode):
     smoke["tuple"]["connectionMode"] = mode

@@ -158,6 +158,27 @@ def validate_display_check(value: object, check: dict) -> None:
         require(value is None, "Display data requires a completed runtime enumeration")
 
 
+def is_standalone_android(identity: dict) -> bool:
+    """Identify the Android system build's physical standalone route."""
+    return identity["connectionMode"] == "Standalone" and (identity["hostPlatform"] or "").lower() == "android"
+
+
+def validate_provenance(value: object, identity: dict, *, observed: bool) -> None:
+    """Validate the test identity and any independently captured Android system build."""
+    keys = {"testPlan", "runId"}
+    if isinstance(value, dict):
+        keys |= value.keys() & {"sourceRevision", "androidDeviceBuildSha256"}
+    provenance = fields(value, keys, "provenance")
+    if "sourceRevision" in provenance:
+        require(is_source_revision(provenance["sourceRevision"]), "Invalid device evidence source revision")
+    if "androidDeviceBuildSha256" in provenance:
+        require(is_digest(provenance["androidDeviceBuildSha256"]), "Invalid Android system build digest")
+        require(is_standalone_android(identity), "Android system build digest requires a standalone Android tuple")
+    require(is_token(provenance["testPlan"]), "Missing test-plan revision")
+    require(is_token(provenance["runId"]) if observed else provenance["runId"] is None or is_token(provenance["runId"]),
+            "Missing or invalid provenance run identity")
+
+
 def validate_record(value: object) -> dict:
     record = fields(value, {"schemaVersion", "category", "evidenceLevel", "status", "tuple",
                             "provenance", "checks", "display"}, "record")
@@ -167,15 +188,7 @@ def validate_record(value: object) -> dict:
     require(in_set(record["status"], STATUSES), "Invalid record status")
     observed = record["status"] not in {"Blocked", "NotRun"}
     validate_identity(record["tuple"], complete=observed and record["evidenceLevel"] == "PhysicalDeviceQualification")
-    provenance_keys = {"testPlan", "runId"}
-    if isinstance(record["provenance"], dict) and "sourceRevision" in record["provenance"]:
-        provenance_keys.add("sourceRevision")
-    provenance = fields(record["provenance"], provenance_keys, "provenance")
-    if "sourceRevision" in provenance:
-        require(is_source_revision(provenance["sourceRevision"]), "Invalid device evidence source revision")
-    require(is_token(provenance["testPlan"]), "Missing test-plan revision")
-    require(is_token(provenance["runId"]) if observed else provenance["runId"] is None or is_token(provenance["runId"]),
-            "Missing or invalid provenance run identity")
+    validate_provenance(record["provenance"], record["tuple"], observed=observed)
     checks = fields(record["checks"], ALL_CHECKS, "checks")
     for name, check in checks.items():
         validate_check(check, name)
