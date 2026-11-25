@@ -1048,6 +1048,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     constexpr auto scenePath = "assets/level.horo";
     constexpr auto perceptionPath = "play-perception.json";
     bool livePerception = false;
+    bool hearingOnly = false;
+    constexpr auto listenerId = 91U;
     std::optional<bool> admitCustomAffiliation;
     std::optional<AI::AiSchedulingMode> watchedScheduler;
     bool inferWatchedScheduler = false;
@@ -1070,6 +1072,10 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         SECTION("An explicit deterministic scheduler rejects authored reactive watches") {
             watchedScheduler = AI::AiSchedulingMode::Deterministic;
         }
+    }
+    SECTION("An approved Gameplay producer borrows the Play registry for authored hearing without Audio") {
+        livePerception = true;
+        hearingOnly = true;
     }
     SceneSource::SceneSourceDocument source;
     source.objects.push_back({.id = {7},
@@ -1184,7 +1190,11 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         disclosure.push_back({Decisions::MakeIdentity<AI::BlackboardSchemaId>(inputs.schema->Identity().Value() + 1), disclosed.key});
     std::unique_ptr<Gameplay::LoadedGameModule> senseModule;
     std::shared_ptr<const AI::PerceptionSenseGeneration> senses;
-    if (livePerception) {
+    if (hearingOnly) {
+        auto generation = AI::PerceptionSenseGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
+        REQUIRE(generation.HasValue());
+        senses = std::move(generation).Value();
+    } else if (livePerception) {
         const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                            Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
         auto loaded = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
@@ -1195,9 +1205,10 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         REQUIRE(generation.HasValue());
         senses = std::move(generation).Value();
         REQUIRE(senses->Contracts().size() == 1);
-        const auto &contract = senses->Contracts().front();
-        const auto sense = std::to_string(contract.sense.identity.Value());
-        const auto units = (contract.workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+    }
+    if (livePerception) {
+        const auto sense = std::to_string(hearingOnly ? AI::SenseTypeIds::Hearing.Value() : senses->Contracts().front().sense.identity.Value());
+        const auto units = hearingOnly ? 1 : (senses->Contracts().front().workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
         const auto watches = watchedScheduler ? R"(,"decisionWatches":[{"node":3,"listener":91}])" : "";
         const auto schema = admitCustomAffiliation ? "3" : "2";
         const auto filter =
@@ -1215,6 +1226,23 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                               sense + "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) +
                               "}" + relationships + "}");
     }
+    std::size_t hearingCaptures{};
+    EditorPlayPerceptionEventFactory hearingProducer;
+    if (hearingOnly) {
+        hearingProducer = [&](const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &,
+                              const AI::PerceptionDescriptorRegistry &registry, const AI::PerceptionSpatialBroadphase &spatial,
+                              const std::uint64_t tick) {
+            REQUIRE(spatial.CurrentFor(scene));
+            const auto listener = registry.FindListener(Decisions::MakeIdentity<AI::PerceptionListenerTypeId>(listenerId));
+            REQUIRE(listener.HasValue());
+            CHECK(listener.Value().availability == AI::PerceptionListenerAvailability::Available);
+            CHECK(listener.Value().descriptor.sense == AI::SenseTypeIds::Hearing);
+            REQUIRE(listener.Value().descriptor.stimulusCount == 1);
+            CHECK(listener.Value().descriptor.stimuli.front().identity == AI::StimulusTypeIds::Sound);
+            CHECK(tick == ++hearingCaptures);
+            return Result<std::optional<Gameplay::PerceptionEventSource>>::Success(std::nullopt);
+        };
+    }
     const auto projectFactory =
         MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
                                                      .decisions = EditorPlayDecisionSelection{project.project.dir.path,
@@ -1223,7 +1251,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                                                                                               std::move(disclosure),
                                                                                               livePerception ? perceptionPath : "",
                                                                                               Duration::FromMilliseconds(10),
-                                                                                              decisionDebug || projectDisallowsDebug}});
+                                                                                              decisionDebug || projectDisallowsDebug},
+                                                     .perceptionEvents = std::move(hearingProducer)});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(project.project.dir.path, id, definition);
     };
@@ -1376,6 +1405,16 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
     if (livePerception) {
         CHECK_FALSE(inspection.snapshot->perceptionFailure);
+        if (hearingOnly) {
+            CHECK(hearingCaptures == 1);
+            CHECK(inspection.snapshot->stimuli.empty());
+            REQUIRE(tick().HasValue());
+            CHECK(hearingCaptures == 2);
+            play.Stop();
+            CHECK(hearingCaptures == 2);
+            lifecycle.Shutdown();
+            return;
+        }
         if (admitCustomAffiliation == false) {
             CHECK(inspection.snapshot->stimuli.empty());
             for (std::uint64_t frame = 0; frame < Editor::EditorPlayAgentInspectionTickSpacing; ++frame)

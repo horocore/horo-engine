@@ -76,6 +76,13 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline;
     };
 
+    /** @brief Captures an approved Gameplay window using the exact perception registry bound to the Play Scene.
+     * @details The Scene, AI, registry and spatial publication are borrowed for one synchronous sensing callback.
+     */
+    using EditorPlayPerceptionEventFactory = std::function<Result<std::optional<Gameplay::PerceptionEventSource>>(
+        const Runtime::RuntimeSceneView &, const AI::AiSceneRuntime &, const AI::PerceptionDescriptorRegistry &,
+        const AI::PerceptionSpatialBroadphase &, std::uint64_t)>;
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
@@ -100,7 +107,7 @@ namespace Horo::Application::Internal {
         bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
         std::optional<EditorPlayNpcDialogueSelection> npcDialogue; /**< Explicit host override for a pre-admitted caption catalog. */
         std::optional<EditorPlayAuthoredNpcDialogue> authoredNpcDialogue;
-        Gameplay::PerceptionEventSourceFactory perceptionEvents; /**< Optional approved Gameplay producer for Play sensing. */
+        EditorPlayPerceptionEventFactory perceptionEvents; /**< Optional approved Gameplay producer for Play sensing. */
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

@@ -41,7 +41,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         auto registry = FreezeProjectNativePerceptionRegistry(*native, generation.Value()->Contracts());
         if (registry.HasError())
             return Result<void>::Failure(std::move(registry).ErrorValue());
-        auto controllers = BindProjectPerceptionEndpoints(*captured.Value(), std::move(registry).Value(), policy.aiControllers);
+        auto controllers = BindProjectPerceptionEndpoints(*captured.Value(), registry.Value(), policy.aiControllers);
         if (controllers.HasError())
             return Result<void>::Failure(std::move(controllers).ErrorValue());
         try {
@@ -56,7 +56,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                    .visibleLayers = native->visibleLayers,
                                    .workUnitsPerTick = native->workUnitsPerTick,
                                    .scheduling = native->scheduling};
-            prepared->eventSource = policy.perceptionEvents;
+            if (policy.perceptionEvents) {
+                prepared->eventSource = [producer = std::move(policy.perceptionEvents), admittedRegistry = std::move(registry).Value()](
+                                            const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
+                                            const AI::PerceptionSpatialBroadphase &spatial, const std::uint64_t tick) {
+                    return producer(scene, ai, *admittedRegistry, spatial, tick);
+                };
+            }
             playPerception_ = std::move(prepared);
             policy.aiSettings.requirePerceptionEndpoints = true;
             policy.aiControllers = std::move(controllers).Value();
