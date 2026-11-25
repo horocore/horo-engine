@@ -809,7 +809,7 @@ namespace {
                                    const SceneObjectId selected) {
         const auto capturedSelection = workspace.CaptureAgentSceneSelection();
         REQUIRE(capturedSelection);
-        const std::array candidates{selected.value, SceneObjectId{1}.value, std::uint64_t{999999}};
+        const std::array candidates{selected.value, SceneObjectId{1}.value, std::uint64_t{999999}, std::uint64_t{3}, std::uint64_t{4}};
         AgentSceneReferenceRequest request{capturedSelection->documentEpoch, capturedSelection->documentRevision, scene.value, candidates};
         const auto references = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(references);
@@ -823,8 +823,37 @@ namespace {
         REQUIRE(pointed);
         CHECK(pointed->RequiresClarification());
         CHECK(pointed->Candidates()[1].state == AgentSceneReferenceState::Available);
+        CHECK(pointed->Candidates()[3].state == AgentSceneReferenceState::Hidden);
+        CHECK(pointed->Candidates()[4].state == AgentSceneReferenceState::Locked);
         ++request.documentRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+    }
+
+    /** @brief Exercises the mounted review boundary with the exact running Scene view. */
+    void VerifyMountedPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::RuntimeSceneView &play,
+                                          const SceneObjectId object) {
+        const auto captured = workspace.CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay);
+        REQUIRE(captured);
+        const std::array points{AgentSceneReferencePoint{object.value, {1, 2, 3}}, AgentSceneReferencePoint{999999, {4, 5, 6}}};
+        AgentSceneReferenceRequest request{.documentEpoch = captured->documentEpoch,
+                                           .documentRevision = captured->documentRevision,
+                                           .worldGeneration = play.RuntimeId().value,
+                                           .source = AgentSceneReferenceSource::Location,
+                                           .locations = points,
+                                           .mountedStructuralRevision = play.StructuralRevision()};
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        workspace.SelectMountedWorldPlay(true);
+        const auto mounted = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(mounted);
+        CHECK(mounted->mounted);
+        REQUIRE(mounted->Candidates().size() == 2);
+        CHECK(mounted->RequiresClarification());
+        CHECK(mounted->Candidates()[0].worldPosition == points[0].worldPosition);
+        CHECK(mounted->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
+        CHECK_FALSE(mounted->Candidates()[1].worldPosition);
+        ++request.mountedStructuralRevision;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        workspace.SelectMountedWorldPlay(false);
     }
 
     /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */
@@ -885,7 +914,9 @@ namespace {
             document{.revision = DocumentRevision{1},
                      .state = DocumentStateId{1},
                      .objects = {{.id = SceneObjectId{1}, .name = "Other object", .components = {.camera = Runtime::CameraComponent{}}},
-                                 {.id = original, .name = "AI agent", .components = {.aiAgent = AI::AiAgentComponent{.agent = agent}}}}};
+                                 {.id = original, .name = "AI agent", .components = {.aiAgent = AI::AiAgentComponent{.agent = agent}}},
+                                 {.id = SceneObjectId{3}, .name = "Hidden object", .editorState = {.visible = false}},
+                                 {.id = SceneObjectId{4}, .name = "Locked object", .editorState = {.locked = true}}}};
         const auto fingerprint = InspectProjectSceneFingerprint(project.Path(), scenePath);
         REQUIRE(fingerprint.HasValue());
         REQUIRE(SaveProjectScene(project.Path(), scenePath, document, fingerprint.Value(), false, mutations, files).HasValue());
@@ -940,9 +971,11 @@ namespace {
         dependencies.localization = &localization;
         dependencies.sourceNavigation.diagnosticOutput = &diagnostics;
         dependencies.assets.mutableAssetRegistry = &registry;
-        dependencies.gameplay.sceneFactory = [=](Runtime::SceneRuntimeId scene, const Runtime::RuntimeSceneDefinition &) {
-            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(
-                std::make_unique<DecisionNavigationTestHost>(scene, original, agent, graph.asset, node));
+        DecisionNavigationTestHost *activeHost{};
+        dependencies.gameplay.sceneFactory = [=, &activeHost](Runtime::SceneRuntimeId scene, const Runtime::RuntimeSceneDefinition &) {
+            auto host = std::make_unique<DecisionNavigationTestHost>(scene, original, agent, graph.asset, node);
+            activeHost = host.get();
+            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::move(host));
         };
         EditorWorkspaceController workspace{project.Path(), preview, registry.Snapshot(), dependencies};
         REQUIRE_FALSE(workspace.InitializationError());
@@ -1005,6 +1038,10 @@ namespace {
         CHECK(workspace.ViewModel().hierarchyRevealObject == original);
         VerifyPlayReferenceReview(workspace, first.scene, original);
         VerifyPlayLocationReview(workspace, first.scene, original);
+        REQUIRE(activeHost);
+        const auto playScene = activeHost->Scenes().ActiveScene();
+        REQUIRE(playScene);
+        VerifyMountedPlayReferenceReview(workspace, *playScene, original);
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);
