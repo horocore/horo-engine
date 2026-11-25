@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -47,6 +48,26 @@ namespace Horo::Application::Internal {
             std::map<std::string_view, const Packages::HoroPackageId *, std::less<>> removed_;
             mutable std::vector<PackageImporterReference> references_; /**< Confined to a single synchronous capture. */
         };
+
+        /** @brief Reports inventory failures alongside importer claims from records admitted by the registry. */
+        Error IncompleteImporterInventory(const Assets::AssetRegistryCandidate &candidate,
+                                          std::vector<PackageImporterReference> references) {
+            Error error{ErrorCode{"packages.host.asset_inventory_incomplete"}, ErrorDomainId{"packages.host"}};
+            if (!candidate.diagnostics.empty())
+                error = WithCause(std::move(error), candidate.diagnostics.front().error);
+            for (const auto &diagnostic : candidate.diagnostics)
+                error.diagnostics.emplace_back(DiagnosticCode{diagnostic.error.code.Value()}, DiagnosticSeverity::Error,
+                                               diagnostic.error.message, SourceLocation{"packages.host"},
+                                               diagnostic.projectPath.value_or(""));
+            std::set<std::string_view> admittedPaths;
+            for (const auto &record : candidate.records)
+                admittedPaths.insert(record.sourcePath.String());
+            std::erase_if(references, [&admittedPaths](const auto &reference) {
+                return !admittedPaths.contains(reference.assetPath);
+            });
+            AppendPackageImporterDiagnostics(error.diagnostics, references);
+            return error;
+        }
     }  // namespace
 
     /** @copydoc InspectPackageRemovalImporters */
@@ -59,13 +80,10 @@ namespace Horo::Application::Internal {
         const auto candidate = Assets::PrepareAssetRegistryCandidate(capture);
         if (candidate.HasError())
             return Report::Failure(candidate.ErrorValue());
-        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete) {
-            Error error{ErrorCode{"packages.host.asset_inventory_incomplete"}, ErrorDomainId{"packages.host"}};
-            if (!candidate.Value().diagnostics.empty())
-                error = WithCause(std::move(error), candidate.Value().diagnostics.front().error);
-            return Report::Failure(std::move(error));
-        }
-        return Report::Success(std::move(capture).TakeReferences());
+        auto references = std::move(capture).TakeReferences();
+        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+            return Report::Failure(IncompleteImporterInventory(candidate.Value(), std::move(references)));
+        return Report::Success(std::move(references));
     }
 
     /** @copydoc AppendPackageImporterDiagnostics */

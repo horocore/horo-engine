@@ -146,7 +146,7 @@ namespace Horo::Application::Internal {
 
     /** @brief Lists all registered assets whose importer belongs to a removed package.
      * @param assets Fresh root-bound project asset source. @param removal Exact lock graph impact.
-     * @return Complete importer evidence or a typed incomplete-inventory failure. */
+     * @return Complete importer evidence, or an inventory failure with diagnostics for admitted references. */
     [[nodiscard]] Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(
         const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal);
 

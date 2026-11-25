@@ -1430,6 +1430,24 @@ namespace {
             PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(*assets));
         REQUIRE(incomplete.HasError());
         CHECK(incomplete.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        const auto &incompleteDiagnostics = incomplete.ErrorValue().diagnostics;
+        REQUIRE(incompleteDiagnostics.size() == 3);
+        CHECK(incompleteDiagnostics[0].path == "Assets/Invalid.horoasset.horo");
+        CHECK(incompleteDiagnostics[1].code.Value() == "packages.host.importer_in_use");
+        CHECK(incompleteDiagnostics[1].path == "Assets/A.horoasset");
+        CHECK(incompleteDiagnostics[2].code.Value() == "packages.host.importer_in_use");
+        CHECK(incompleteDiagnostics[2].path == "Assets/Z.horoasset");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+
+        writeAsset("Duplicate.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e", package);
+        const auto ambiguous =
+            PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, fixture.RemovalSources(*assets));
+        REQUIRE(ambiguous.HasError());
+        CHECK(ambiguous.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        CHECK(std::ranges::none_of(ambiguous.ErrorValue().diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.importer_in_use";
+        }));
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
     }
