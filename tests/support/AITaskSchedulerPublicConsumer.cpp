@@ -4,6 +4,23 @@
 
 #include <array>
 
+namespace {
+    /** @brief Exercises scheduler calls through the staged public headers and static library. */
+    int ExerciseScheduler(Horo::AI::AiTaskScheduler &scheduler) {
+        if (scheduler.SetRelevanceBatchAtSafePoint({}).HasValue())
+            return 7;
+        auto staged = scheduler.PreparePopulationChange({}, {});
+        if (staged.HasError() || staged.Value()->ValidatePublication().HasError())
+            return 6;
+        staged.Value()->Publish();
+        staged.Value()->FinishRetirements();
+        if (scheduler.EvaluateAtDecision(1).HasError() || scheduler.CommitAtIntentDispatch(1).HasError())
+            return 4;
+        scheduler.Shutdown();
+        return 0;
+    }
+}  // namespace
+
 int main() {
     Horo::AI::AiWorkBudget budget{2};
     if (!budget.Consume(2) || budget.Consume())
@@ -16,14 +33,8 @@ int main() {
     auto scheduler = Horo::AI::AiTaskScheduler::Create(jobs, incarnation.Value());
     if (scheduler.HasError())
         return 3;
-    auto staged = scheduler.Value()->PreparePopulationChange({}, {});
-    if (staged.HasError() || staged.Value()->ValidatePublication().HasError())
-        return 6;
-    staged.Value()->Publish();
-    staged.Value()->FinishRetirements();
-    if (scheduler.Value()->EvaluateAtDecision(1).HasError() || scheduler.Value()->CommitAtIntentDispatch(1).HasError())
-        return 4;
-    scheduler.Value()->Shutdown();
+    if (const auto checked = ExerciseScheduler(*scheduler.Value()); checked != 0)
+        return checked;
     std::array<Horo::AI::QueryGeneratedItem, 1> candidates;
     const Horo::AI::QueryGeneratorOutput output{{Horo::AI::QueryStageId::Create(1).Value(), Horo::AI::QueryGeneratorId::Create(2).Value(),
                                                  Horo::AI::QueryProviderId::Create(3).Value(), 1},

@@ -62,6 +62,12 @@ namespace Horo::AI {
         bool urgentStimulus{};         /**< High-priority committed gameplay stimulus promotes immediately. */
     };
 
+    /** @brief One owner-observed relevance update for an exact Scene agent generation. */
+    struct AiDecisionRelevanceUpdate final {
+        AgentHandle agent;
+        AiDecisionRelevance relevance;
+    };
+
     /** @brief Non-copyable allowance; every node/query/command step must consume before doing work. */
     class AiWorkBudget final {
     public:
@@ -346,6 +352,13 @@ namespace Horo::AI {
          * @pre Before the first decision phase or after intent dispatch; no publication during callbacks.
          */
         [[nodiscard]] Result<void> SetRelevanceAtSafePoint(AgentHandle agent, const AiDecisionRelevance &relevance);
+        /** @brief Atomically accepts a bounded set of owner-observed facts for the next decision tick.
+         * @param updates Borrowed input in strictly increasing AgentHandle order. Omitted agents retain their latest facts.
+         * @return Success or a typed phase, policy, capacity or stale-agent failure.
+         * @pre Call on the scheduler owner lane before its first decision phase or after intent dispatch.
+         * @post Failure preserves all previously accepted facts. Success starts no work and invokes no callbacks.
+         */
+        [[nodiscard]] Result<void> SetRelevanceBatchAtSafePoint(std::span<const AiDecisionRelevanceUpdate> updates);
         /** @brief Reads the current admitted tier. @param agent Exact registered generation.
          * @return Current tier or a typed stale-agent failure. */
         [[nodiscard]] Result<AiSimulationTier> SimulationTier(AgentHandle agent);
@@ -435,6 +448,8 @@ namespace Horo::AI {
         /** @brief Compares stable priority, age and persistent identity. @param a Left slot. @param b Right slot.
          * @return Whether the left slot precedes the right. */
         [[nodiscard]] bool Before(const Entry &a, const Entry &b) const noexcept;
+        /** @brief Validates the complete exact-generation relevance batch before any facts are stored. */
+        [[nodiscard]] Result<void> ValidateRelevanceUpdates(std::span<const AiDecisionRelevanceUpdate> updates);
         /** @brief Applies promotions and stable demotions before any worker publication for the tick. */
         void ApplyRelevance();
         /** @brief Applies a changed tier, retaining the registration and owner lifetime. */

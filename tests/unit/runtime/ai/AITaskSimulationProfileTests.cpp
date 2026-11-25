@@ -93,6 +93,74 @@ namespace Horo::AI {
             CHECK(probe->cancelled == 0);
         }
 
+        TEST_CASE("A rejected relevance batch preserves all previously accepted facts", "[unit][ai][simulation-tier]") {
+            auto settings = Settings();
+            settings.maximumAgents = 2;
+            settings.evaluationsPerTick = 2;
+            Harness fixture(settings);
+            const auto first = fixture.Handle(0);
+            const auto second = fixture.Handle(1);
+            const auto probe = fixture.Register(0);
+            CancellationSource peer;
+            fixture.Register(1, {}, peer.Token());
+            auto &scheduler = *fixture.scheduler;
+            const AiDecisionRelevance distant{.anchorDistanceMillimeters = 31'000};
+            std::array updates{AiDecisionRelevanceUpdate{first, distant}, AiDecisionRelevanceUpdate{second, distant}};
+            SECTION("a stale generation follows a valid one") {
+                ++updates.back().agent.slot.generation;
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::TaskContextInvalid);
+            }
+            SECTION("a cancelled generation follows a valid one") {
+                peer.RequestCancellation();
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::TaskContextInvalid);
+            }
+            SECTION("duplicate observations are ambiguous") {
+                updates.back().agent = first;
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPolicyInvalid);
+            }
+            SECTION("the host supplies a noncanonical batch order") {
+                std::swap(updates.front(), updates.back());
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPolicyInvalid);
+            }
+            SECTION("the batch exceeds the admitted agent capacity") {
+                const std::array oversized{updates.front(), updates.back(), AiDecisionRelevanceUpdate{fixture.Handle(2), distant}};
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(oversized), AIErrors::TaskCapacityExceeded);
+            }
+            for (std::uint64_t tick = 1; tick <= 3; ++tick)
+                EvaluateTick(scheduler, tick);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            CHECK(probe->cancelled == 0);
+            CHECK(probe->evaluations == 3);
+        }
+
+        TEST_CASE("Accepted relevance batches keep omitted agents and apply per-agent tiers", "[unit][ai][simulation-tier]") {
+            Harness fixture(Settings());
+            const auto first = fixture.Handle(0);
+            const auto second = fixture.Handle(1);
+            const auto firstProbe = fixture.Register(0);
+            const auto secondProbe = fixture.Register(1);
+            auto &scheduler = *fixture.scheduler;
+            const AiDecisionRelevance distant{.anchorDistanceMillimeters = 31'000};
+            const std::array updates{AiDecisionRelevanceUpdate{first, distant},
+                                     AiDecisionRelevanceUpdate{second, {.anchorDistanceMillimeters = 15'000}}};
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(updates).HasValue());
+            REQUIRE(scheduler.EvaluateAtDecision(1).HasValue());
+            ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler.CommitAtIntentDispatch(1).HasValue());
+            EvaluateTick(scheduler, 2);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            EvaluateTick(scheduler, 3);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Suspended);
+            CHECK(Tier(scheduler, second) == AiSimulationTier::Reduced);
+            const std::array promotion{AiDecisionRelevanceUpdate{first, {.gameplayPinned = true}}};
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(promotion).HasValue());
+            EvaluateTick(scheduler, 4);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            CHECK(Tier(scheduler, second) == AiSimulationTier::Reduced);
+            CHECK(firstProbe->cancelled == 1);
+            CHECK(secondProbe->cancelled == 0);
+        }
+
         TEST_CASE("Suspended Scene decision drops optional work and preserves canonical agent state",
                   "[unit][ai][simulation-tier][scene]") {
             JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});

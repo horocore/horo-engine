@@ -511,14 +511,34 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::SetRelevanceAtSafePoint */
     Result<void> AiTaskScheduler::SetRelevanceAtSafePoint(const AgentHandle agent, const AiDecisionRelevance &relevance) {
+        const AiDecisionRelevanceUpdate update{agent, relevance};
+        return SetRelevanceBatchAtSafePoint(std::span{&update, 1});
+    }
+
+    /** @copydoc AiTaskScheduler::SetRelevanceBatchAtSafePoint */
+    Result<void> AiTaskScheduler::SetRelevanceBatchAtSafePoint(const std::span<const AiDecisionRelevanceUpdate> updates) {
         if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
         if (!settings_.simulationProfile)
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
-        auto *entry = Find(agent);
-        if (!entry || !entry->executor || entry->cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        entry->relevance = relevance;
+        if (auto admitted = ValidateRelevanceUpdates(updates); admitted.HasError())
+            return admitted;
+        for (const auto &update : updates)
+            Find(update.agent)->relevance = update.relevance;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::ValidateRelevanceUpdates */
+    Result<void> AiTaskScheduler::ValidateRelevanceUpdates(const std::span<const AiDecisionRelevanceUpdate> updates) {
+        if (updates.size() > settings_.maximumAgents)
+            return Result<void>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        if (std::ranges::adjacent_find(updates, std::ranges::greater_equal{}, &AiDecisionRelevanceUpdate::agent) != updates.end())
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        for (const auto &update : updates) {
+            const auto *entry = Find(update.agent);
+            if (!entry || !entry->executor || entry->cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        }
         return Result<void>::Success();
     }
 

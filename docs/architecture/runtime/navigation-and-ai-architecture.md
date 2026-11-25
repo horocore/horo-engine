@@ -4097,8 +4097,11 @@ grant development access. Its terminal surface has no live mutation command.
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through
-`SetRelevanceAtSafePoint`. The host supplies integer millimetres from the nearest
-simulation anchor, active gameplay or streaming region membership, gameplay
+`SetRelevanceAtSafePoint`. `SetRelevanceBatchAtSafePoint` admits bounded,
+strictly ordered exact-generation updates as a unit. Duplicate, stale or revoked
+registrations reject the entire input before any relevance facts are stored.
+Omitted agents retain their last facts. The host supplies integer millimetres
+from the nearest simulation anchor, active gameplay or streaming region membership, gameplay
 pins, and committed urgent stimuli. Missing distance evidence preserves full
 cadence. The camera and renderer are outside the input contract.
 
