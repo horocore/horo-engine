@@ -268,7 +268,9 @@ namespace Horo::Audio::Backend {
             SECTION("revoked consent discards the unread tail") {
                 REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
                 grant.foreground = false;
-                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                const auto stopped = backend->FinishRecording(descriptor.generation, grant);
+                REQUIRE(stopped.HasError());
+                CHECK(stopped.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
                 CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
             }
             SECTION("speech admission cannot authorize recording") {

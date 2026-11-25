@@ -393,7 +393,7 @@ namespace Horo::Audio::Backend {
         if (capture.activeGrant.intent.purpose != purpose)
             return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
         auto tail = capture.stream->Finish();
-        const auto *failure = purpose == Sdl3CapturePurpose::Speech ? capture.stream->Failure() : nullptr;
+        const auto *failure = capture.stream->Failure();
         capture.Stop();
         if (failure)
             return Output::Failure(MakeError(*failure));
