@@ -11,3 +11,9 @@ static_assert(std::is_same_v<
                                                                    std::declval<const LockedPackage &>(),
                                                                    std::declval<const ValidatedPackageArchive &>())),
               Horo::Result<std::vector<Horo::Packages::PackageAssetRename>>>);
+static_assert(std::is_same_v<
+              decltype(Horo::Packages::InspectPackageBehaviorRenames(std::declval<const LockedPackage &>(),
+                                                                      std::declval<const ValidatedPackageArchive &>(),
+                                                                      std::declval<const LockedPackage &>(),
+                                                                      std::declval<const ValidatedPackageArchive &>())),
+              Horo::Result<std::vector<Horo::Packages::PackageBehaviorRename>>>);

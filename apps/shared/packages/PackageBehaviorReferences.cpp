@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <ranges>
 #include <set>
 
 namespace Horo::Application::Internal {
@@ -350,15 +351,10 @@ namespace Horo::Application::Internal {
         return Inspection::Success(std::move(references));
     }
 
-    /** @copydoc InspectPackageBehaviorReferences */
-    Result<References> InspectPackageBehaviorReferences(
-        const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
-        std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations,
-        const Packages::ValidatedPackageLockfileV1 &lock, const Packages::PackageRemovalGraphPreview &removal) {
-        const auto owners = IndexOwners(registrations, lock, removal);
-        if (owners.HasError())
-            return Result<References>::Failure(owners.ErrorValue());
-        if (owners.Value().empty())
+    /** @brief Scans saved sources against either observed registrations or inert preview claims. */
+    static Result<References> InspectSavedBehaviors(const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files,
+                                                   Platform::ProjectReadContext context, const Owners &owners) {
+        if (owners.empty())
             return Result<References>::Success({});
         context.deadline =
             std::min(context.deadline, std::chrono::steady_clock::now() + Platform::ProjectSourceReadLimits{}.maximumDuration);
@@ -367,6 +363,42 @@ namespace Horo::Application::Internal {
             return Result<References>::Failure(candidate.ErrorValue());
         if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
             return Result<References>::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
-        return InspectAssets(files, context, candidate.Value(), owners.Value());
+        return InspectAssets(files, context, candidate.Value(), owners);
+    }
+
+    /** @copydoc InspectPackageBehaviorReferences */
+    Result<References> InspectPackageBehaviorReferences(
+        const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
+        std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations,
+        const Packages::ValidatedPackageLockfileV1 &lock, const Packages::PackageRemovalGraphPreview &removal) {
+        const auto owners = IndexOwners(registrations, lock, removal);
+        if (owners.HasError())
+            return Result<References>::Failure(owners.ErrorValue());
+        return InspectSavedBehaviors(assets, files, std::move(context), owners.Value());
+    }
+
+    /** @copydoc InspectPackageBehaviorMigrations */
+    Result<std::vector<Diagnostic>> InspectPackageBehaviorMigrations(
+        const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
+        std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit) {
+        using Inspection = Result<std::vector<Diagnostic>>;
+        Owners assertedOwners;
+        std::map<std::pair<Packages::HoroPackageId, Gameplay::BehaviorTypeId>, const Gameplay::BehaviorTypeId *> targets;
+        for (const auto &claim : claims) {
+            assertedOwners[claim.previous].insert(claim.package);
+            targets.emplace(std::pair{claim.package, claim.previous}, &claim.candidate);
+        }
+        const auto matches = InspectSavedBehaviors(assets, files, std::move(context), assertedOwners);
+        if (matches.HasError())
+            return Inspection::Failure(matches.ErrorValue());
+        std::vector<Diagnostic> diagnostics;
+        for (const auto &match : matches.Value() | std::views::take(diagnosticLimit)) {
+            const auto *target = targets.at({match.package, match.type});
+            auto message = match.package.Value() + ": " + match.type.Value() + " -> " + target->Value() +
+                           " (object " + std::to_string(match.object) + ", attachment " + std::to_string(match.instance.value) + ')';
+            diagnostics.emplace_back(DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
+                                     std::move(message), SourceLocation{"packages.host"}, match.assetPath);
+        }
+        return Inspection::Success(std::move(diagnostics));
     }
 }  // namespace Horo::Application::Internal

@@ -1,6 +1,7 @@
 #include "PackageUpdateReferences.h"
 
 #include "Horo/Packages/PackageMigration.h"
+#include "PackageBehaviorReferences.h"
 
 #include <algorithm>
 #include <array>
@@ -19,8 +20,6 @@ namespace Horo::Application::Internal {
         compatible.fileManifestDigest = next.fileManifestDigest;
         return compatible == next && std::ranges::equal(next.contributions, std::array<std::string_view, 1>{"assets"});
     }
-
-    constexpr std::size_t MaximumUpdateDiagnostics = 64;
 
     /** @copydoc UpdateNeedsMigration */
     Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics) {
@@ -136,9 +135,27 @@ namespace Horo::Application::Internal {
         return diagnostics;
     }
 
+    /** @brief Binds names from the archive to Gameplay type identities and bounds the project-wide scan. */
+    static Result<void> AppendBehaviorClaims(const Packages::LockedPackage &previous,
+                                             std::span<const Packages::PackageBehaviorRename> names,
+                                             std::vector<PackageBehaviorMigration> &claims) {
+        constexpr std::size_t maximumClaims = 128;
+        if (names.size() > maximumClaims - claims.size())
+            return Result<void>::Failure(Error{ErrorCode{"packages.migration.behavior_rename_limit"}, ErrorDomainId{"packages.migration"}});
+        for (const auto &name : names) {
+            auto from = Gameplay::BehaviorTypeId::Parse(name.previous);
+            auto to = Gameplay::BehaviorTypeId::Parse(name.candidate);
+            if (from.HasError() || to.HasError())
+                return Result<void>::Failure(Error{ErrorCode{"packages.migration.invalid_behavior_rename"},
+                                                   ErrorDomainId{"packages.migration"}, ErrorSeverity::Error, previous.package.Value()});
+            claims.emplace_back(previous.package, std::move(from).Value(), std::move(to).Value());
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc ReviewCachedChange */
     Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                    std::vector<Diagnostic> &diagnostics) {
+                                    std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims) {
         if (!change.candidate)
             return Result<void>::Success();
         const auto candidate = ReadUpdateArchive(cache, *change.candidate);
@@ -149,6 +166,11 @@ namespace Horo::Application::Internal {
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
             return Result<void>::Failure(previous.ErrorValue());
+        const auto behavior = Packages::InspectPackageBehaviorRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
+        if (behavior.HasError())
+            return Result<void>::Failure(behavior.ErrorValue());
+        if (auto typed = AppendBehaviorClaims(*change.current, behavior.Value(), claims); typed.HasError())
+            return typed;
         return ReviewAssetFiles(*change.current, previous.Value(), *change.candidate, candidate.Value(), diagnostics);
     }
 }  // namespace Horo::Application::Internal

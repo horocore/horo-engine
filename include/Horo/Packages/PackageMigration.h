@@ -1,12 +1,13 @@
 #pragma once
 
-/** @file PackageMigration.h @brief Verified declarations for package asset path migration previews. */
+/** @file PackageMigration.h @brief Artifact-bound package migration declarations for previews. */
 
 #include "Horo/Packages/PackageArchive.h"
 #include "Horo/Packages/PackageLockfile.h"
 
 namespace Horo::Packages {
     inline constexpr std::string_view PackageAssetRenameDeclarationPath = "migrations/asset-renames.json";
+    inline constexpr std::string_view PackageBehaviorRenameDeclarationPath = "migrations/behavior-renames.json";
 
     /** @brief Identifies the reserved declaration file when it is inert archive metadata.
      * @param file Verified file inventory entry.
@@ -29,6 +30,22 @@ namespace Horo::Packages {
      * without colliding with other declarations or referencing executable files. No project writes or approval occur here.
      */
     [[nodiscard]] Result<std::vector<PackageAssetRename>> InspectPackageAssetRenames(
+        const LockedPackage &previous, const ValidatedPackageArchive &previousArchive, const LockedPackage &candidate,
+        const ValidatedPackageArchive &candidateArchive);
+
+    /** @brief Inert behavior names declared by the candidate archive. Gameplay owns interpretation and verification. */
+    struct PackageBehaviorRename final {
+        std::string previous;
+        std::string candidate;
+    };
+
+    /** @brief Reads bounded behavior rename claims scoped to one exact installed artifact.
+     * @param previous Installed lock entry. @param previousArchive Independently verified old archive.
+     * @param candidate Proposed lock entry. @param candidateArchive Independently verified new archive.
+     * @return Declared claims, empty when absent or inapplicable, or a typed validation error.
+     * @details A claim does not prove that either archive owns the named runtime type or can preserve saved fields.
+     */
+    [[nodiscard]] Result<std::vector<PackageBehaviorRename>> InspectPackageBehaviorRenames(
         const LockedPackage &previous, const ValidatedPackageArchive &previousArchive, const LockedPackage &candidate,
         const ValidatedPackageArchive &candidateArchive);
 }  // namespace Horo::Packages

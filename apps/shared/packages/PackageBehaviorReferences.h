@@ -72,6 +72,24 @@ namespace Horo::Application::Internal {
         Gameplay::BehaviorInstanceId instance;
     };
 
+    /** @brief One artifact-bound rename claim with names interpreted by Gameplay. */
+    struct PackageBehaviorMigration final {
+        Packages::HoroPackageId package;
+        Gameplay::BehaviorTypeId previous;
+        Gameplay::BehaviorTypeId candidate;
+    };
+
+    /** @brief Reports saved Scene and Prefab attachments whose type matches a declared rename.
+     * @param assets Same-project canonical asset registry source. @param files Root-bound source reader.
+     * @param context Original opening, cancellation and deadline.
+     * @param claims Bounded artifact-bound claims with typed behavior names. @param diagnosticLimit Output limit.
+     * @return Advisory attachment locations or a typed error when the saved inventory could not be read.
+     * @details The matches are possible impacts. Only the live package lifecycle can certify provider ownership.
+     */
+    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageBehaviorMigrations(
+        const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
+        std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit);
+
     /** @brief Reads the canonical saved Scene and Prefab sources for the supplied package behavior identities.
      * @param assets Canonical registry source bound to the same project as files and context.
      * @param files Root-bound source read authority. @param context Original opening, cancellation and deadline.

@@ -570,6 +570,15 @@ review. This declaration supplies evidence for review. Applying the mapping to
 project files and producing an approval for that migration require a document
 transaction.
 
+The optional inert `migrations/behavior-renames.json` declaration uses the same
+destination and exact source selectors, with stable Gameplay type IDs in
+`from` and `to`. Cache-backed preview matches applicable source IDs against
+saved Scene and Prefab attachments, including disabled attachments, and reports
+the relative path, object and attachment identity. Matches show possible impact.
+They require live provider ownership and field compatibility verification before
+the host can approve a migration. The preview does not activate package code or
+edit project sources.
+
 Legacy extension directories and `.horo/plugins.json` use the bounded ADR-054
 migration. It parses legacy metadata only to build a preview, generates a
 canonical `horo-package.toml`, `files.manifest.json` and package-scoped extension

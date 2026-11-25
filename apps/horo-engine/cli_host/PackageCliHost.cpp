@@ -228,6 +228,9 @@ namespace Horo::Application::Internal {
         /** @brief Reports saved importer references and lock-level blockers before issuing an offline approval. */
         Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
         /** @brief Checks the verified archives if the caller requested a reference-aware preview. */
+        Result<void> AppendBehaviorMigrationDiagnostics(const PackageProjectPolicy &policy, const Cli::CliExecutionContext &context,
+                                                         std::span<const PackageBehaviorMigration> claims, std::vector<Diagnostic> &diagnostics);
+
         Result<void> ReviewCachedUpdate(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
                                         const Cli::CliExecutionContext &context);
 
@@ -316,12 +319,15 @@ namespace Horo::Application::Internal {
             if (cache.HasError())
                 return Result<void>::Failure(cache.ErrorValue());
             auto diagnostics = ReviewUpdateLock(update.preview);
+            std::vector<PackageBehaviorMigration> claims;
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics); reviewed.HasError())
+                if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics, claims); reviewed.HasError())
                     return reviewed;
             }
+            if (auto reviewed = AppendBehaviorMigrationDiagnostics(update.policy, context, claims, diagnostics); reviewed.HasError())
+                return reviewed;
             if (context.IsStopRequested())
                 return Result<void>::Failure(UpdateStopped(context));
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
@@ -355,6 +361,24 @@ namespace Horo::Application::Internal {
             if (assets.HasError())
                 return Inventory::Failure(assets.ErrorValue());
             return Inventory::Success({std::move(admission), std::move(read).Value(), std::move(assets).Value()});
+        }
+
+        /** @brief Resolves possible attachment impacts in the bounded saved asset inventory without activating either artifact. */
+        Result<void> AppendBehaviorMigrationDiagnostics(const PackageProjectPolicy &policy, const Cli::CliExecutionContext &context,
+                                                         std::span<const PackageBehaviorMigration> claims, std::vector<Diagnostic> &diagnostics) {
+            if (claims.empty())
+                return Result<void>::Success();
+            const auto inventory = OpenRemovalInventory(policy, context);
+            if (inventory.HasError())
+                return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), inventory.ErrorValue()));
+            const auto &inputs = inventory.Value();
+            auto matches = InspectPackageBehaviorMigrations(*inputs.assets, *inputs.files, inputs.admission, claims,
+                                                            MaximumUpdateDiagnostics - diagnostics.size());
+            if (matches.HasError())
+                return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), matches.ErrorValue()));
+            auto notes = std::move(matches).Value();
+            std::ranges::move(notes, std::back_inserter(diagnostics));
+            return Result<void>::Success();
         }
 
         /** @brief Reads the saved importer inventory through the same filesystem authority used during removal. */

@@ -2,6 +2,7 @@
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Packages/PackageMigration.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Scene/SceneSource.h"
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
 
@@ -104,17 +105,21 @@ namespace {
             REQUIRE(output.good());
         }
 
-        void WriteImporterReference(const char *name, const char *assetId) const {
+        void WriteScene(const char *name, const char *assetId, std::string_view bytes, bool imported = false) const {
             const auto folder = project.Path() / "Assets";
             std::filesystem::create_directories(folder);
             const auto asset = folder / name;
             auto sidecar = asset;
             sidecar += ".horo";
-            std::ofstream{asset} << "{}";
-            std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
-                                                     {"assetId", assetId},
-                                                     {"assetType", "core.scene"},
-                                                     {"importerPackageId", graph.package.Value()}};
+            std::ofstream{asset, std::ios::binary} << bytes;
+            nlohmann::json metadata{{"schemaVersion", 1}, {"assetId", assetId}, {"assetType", "core.scene"}};
+            if (imported)
+                metadata["importerPackageId"] = graph.package.Value();
+            std::ofstream{sidecar} << metadata;
+        }
+
+        void WriteImporterReference(const char *name, const char *assetId) const {
+            WriteScene(name, assetId, "{}", true);
         }
 
         static CliParsedOption PathOption(const char *name, const std::filesystem::path &path) {
@@ -492,6 +497,57 @@ namespace {
         const auto after = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
         REQUIRE(after.HasValue());
         CHECK(after.Value() == unchanged.Value());
+    }
+
+    TEST_CASE("Cached updates preview saved behavior rename impact", "[packages][application][cli][update]") {
+        NativeProject fixture;
+        constexpr std::string_view oldType = "game.tests.legacy_behavior";
+        constexpr std::string_view newType = "game.tests.current_behavior";
+        SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
+        object.components.behaviors = {{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(), .enabled = false}};
+        fixture.WriteScene("Migration.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e",
+                           SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}}));
+        const bool applies = GENERATE(true, false);
+        const auto source = applies ? fixture.graph.archive.Digest() : Sha256Digest{};
+        const nlohmann::json transition{{"fromVersion", "1.0.0"}, {"fromArtifactSha256", FormatSha256(source)},
+                                       {"renames", {{{"from", oldType}, {"to", newType}}}}};
+        const nlohmann::json declaration{{"schemaVersion", 1}, {"packageId", fixture.graph.package.Value()}, {"toVersion", "2.0.0"},
+                                         {"transitions", nlohmann::json::array({transition})}};
+        const std::vector<std::pair<std::string, std::string>> entries{
+            {"horo-package.toml", "schemaVersion = 1\n"},
+            {"assets/data.bin", "verified bytes"},
+            {std::string{Packages::PackageBehaviorRenameDeclarationPath}, declaration.dump()}};
+        const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
+        REQUIRE(archive.HasValue());
+        WriteAssetCandidate(fixture, Packages::PackageVersion::Parse("2.0.0").Value(), archive.Value());
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        NativeDurableFileSystem files;
+        auto cacheResult = Packages::PackageCacheStore::Create(files, cacheRoot);
+        REQUIRE(cacheResult.HasValue());
+        auto cache = std::move(cacheResult).Value();
+        REQUIRE(cache.Publish(fixture.graph.archive).HasValue());
+        REQUIRE(cache.Publish(archive.Value()).HasValue());
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    NativeProject::PathOption("candidate-request", root / ".horo/candidate.json"),
+                                                    NativeProject::PathOption("candidate-lock", root / ".horo/candidate.lock"),
+                                                    NativeProject::PathOption("package-cache-root", cacheRoot)}};
+        InInvocation([&](CliExecutionContext &context) {
+            const auto result = preview.adapter->Execute(command, context);
+            REQUIRE(result.HasError());
+            const auto &failure = result.ErrorValue();
+            CHECK(failure.code.Value() == "packages.host.update_requires_migration_review");
+            const auto match = std::ranges::find_if(failure.diagnostics, [](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_possible_behavior_rename";
+            });
+            REQUIRE((match != failure.diagnostics.end()) == applies);
+            if (applies) {
+                CHECK(match->path == "Assets/Migration.horoasset");
+                CHECK(match->message.ends_with("game.tests.legacy_behavior -> game.tests.current_behavior (object 7, attachment 3)"));
+            }
+        });
     }
 
     TEST_CASE("Headless package removal previews show when an extension requires a live owner", "[packages][application][cli][remove]") {

@@ -4,6 +4,9 @@
 #include "Horo/Packages/PackageRequest.h"
 
 namespace Horo::Application::Internal {
+    struct PackageBehaviorMigration;
+    inline constexpr std::size_t MaximumUpdateDiagnostics = 64;
+
     /** @brief Gives a typed migration failure with the collected compatibility blockers. */
     [[nodiscard]] Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics = {});
 
@@ -21,5 +24,5 @@ namespace Horo::Application::Internal {
 
     /** @brief Appends exact archive compatibility findings for one changed entry. */
     [[nodiscard]] Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                                  std::vector<Diagnostic> &diagnostics);
+                                                  std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims);
 }  // namespace Horo::Application::Internal

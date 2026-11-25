@@ -813,6 +813,14 @@ namespace {
         REQUIRE(prefabBytes.HasValue());
         writeAsset("Example.prefab", prefabAsset, "core.prefab", prefabBytes.Value());
 
+        const auto newType = Gameplay::BehaviorTypeId::Parse("game.tests.new_behavior").Value();
+        const std::array claims{PackageBehaviorMigration{locked.package, type, newType}};
+        const auto impact = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, claims, 2);
+        REQUIRE(impact.HasValue());
+        REQUIRE(impact.Value().size() == 2);
+        CHECK(impact.Value().front().path == "Assets/Scene.horoasset");
+        CHECK(impact.Value().back().path == "Assets/Example.prefab");
+
         const auto oldRequest = fixture.Read("packages.json");
         const auto oldLock = fixture.Read("packages.lock");
         const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
