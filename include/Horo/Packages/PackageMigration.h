@@ -8,6 +8,12 @@
 namespace Horo::Packages {
     inline constexpr std::string_view PackageAssetRenameDeclarationPath = "migrations/asset-renames.json";
 
+    /** @brief Identifies the reserved declaration file when it is inert archive metadata.
+     * @param file Verified file inventory entry.
+     * @return True for the reserved path with neither executable bytes nor a contribution owner.
+     */
+    [[nodiscard]] bool IsPackageAssetRenameMetadata(const PackageFileEntry &file);
+
     /** @brief One verified archive path transition inside the same portable package. */
     struct PackageAssetRename final {
         PackagePath previous;

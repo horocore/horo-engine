@@ -5,6 +5,7 @@
 #include "PackageApplicationServiceTestSupport.h"
 #include "PackageCliHost.h"
 
+#include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <iterator>
@@ -365,6 +366,60 @@ namespace {
         }
         CHECK(read(metadata / "packages.json") == originalRequest);
         CHECK(read(metadata / "packages.lock") == originalLock);
+    }
+
+    TEST_CASE("Asset replacements can carry and retire historical migration metadata", "[packages][application][cli][update]") {
+        NativeProject fixture;
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto metadata = root / ".horo";
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        const auto version = Packages::PackageVersion::Parse("1.0.0").Value();
+        const nlohmann::json transition{{"fromVersion", "0.9.0"},
+                                       {"fromArtifactSha256", FormatSha256(Sha256Digest{})},
+                                       {"renames", {{{"from", "assets/legacy.bin"}, {"to", "assets/data.bin"}}}}};
+        const nlohmann::json declaration{{"schemaVersion", 1},
+                                         {"packageId", fixture.graph.package.Value()},
+                                         {"toVersion", version.ToString()},
+                                         {"transitions", nlohmann::json::array({transition})}};
+        const std::vector<std::pair<std::string, std::string>> entries{
+            {"horo-package.toml", "schemaVersion = 1\n"},
+            {"assets/data.bin", "verified bytes"},
+            {std::string{Packages::PackageAssetRenameDeclarationPath}, declaration.dump()}};
+        const auto carrier = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
+        REQUIRE(carrier.HasValue());
+        NativeDurableFileSystem files;
+        auto cacheResult = Packages::PackageCacheStore::Create(files, cacheRoot);
+        REQUIRE(cacheResult.HasValue());
+        auto cache = std::move(cacheResult).Value();
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const auto apply = MakePackageApplyUpdateCommandAdapter();
+        const CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                        .options = {NativeProject::PathOption("project", root),
+                                                    NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
+                                                    NativeProject::PathOption("candidate-lock", metadata / "candidate.lock")}};
+        const auto cacheOption = NativeProject::PathOption("package-cache-root", cacheRoot);
+        const std::array<const Packages::ValidatedPackageArchive *, 2> archives{&carrier.Value(), &fixture.graph.archive};
+        REQUIRE(cache.Publish(fixture.graph.archive).HasValue());
+        REQUIRE(cache.Publish(carrier.Value()).HasValue());
+        for (const auto *archive : archives) {
+            WriteAssetCandidate(fixture, version, *archive);
+            InInvocation([&](CliExecutionContext &context) {
+                auto reviewed = command;
+                reviewed.options.push_back(cacheOption);
+                REQUIRE(preview.adapter->Execute(reviewed, context).HasValue());
+                const auto approval = preview.adapter->Execute(command, context);
+                REQUIRE(approval.HasValue());
+                const auto approved = std::get<std::string>(approval.Value().fields.back().value);
+                reviewed.command = apply.adapter->GetDescriptor().path;
+                reviewed.options.push_back({"approve", {{approved, CliValueSource::Invocation, {}}}});
+                REQUIRE(apply.adapter->Execute(reviewed, context).HasValue());
+            });
+            const auto installed = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
+            const auto candidate = files.ReadFileBounded(metadata / "candidate.lock", 1U << 20U, {});
+            REQUIRE(installed.HasValue());
+            REQUIRE(candidate.HasValue());
+            CHECK(installed.Value() == candidate.Value());
+        }
     }
 
     TEST_CASE("Cached update previews bind asset rename declarations to the exact previous artifact",

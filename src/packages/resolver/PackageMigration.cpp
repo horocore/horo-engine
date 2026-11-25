@@ -148,6 +148,11 @@ namespace Horo::Packages {
         }
     }  // namespace
 
+    /** @copydoc IsPackageAssetRenameMetadata */
+    bool IsPackageAssetRenameMetadata(const PackageFileEntry &file) {
+        return file.id.path.Value() == PackageAssetRenameDeclarationPath && !file.executable && !file.contributionRoot;
+    }
+
     /** @copydoc InspectPackageAssetRenames */
     Result<std::vector<PackageAssetRename>> InspectPackageAssetRenames(const LockedPackage &previous,
                                                                       const ValidatedPackageArchive &previousArchive,
@@ -159,7 +164,7 @@ namespace Horo::Packages {
         const auto *declared = FindFile(candidateArchive, PackageAssetRenameDeclarationPath);
         if (!declared)
             return Renames::Success({});
-        if (declared->executable || declared->size == 0)
+        if (!IsPackageAssetRenameMetadata(*declared) || declared->size == 0)
             return Renames::Failure(PlanError("packages.migration.archive_evidence_invalid", candidate));
         const auto bytes = candidateArchive.ReadDeclaredFile(declared->id.path, MaximumPlanBytes);
         if (bytes.HasError())

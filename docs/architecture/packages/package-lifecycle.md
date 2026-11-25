@@ -544,6 +544,9 @@ scene or asset files uses editor document commands/transactions where applicable
 The cache-backed update preview reads the optional `migrations/asset-renames.json`
 file from the candidate's verified inventory. A version-one declaration binds
 the candidate package ID and version and lists exact prior artifact selectors.
+Compatible asset replacements may carry or retire this archive metadata when
+no selector matches the installed artifact and all existing asset paths retain
+their bytes and owners. Preview and apply both validate a candidate declaration.
 
 ```json
 {

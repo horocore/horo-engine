@@ -25,10 +25,10 @@ namespace Horo::Application::Internal {
     /** @copydoc UpdateNeedsMigration */
     Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics) {
         std::string message{"Package update requires migration review."};
-        if (!diagnostics.empty()) {
-            const auto &first = diagnostics.front();
-            const auto subject = first.path.empty() ? first.message : first.message + " / " + first.path;
-            message += " The first blocker is " + subject + " (" + first.code.Value() + ").";
+        const auto first = std::ranges::find(diagnostics, DiagnosticSeverity::Error, &Diagnostic::severity);
+        if (first != diagnostics.end()) {
+            const auto subject = first->path.empty() ? first->message : first->message + " / " + first->path;
+            message += " The first blocker is " + subject + " (" + first->code.Value() + ").";
         }
         return Error{ErrorCode{"packages.host.update_requires_migration_review"}, ErrorDomainId{"packages.host"},
                      ErrorSeverity::Error, std::move(message), std::move(diagnostics)};
@@ -59,24 +59,49 @@ namespace Horo::Application::Internal {
         return nullptr;
     }
 
-    /** @copydoc ReviewAssetFiles */
-    void ReviewAssetFiles(const Packages::HoroPackageId &package, const Packages::ValidatedPackageArchive &previous,
-                          const Packages::ValidatedPackageArchive &candidate, std::vector<Diagnostic> &diagnostics) {
+    /** @brief Checks the paths that could be visible to existing package consumers. */
+    static void ReviewInventory(const Packages::HoroPackageId &package, const Packages::ValidatedPackageArchive &previous,
+                                const Packages::ValidatedPackageArchive &candidate, std::vector<Diagnostic> &diagnostics) {
         std::map<std::string_view, const Packages::PackageFileEntry *, std::less<>> byPath;
         for (const auto &file : candidate.Manifest().Entries()) {
             const std::string_view path = file.id.path.Value();
-            if (path == Packages::PackageAssetRenameDeclarationPath && !file.executable)
-                ReportUpdateBlocker(diagnostics, "packages.host.update_migration_execution_required", package, path);
-            else if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
+            if (Packages::IsPackageAssetRenameMetadata(file))
+                continue;
+            if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
                 ReportUpdateBlocker(diagnostics, "packages.host.update_archive_requires_owner", package, path);
             byPath.emplace(path, &file);
         }
         for (const auto &oldFile : previous.Manifest().Entries()) {
+            if (Packages::IsPackageAssetRenameMetadata(oldFile))
+                continue;
             const auto &path = oldFile.id.path.Value();
             const auto next = byPath.find(path);
             if (const auto *blocked = AssetFileBlocker(oldFile, next == byPath.end() ? nullptr : next->second))
                 ReportUpdateBlocker(diagnostics, blocked, package, path);
         }
+    }
+
+    /** @copydoc ReviewAssetFiles */
+    Result<void> ReviewAssetFiles(const Packages::LockedPackage &previous, const Packages::ValidatedPackageArchive &previousArchive,
+                                  const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &candidateArchive,
+                                  std::vector<Diagnostic> &diagnostics) {
+        const auto renames = Packages::InspectPackageAssetRenames(previous, previousArchive, candidate, candidateArchive);
+        if (renames.HasError())
+            return Result<void>::Failure(renames.ErrorValue());
+        if (!renames.Value().empty())
+            ReportUpdateBlocker(diagnostics, "packages.host.update_migration_execution_required", previous.package,
+                                Packages::PackageAssetRenameDeclarationPath);
+        ReviewInventory(previous.package, previousArchive, candidateArchive, diagnostics);
+        for (const auto &rename : renames.Value()) {
+            if (diagnostics.size() >= MaximumUpdateDiagnostics)
+                break;
+            const auto *code = rename.preservesBytes ? "packages.host.update_declared_asset_rename"
+                                                     : "packages.host.update_declared_asset_rename_changes_bytes";
+            diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Note,
+                                     previous.package.Value() + " -> " + rename.candidate.Value(), SourceLocation{"packages.host"},
+                                     rename.previous.Value());
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc ReadUpdateArchive */
@@ -124,19 +149,6 @@ namespace Horo::Application::Internal {
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
             return Result<void>::Failure(previous.ErrorValue());
-        const auto renames = Packages::InspectPackageAssetRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
-        if (renames.HasError())
-            return Result<void>::Failure(renames.ErrorValue());
-        for (const auto &rename : renames.Value()) {
-            if (diagnostics.size() == MaximumUpdateDiagnostics)
-                break;
-            const auto *code = rename.preservesBytes ? "packages.host.update_declared_asset_rename"
-                                                     : "packages.host.update_declared_asset_rename_changes_bytes";
-            diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Note,
-                                     change.current->package.Value() + " -> " + rename.candidate.Value(), SourceLocation{"packages.host"},
-                                     rename.previous.Value());
-        }
-        ReviewAssetFiles(change.current->package, previous.Value(), candidate.Value(), diagnostics);
-        return Result<void>::Success();
+        return ReviewAssetFiles(*change.current, previous.Value(), *change.candidate, candidate.Value(), diagnostics);
     }
 }  // namespace Horo::Application::Internal

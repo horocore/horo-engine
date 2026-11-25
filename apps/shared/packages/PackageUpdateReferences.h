@@ -7,9 +7,10 @@ namespace Horo::Application::Internal {
     /** @brief Gives a typed migration failure with the collected compatibility blockers. */
     [[nodiscard]] Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics = {});
 
-    /** @brief Checks whether the old asset paths keep their bytes and contribution owners. */
-    void ReviewAssetFiles(const Packages::HoroPackageId &package, const Packages::ValidatedPackageArchive &previous,
-                          const Packages::ValidatedPackageArchive &candidate, std::vector<Diagnostic> &diagnostics);
+    /** @brief Reviews sealed archives for reference changes and applicable migration declarations. */
+    [[nodiscard]] Result<void> ReviewAssetFiles(const Packages::LockedPackage &previous, const Packages::ValidatedPackageArchive &previousArchive,
+                                                const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &candidateArchive,
+                                                std::vector<Diagnostic> &diagnostics);
 
     /** @brief Binds a read-only cache archive to the exact current or candidate lock entry. */
     [[nodiscard]] Result<Packages::ValidatedPackageArchive> ReadUpdateArchive(const Packages::PackageCacheStore &cache,

@@ -432,7 +432,8 @@ namespace Horo::Application::Internal {
                 const auto previous = ReadUpdateArchive(cache, old);
                 if (previous.HasError())
                     return Result<void>::Failure(previous.ErrorValue());
-                ReviewAssetFiles(old.package, previous.Value(), *next->archive, diagnostics);
+                if (auto reviewed = ReviewAssetFiles(old, previous.Value(), next->lock, *next->archive, diagnostics); reviewed.HasError())
+                    return reviewed;
             }
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
