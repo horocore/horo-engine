@@ -207,8 +207,9 @@ Ownership rules:
   The ray carries its own pose interval. When both adjacent states have valid
   action intervals, the press carries the range between the observed released
   and pressed states. An uncertain press cannot be inferred from the ray's time.
-- On macOS, the local Agent panel offers explicit listening controls for focused
-  XR Play with a current scene selection. Speech and microphone permission are
+- On macOS, the local Agent panel offers explicit listening controls for the
+  current authored scene in focused XR Play. The scene selection is optional.
+  Speech and microphone permission are
   requested separately. Play capture retains only a transient transcript preview
   and does not grant model, tool or mutation authority. The panel clears capture
   when presentation, selection or the Play lineage is withdrawn.

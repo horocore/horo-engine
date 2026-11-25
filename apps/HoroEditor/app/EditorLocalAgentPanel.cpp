@@ -476,8 +476,9 @@ namespace Horo::Editor {
                     listening_->RefreshInputs();
                 }
                 DrawListeningInput(context);
-                if (Button(locale, "xr_listening_start", listeningDevice_.has_value() && listening_->CanListen())) {
-                    const auto selection = captureSceneSelection_ ? captureSceneSelection_() : std::nullopt;
+                const bool ready = listeningDevice_.has_value() && captureSceneSelection_ && listening_->CanListen();
+                if (Button(locale, "xr_listening_start", ready)) {
+                    const auto selection = captureSceneSelection_(AgentSceneSelectionPurpose::ImmersivePlay);
                     listening_->Start(*listeningDevice_, context.settings.settings.languageTag, contextGeneration_,
                                       selection.value_or(AgentSceneSelectionSnapshot{}));
                 }
@@ -567,6 +568,8 @@ namespace Horo::Editor {
                 const auto &review = *listeningReferences_;
                 Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
                                 Theme::Muted(), fonts);
+                if (review.Candidates().empty())
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_empty"), Theme::Muted(), fonts);
                 if (review.RequiresClarification())
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
                 for (const auto &candidate : review.Candidates())
@@ -948,7 +951,8 @@ namespace Horo::Editor {
             void DrawSceneActions(const ILocalizationService &locale, const bool ready) {
                 const bool contextReady = ready && contextLifetime_ && !contextProject_.empty();
                 if (Button(locale, "context_scene_selection_offer", contextReady && captureSceneSelection_)) {
-                    PrepareSceneSelectionReview(captureSceneSelection_(), "context_scene_selection_unavailable");
+                    PrepareSceneSelectionReview(captureSceneSelection_(AgentSceneSelectionPurpose::SelectedObjects),
+                                                "context_scene_selection_unavailable");
                     return;
                 }
                 if (captureAgentViewport_ && Button(locale, "context_viewport_offer", contextReady)) {
@@ -2058,7 +2062,7 @@ namespace Horo::Editor {
             std::optional<CloudTurnReview> cloudReview_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
-            std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
+            std::function<std::optional<AgentSceneSelectionSnapshot>(AgentSceneSelectionPurpose)> captureSceneSelection_;
             decltype(PanelContext::captureAgentViewport) captureAgentViewport_;
             decltype(PanelContext::takeAgentViewportReview) takeAgentViewportReview_;
             std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics_;

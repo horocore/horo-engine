@@ -586,14 +586,28 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::CaptureAgentSceneSelection */
-    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection() {
+    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection(
+        const AgentSceneSelectionPurpose purpose) {
         const auto &selection = m_selection.Current();
-        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() || !selection.revision.value ||
-            selection.objects.empty())
+        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid())
+            return std::nullopt;
+        if (purpose == AgentSceneSelectionPurpose::ImmersivePlay) {
+            if (!ReadAgentReferenceScene())
+                return std::nullopt;
+        } else if (!selection.revision.value || selection.objects.empty())
             return std::nullopt;
         if (!m_agentSceneSelectionLifetime)
             m_agentSceneSelectionLifetime.emplace();
         return CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
+    }
+
+    /** @copydoc EditorWorkspaceController::ReadAgentReferenceScene */
+    std::optional<Runtime::RuntimeSceneView> EditorWorkspaceController::ReadAgentReferenceScene() const {
+        const auto play = m_playSession.SceneView();
+        if (m_playSession.State() != EditorPlaySessionState::Playing || !play || !play->IsCurrent() ||
+            play->DefinitionRevision().value != m_document.State().value)
+            return std::nullopt;
+        return play;
     }
 
     namespace {
@@ -620,9 +634,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ReviewAgentSceneReferences */
     std::optional<AgentSceneReferenceReview> EditorWorkspaceController::ReviewAgentSceneReferences(
         const AgentSceneReferenceRequest &request) const {
-        const auto play = m_playSession.SceneView();
-        if (m_playSession.State() != EditorPlaySessionState::Playing || !play || !play->IsCurrent() ||
-            play->RuntimeId().value != request.worldGeneration || play->DefinitionRevision().value != m_document.State().value)
+        const auto play = ReadAgentReferenceScene();
+        if (!play || play->RuntimeId().value != request.worldGeneration)
             return std::nullopt;
         if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value ||
             request.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects)

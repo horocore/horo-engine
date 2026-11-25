@@ -116,8 +116,8 @@ namespace Horo::Editor {
          * @details Copy chosen snapshots before returning to the workspace. The borrow expires on the next model update.
          */
         std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
-        /** @brief Captures bounded selected Scene object IDs on the workspace owner lane. */
-        std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection{};
+        /** @brief Captures bounded Scene selection and its lifetime for the requested workflow. */
+        std::function<std::optional<AgentSceneSelectionSnapshot>(AgentSceneSelectionPurpose)> captureSceneSelection{};
         /** @brief Revalidates captured scene references on the workspace owner lane for a read-only review. */
         std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences{};
         /** @brief Optional rooted read authority for explicit saved-file review, bound to generation one. */

@@ -337,8 +337,11 @@ namespace Horo::Editor {
             return m_viewModel;
         }
 
-        /** @brief Captures the current ordinary Scene selection and its revocable revision on the owner lane. */
-        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection();
+        /** @brief Captures the ordinary Scene selection and its revocable lifetime on the owner lane.
+         * @param purpose The immersive Play workflow may capture an empty selection in the active Play scene.
+         * @return A scoped selection snapshot, or no value when the workflow is unavailable. */
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection(
+            AgentSceneSelectionPurpose purpose = AgentSceneSelectionPurpose::SelectedObjects);
         /** @brief Reviews captured references against the same document and current Play scene. */
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewAgentSceneReferences(const AgentSceneReferenceRequest &request) const;
 
@@ -1403,6 +1406,8 @@ namespace Horo::Editor {
         void AdvanceViewportSceneRevision() noexcept;
         /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */
         [[nodiscard]] AgentSceneSelectionSnapshot CaptureAgentSelectionValues(const CancellationSource &lifetime) const;
+        /** @brief Borrows the running Play scene built from the current authoring state. */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> ReadAgentReferenceScene() const;
         /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
         void RefreshInspectorDocumentPort();
         /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */

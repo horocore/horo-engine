@@ -208,8 +208,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return controller_->ViewModel().sourceDocuments;
         },
             .captureSceneSelection =
-                [this] {
-            return controller_->CaptureAgentSceneSelection();
+                [this](const AgentSceneSelectionPurpose purpose) {
+            return controller_->CaptureAgentSceneSelection(purpose);
         },
             .reviewAgentSceneReferences =
                 [this](const AgentSceneReferenceRequest &request) {

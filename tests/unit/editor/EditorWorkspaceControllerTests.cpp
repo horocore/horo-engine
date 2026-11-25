@@ -822,6 +822,20 @@ namespace {
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
     }
 
+    /** @brief Verifies that immersive capture can borrow the Play scope with an empty selection. */
+    void VerifyUnselectedPlayCapture(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene) {
+        REQUIRE(workspace.ViewModel().selectedObjects.empty());
+        CHECK_FALSE(workspace.CaptureAgentSceneSelection());
+        const auto capture = workspace.CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay);
+        REQUIRE(capture);
+        CHECK(capture->objectCount == 0);
+        CHECK_FALSE(capture->lifetime.IsCancellationRequested());
+        const auto review = workspace.ReviewAgentSceneReferences({capture->documentEpoch, capture->documentRevision, scene.value, {}});
+        REQUIRE(review);
+        CHECK(review->Candidates().empty());
+        CHECK_FALSE(review->RequiresClarification());
+    }
+
     TEST_CASE("Play Decision navigation honors the exact Scene and report identities", "[unit][editor][play][ai]") {
         Tests::OwnedTestDirectory project{"workspace-decision-navigation"};
         const auto scenePath = project.Path() / "assets/scenes/main.horo";
@@ -921,8 +935,10 @@ namespace {
             REQUIRE(workspace.ViewModel().playDecisionObjectAvailable);
             return *workspace.ViewModel().playDecisionProblem;
         };
+        CHECK_FALSE(workspace.CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay));
         const auto first = play();
         REQUIRE(first.entity);
+        VerifyUnselectedPlayCapture(workspace, first.scene);
         workspace.UpdatePlayPresentation(0.0F);
         const auto emitted = diagnostics.SnapshotIfChanged(0);
         REQUIRE(emitted);

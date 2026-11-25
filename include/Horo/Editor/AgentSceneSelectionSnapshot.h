@@ -13,6 +13,12 @@
 namespace Horo::Editor {
     inline constexpr char LocalAgentWorkspacePanelId[] = "horo.local_agent";
 
+    /** @brief Identifies which local workflow is borrowing the current selection. */
+    enum class AgentSceneSelectionPurpose : std::uint8_t {
+        SelectedObjects,
+        ImmersivePlay
+    };
+
     /** @brief Explicit component data scope for a viewport review. */
     enum class AgentViewportComponents : std::uint8_t {
         None,
