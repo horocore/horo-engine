@@ -83,6 +83,49 @@ namespace Horo::Agent {
         }
     }  // namespace
 
+    /** @copydoc McpPlanCatalog::Capture */
+    std::shared_ptr<const McpPlanCatalog> McpPlanCatalog::Capture(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                  const std::span<const std::string> capabilities,
+                                                                  const std::span<const std::string> approvedTools) {
+        constexpr auto MaximumApprovedTools = AgentTurnLimits{}.maximumToolCalls;
+        if (!registry || approvedTools.empty() || approvedTools.size() > MaximumApprovedTools)
+            return {};
+        const auto snapshot = registry->Read();
+        if (!snapshot)
+            return {};
+        const auto visible = snapshot->Discover(capabilities);
+        auto catalog = std::shared_ptr<McpPlanCatalog>{new McpPlanCatalog};
+        catalog->tools_.reserve(approvedTools.size());
+        for (const auto &name : approvedTools) {
+            const auto tool = std::ranges::find(visible, Mcp::McpToolId{name}, &Mcp::McpToolDescriptor::id);
+            if (tool == visible.end() || std::ranges::find(catalog->tools_, name, &ModelTool::name) != catalog->tools_.end())
+                return {};
+            catalog->tools_.emplace_back(name, tool->description, tool->inputSchema.dump());
+        }
+        catalog->registry_ = std::move(registry);
+        catalog->snapshot_ = snapshot;
+        catalog->capabilities_.assign(capabilities.begin(), capabilities.end());
+        return catalog->IsCurrent() ? catalog : nullptr;
+    }
+
+    /** @copydoc McpPlanCatalog::IsCurrent */
+    bool McpPlanCatalog::IsCurrent() const noexcept {
+        try {
+            return registry_->Read() == snapshot_;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    /** @copydoc McpPlanCatalog::Inspect */
+    AgentPlanToolInspection McpPlanCatalog::Inspect(const ModelToolIntent &intent) const {
+        if (!IsCurrent())
+            return {ContextDenied};
+        if (std::ranges::find(tools_, intent.name, &ModelTool::name) == tools_.end())
+            return {ToolDenied};
+        return InspectMcpPlanTool(*snapshot_, capabilities_, intent);
+    }
+
     /** @copydoc InspectMcpPlanTool */
     AgentPlanToolInspection InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry, const std::span<const std::string> capabilities,
                                                const ModelToolIntent &intent) {

@@ -14,6 +14,10 @@
 #include <string>
 #include <string_view>
 
+namespace Horo::Agent {
+    class McpPlanCatalog;
+}
+
 namespace Horo::Editor {
     enum class ImmersiveAuthoringMode : std::uint8_t {
         Edit,
@@ -111,12 +115,13 @@ namespace Horo::Editor {
     private:
         friend class ImmersiveAgentRequest;
         ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
-                            CancellationToken projectLifetime = {});
+                            CancellationToken projectLifetime = {}, std::shared_ptr<const Agent::McpPlanCatalog> catalog = {});
 
         ImmersivePlanningContext context_;
         Agent::AgentTurnPlan plan_;
         std::stop_token stop_;
         CancellationToken projectLifetime_;
+        std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
     };
 
     /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
@@ -131,9 +136,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Checks whether this request can still publish on the editor lane after worker completion. */
-        [[nodiscard]] bool IsCurrent() const noexcept {
-            return context_.IsCurrent();
-        }
+        [[nodiscard]] bool IsCurrent() const noexcept;
 
         /** @brief Runs bounded text inference with the existing Agent runtime and checks revocation during dispatch.
          * @param provider Host-selected provider with separately admitted transport and payload.
@@ -150,7 +153,7 @@ namespace Horo::Editor {
          * @return Inert draft or terminal rejection.
          */
         [[nodiscard]] ImmersivePlanReview Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
-                                               const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {},
+                                               const Agent::AgentPlanToolValidator &validateTool = {}, std::stop_token stop = {},
                                                const Agent::AgentTurnContext *approvedContext = nullptr);
 
     private:
@@ -162,6 +165,7 @@ namespace Horo::Editor {
         Agent::ModelRequest request_;
         bool reviewOnly_{};
         std::string projectIdentity_;
+        std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
     };
 
     /** @brief Cold owner-lane publication and admission for one Editor opening. */
@@ -198,6 +202,15 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlan(const ImmersivePlanningContext &context,
                                                                        Agent::ModelRequest &&request,
                                                                        std::string_view projectIdentity = {}) const;
+        /** @brief Captures a text request with tool definitions and inspection from the same approved registry snapshot.
+         * @param context Current authoring scope. @param request Request without predeclared tools.
+         * @param catalog Exact approved MCP catalog. @param projectIdentity Optional consented project identifier.
+         * @return Owned inert planner or empty for invalid scope, stale catalog or payload.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureMcpPlan(const ImmersivePlanningContext &context,
+                                                                          Agent::ModelRequest request,
+                                                                          std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                                                                          std::string_view projectIdentity = {}) const;
 
     private:
         std::shared_ptr<ImmersiveContextEpoch> epoch_;

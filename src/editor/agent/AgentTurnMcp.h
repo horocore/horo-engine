@@ -7,10 +7,40 @@
 #include "Horo/Security/SecureMemory.h"
 
 namespace Horo::Mcp {
+    class McpToolRegistry;
     class McpToolSnapshot;
 }  // namespace Horo::Mcp
 
 namespace Horo::Agent {
+    /** @brief Exact host-approved subset of one MCP registry generation for review-only inference. */
+    class McpPlanCatalog final {
+    public:
+        /** @brief Captures only explicitly approved, granted registrations.
+         * @param registry Host-owned registry. @param capabilities Already admitted capability names.
+         * @param approvedTools Host-selected tool names. @return Catalog or empty when any approval is invalid.
+         */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> Capture(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                           std::span<const std::string> capabilities,
+                                                                           std::span<const std::string> approvedTools);
+        /** @brief Checks whether the exact published registry snapshot remains current. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
+        /** @brief Borrows the exact model schema list projected from the approved registrations. */
+        [[nodiscard]] const std::vector<ModelTool> &Tools() const noexcept {
+            return tools_;
+        }
+
+        /** @brief Inspects an inert proposal through the same catalog that advertised it. */
+        [[nodiscard]] AgentPlanToolInspection Inspect(const ModelToolIntent &intent) const;
+
+    private:
+        McpPlanCatalog() = default;
+        std::shared_ptr<const Mcp::McpToolRegistry> registry_;
+        std::shared_ptr<const Mcp::McpToolSnapshot> snapshot_;
+        std::vector<std::string> capabilities_;
+        std::vector<ModelTool> tools_;
+    };
+
     /** @brief Decodes a bounded model intent and inspects it against the host's admitted registry snapshot.
      * @param registry Exact registry generation selected by the host. @param capabilities Its granted capability names.
      * @param intent Untrusted proposed call. @return Registered effect or typed rejection, without running or authorizing the call.

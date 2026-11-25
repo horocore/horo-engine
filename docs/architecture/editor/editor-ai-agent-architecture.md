@@ -278,6 +278,9 @@ Ownership rules:
   The draft retains the registered read, presentation, or mutation effect for
   each proposed call and any provider-reported token usage. The Editor can read
   it only under the original authoring generation while the request is current.
+  A registry-backed request advertises only definitions derived from its
+  host-selected, capability-granted catalog. Replacing the MCP registry blocks
+  new inference and withdraws any draft from the old catalog.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

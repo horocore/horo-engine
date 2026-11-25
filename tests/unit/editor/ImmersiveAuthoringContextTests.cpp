@@ -1,4 +1,5 @@
 #include "../../../apps/HoroEditor/app/ImmersiveAuthoringContext.h"
+#include "AgentTurnTestTools.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <future>
@@ -10,13 +11,15 @@ namespace Horo::Editor {
             std::function<void()> duringInference;
             std::size_t calls{};
             std::optional<Agent::ModelToolIntent> tool;
+            std::vector<Agent::ModelTool> advertised;
 
             Agent::ProviderDiscovery Discover(std::stop_token) override {
                 return {};
             }
 
-            Agent::ModelOutcome Stream(const Agent::ModelRequest &, const Agent::ModelEventSink &sink, std::stop_token) override {
+            Agent::ModelOutcome Stream(const Agent::ModelRequest &request, const Agent::ModelEventSink &sink, std::stop_token) override {
                 ++calls;
+                advertised = request.tools;
                 if (duringInference)
                     duringInference();
                 if (tool && !sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = *tool}))
@@ -330,6 +333,37 @@ namespace Horo::Editor {
                 CHECK(targets.objects == scope.objects);
                 return true;
             }) != nullptr) == (expected == Completed));
+        }
+
+        TEST_CASE("Immersive plan schemas and review share one revocable MCP catalog", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            const std::vector<std::string> capabilities{"editor.scene.inspect"};
+            Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
+            const std::array approved{std::string{"scene.inspect"}};
+            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, {}, approved));
+            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved);
+            REQUIRE(catalog);
+            const std::array unregistered{std::string{"scene.unregistered"}};
+            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, unregistered));
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto request = owner.CaptureMcpPlan(*context, Prompt(), catalog);
+            auto pending = owner.CaptureMcpPlan(*context, Prompt(), catalog);
+            REQUIRE(request);
+            REQUIRE(pending);
+            PlanningModel model;
+            model.tool = Agent::ModelToolIntent{"inspect", approved.front(), "{}"};
+            const auto review = request->Plan(model, 1, {});
+            REQUIRE(review.Read(*context));
+            REQUIRE(model.advertised.size() == 1);
+            CHECK(model.advertised.front().name == approved.front());
+            CHECK(model.advertised.front().parametersJson == R"({"additionalProperties":false,"type":"object"})");
+            REQUIRE(tools.registry->Publish({}).HasValue());
+            CHECK_FALSE(review.Read(*context));
+            CHECK(pending->Plan(model, 2, {}).Status() == ContextDenied);
+            CHECK(model.calls == 1);
+            CHECK(tools.scene->calls == 0);
         }
 
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {
