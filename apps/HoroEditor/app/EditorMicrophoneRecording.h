@@ -7,6 +7,13 @@
 #include <thread>
 
 namespace Horo::Editor {
+    /** @brief Reserves a fresh recording identity for a canonical project WAV path.
+     * @param root Active project root. @param path Portable destination path under assets.
+     * @return Owned recording destination, or empty when validation or identity allocation fails.
+     */
+    [[nodiscard]] std::optional<Application::Internal::AudioRecordingDestination> RecordingTarget(const std::filesystem::path &root,
+                                                                                                  std::string_view path);
+
     /** @brief A durable recording adopted by the active project registry. */
     struct EditorPublishedRecording final {
         Assets::AssetId id;

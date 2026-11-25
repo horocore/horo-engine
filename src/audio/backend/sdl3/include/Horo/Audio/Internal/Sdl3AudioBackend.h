@@ -206,6 +206,13 @@ namespace Horo::Audio::Backend {
          */
         [[nodiscard]] Result<AudioCaptureBuffer> FinishRecording(std::uint64_t generation, const Sdl3CaptureGrant &grant);
 
+        /** @brief Seals an admitted speech generation and transfers its unread PCM on the control lane.
+         * @param generation Exact active speech capture generation.
+         * @param grant Current speech admission. Withdrawal or loss discards the queue.
+         * @return Detached gap-free tail for the speech worker, or typed stale, health, overflow or permission failure.
+         */
+        [[nodiscard]] Result<AudioCaptureBuffer> FinishSpeech(std::uint64_t generation, const Sdl3CaptureGrant &grant);
+
         /** @brief Closes one generation, including host-driven revocation. Repeated stop for that generation succeeds.
          * @param generation Previously started capture generation.
          * @return Success after native detachment or a typed stale-generation error.
@@ -224,6 +231,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept override;
 
     private:
+        [[nodiscard]] Result<AudioCaptureBuffer> FinishCapture(std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                               Sdl3CapturePurpose purpose);
         struct Impl;
         friend Result<std::unique_ptr<Sdl3AudioBackend>> CreateSdl3AudioBackend(const Sdl3AudioBackendConfig &config);
         explicit Sdl3AudioBackend(std::unique_ptr<Impl> implementation) noexcept;

@@ -372,14 +372,31 @@ namespace Horo::Audio::Backend {
 
     /** @copydoc Sdl3AudioBackend::FinishRecording */
     Result<AudioCaptureBuffer> Sdl3AudioBackend::FinishRecording(const std::uint64_t generation, const Sdl3CaptureGrant &grant) {
+        return FinishCapture(generation, grant, Sdl3CapturePurpose::Recording);
+    }
+
+    /** @copydoc Sdl3AudioBackend::FinishSpeech */
+    Result<AudioCaptureBuffer> Sdl3AudioBackend::FinishSpeech(const std::uint64_t generation, const Sdl3CaptureGrant &grant) {
+        using Output = Result<AudioCaptureBuffer>;
+        auto tail = FinishCapture(generation, grant, Sdl3CapturePurpose::Speech);
+        if (tail.HasValue() && tail.Value().DroppedFrames() != 0)
+            return Output::Failure(MakeError(AudioErrors::SourceInvalid));
+        return tail;
+    }
+
+    Result<AudioCaptureBuffer> Sdl3AudioBackend::FinishCapture(const std::uint64_t generation, const Sdl3CaptureGrant &grant,
+                                                               const Sdl3CapturePurpose purpose) {
         using Output = Result<AudioCaptureBuffer>;
         if (auto current = ReconcileCapture(generation, grant); current.HasError())
             return Output::Failure(current.ErrorValue());
         auto &capture = impl_->capture;
-        if (capture.activeGrant.intent.purpose != Sdl3CapturePurpose::Recording)
+        if (capture.activeGrant.intent.purpose != purpose)
             return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
         auto tail = capture.stream->Finish();
+        const auto *failure = purpose == Sdl3CapturePurpose::Speech ? capture.stream->Failure() : nullptr;
         capture.Stop();
+        if (failure)
+            return Output::Failure(MakeError(*failure));
         return Output::Success(std::move(tail));
     }
 }  // namespace Horo::Audio::Backend

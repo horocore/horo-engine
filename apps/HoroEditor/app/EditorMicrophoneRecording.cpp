@@ -1,9 +1,11 @@
 #include "EditorMicrophoneRecording.h"
 
 #include "Horo/Audio/AudioErrors.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Security/SecureMemory.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <new>
 #include <system_error>
@@ -13,6 +15,18 @@ namespace Horo::Editor {
         using namespace Application::Internal;
         using RecordResult = Result<Assets::AssetRecord>;
         using SaveResult = Result<EditorPublishedRecording>;
+
+        /** @brief Rejects characters that cannot be used consistently in project asset paths. */
+        bool InvalidRecordingPathCharacter(const unsigned char character) noexcept {
+            constexpr std::string_view Reserved = ":*?\"<>|";
+            return character < 32 || character == 127 || Reserved.find(static_cast<char>(character)) != std::string_view::npos;
+        }
+
+        /** @brief Restricts recording to portable WAV destinations under the project asset root. */
+        bool IsRecordingPath(const std::string_view path) noexcept {
+            return path.size() <= 200 && path.starts_with("assets/") && path.ends_with(".wav") && !path.ends_with("/.wav") &&
+                   !std::ranges::any_of(path, InvalidRecordingPathCharacter);
+        }
 
         /** @brief Limits a take to 20 seconds or 8 MiB of PCM, whichever is smaller. */
         std::uint64_t RecordingFrames(const Audio::AudioProcessingFormat &format) noexcept {
@@ -48,6 +62,24 @@ namespace Horo::Editor {
             return SaveResult::Success(std::move(result));
         }
     }  // namespace
+
+    /** @copydoc RecordingTarget */
+    std::optional<Application::Internal::AudioRecordingDestination> RecordingTarget(const std::filesystem::path &root,
+                                                                                    const std::string_view path) {
+        if (root.empty() || !IsRecordingPath(path))
+            return std::nullopt;
+        auto relative = ProjectPath::Parse(path);
+        if (relative.HasError() || relative.Value().String() != path)
+            return std::nullopt;
+        std::array<std::uint8_t, 16> bytes{};
+        if (const auto entropy = Platform::CreateNativeSecureRandomSource();
+            entropy->Fill(std::as_writable_bytes(std::span{bytes})).HasError())
+            return std::nullopt;
+        const auto id = Assets::AssetId::FromBytes(bytes);
+        if (!id.IsValid())
+            return std::nullopt;
+        return Application::Internal::AudioRecordingDestination{id.ToString(), root, std::move(relative).Value(), id};
+    }
 
     EditorRecordingTake::EditorRecordingTake(Audio::Backend::AudioCaptureBufferDescriptor descriptor, AudioRecordingDestination target,
                                              AudioRecording accumulation)

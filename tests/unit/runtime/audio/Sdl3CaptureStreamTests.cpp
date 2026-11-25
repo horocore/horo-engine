@@ -293,6 +293,57 @@ namespace Horo::Audio::Backend {
             }
         }
 
+        TEST_CASE("SDL speech sealing transfers only an uninterrupted authorized generation", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            auto descriptor = SelectEndpoint(catalog);
+            descriptor.slots = 8;
+            descriptor.budgetBytes = 512U << 10U;
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Speech},
+                                   .foreground = true};
+            SECTION("consent withdrawn before seal") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                grant.foreground = false;
+                const auto denied = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(denied.HasError());
+                CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            SECTION("recording grant cannot seal speech") {
+                grant.intent.purpose = Sdl3CapturePurpose::Recording;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
+                REQUIRE(backend->StopCapture(grant.generation).HasValue());
+            }
+            SECTION("overflow invalidates the unread queue") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(WaitForOverflow(*backend, grant).droppedFrames > 0);
+                const auto interrupted = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(interrupted.HasError());
+                CHECK(interrupted.ErrorValue().code.Value() == AudioErrors::SourceInvalid.code.Value());
+            }
+            SECTION("normal seal returns the exact detached generation") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                WaitForActivity(*backend);
+                auto sealed = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(sealed.HasValue());
+                auto tail = std::move(sealed).Value();
+                REQUIRE(tail.Descriptor());
+                CHECK(tail.Descriptor()->generation == grant.generation);
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size());
+                REQUIRE(tail.TryRead(block, pcm) == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+            }
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
+        }
+
         TEST_CASE("SDL connection tests expose a level without granting access to PCM", "[audio][sdl3][capture]") {
             auto backend = MakeBackend();
             const auto discovery = backend->DiscoverCapture();

@@ -243,7 +243,8 @@ if(HORO_BUILD_EDITOR_GUI)
             set(_HORO_EDITOR_MAC_SPEECH_SOURCE HoroEditor/app/MacOnDeviceSpeechProvider.mm)
             set_source_files_properties(${_HORO_EDITOR_MAC_SPEECH_SOURCE} PROPERTIES
                 LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
-            target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophonePermission.cpp HoroEditor/app/EditorMicrophoneRecording.cpp
+            target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophoneAuthorization.cpp
+                HoroEditor/app/EditorMicrophonePermission.cpp HoroEditor/app/EditorMicrophoneRecording.cpp
                 ${_HORO_EDITOR_MAC_SPEECH_SOURCE})
             target_link_libraries(HoroEditor PRIVATE HoroApplicationAudioExport "-framework Speech" "-framework AVFoundation")
             target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_MAC_MICROPHONE_PERMISSION=1)

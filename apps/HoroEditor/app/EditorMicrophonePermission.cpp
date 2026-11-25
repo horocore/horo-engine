@@ -2,10 +2,11 @@
 
 #include "EditorMicrophoneRecording.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
-#include "Horo/Platform/SecureRandom.h"
+#include "Horo/Security/SecureMemory.h"
+#include "ImmersiveAuthoringContext.h"
+#include "MacOnDeviceSpeechProvider.h"
 
 #include <algorithm>
-#include <array>
 #include <limits>
 #include <new>
 #include <optional>
@@ -14,52 +15,11 @@
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Rejects characters that cannot be used consistently in project asset paths. */
-        bool InvalidRecordingPathCharacter(const unsigned char character) noexcept {
-            constexpr std::string_view Reserved = ":*?\"<>|";
-            return character < 32 || character == 127 || Reserved.find(static_cast<char>(character)) != std::string_view::npos;
+        /** @brief Checks current foreground admission and the independent recognizer permission. */
+        bool SpeechCaptureAllowed(const bool foreground) noexcept {
+            return foreground && ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted;
         }
 
-        /** @brief Projects exact OS facts without interpreting permission as a live microphone session. */
-        EditorMicrophonePermissionStatus Project(const Audio::Backend::Sdl3MacCapturePermission native) noexcept {
-            using enum EditorMicrophonePermissionStatus;
-            if (native.pending)
-                return Pending;
-            switch (native.permission) {
-                case Audio::AudioCapturePermission::Required:
-                    return Required;
-                case Audio::AudioCapturePermission::Granted:
-                    return Granted;
-                case Audio::AudioCapturePermission::Denied:
-                    return Denied;
-                default:
-                    return Unavailable;
-            }
-        }
-
-        /** @brief Restricts recording to portable WAV destinations under the project asset root. */
-        bool IsRecordingPath(const std::string_view path) noexcept {
-            return path.size() <= 200 && path.starts_with("assets/") && path.ends_with(".wav") && !path.ends_with("/.wav") &&
-                   !std::ranges::any_of(path, InvalidRecordingPathCharacter);
-        }
-
-        /** @brief Reserves the exact new recording identity for a canonical asset path. */
-        std::optional<Application::Internal::AudioRecordingDestination> RecordingTarget(const std::filesystem::path &root,
-                                                                                        const std::string_view path) {
-            if (root.empty() || !IsRecordingPath(path))
-                return std::nullopt;
-            auto relative = ProjectPath::Parse(path);
-            if (relative.HasError() || relative.Value().String() != path)
-                return std::nullopt;
-            std::array<std::uint8_t, 16> bytes{};
-            if (const auto entropy = Platform::CreateNativeSecureRandomSource();
-                entropy->Fill(std::as_writable_bytes(std::span{bytes})).HasError())
-                return std::nullopt;
-            const auto id = Assets::AssetId::FromBytes(bytes);
-            if (!id.IsValid())
-                return std::nullopt;
-            return Application::Internal::AudioRecordingDestination{id.ToString(), root, std::move(relative).Value(), id};
-        }
     }  // namespace
 
     /** @brief Owns the shared microphone connection check and private foreground recorder. */
@@ -68,6 +28,7 @@ namespace Horo::Editor {
         static constexpr Audio::Backend::Sdl3CaptureIntent Intent{.purpose = Audio::Backend::Sdl3CapturePurpose::ConnectionTest};
         static constexpr std::uint64_t ClockDomain = 1;
         static constexpr auto TestDuration = std::chrono::seconds(5);
+        static constexpr auto SpeechDuration = std::chrono::seconds(15);
         static constexpr auto HealthInterval = std::chrono::milliseconds(100);
 
         std::unique_ptr<Audio::Backend::Sdl3AudioBackend> backend;
@@ -78,6 +39,14 @@ namespace Horo::Editor {
         bool stopping{};
         bool saving{};
         std::optional<Audio::Backend::Sdl3CaptureGrant> grant;
+
+        /** @brief The retained editor generation and stop authority survive native detachment together. */
+        struct SpeechAdmission final {
+            std::stop_source cancellation;
+            ImmersivePlanningContext context;
+        };
+
+        std::optional<SpeechAdmission> speech;
         std::uint64_t generation{};
         Clock::time_point deadline{};
         Clock::time_point nextHealth{};
@@ -88,8 +57,13 @@ namespace Horo::Editor {
         std::optional<EditorRecordingTake> take;
         EditorRecordingPublication publication;
         EditorMicrophoneRecordingStatus recordingStatus{EditorMicrophoneRecordingStatus::Idle};
-        std::string savedPath;
-        std::optional<Assets::AssetId> savedAsset;
+
+        struct SavedRecording final {
+            std::string path;
+            std::optional<Assets::AssetId> asset;
+        };
+
+        SavedRecording savedRecording;
 
         CaptureCheck(ProjectMutationCoordinator &mutations, DurableFileSystem &files, Assets::AssetRegistry &registry)
             : publication(mutations, files, registry) {}
@@ -97,6 +71,21 @@ namespace Horo::Editor {
         /** @brief Returns pending or active private PCM ownership, separate from detached publication. */
         [[nodiscard]] bool RecordingRequested() const noexcept {
             return recordingTarget.has_value() || take.has_value();
+        }
+
+        /** @brief A live or sealed speech lease reserves the microphone owner until the host retires it. */
+        [[nodiscard]] bool InputBusy() const noexcept {
+            return grant || pending || scanning || speech;
+        }
+
+        /** @brief Tests the exact generation, including a detached lease awaiting worker completion. */
+        [[nodiscard]] bool OwnsSpeech(const std::uint64_t expected) const noexcept {
+            return speech && generation == expected;
+        }
+
+        /** @brief Rejects stale editor scope and expires a live microphone independently of worker polling. */
+        [[nodiscard]] bool SpeechCurrent(const Clock::time_point now) const noexcept {
+            return speech && speech->context.IsCurrent() && (!grant || now < deadline);
         }
 
         /** @brief Creates an inert capture-only backend when the user first requests discovery. */
@@ -132,18 +121,63 @@ namespace Horo::Editor {
             return !inputs.empty();
         }
 
-        /** @brief Refreshes the exact selected endpoint, then opens a new foreground-only generation. */
-        bool Start(const Audio::AudioCaptureDeviceId selected, const Clock::time_point now) {
-            if (!backend || generation == std::numeric_limits<std::uint64_t>::max())
-                return false;
+        /** @brief An endpoint's format and admission revision captured together. */
+        struct InputFormat final {
+            Audio::AudioProcessingFormat format;
+            std::uint64_t revision{};
+        };
+
+        /** @brief Refreshes the exact selected endpoint without resolving another default. */
+        Result<InputFormat> RefreshSelected(const Audio::AudioCaptureDeviceId selected) {
+            using Output = Result<InputFormat>;
+            if (!backend)
+                return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
             const auto discovery = backend->DiscoverCapture();
             if (discovery.HasError())
-                return false;
+                return Output::Failure(discovery.ErrorValue());
             const auto &snapshot = discovery.Value().snapshot;
             const auto device = std::ranges::find(snapshot.devices, selected, &Audio::AudioDiscoveredCaptureDevice::id);
             if (device == snapshot.devices.end() || !device->preferredFormat)
+                return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
+            return Output::Success({*device->preferredFormat, snapshot.revision});
+        }
+
+        /** @brief Refreshes and opens a foreground-only connection test or recording. */
+        bool Start(const Audio::AudioCaptureDeviceId selected, const Clock::time_point now) {
+            if (generation == std::numeric_limits<std::uint64_t>::max())
                 return false;
-            return Open(selected, snapshot.revision, *device->preferredFormat, now);
+            const auto input = RefreshSelected(selected);
+            return input.HasValue() && Open(selected, input.Value().revision, input.Value().format, now);
+        }
+
+        /** @brief Prepares a revocation token and starts speech on the same exclusive native owner. */
+        Result<EditorSpeechCaptureLease> OpenSpeech(const Audio::AudioCaptureDeviceId selected, InputFormat input,
+                                                    const ImmersivePlanningContext &context) {
+            using Output = Result<EditorSpeechCaptureLease>;
+            if (generation == std::numeric_limits<std::uint64_t>::max())
+                return Output::Failure(MakeError(Audio::AudioErrors::HandleGenerationExhausted));
+            ++generation;
+            const Audio::Backend::Sdl3CaptureGrant admission{.device = selected,
+                                                             .discoveryRevision = input.revision,
+                                                             .generation = generation,
+                                                             .authorityRevision = generation,
+                                                             .intent = {.purpose = Audio::Backend::Sdl3CapturePurpose::Speech},
+                                                             .foreground = true};
+            std::stop_source cancellation;
+            auto result = Output::Success({{.device = selected,
+                                            .generation = generation,
+                                            .clockDomain = ClockDomain,
+                                            .format = std::move(input.format),
+                                            .slots = 8,
+                                            .maximumFrames = 4096,
+                                            .budgetBytes = 512U << 10U},
+                                           cancellation.get_token()});
+            if (const auto opened = backend->StartCapture(result.Value().source, admission.intent, admission); opened.HasError())
+                return Output::Failure(opened.ErrorValue());
+            grant = admission;
+            speech.emplace(std::move(cancellation), context);
+            deadline = Clock::now() + SpeechDuration;
+            return result;
         }
 
         /** @brief Prepares private recording storage before opening the exact admitted native stream. */
@@ -187,9 +221,12 @@ namespace Horo::Editor {
             stopping = false;
             saving = false;
             pending.reset();
+            if (speech)
+                speech->cancellation.request_stop();
             if (grant)
                 static_cast<void>(backend->StopCapture(grant->generation));
             grant.reset();
+            speech.reset();
             status = EditorMicrophoneTestStatus::Idle;
             peakLevel = 0.0F;
             recordingTarget.reset();
@@ -240,8 +277,8 @@ namespace Horo::Editor {
                 return;
             }
             auto saved = std::move(*result).Value();
-            savedPath = std::move(saved.path);
-            savedAsset = saved.id;
+            savedRecording.path = std::move(saved.path);
+            savedRecording.asset = saved.id;
             recordingStatus = Saved;
         }
 
@@ -317,30 +354,96 @@ namespace Horo::Editor {
                                                            Assets::AssetRegistry &registry)
         : check_(std::make_unique<CaptureCheck>(mutations, files, registry)) {}
 
-    EditorMicrophonePermission::~EditorMicrophonePermission() = default;
-
-    /** @copydoc EditorMicrophonePermission::Status */
-    EditorMicrophonePermissionStatus EditorMicrophonePermission::Status() {
-        if (const auto now = std::chrono::steady_clock::now(); now >= nextObservation_) {
-            status_ = Project(Audio::Backend::ObserveSdl3MacCapturePermission());
-            nextObservation_ = now + std::chrono::milliseconds(250);
-        }
-        return status_;
+    EditorMicrophonePermission::~EditorMicrophonePermission() {
+        CancelSpeechCapture(check_->generation);
     }
 
-    /** @copydoc EditorMicrophonePermission::Request */
-    void EditorMicrophonePermission::Request() {
-        if (Status() != EditorMicrophonePermissionStatus::Required)
-            return;
-        const auto requested = Audio::Backend::RequestSdl3MacCapturePermission();
-        nextObservation_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
-        status_ = requested.HasValue() ? Project(Audio::Backend::ObserveSdl3MacCapturePermission())
-                                       : EditorMicrophonePermissionStatus::Unavailable;
+    /** @copydoc EditorMicrophonePermission::BeginSpeechCapture */
+    Result<EditorSpeechCaptureLease> EditorMicrophonePermission::BeginSpeechCapture(const std::size_t input, const bool foreground,
+                                                                                    const ImmersiveAuthoringContext &owner,
+                                                                                    const ImmersivePlanningContext &context) {
+        using Output = Result<EditorSpeechCaptureLease>;
+        if (!SpeechCaptureAllowed(foreground) || owner.Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted)
+            return Output::Failure(MakeError(Audio::AudioErrors::CapturePermissionDenied));
+        if (check_->InputBusy())
+            return Output::Failure(MakeError(Audio::AudioErrors::HandleCapacityExhausted));
+        if (check_->project.empty() || input >= check_->inputs.size())
+            return Output::Failure(MakeError(Audio::AudioErrors::DeviceUnavailable));
+        const auto selected = check_->inputs[input];
+        try {
+            auto spec = check_->RefreshSelected(selected);
+            if (spec.HasError())
+                return Output::Failure(spec.ErrorValue());
+            return check_->OpenSpeech(selected, std::move(spec).Value(), context);
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(Audio::AudioErrors::MemoryAllocationFailed));
+        }
+    }
+
+    /** @copydoc EditorMicrophonePermission::ReadSpeechCapture */
+    Result<Audio::Backend::AudioCaptureRead> EditorMicrophonePermission::ReadSpeechCapture(const std::uint64_t generation,
+                                                                                           const bool foreground,
+                                                                                           Audio::Backend::AudioCapturedBlock &block,
+                                                                                           const std::span<Audio::AudioSample> pcm) {
+        using Output = Result<Audio::Backend::AudioCaptureRead>;
+        if (const auto allowed = CheckSpeechCapture(generation, foreground); allowed.HasError())
+            return Output::Failure(allowed.ErrorValue());
+        Audio::Backend::AudioCapturedBlock candidate{};
+        const auto read = check_->backend->ReadCapture(generation, check_->grant, candidate, pcm);
+        if (read.HasError()) {
+            CancelSpeechCapture(generation);
+            return Output::Failure(read.ErrorValue());
+        }
+        using enum Audio::Backend::AudioCaptureRead;
+        const auto &value = read.Value();
+        if (value.droppedFrames != 0 || candidate.missingSourceFramesBefore != 0) {
+            if (value.status == Copied)
+                Security::SecureZero(std::as_writable_bytes(pcm));
+            CancelSpeechCapture(generation);
+            return Output::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
+        }
+        if (value.status == Copied)
+            block = candidate;
+        return Output::Success(value.status);
+    }
+
+    /** @copydoc EditorMicrophonePermission::SealSpeechCapture */
+    Result<Audio::Backend::AudioCaptureBuffer> EditorMicrophonePermission::SealSpeechCapture(const std::uint64_t generation,
+                                                                                             const bool foreground) {
+        using Output = Result<Audio::Backend::AudioCaptureBuffer>;
+        if (const auto allowed = CheckSpeechCapture(generation, foreground); allowed.HasError())
+            return Output::Failure(allowed.ErrorValue());
+        auto tail = check_->backend->FinishSpeech(generation, *check_->grant);
+        if (tail.HasError())
+            CancelSpeechCapture(generation);
+        else
+            check_->grant.reset();
+        return tail;
+    }
+
+    Result<void> EditorMicrophonePermission::CheckSpeechCapture(const std::uint64_t generation, const bool foreground) {
+        if (!check_->OwnsSpeech(generation) || !check_->grant)
+            return Result<void>::Failure(MakeError(Audio::AudioErrors::HandleStale));
+        if (!SpeechCaptureAllowed(foreground)) {
+            CancelSpeechCapture(generation);
+            return Result<void>::Failure(MakeError(Audio::AudioErrors::CapturePermissionDenied));
+        }
+        if (!check_->SpeechCurrent(CaptureCheck::Clock::now())) {
+            CancelSpeechCapture(generation);
+            return Result<void>::Failure(MakeError(Audio::AudioErrors::OperationCancelled));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorMicrophonePermission::CancelSpeechCapture */
+    void EditorMicrophonePermission::CancelSpeechCapture(const std::uint64_t generation) noexcept {
+        if (check_->OwnsSpeech(generation))
+            check_->Stop();
     }
 
     /** @copydoc EditorMicrophonePermission::ScanInputs */
     void EditorMicrophonePermission::ScanInputs() noexcept {
-        if (!check_->grant && !check_->pending)
+        if (!check_->InputBusy())
             check_->scanning = true;
     }
 
@@ -351,7 +454,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorMicrophonePermission::StartTest */
     void EditorMicrophonePermission::StartTest(const std::size_t input) noexcept {
-        if (check_->grant || check_->pending || check_->scanning || input >= check_->inputs.size())
+        if (check_->InputBusy() || input >= check_->inputs.size())
             return;
         check_->pending = check_->inputs[input];
         check_->status = EditorMicrophoneTestStatus::Starting;
@@ -359,7 +462,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorMicrophonePermission::StopTest */
     void EditorMicrophonePermission::StopTest() noexcept {
-        if (check_->RecordingRequested())
+        if (check_->RecordingRequested() || check_->speech)
             return;
         if (check_->grant)
             check_->stopping = true;
@@ -371,8 +474,12 @@ namespace Horo::Editor {
     void EditorMicrophonePermission::AdvanceTest(const bool foreground) noexcept {
         try {
             check_->PollPublication();
-            if (check_->scanning || check_->pending || check_->grant)
+            if (check_->speech) {
+                if (!check_->SpeechCurrent(CaptureCheck::Clock::now()))
+                    check_->Stop();
+            } else if (check_->scanning || check_->pending || check_->grant) {
                 check_->Advance(foreground, CaptureCheck::Clock::now());
+            }
         } catch (const std::bad_alloc &) {
             if (check_->RecordingRequested())
                 check_->FailRecording();
@@ -397,22 +504,23 @@ namespace Horo::Editor {
     void EditorMicrophonePermission::SetProject(const std::filesystem::path &root) {
         if (root == check_->project)
             return;
+        CancelSpeechCapture(check_->generation);
         CancelRecording();
-        check_->savedPath.clear();
+        check_->savedRecording.path.clear();
         check_->project = root;
     }
 
     /** @copydoc IEditorMicrophoneRecorder::CanRecord */
     bool EditorMicrophonePermission::CanRecord() const noexcept {
-        return !check_->project.empty() && !check_->grant && !check_->pending && !check_->scanning && !check_->publication.Busy();
+        return !check_->project.empty() && !check_->InputBusy() && !check_->publication.Busy();
     }
 
     /** @copydoc IEditorMicrophoneRecorder::StartRecording */
     void EditorMicrophonePermission::StartRecording(const std::size_t input, const std::string_view wavePath) {
         if (!CanRecord() || input >= check_->inputs.size())
             return;
-        check_->savedPath.clear();
-        check_->savedAsset.reset();
+        check_->savedRecording.path.clear();
+        check_->savedRecording.asset.reset();
         try {
             auto target = RecordingTarget(check_->project, wavePath);
             if (target) {
@@ -439,7 +547,7 @@ namespace Horo::Editor {
         if (check_->RecordingRequested())
             check_->stopping = true;
         check_->publication.Cancel();
-        check_->savedAsset.reset();
+        check_->savedRecording.asset.reset();
         check_->recordingStatus = EditorMicrophoneRecordingStatus::Idle;
     }
 
@@ -455,11 +563,11 @@ namespace Horo::Editor {
 
     /** @copydoc IEditorMicrophoneRecorder::SavedRecordingPath */
     std::string_view EditorMicrophonePermission::SavedRecordingPath() const noexcept {
-        return check_->savedPath;
+        return check_->savedRecording.path;
     }
 
     /** @copydoc IEditorMicrophoneRecorder::TakeSavedRecording */
     std::optional<Assets::AssetId> EditorMicrophonePermission::TakeSavedRecording() noexcept {
-        return std::exchange(check_->savedAsset, std::nullopt);
+        return std::exchange(check_->savedRecording.asset, std::nullopt);
     }
 }  // namespace Horo::Editor

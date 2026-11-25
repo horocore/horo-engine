@@ -174,6 +174,11 @@ Ownership rules:
   locale supports device-local recognition before creating a Speech request.
   It uses Audio-owned PCM and retains only the latest framework result. Its
   authorization action is separate from microphone permission and stream opening.
+- The macOS microphone owner reserves one foreground speech lease, separate
+  from test and recording purposes. Reads use the exact Audio grant and report
+  interruption instead of delivering queued PCM after a drop. Explicit sealing
+  detaches the device before handing the last PCM blocks to the worker. Project
+  replacement and cancellation revoke the lease even after detachment.
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.
