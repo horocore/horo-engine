@@ -616,6 +616,20 @@ namespace Horo::Editor {
     }
 
     namespace {
+        /** @brief Admits the receipt only for the source that produced the current Play geometry. */
+        bool MatchesAgentReferenceSource(const AgentSceneReferenceRequest &request, const bool mountedWorld,
+                                         const std::uint64_t structuralRevision) noexcept {
+            using enum AgentSceneReferenceSource;
+            switch (request.source) {
+                case Selection:
+                    return !request.mounted && request.structuralRevision == 0 && (!mountedWorld || request.objects.empty());
+                case Pointing:
+                case Location:
+                    return request.mounted == mountedWorld && request.structuralRevision == structuralRevision;
+            }
+            return false;
+        }
+
         /** @brief Checks candidate eligibility against authored state and committed Play membership. */
         AgentSceneReferenceState ClassifyAgentReference(const std::span<const SceneObjectSnapshot> objects, const bool admitted,
                                                         const Runtime::RuntimeSceneView &play, const SceneObjectId object) {
@@ -708,9 +722,7 @@ namespace Horo::Editor {
         if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value)
             return std::nullopt;
 
-        if (request.source != AgentSceneReferenceSource::Selection && request.structuralRevision != play->StructuralRevision())
-            return std::nullopt;
-        if (request.mounted && (!m_mountedWorldPlaySelected || request.source == AgentSceneReferenceSource::Selection))
+        if (!MatchesAgentReferenceSource(request, m_mountedWorldPlaySelected, play->StructuralRevision()))
             return std::nullopt;
         const auto objects = m_document.Objects();
         if (request.source == AgentSceneReferenceSource::Location)

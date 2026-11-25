@@ -860,6 +860,11 @@ namespace {
         CHECK(pointed->Candidates()[1].state == AgentSceneReferenceState::Available);
         CHECK(pointed->Candidates()[3].state == AgentSceneReferenceState::Hidden);
         CHECK(pointed->Candidates()[4].state == AgentSceneReferenceState::Locked);
+        request.source = static_cast<AgentSceneReferenceSource>(0xFF);
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.source = AgentSceneReferenceSource::Selection;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.source = AgentSceneReferenceSource::Pointing;
         ++request.structuralRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         request.structuralRevision = play.StructuralRevision();
@@ -890,6 +895,9 @@ namespace {
         CHECK(mounted->Candidates()[0].worldPosition == points[0].worldPosition);
         CHECK(mounted->Candidates()[1].state == AgentSceneReferenceState::OutOfScope);
         CHECK_FALSE(mounted->Candidates()[1].worldPosition);
+        request.mounted = false;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.mounted = true;
         ++request.structuralRevision;
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(false);
