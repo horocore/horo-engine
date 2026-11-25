@@ -23,12 +23,13 @@ configure_file(shared/packages/ApprovedGameplayPackageHost.h "${HORO_PACKAGE_HOS
 configure_file(shared/packages/PackageBehaviorReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageBehaviorReferences.h" COPYONLY)
 add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.cpp shared/packages/PackageProjectPreparation.cpp
     shared/packages/PackageProjectRemovalReferences.cpp shared/packages/PackageBehaviorReferences.cpp
+    shared/packages/PackageDecisionReferences.cpp
     shared/packages/PackageProjectHost.cpp shared/packages/PackageProjectMetadata.cpp shared/packages/PackageHostPolicy.cpp
     shared/packages/ApprovedGameplayPackageHost.cpp)
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
 target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
 target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication HoroEngine::PackageGameplayHost
-    PRIVATE HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets
+    PRIVATE HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets HoroEngine::AI
         HoroEngine::ProjectMutationGuard HoroEngine::ProjectReadFilesApi HoroEngine::SceneSource HoroEngine::PrefabAuthoring)
 
 # One application-owned signature document codec, shared by the package CLI and

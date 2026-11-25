@@ -98,9 +98,10 @@ namespace Horo::Packages {
             std::vector<Gameplay::GameplayServiceDescriptor> services;
             std::string descriptorPath; /**< Canonical path of the declaring descriptor inside the verified archive. */
             std::vector<Gameplay::GameplaySystemDescriptor> systems; /**< Inert schedule metadata, including required service IDs. */
+            std::vector<AI::DecisionNodeTypeId> decisionNodes; /**< Inert IDs from the exact native decision registry. */
         };
 
-        /** @brief Copies behavior IDs and service and system descriptors from frozen registries of exact published runtime roles.
+        /** @brief Copies behavior and decision IDs and service and system descriptors from exact published runtime roles.
          * @param lifecycle The package lifecycle which published those roles.
          * @return Owned metadata or typed owner/generation failure. An empty result means no active SDK roles.
          * @details Must run on the owner lane. No factories are called or retained. The result describes active roles only

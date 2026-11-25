@@ -13,7 +13,7 @@ namespace Horo::Packages {
 
 namespace Horo::Application::Internal {
     /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
-     * @details Retains observed behavior IDs and the latest service and system descriptors per exact package artifact and role. */
+     * @details Retains observed behavior and decision IDs and the latest service and system descriptors per exact artifact and role. */
     struct PackageRemovalRegistrationEvidence final {
         std::vector<Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
     };
@@ -51,6 +51,16 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageServiceReferences(const PackageRemovalSources &sources,
                                                                                   const Packages::ValidatedPackageLockfileV1 &lock,
                                                                                   const Packages::PackageRemovalGraphPreview &removal);
+
+    /** @brief Finds authored Decision nodes belonging to departing packages.
+     * @param sources Owned registration observations and root-bound saved source.
+     * @param lock Exact current lock used to attribute registrations.
+     * @param removal Validated withdrawal plan.
+     * @return Bounded diagnostics, or a typed failure if registered graphs cannot be read completely.
+     */
+    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageDecisionReferences(const PackageRemovalSources &sources,
+                                                                                   const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                                   const Packages::PackageRemovalGraphPreview &removal);
 
     /** @brief A saved Scene or Prefab attachment using an exactly attributed package behavior. */
     struct PackageBehaviorReference final {

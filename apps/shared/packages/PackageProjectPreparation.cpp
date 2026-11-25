@@ -530,6 +530,12 @@ namespace Horo::Application::Internal {
             else
                 std::ranges::move(services.Value(), std::back_inserter(references));
 
+            auto decisions = InspectPackageDecisionReferences(sources, lock, impact);
+            if (decisions.HasError())
+                RecordRemovalFailure(blocking, std::move(decisions).ErrorValue());
+            else
+                std::ranges::move(decisions.Value(), std::back_inserter(references));
+
             if (!blocking && references.empty())
                 return Result<void>::Success();
             if (!blocking)

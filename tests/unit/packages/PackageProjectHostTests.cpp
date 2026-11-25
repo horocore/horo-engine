@@ -1,3 +1,5 @@
+#include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
@@ -9,6 +11,7 @@
 #include "PackageProjectHost.h"
 #include "PackageRestoreTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <functional>
 #include <type_traits>
@@ -675,6 +678,74 @@ namespace {
         CHECK(fixture.Read("packages.json") == edited);
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+    }
+
+    /** @brief Builds a registered graph with one package node in the chosen source family. */
+    AI::DecisionGraphSource MakeReferencedDecisionGraph(const AI::DecisionPlanKind kind, const AI::DecisionNodeTypeId type) {
+        using namespace AI::DecisionGraphTestSupport;
+        if (kind == AI::DecisionPlanKind::BehaviorTree)
+            return TaskTree(1, type.Value());
+        if (kind == AI::DecisionPlanKind::StateMachine) {
+            auto graph = TerminalMachine(1);
+            auto &state = std::get<AI::StateMachineAssetDescriptor>(graph.body).states.front();
+            state.entry = MakeIdentity<AI::TaskId>(8);
+            state.entryProvider = AI::StateMachineProviderAction{{.id = Node(2), .type = type, .source = Location()}, {}};
+            return graph;
+        }
+        const auto key = MakeIdentity<AI::BlackboardKeyId>(2);
+        AI::UtilityDecisionSource utility{.root = Node(1), .requirements = {{.key = key, .kind = AI::BlackboardValueKind::Scalar}},
+                                          .options = {{{Node(2), MakeIdentity<AI::TaskId>(9), 1, 0, {{.key = key}}},
+                                                       {.id = Node(2), .type = type, .source = Location()}}}};
+        return {Graph(1), 1, SchemaId(), {1, 1}, Location(), {}, std::move(utility)};
+    }
+
+    TEST_CASE("Package removal protects saved graphs using a departing Decision node", "[packages][application][host][removal]") {
+        HostFixture fixture{true};
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto &locked = expected.Value().application.lockedPlan->Packages().front();
+        const auto type = AI::DecisionNodeTypeId::Create(201).Value();
+        std::array owners{Packages::GameplayPackageModuleHost::RegistrationInventory{
+            .package = locked.package,
+            .version = locked.version,
+            .artifact = locked.artifactDigest,
+            .activationGeneration = 1,
+            .moduleId = "com.horo.application-fixture.native",
+            .descriptorPath = "extensions/native/extension.json",
+            .decisionNodes = {type}}};
+        using enum AI::DecisionPlanKind;
+        const auto kind = GENERATE(BehaviorTree, StateMachine, Utility);
+        const auto graph = MakeReferencedDecisionGraph(kind, type);
+        const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+        REQUIRE(encoded.HasValue());
+        const auto relative = std::string{"Assets/Agent"} + (kind == BehaviorTree ? ".horo_bt" : kind == StateMachine ? ".horo_sm" : ".horo_utility");
+        const auto file = policy.projectRoot / relative;
+        auto sidecar = file;
+        sidecar += ".horo";
+        std::ofstream{file, std::ios::binary}.write(reinterpret_cast<const char *>(encoded.Value().data()),
+                                                     static_cast<std::streamsize>(encoded.Value().size()));
+        std::ofstream{sidecar} << nlohmann::json{{"schemaVersion", 1},
+                                                 {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
+                                                 {"assetType", AI::DecisionAssetType(kind)}};
+        auto sources = fixture.RemovalSources(*assets);
+        sources.registrations = owners;
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto publish = [&] { return PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources); };
+        const auto blocked = publish();
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().code.Value() == "packages.host.decision_node_in_use");
+        REQUIRE(blocked.ErrorValue().diagnostics.size() == 1);
+        CHECK(blocked.ErrorValue().diagnostics.front().location.source == relative);
+        CHECK(blocked.ErrorValue().diagnostics.front().path == (kind == StateMachine ? "1/entry" : "2"));
+
+        std::ofstream{file, std::ios::binary | std::ios::trunc} << "broken";
+        const auto unreadable = publish();
+        REQUIRE(unreadable.HasError());
+        CHECK(unreadable.ErrorValue().code.Value() == "packages.host.decision_reference_unreadable");
+        CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
     TEST_CASE("Package removal reports the saved Scene and Prefab attachments of a departing behavior", "[packages][application][host]") {

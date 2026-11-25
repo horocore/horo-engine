@@ -496,6 +496,8 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     CHECK(registration.package == fixture.enabled.package);
     REQUIRE(registration.behaviors.size() == 1);
     CHECK(registration.behaviors.front().Value() == "game.tests.package_behavior");
+    REQUIRE(registration.decisionNodes.size() == 1);
+    CHECK(registration.decisionNodes.front().Value() == 201);
     CHECK(host->RemovalRegistrations(root, stamp->project + 1).HasError());
     REQUIRE(modal.Close(generation.Value()).HasValue());
     REQUIRE(host->Close().HasValue());

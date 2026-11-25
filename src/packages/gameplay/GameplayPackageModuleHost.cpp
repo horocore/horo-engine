@@ -360,6 +360,11 @@ namespace Horo::Packages {
                     inventory.services.push_back(service.descriptor);
                 for (const auto &system : loaded.Systems().Registrations())
                     inventory.systems.push_back(system.descriptor);
+                auto decisionNodes = loaded.AcquireDecisionNodes();
+                if (decisionNodes.HasError())
+                    return Inventory::Failure(decisionNodes.ErrorValue());
+                for (const auto &node : decisionNodes.Value()->Contracts())
+                    inventory.decisionNodes.push_back(node.descriptor.type);
             }
             return Inventory::Success(std::move(registrations));
         } catch (const std::bad_alloc &) {

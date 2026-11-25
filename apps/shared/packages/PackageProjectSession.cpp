@@ -21,6 +21,7 @@ namespace Horo::Application::Internal {
                                         const Packages::HoroPackageId &package, DurableFileSystem &files,
                                         PackageRemovalReadAuthorities reads,
                                         std::shared_ptr<const Packages::PackageRemovalLease> reservation,
+                                        std::span<const Registration> registrations,
                                         const CancellationToken &token) {
             const Platform::ProjectReadContext context{.projectIdentity = "editor-package-removal",
                                                       .projectGeneration = 1,
@@ -35,6 +36,7 @@ namespace Horo::Application::Internal {
             const PackageRemovalSources sources{.assets = *assets.Value(),
                                                 .files = *read.Value(),
                                                 .context = context,
+                                                .registrations = registrations,
                                                 .live = std::move(reservation),
                                                 .requireAssetOnly = true};
             const auto published = PublishPackageProjectRemoval(policy, expected, package, files, sources);
@@ -45,23 +47,34 @@ namespace Horo::Application::Internal {
 
         /** @brief Captures only the approved project and metadata digests in the worker's immutable policy. */
         auto MakeRemovalPreparation(const PackageProjectPolicy &policy, const PreparedPackageProject &prepared,
-                                    const PackageProjectHostServices &services) {
+                                    const PackageProjectHostServices &services,
+                                    std::function<std::shared_ptr<const PackageRemovalRegistrationEvidence>()> snapshot) {
             PackageProjectPolicy removalPolicy{.projectRoot = policy.projectRoot, .limits = policy.limits};
             PreparedPackageProject removalBase{.application = {.restore = {.projectRoot = policy.projectRoot}},
                                                .lockDigest = prepared.lockDigest,
                                                .requestDocumentDigest = prepared.requestDocumentDigest};
             return [removalPolicy = std::move(removalPolicy), removalBase = std::move(removalBase),
-                    &files = services.files, reads = services.removal](
+                    &files = services.files, reads = services.removal, snapshot = std::move(snapshot)](
                        const Packages::HoroPackageId &package, std::shared_ptr<const Packages::PackageRemovalLease> reservation) {
                 return Result<PackageRemovalWork>::Success([removalPolicy, removalBase, package, &files, reads,
-                                                           reservation = std::move(reservation)](
+                                                           reservation = std::move(reservation), evidence = snapshot()](
                                                                const CancellationToken &cancellation) {
-                    return RemoveSavedPackage(removalPolicy, removalBase, package, files, reads, reservation, cancellation);
+                    const std::span<const Registration> registrations = evidence ? std::span<const Registration>{evidence->registrations}
+                                                                                 : std::span<const Registration>{};
+                    return RemoveSavedPackage(removalPolicy, removalBase, package, files, reads, reservation, registrations, cancellation);
                 });
             };
         }
 
-        /** @brief Preserves previously observed behavior IDs across role reactivation for the same artifact. */
+        /** @brief Preserves a role's historical typed identities across reactivation of the same artifact. */
+        void MergeObservedIds(auto &current, const auto &previous) {
+            current.insert(current.end(), previous.begin(), previous.end());
+            std::ranges::sort(current);
+            const auto duplicates = std::ranges::unique(current);
+            current.erase(duplicates.begin(), duplicates.end());
+        }
+
+        /** @brief Preserves previously observed behavior and decision IDs for the same artifact. */
         Result<void> MergeRegistration(PackageRemovalRegistrationEvidence &evidence, Registration observed) {
             auto match = std::ranges::find_if(evidence.registrations, [&observed](const auto &previous) {
                 return previous.package == observed.package && previous.version == observed.version &&
@@ -69,12 +82,11 @@ namespace Horo::Application::Internal {
                        previous.descriptorPath == observed.descriptorPath;
             });
             if (match != evidence.registrations.end()) {
-                observed.behaviors.insert(observed.behaviors.end(), match->behaviors.begin(), match->behaviors.end());
-                std::ranges::sort(observed.behaviors);
-                const auto duplicates = std::ranges::unique(observed.behaviors);
-                observed.behaviors.erase(duplicates.begin(), duplicates.end());
+                MergeObservedIds(observed.behaviors, match->behaviors);
+                MergeObservedIds(observed.decisionNodes, match->decisionNodes);
             }
-            if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors)
+            if (observed.behaviors.size() > Gameplay::MaximumGeneratedBehaviorDescriptors ||
+                observed.decisionNodes.size() > AI::DecisionNodeGeneration::MaximumNodes)
                 return Result<void>::Failure(SessionError("packages.host.registration_evidence_limit"));
             if (match != evidence.registrations.end())
                 *match = std::move(observed);
@@ -161,8 +173,11 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(lifecycle.ErrorValue());
         impl->lifecycle = std::move(lifecycle).Value();
         prepared.application.wallClock = &services.wallClock;
-        if (services.removal.openFiles && services.removal.openAssets)
-            prepared.application.prepareRemoval = MakeRemovalPreparation(policy, prepared, services);
+        if (services.removal.openFiles && services.removal.openAssets) {
+            prepared.application.prepareRemoval = MakeRemovalPreparation(policy, prepared, services, [session = impl.get()] {
+                return session->removalEvidence;
+            });
+        }
         auto application =
             PackageApplication::Create(services.jobs, *impl->restore, *impl->install, *impl->lifecycle, std::move(prepared.application));
         if (application.HasError())

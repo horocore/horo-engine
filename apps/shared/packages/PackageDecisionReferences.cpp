@@ -1,0 +1,138 @@
+#include "PackageBehaviorReferences.h"
+
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetRegistry.h"
+
+#include <algorithm>
+#include <array>
+#include <map>
+#include <set>
+
+namespace Horo::Application::Internal {
+    namespace {
+        using Owners = std::map<std::uint64_t, std::set<Packages::HoroPackageId>>;
+        constexpr auto MaximumReferences = 16'384U;
+        constexpr std::array DecisionTypes{AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree),
+                                          AI::DecisionAssetType(AI::DecisionPlanKind::StateMachine),
+                                          AI::DecisionAssetType(AI::DecisionPlanKind::Utility)};
+
+        /** @brief Preserves the failing saved path or locked package identity. */
+        Error ReferenceError(const char *code, std::string_view identity = {}) {
+            return {ErrorCode{code}, ErrorDomainId{"packages.host"}, ErrorSeverity::Error, std::string{identity}};
+        }
+
+        /** @brief Indexes only departing providers with evidence from the exact locked artifact. */
+        Result<Owners> IndexDecisionOwners(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                           const Packages::PackageRemovalGraphPreview &removal) {
+            Owners owners;
+            for (const auto &role : sources.registrations) {
+                if (role.decisionNodes.empty() ||
+                    std::ranges::find(removal.removed, role.package, &Packages::LockedPackageReference::package) == removal.removed.end())
+                    continue;
+                const auto entry = std::ranges::find(lock.Packages(), role.package, &Packages::LockedPackage::package);
+                if (entry == lock.Packages().end() || entry->version != role.version || entry->artifactDigest != role.artifact)
+                    return Result<Owners>::Failure(ReferenceError("packages.host.decision_ownership_stale", role.package.Value()));
+                for (const auto type : role.decisionNodes)
+                    owners[type.Value()].insert(role.package);
+            }
+            return Result<Owners>::Success(std::move(owners));
+        }
+
+        /** @brief Records each authored use, including its exact node or action phase. */
+        struct DecisionReferences final {
+            const Owners &owners;
+            std::string_view assetPath;
+            std::vector<Diagnostic> &diagnostics;
+
+            Result<void> Collect(const std::uint64_t type, const std::uint64_t node, const std::string_view phase = {}) const {
+                const auto found = owners.find(type);
+                if (found == owners.end())
+                    return Result<void>::Success();
+                if (found->second.size() > MaximumReferences - diagnostics.size())
+                    return Result<void>::Failure(ReferenceError("packages.host.decision_reference_limit", assetPath));
+                auto identity = std::to_string(node);
+                identity.append(phase);
+                for (const auto &package : found->second)
+                    diagnostics.emplace_back(DiagnosticCode{"packages.host.decision_node_in_use"}, DiagnosticSeverity::Error,
+                                             package.Value() + " / " + std::to_string(type), SourceLocation{std::string{assetPath}},
+                                             identity);
+                return Result<void>::Success();
+            }
+
+            Result<void> operator()(const std::shared_ptr<const AI::BehaviorTreeAsset> &tree) const {
+                for (const auto &node : tree->Data().nodes)
+                    if (auto collected = Collect(node.type.Value(), node.id.Value()); collected.HasError())
+                        return collected;
+                return Result<void>::Success();
+            }
+
+            Result<void> operator()(const AI::StateMachineAssetDescriptor &machine) const {
+                for (const auto &state : machine.states) {
+                    const std::array phases{std::pair{&state.entryProvider, "/entry"}, std::pair{&state.updateProvider, "/update"},
+                                            std::pair{&state.exitProvider, "/exit"}};
+                    for (const auto &[action, phase] : phases) {
+                        if (!*action)
+                            continue;
+                        if (auto collected = Collect((*action)->binding.type.Value(), state.id.Value(), phase); collected.HasError())
+                            return collected;
+                    }
+                }
+                return Result<void>::Success();
+            }
+
+            Result<void> operator()(const AI::UtilityDecisionSource &utility) const {
+                for (const auto &option : utility.options)
+                    if (auto collected = Collect(option.provider.type.Value(), option.provider.id.Value()); collected.HasError())
+                        return collected;
+                return Result<void>::Success();
+            }
+        };
+
+        /** @brief Uses the bounded codec for the registered source, without loading gameplay factories. */
+        Result<void> InspectGraph(const PackageRemovalSources &sources, const Assets::AssetRecord &record,
+                                  const DecisionReferences &references) {
+            const auto captured = sources.files.SourceText(record.sourcePath.String(), sources.context, {});
+            if (captured.HasError())
+                return Result<void>::Failure(
+                    WithCause(ReferenceError("packages.host.decision_reference_unreadable", references.assetPath), captured.ErrorValue()));
+            const auto &bytes = *captured.Value().text;
+            AI::DecisionGraphAssetId root;
+            const auto decoded = AI::DecisionPlanCodec::DecodeSource(
+                {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()}, root);
+            if (decoded.HasError())
+                return Result<void>::Failure(
+                    WithCause(ReferenceError("packages.host.decision_reference_unreadable", references.assetPath), decoded.ErrorValue()));
+            const auto &graphs = decoded.Value();
+            if (graphs.size() != 1 || graphs.front().asset != root || DecisionTypes[graphs.front().body.index()] != record.type.Value())
+                return Result<void>::Failure(ReferenceError("packages.host.decision_reference_identity_mismatch", references.assetPath));
+            return std::visit(references, graphs.front().body);
+        }
+    }  // namespace
+
+    /** @copydoc InspectPackageDecisionReferences */
+    Result<std::vector<Diagnostic>> InspectPackageDecisionReferences(const PackageRemovalSources &sources,
+                                                                   const Packages::ValidatedPackageLockfileV1 &lock,
+                                                                   const Packages::PackageRemovalGraphPreview &removal) {
+        using Output = Result<std::vector<Diagnostic>>;
+        const auto owners = IndexDecisionOwners(sources, lock, removal);
+        if (owners.HasError())
+            return Output::Failure(owners.ErrorValue());
+        if (owners.Value().empty())
+            return Output::Success({});
+        const auto candidate = Assets::PrepareAssetRegistryCandidate(sources.assets);
+        if (candidate.HasError())
+            return Output::Failure(candidate.ErrorValue());
+        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+            return Output::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
+        std::vector<Diagnostic> diagnostics;
+        for (const auto &record : candidate.Value().records) {
+            if (std::ranges::find(DecisionTypes, record.type.Value()) == DecisionTypes.end())
+                continue;
+            if (auto inspected = InspectGraph(sources, record, {owners.Value(), record.sourcePath.String(), diagnostics}); inspected.HasError())
+                return Output::Failure(inspected.ErrorValue());
+        }
+        if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
+            return Output::Failure(admitted.ErrorValue());
+        return Output::Success(std::move(diagnostics));
+    }
+}  // namespace Horo::Application::Internal

@@ -491,6 +491,12 @@ from its exact locked archive. An unobserved consumer blocks removal and reports
 the missing role. The saved request and lock stay intact until coverage and
 reference checks pass.
 
+Removal checks also use Decision node IDs observed from the exact native
+gameplay registry. Saved Behavior Tree, State Machine, and Utility sources
+are decoded with the bounded Decision codec. References report the source
+asset and node or action phase. An unreadable registered graph blocks removal
+when a departing package owns Decision nodes.
+
 ## Rollback Contract
 
 Package lifecycle operations write a transaction journal before mutating project
