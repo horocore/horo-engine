@@ -121,11 +121,13 @@ namespace Horo::Agent {
         REQUIRE(result.draft.has_value() == (expected == Completed));
         if (result.draft) {
             CHECK(result.draft->toolIntents.size() == 2);
-            CHECK((result.effects == std::vector{expectedEffect, expectedEffect}));
+            REQUIRE(result.tools.size() == 2);
+            CHECK(result.tools[0].effect == expectedEffect);
+            CHECK(result.tools[1].effect == expectedEffect);
             REQUIRE(result.usage);
             CHECK(result.usage->outputTokens == 2);
         } else
-            CHECK(result.effects.empty());
+            CHECK(result.tools.empty());
     }
 
     TEST_CASE("Editor Agent observes only accepted text deltas from a tool-free turn", "[agent][turn]") {

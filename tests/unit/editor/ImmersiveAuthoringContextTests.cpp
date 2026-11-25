@@ -9,6 +9,7 @@ namespace Horo::Editor {
         struct PlanningModel final : Agent::IModelProvider {
             std::function<void()> duringInference;
             std::size_t calls{};
+            std::optional<Agent::ModelToolIntent> tool;
 
             Agent::ProviderDiscovery Discover(std::stop_token) override {
                 return {};
@@ -18,6 +19,8 @@ namespace Horo::Editor {
                 ++calls;
                 if (duringInference)
                     duringInference();
+                if (tool && !sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = *tool}))
+                    return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}) || !sink({.kind = Agent::ModelEventKind::Completed}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 return {};
@@ -290,6 +293,36 @@ namespace Horo::Editor {
             stop.request_stop();
             CHECK(review.Status() == Cancelled);
             CHECK_FALSE(review.Read(*context));
+        }
+
+        TEST_CASE("Immersive planning rejects object targets from a different scene revision", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto prompt = Prompt();
+            prompt.tools.emplace_back("scene.change", "Propose a scene change", R"({"type":"object"})");
+            prompt.requiredFeatures.bits |= static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
+            auto pending = owner.CapturePlan(*context, std::move(prompt));
+            REQUIRE(pending);
+            PlanningModel model;
+            model.tool = Agent::ModelToolIntent{"change", "scene.change", "{}"};
+            auto scope = Agent::AgentPlanObjectScope{context->Identity().documentOpening, context->Identity().documentRevision, {42}};
+            auto expected = Completed;
+            SECTION("the exact scope remains available") {}
+            SECTION("a different document opening is denied") {
+                ++scope.opening;
+                expected = ContextDenied;
+            }
+            SECTION("an outdated revision is denied") {
+                ++scope.revision;
+                expected = ContextDenied;
+            }
+            const auto result = pending->Plan(model, 1, {}, [&](const Agent::ModelToolIntent &) {
+                return Agent::AgentPlanToolInspection{Completed, Agent::AgentPlannedTool{Agent::AgentPlannedEffect::Presentation, scope}};
+            });
+            CHECK(result.Status() == expected);
+            CHECK((result.Read(*context) != nullptr) == (expected == Completed));
         }
 
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {

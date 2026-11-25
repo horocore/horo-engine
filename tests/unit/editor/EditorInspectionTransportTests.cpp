@@ -191,4 +191,37 @@ namespace {
             CHECK(outdated["error"]["code"] == "scene_stale");
         }
     }
+
+    TEST_CASE("Scene proposal inspection reports scoped objects without opening a preview", "[mcp][editor][plan]") {
+        auto fixture = FixtureEndpoint();
+        unsigned invocations{};
+        fixture.proposeEdits = [&](auto, auto, auto, auto, auto) {
+            ++invocations;
+            return Result<std::uint64_t>::Success(1);
+        };
+        const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(std::move(fixture));
+        auto registrations = MakeEditorInspectionMcpTools(endpoint);
+        REQUIRE(registrations.HasValue());
+        const std::vector<std::string> grants{std::string{EditorSceneInspectionGrant}, std::string{EditorSceneProposalGrant}};
+        McpToolRegistry registry;
+        REQUIRE(registry.Publish(std::move(registrations).Value(), grants).HasValue());
+        const auto tools = registry.Read();
+        const McpToolId id{"scene.propose_edits"};
+        auto arguments = Json::parse(R"({"scene":{"epoch":7,"revision":19},
+             "renames":[{"object":42,"name":"Renamed"}],
+             "lights":[{"object":42,"enabled":true},{"object":8,"enabled":false}]})");
+        CHECK(tools->InspectDraft(id, arguments, {}).HasError());
+        const auto inspected = tools->InspectDraft(id, arguments, grants);
+        REQUIRE(inspected.HasValue());
+        CHECK(inspected.Value().effect == McpToolEffect::PresentationSideEffect);
+        const auto &scope = inspected.Value().scope;
+        REQUIRE(scope);
+        CHECK(scope->opening == Scene.epoch);
+        CHECK(scope->revision == Scene.revision);
+        CHECK((scope->objects == std::vector<std::uint64_t>{42, 8}));
+        arguments.erase("renames");
+        arguments.erase("lights");
+        CHECK(tools->InspectDraft(id, arguments, grants).HasError());
+        CHECK(invocations == 0);
+    }
 }  // namespace

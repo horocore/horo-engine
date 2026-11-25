@@ -4,6 +4,7 @@
 #include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
 
+#include <algorithm>
 #include <limits>
 #include <type_traits>
 
@@ -569,14 +570,61 @@ namespace Horo::Editor {
         };
 
         /** @brief Decodes one schema-validated optional list of typed Scene edits. */
-        template <class T, class Read> std::vector<T> ReadProposedEdits(const Json &arguments, const char *field, Read read) {
+        template <class T, class Decode> std::vector<T> ReadProposedEdits(const Json &arguments, const char *field, Decode decode) {
             std::vector<T> values;
             if (const auto rows = arguments.find(field); rows != arguments.end()) {
                 values.reserve(rows->size());
                 for (const auto &row : *rows)
-                    values.push_back(read(row));
+                    values.push_back(decode(row));
             }
             return values;
+        }
+
+        /** @brief Exact typed payload shared by planning review and the editor preview adapter. */
+        struct DecodedSceneProposal final {
+            InspectionSceneRevision revision;
+            std::vector<AgentViewportTransform> transforms;
+            std::vector<AgentSceneObjectRename> renames;
+            std::vector<AgentSceneLightUpdate> lights;
+        };
+
+        /** @brief Converts schema-validated Scene proposal input and checks the combined edit budget. */
+        Result<DecodedSceneProposal> ReadSceneProposal(const Json &arguments) {
+            const auto &scene = arguments.at("scene");
+            const InspectionSceneRevision revision{scene.at("epoch").get<std::uint64_t>(), scene.at("revision").get<std::uint64_t>()};
+            auto transforms = ReadProposedEdits<AgentViewportTransform>(arguments, "transforms", [](const Json &row) {
+                return AgentViewportTransform{row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
+                                              row.at("rotationXYZW").get<std::array<float, 4>>(),
+                                              row.at("scale").get<std::array<float, 3>>()};
+            });
+            auto renames = ReadProposedEdits<AgentSceneObjectRename>(arguments, "renames", [](const Json &row) {
+                return AgentSceneObjectRename{row.at("object").get<std::uint64_t>(), row.at("name").get<std::string>()};
+            });
+            auto lights = ReadProposedEdits<AgentSceneLightUpdate>(arguments, "lights", [](const Json &row) {
+                return AgentSceneLightUpdate{row.at("object").get<std::uint64_t>(), row.at("enabled").get<bool>()};
+            });
+            const auto count = transforms.size() + renames.size() + lights.size();
+            if (count == 0 || count > MaximumObjects)
+                return Result<DecodedSceneProposal>::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
+            return Result<DecodedSceneProposal>::Success({revision, std::move(transforms), std::move(renames), std::move(lights)});
+        }
+
+        /** @brief Lists each affected object once in proposal order without querying live Editor state. */
+        Result<Mcp::McpToolDraftScope> InspectSceneProposal(const Json &arguments) {
+            auto proposal = ReadSceneProposal(arguments);
+            if (proposal.HasError())
+                return Result<Mcp::McpToolDraftScope>::Failure(proposal.ErrorValue());
+            const auto &value = proposal.Value();
+            Mcp::McpToolDraftScope scope{.opening = value.revision.epoch, .revision = value.revision.revision};
+            const auto collect = [&scope](const auto &edits) {
+                for (const auto &edit : edits)
+                    if (std::ranges::find(scope.objects, edit.object) == scope.objects.end())
+                        scope.objects.push_back(edit.object);
+            };
+            collect(value.transforms);
+            collect(value.renames);
+            collect(value.lights);
+            return Result<Mcp::McpToolDraftScope>::Success(std::move(scope));
         }
 
         /** @brief Stages the exact proposal on the editor lane and retains a revocable, weak principal lease. */
@@ -593,27 +641,16 @@ namespace Horo::Editor {
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
                 if (context.IsStopRequested())
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
-                const auto &scene = arguments.at("scene");
-                const InspectionSceneRevision revision{scene.at("epoch").get<std::uint64_t>(), scene.at("revision").get<std::uint64_t>()};
-                const auto transforms = ReadProposedEdits<AgentViewportTransform>(arguments, "transforms", [](const Json &row) {
-                    return AgentViewportTransform{row.at("object").get<std::uint64_t>(), row.at("translation").get<std::array<float, 3>>(),
-                                                  row.at("rotationXYZW").get<std::array<float, 4>>(),
-                                                  row.at("scale").get<std::array<float, 3>>()};
-                });
-                const auto renames = ReadProposedEdits<AgentSceneObjectRename>(arguments, "renames", [](const Json &row) {
-                    return AgentSceneObjectRename{row.at("object").get<std::uint64_t>(), row.at("name").get<std::string>()};
-                });
-                const auto lights = ReadProposedEdits<AgentSceneLightUpdate>(arguments, "lights", [](const Json &row) {
-                    return AgentSceneLightUpdate{row.at("object").get<std::uint64_t>(), row.at("enabled").get<bool>()};
-                });
-                const auto count = transforms.size() + renames.size() + lights.size();
-                if (count == 0 || count > MaximumObjects)
-                    return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
+                const auto proposal = ReadSceneProposal(arguments);
+                if (proposal.HasError())
+                    return JsonResult::Failure(proposal.ErrorValue());
                 auto authorized = [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
                     const auto active = principal.lock();
                     return active && !active->IsStopRequested();
                 };
-                const auto result = endpoint->proposeEdits(revision, transforms, renames, lights, std::move(authorized));
+                const auto &edits = proposal.Value();
+                const auto result =
+                    endpoint->proposeEdits(edits.revision, edits.transforms, edits.renames, edits.lights, std::move(authorized));
                 if (result.HasError())
                     return JsonResult::Failure(result.ErrorValue());
                 return JsonResult::Success({{"reviewId", std::to_string(result.Value())}});
@@ -641,7 +678,8 @@ namespace Horo::Editor {
                          .requiredCapabilities = {std::string{EditorSceneProposalGrant}},
                          .bounds = {.maximumInputBytes = 8192, .maximumResultBytes = 128, .maximumDepth = 6, .maximumNodes = 384}},
                     .adapter = std::make_shared<SceneProposalTool>(endpoint),
-                    .owner = Mcp::McpOwnerContext::Editor};
+                    .owner = Mcp::McpOwnerContext::Editor,
+                    .inspectDraft = &InspectSceneProposal};
         }
 
         /** @brief Publishes a read-only query under the shared inspection capability and bounds. */

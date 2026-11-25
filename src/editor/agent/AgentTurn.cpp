@@ -163,20 +163,20 @@ namespace Horo::Agent {
 
         /** @brief Validates an inert draft and rechecks freshness before it can leave the runtime. */
         AgentTurnStatus ValidatePlanRound(const ModelRequest &request, const ModelMessage &message, const AgentPlanToolValidator &plan,
-                                          const TurnStop &stop, TurnContextGate &context, std::vector<AgentPlannedEffect> &effects) {
+                                          const TurnStop &stop, TurnContextGate &context, std::vector<AgentPlannedTool> &tools) {
             try {
-                effects.reserve(message.toolIntents.size());
+                tools.reserve(message.toolIntents.size());
                 const auto status = PrepareTools(request, message, [&](const ModelToolIntent &intent) {
                     if (const auto stopped = stop.Status())
                         return *stopped;
                     if (!context.Check())
                         return ContextDenied;
-                    const auto inspected = plan(intent);
+                    auto inspected = plan(intent);
                     if (inspected.status != Completed)
                         return inspected.status;
-                    if (!inspected.effect || *inspected.effect > AgentPlannedEffect::Mutation)
+                    if (!inspected.tool || inspected.tool->effect > AgentPlannedEffect::Mutation)
                         return ToolDenied;
-                    effects.push_back(*inspected.effect);
+                    tools.push_back(std::move(*inspected.tool));
                     return Completed;
                 });
                 if (const auto stopped = stop.Status())
@@ -334,7 +334,7 @@ namespace Horo::Agent {
         return {.status = Completed,
                 .draft = std::move(result.messages.back()),
                 .usage = result.finalUsage,
-                .effects = std::move(review.effects)};
+                .tools = std::move(review.tools)};
     }
 
     /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
@@ -394,7 +394,7 @@ namespace Horo::Agent {
                 progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
                 if (plan) {
-                    const auto status = ValidatePlanRound(request, message, plan->inspect, stop, contextGate, plan->effects);
+                    const auto status = ValidatePlanRound(request, message, plan->inspect, stop, contextGate, plan->tools);
                     if (status != Completed)
                         return FailedRound(status);
                 }

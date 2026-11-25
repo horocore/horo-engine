@@ -11,6 +11,14 @@ namespace Horo::Editor {
     };
 
     namespace {
+        /** @brief An explicit proposal scope must name the document used to start planning. */
+        bool MatchesPlanScene(const Agent::AgentPlanToolInspection &inspection, const ImmersiveContextIdentity &scene) noexcept {
+            if (!inspection.tool || !inspection.tool->scope)
+                return true;
+            const auto &scope = *inspection.tool->scope;
+            return scope.opening == scene.documentOpening && scope.revision == scene.documentRevision;
+        }
+
         /** @brief Capture-only Play admits no user, conversation or tool dispatch credentials. */
         bool ValidAuthority(const ImmersiveContextIdentity &identity) noexcept {
             if (identity.localSpeechOnly)
@@ -109,7 +117,7 @@ namespace Horo::Editor {
     ImmersivePlanReview ImmersiveAgentRequest::Plan(Agent::IModelProvider &provider, const std::uint64_t turnId,
                                                     const Agent::AgentTurnLimits &limits, const Agent::AgentPlanToolValidator &validateTool,
                                                     const std::stop_token stop, const Agent::AgentTurnContext *approvedContext) {
-        if (!reviewOnly_)
+        if (!reviewOnly_ || !validateTool)
             return {context_, {.status = Agent::AgentTurnStatus::InvalidRequest}, stop};
         if (!approvedContext && !projectIdentity_.empty())
             return {context_, {.status = Agent::AgentTurnStatus::ContextDenied}, stop};
@@ -121,7 +129,13 @@ namespace Horo::Editor {
         Agent::AgentTurnRuntime runtime{[this] {
             return IsCurrent();
         }};
-        auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop, approvedContext);
+        const Agent::AgentPlanToolValidator inspect = [&](const Agent::ModelToolIntent &intent) {
+            auto inspected = validateTool(intent);
+            if (!MatchesPlanScene(inspected, context_.Identity()))
+                return Agent::AgentPlanToolInspection{Agent::AgentTurnStatus::ContextDenied};
+            return inspected;
+        };
+        auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext);
         return {context_, std::move(plan), stop, approvedContext ? approvedContext->project.cancellation : CancellationToken{}};
     }
 

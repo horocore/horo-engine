@@ -94,10 +94,23 @@ namespace Horo::Agent {
         Mutation
     };
 
+    /** @brief Object identifiers scoped to the exact document revision named by a planned operation. */
+    struct AgentPlanObjectScope final {
+        std::uint64_t opening{};
+        std::uint64_t revision{};
+        std::vector<std::uint64_t> objects;
+    };
+
+    /** @brief Authoritative review projection for one inert model intent. */
+    struct AgentPlannedTool final {
+        AgentPlannedEffect effect{};
+        std::optional<AgentPlanObjectScope> scope;
+    };
+
     /** @brief Disposition of an inert proposal. Success requires an effect from the host. */
     struct AgentPlanToolInspection final {
         AgentTurnStatus status{AgentTurnStatus::ToolDenied};
-        std::optional<AgentPlannedEffect> effect;
+        std::optional<AgentPlannedTool> tool;
     };
 
     /** @brief Validates one proposed tool against host policy. Builds no operation and consumes no approval. */
@@ -109,7 +122,7 @@ namespace Horo::Agent {
         std::optional<ModelMessage> draft;
         std::optional<ModelErrorCode> providerError;
         std::optional<ModelUsage> usage;
-        std::vector<AgentPlannedEffect> effects; /**< One host result per draft intent, in the same order. */
+        std::vector<AgentPlannedTool> tools; /**< One host result per draft intent, in the same order. */
         std::optional<Security::AgentPolicyReason> contextError;
     };
 
@@ -155,7 +168,7 @@ namespace Horo::Agent {
     private:
         struct PlanReview final {
             const AgentPlanToolValidator &inspect;
-            std::vector<AgentPlannedEffect> effects;
+            std::vector<AgentPlannedTool> tools;
         };
 
         struct TurnPorts final {

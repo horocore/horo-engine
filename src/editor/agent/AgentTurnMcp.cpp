@@ -89,21 +89,28 @@ namespace Horo::Agent {
         const auto arguments = DecodeArguments(intent.argumentsJson);
         if (!arguments.is_object())
             return {InvalidModelResponse};
-        const auto inspected = registry.InspectDraft({intent.name}, arguments, capabilities);
+        auto inspected = registry.InspectDraft({intent.name}, arguments, capabilities);
         if (inspected.HasError()) {
             const auto &error = inspected.ErrorValue();
             const auto &invalid = Mcp::McpErrors::ToolInputInvalid;
             return {ErrorChainContains(error, invalid.domain, invalid.code) ? InvalidModelResponse : ErrorStatus(error.code.Value())};
         }
-        switch (inspected.Value()) {
+        auto &draft = inspected.Value();
+        AgentPlannedTool tool;
+        switch (draft.effect) {
             case Mcp::McpToolEffect::Query:
-                return {Completed, AgentPlannedEffect::Read};
+                tool.effect = AgentPlannedEffect::Read;
+                break;
             case Mcp::McpToolEffect::PresentationSideEffect:
-                return {Completed, AgentPlannedEffect::Presentation};
+                tool.effect = AgentPlannedEffect::Presentation;
+                break;
             case Mcp::McpToolEffect::Mutation:
-                return {Completed, AgentPlannedEffect::Mutation};
+                tool.effect = AgentPlannedEffect::Mutation;
+                break;
         }
-        return {ToolDenied};
+        if (draft.scope)
+            tool.scope = AgentPlanObjectScope{draft.scope->opening, draft.scope->revision, std::move(draft.scope->objects)};
+        return {Completed, std::move(tool)};
     }
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */

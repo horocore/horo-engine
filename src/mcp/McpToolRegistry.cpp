@@ -386,16 +386,24 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpToolSnapshot::InspectDraft */
-    Result<McpToolEffect> McpToolSnapshot::InspectDraft(const McpToolId &id, const nlohmann::json &arguments,
-                                                        const std::span<const std::string> capabilities) const {
-        using Output = Result<McpToolEffect>;
+    Result<McpToolDraftInspection> McpToolSnapshot::InspectDraft(const McpToolId &id, const nlohmann::json &arguments,
+                                                                 const std::span<const std::string> capabilities) const {
+        using Output = Result<McpToolDraftInspection>;
         const auto found = FindGranted(id, capabilities);
         if (found.HasError())
             return Output::Failure(found.ErrorValue());
         const auto &descriptor = found.Value()->descriptor;
         if (!ValidInput(descriptor, arguments))
             return Output::Failure(MakeError(McpErrors::ToolInputInvalid));
-        return Output::Success(descriptor.effect);
+        if (const auto inspect = found.Value()->inspectDraft) {
+            auto scope = inspect(arguments);
+            if (scope.HasError())
+                return Output::Failure(scope.ErrorValue());
+            if (scope.Value().opening == 0 || scope.Value().objects.size() > McpToolDraftScope::MaximumObjects)
+                return Output::Failure(MakeError(McpErrors::ToolInputInvalid));
+            return Output::Success({descriptor.effect, std::move(scope).Value()});
+        }
+        return Output::Success({descriptor.effect, {}});
     }
 
     /** @copydoc McpToolSnapshot::PrepareInvocation */
