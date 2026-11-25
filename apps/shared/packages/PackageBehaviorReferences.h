@@ -81,10 +81,10 @@ namespace Horo::Application::Internal {
         const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
         std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit);
 
-    /** @brief Reads canonical saved Scene and Prefab sources for behavior and potential custom sense dependencies.
+    /** @brief Reads canonical saved Scene and Prefab sources for components, behaviors and potential custom sense dependencies.
      * @param sources Same-project registry, root-bound read authority, and registration evidence.
      * @param lock Current validated lock. @param removal Exact withdrawal effects from that lock.
-     * @return Confirmed behavior and unresolved sense findings, or a typed failure.
+     * @return Confirmed component and behavior matches, unresolved sense findings, or a typed failure.
      * @details Matches known registrations. It does not certify registration coverage for packages without supplied evidence,
      * inspect unsaved documents or grant removal approval. Call off the UI draw lane.
      */

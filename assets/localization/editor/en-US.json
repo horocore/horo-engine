@@ -4620,6 +4620,9 @@
     "workspace.packages.reference_behavior": {
       "text": "Saved behavior (object / attachment)"
     },
+    "workspace.packages.reference_component": {
+      "text": "Saved component (object or prefab occurrence)"
+    },
     "workspace.packages.reference_service": {
       "text": "Required gameplay service (consumer package / registration)"
     },

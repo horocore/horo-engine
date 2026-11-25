@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <ranges>
@@ -26,6 +27,7 @@ namespace Horo::Application::Internal {
 
         using Owners = std::map<Gameplay::BehaviorTypeId, std::set<Packages::HoroPackageId>>;
         using References = std::vector<PackageBehaviorReference>;
+        using ComponentOwners = std::map<Gameplay::ComponentTypeId, std::set<Packages::HoroPackageId>>;
         constexpr std::size_t MaximumBehaviorReferences = 16'384;
         constexpr std::size_t MaximumServiceReferences = 16'384;
         constexpr auto ServiceInUse = "packages.host.service_in_use";
@@ -36,11 +38,12 @@ namespace Horo::Application::Internal {
         /** @brief Exact departing provider identities or inert behavior claims for one saved-source scan. */
         struct SavedReferenceOwners final {
             Owners behaviors;
+            ComponentOwners components;
             std::set<Packages::HoroPackageId> senses;
 
             /** @brief Reports whether this scan has an observed or declared provider to inspect. */
             [[nodiscard]] bool Empty() const {
-                return behaviors.empty() && senses.empty();
+                return behaviors.empty() && components.empty() && senses.empty();
             }
         };
 
@@ -48,6 +51,7 @@ namespace Horo::Application::Internal {
         struct SavedReferenceScan final {
             References behaviors;
             std::vector<Diagnostic> senses;
+            std::vector<Diagnostic> components;
         };
 
         Error ReferenceError(std::string code, std::string_view path = {}) {
@@ -59,6 +63,12 @@ namespace Horo::Application::Internal {
             return std::ranges::find(removal.removed, package, &Packages::LockedPackageReference::package) != removal.removed.end();
         }
 
+        /** @brief Confirms that an observed role belongs to the exact locked artifact. */
+        bool MatchesLockedArtifact(const Registration &registration, const Packages::LockedPackage &locked) {
+            return registration.activationGeneration != 0 && registration.package == locked.package &&
+                   registration.version == locked.version && registration.artifact == locked.artifactDigest;
+        }
+
         /** @brief Accepts only registrations attributed to the exact locked artifact being withdrawn. */
         Result<SavedReferenceOwners> IndexOwners(std::span<const Registration> registrations, const Packages::ValidatedPackageLockfileV1 &lock,
                                                 const Packages::PackageRemovalGraphPreview &removal) {
@@ -68,15 +78,103 @@ namespace Horo::Application::Internal {
                 if (!IsDeparting(removal, registration.package))
                     continue;
                 if (const auto entry = std::ranges::find(lock.Packages(), registration.package, &Packages::LockedPackage::package);
-                    entry == lock.Packages().end() || entry->version != registration.version ||
-                    entry->artifactDigest != registration.artifact)
+                    entry == lock.Packages().end() || !MatchesLockedArtifact(registration, *entry))
                     return Indexed::Failure(ReferenceError("packages.host.behavior_ownership_stale"));
                 for (const auto &type : registration.behaviors)
                     owners.behaviors[type].insert(registration.package);
+                for (const auto &type : registration.components)
+                    owners.components[type].insert(registration.package);
                 if (registration.hasCustomSenses)
                     owners.senses.insert(registration.package);
             }
             return Indexed::Success(std::move(owners));
+        }
+
+        /** @brief Records exact component usage without interpreting serialized payload bytes. */
+        struct ComponentReferences final {
+            std::vector<Diagnostic> &diagnostics;
+            const ComponentOwners &owners;
+            std::string_view path;
+            std::optional<std::uint64_t> placement{};
+
+            /** @brief Keeps a matching object, placement and optional component instance in authored address order. */
+            Result<void> Collect(const Gameplay::ComponentTypeId &type, std::uint64_t object, std::optional<std::uint64_t> instance = {},
+                                 std::span<const Prefab::LocalObjectId> scope = {}) const {
+                const auto matched = owners.find(type);
+                if (matched == owners.end())
+                    return Result<void>::Success();
+                if (matched->second.size() > MaximumBehaviorReferences - diagnostics.size())
+                    return Result<void>::Failure(ReferenceError("packages.host.component_reference_limit", path));
+                std::string target;
+                if (placement)
+                    target = std::to_string(*placement) + '/';
+                for (const auto step : scope)
+                    target += std::to_string(step.value) + '/';
+                target += std::to_string(object);
+                if (instance)
+                    target += '/' + std::to_string(*instance);
+                for (const auto &package : matched->second)
+                    diagnostics.emplace_back(DiagnosticCode{"packages.host.component_in_use"}, DiagnosticSeverity::Error,
+                                             package.Value() + " / " + type.Value(), SourceLocation{std::string{path}}, target);
+                return Result<void>::Success();
+            }
+
+            /** @brief Records a property, add or remove component target in its owning prefab scope. */
+            Result<void> Collect(const Gameplay::ComponentTypeId &type, const Prefab::PrefabObjectAddress &object,
+                                 const Prefab::PrefabComponentInstanceId instance) const {
+                return Collect(type, object.SourceObject().value, instance.Value(), object.NestedInstanceScope());
+            }
+
+            Result<void> operator()(const Prefab::PrefabValueOverrideRecord &value) const {
+                const auto *target = std::get_if<Prefab::PrefabPropertyAddress>(&value.target);
+                return target ? Collect(target->ComponentType(), target->Object(), target->ComponentInstance()) : Result<void>::Success();
+            }
+
+            Result<void> operator()(const Prefab::PrefabComponentOverrideRecord &record) const {
+                if (const auto *added = std::get_if<Prefab::PrefabAddComponentOverride>(&record))
+                    return Collect(added->payload.component.typeId, added->object, added->payload.instance);
+                const auto &target = std::get<Prefab::PrefabRemoveComponentOverride>(record).target;
+                return Collect(target.type, target.object, target.instance);
+            }
+        };
+
+        /** @brief Visits stored intent including original records retained as conflicts and orphans. */
+        Result<void> InspectComponentOverrides(const std::optional<Prefab::PrefabValueOverrideSet> &overrides,
+                                               const ComponentReferences &references) {
+            if (!overrides || references.owners.empty())
+                return Result<void>::Success();
+            const auto &set = *overrides;
+            const auto scan = [&references](const auto &records, auto projection) -> Result<void> {
+                for (const auto &record : records)
+                    if (auto found = references(std::invoke(projection, record)); found.HasError())
+                        return found;
+                return Result<void>::Success();
+            };
+            if (auto result = scan(set.records, std::identity{}); result.HasError())
+                return result;
+            if (auto result = scan(set.conflicts, &Prefab::PrefabValueOverrideConflict::original); result.HasError())
+                return result;
+            if (auto result = scan(set.orphans, &Prefab::PrefabValueOverrideOrphan::original); result.HasError())
+                return result;
+            if (auto result = scan(set.componentRecords, std::identity{}); result.HasError())
+                return result;
+            if (auto result = scan(set.componentConflicts, &Prefab::PrefabComponentOverrideConflict::original); result.HasError())
+                return result;
+            return scan(set.componentOrphans, &Prefab::PrefabComponentOverrideOrphan::original);
+        }
+
+        /** @brief Reads component intents stored outside the prefab's direct object list. */
+        Result<void> InspectPrefabComposition(const std::optional<Prefab::PrefabComposition> &composition,
+                                              const ComponentReferences &references) {
+            if (!composition || references.owners.empty())
+                return Result<void>::Success();
+            for (const auto &nested : composition->nestedPlacements) {
+                auto nestedReferences = references;
+                nestedReferences.placement = nested.placementLocalId.value;
+                if (auto found = InspectComponentOverrides(nested.valueOverrides, nestedReferences); found.HasError())
+                    return found;
+            }
+            return InspectComponentOverrides(composition->variantOverrides, references);
         }
 
         /** @brief Records a document that can still bind an unclassified Perception implementation. */
@@ -122,6 +220,26 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Reads direct Scene objects and the saved overrides owned by their containing document. */
+        Result<void> InspectSceneObjects(const SceneSource::SceneSourceDocument &scene, SavedReferenceScan &scan,
+                                         const SavedReferenceOwners &owners, std::string_view path) {
+            ComponentReferences components{scan.components, owners.components, path};
+            for (const auto &object : scene.objects) {
+                if (auto found = Collect(scan.behaviors, owners.behaviors, path, object.id.value, object.components.behaviors);
+                    found.HasError())
+                    return found;
+                for (const auto &component : object.components.gameplayComponents)
+                    if (auto found = components.Collect(component.typeId, object.id.value); found.HasError())
+                        return found;
+            }
+            for (const auto &instance : scene.prefabInstances) {
+                components.placement = instance.instanceId.Value();
+                if (auto found = InspectComponentOverrides(instance.valueOverrides, components); found.HasError())
+                    return found;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Reads direct authored attachments; each referenced child or prefab has its own registry entry. */
         Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceOwners &owners, std::string_view path, std::string_view text) {
             const auto scene = SceneSource::DecodeSceneSourceWithChildReferences(text);
@@ -130,12 +248,25 @@ namespace Horo::Application::Internal {
                     WithCause(ReferenceError("packages.host.scene_reference_unreadable", path), scene.ErrorValue()));
             if (!scene.Value().unsupportedComponentOwners.empty())
                 return Result<void>::Failure(ReferenceError("packages.host.scene_reference_unsupported", path));
-            for (const auto &object : scene.Value().objects)
-                if (auto collected = Collect(scan.behaviors, owners.behaviors, path, object.id.value, object.components.behaviors);
-                    collected.HasError())
-                    return collected;
+            if (auto found = InspectSceneObjects(scene.Value(), scan, owners, path); found.HasError())
+                return found;
             return !owners.senses.empty() && RequiresSenseReview(scene.Value()) ? CollectSenseReview(scan, owners, path)
                                                                                  : Result<void>::Success();
+        }
+
+        /** @brief Uses prefab-local component instances and visits nested and variant override records. */
+        Result<void> InspectPrefabObjects(const Prefab::PrefabDocumentData &prefab, SavedReferenceScan &scan,
+                                          const SavedReferenceOwners &owners, std::string_view path) {
+            const ComponentReferences components{scan.components, owners.components, path};
+            for (const auto &object : prefab.objects) {
+                if (auto found = Collect(scan.behaviors, owners.behaviors, path, object.localId.value, object.behaviors); found.HasError())
+                    return found;
+                for (const auto &payload : object.components)
+                    if (auto found = components.Collect(payload.component.typeId, object.localId.value, payload.instance.Value());
+                        found.HasError())
+                        return found;
+            }
+            return InspectPrefabComposition(prefab.composition, components);
         }
 
         /** @brief Reads direct prefab attachments, retaining both asset and prefab-local object identity. */
@@ -149,9 +280,8 @@ namespace Horo::Application::Internal {
             if (prefab.Value().Data().assetId != record.id)
                 return Result<void>::Failure(ReferenceError("packages.host.prefab_reference_identity_mismatch", path));
             const auto &data = prefab.Value().Data();
-            for (const auto &object : data.objects)
-                if (auto collected = Collect(scan.behaviors, owners.behaviors, path, object.localId.value, object.behaviors); collected.HasError())
-                    return collected;
+            if (auto found = InspectPrefabObjects(data, scan, owners, path); found.HasError())
+                return found;
             return !owners.senses.empty() && RequiresSenseReview(data) ? CollectSenseReview(scan, owners, path)
                                                                        : Result<void>::Success();
         }
@@ -214,12 +344,6 @@ namespace Horo::Application::Internal {
                     result.HasError())
                     return result;
             return Result<void>::Success();
-        }
-
-        /** @brief Confirms that an observed role belongs to the exact locked artifact. */
-        bool MatchesLockedArtifact(const Registration &registration, const Packages::LockedPackage &locked) {
-            return registration.activationGeneration != 0 && registration.package == locked.package &&
-                   registration.version == locked.version && registration.artifact == locked.artifactDigest;
         }
 
         /** @brief Excludes cached observations from another artifact or without an admitted generation. */
@@ -444,12 +568,13 @@ namespace Horo::Application::Internal {
             return Inspection::Failure(inspected.ErrorValue());
         auto scan = std::move(inspected).Value();
         std::vector<Diagnostic> diagnostics;
-        diagnostics.reserve(scan.behaviors.size() + scan.senses.size());
+        diagnostics.reserve(scan.behaviors.size() + scan.senses.size() + scan.components.size());
         for (const auto &reference : scan.behaviors)
             diagnostics.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
                                      reference.package.Value() + ": " + reference.type.Value(), SourceLocation{reference.assetPath},
                                      std::to_string(reference.object) + "/" + std::to_string(reference.instance.value));
         std::ranges::move(scan.senses, std::back_inserter(diagnostics));
+        std::ranges::move(scan.components, std::back_inserter(diagnostics));
         return Inspection::Success(std::move(diagnostics));
     }
 

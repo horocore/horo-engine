@@ -892,6 +892,78 @@ namespace {
         CHECK(rollback.Value().request == oldRequest);
     }
 
+    /** @brief Writes direct native components and distinct active and orphaned topology edits. */
+    void WriteSavedComponentReferences(const std::filesystem::path &folder, const Gameplay::ComponentTypeId &type) {
+        const auto prefabId = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0f").Value();
+        const auto version = ParseHoroVersion("1.2.3").Value();
+        const Gameplay::SerializedComponent component{.typeId = type, .payload = {std::byte{'{'}, std::byte{'}'}}};
+        const Prefab::PrefabObjectNode root{
+            .name = "Prefab Root", .components = {{Prefab::PrefabComponentInstanceId::Create(2).Value(), component}}};
+        const auto prefab = Prefab::PrefabDocument::Create({.projectVersion = version, .assetId = prefabId, .objects = {root}},
+                                                            Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(prefab.HasValue());
+        const auto prefabBytes = prefab.Value().SerializeCanonical();
+        REQUIRE(prefabBytes.HasValue());
+        const auto &bytes = prefabBytes.Value();
+        const auto digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+        const Prefab::PrefabSourceRevision revision{version, digest};
+        const auto add = [&](std::uint64_t instance) {
+            return Prefab::PrefabAddComponentOverride{
+                {}, {Prefab::PrefabComponentInstanceId::Create(instance).Value(), component}};
+        };
+        const Prefab::PrefabValueOverrideSet overrides{.sourcePrefab = prefabId, .authoredAgainst = revision, .schemaRevision = digest,
+                                                       .componentRecords = {add(8)}, .componentOrphans = {{add(9), revision, digest}}};
+        SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Scene Object"};
+        object.components.gameplayComponents = {component};
+        const SceneSource::ScenePrefabInstance instance{.instanceId = Prefab::PrefabInstanceId::Create(4).Value(),
+                                                        .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabId).Value(),
+                                                        .valueOverrides = overrides};
+        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}, .prefabInstances = std::span{&instance, 1}});
+        std::ofstream{folder / "Scene.horoasset"} << scene;
+        std::ofstream{folder / "Scene.horoasset.horo"}
+            << R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0e","assetType":"core.scene"})";
+        std::ofstream{folder / "Example.prefab"} << bytes;
+        std::ofstream{folder / "Example.prefab.horo"}
+            << R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.prefab"})";
+    }
+
+    TEST_CASE("Package removal identifies saved native components and retained prefab override intent", "[packages][application][host]") {
+        HostFixture fixture{true};
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto &locked = expected.Value().application.lockedPlan->Packages().front();
+        const auto type = Gameplay::ComponentTypeId::Parse("game.tests.package_component").Value();
+        std::array owners{Packages::GameplayPackageModuleHost::RegistrationInventory{
+            .package = locked.package, .version = locked.version, .artifact = locked.artifactDigest, .activationGeneration = 1,
+            .moduleId = "com.horo.application-fixture.native", .descriptorPath = "extensions/native/extension.json",
+            .hasAdditionalReferenceClasses = true, .components = {type}}};
+        auto sources = fixture.RemovalSources(*assets);
+        sources.registrations = owners;
+        sources.requireGameplayOwner = true;
+        WriteSavedComponentReferences(policy.projectRoot / "Assets", type);
+        const auto attempted = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(attempted.HasError());
+        CHECK(attempted.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        const auto &references = attempted.ErrorValue().diagnostics;
+        REQUIRE(references.size() == 4);
+        for (const auto &reference : references)
+            CHECK(reference.code.Value() == "packages.host.component_in_use");
+        CHECK(references[0].location.source == "Assets/Scene.horoasset");
+        CHECK(references[0].path == "7");
+        CHECK(references[1].path == "4/0/8");
+        CHECK(references[2].path == "4/0/9");
+        CHECK(references[3].location.source == "Assets/Example.prefab");
+        CHECK(references[3].path == "0/2");
+
+        sources.requireGameplayOwner = false;
+        const auto ownerAdmitted = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(ownerAdmitted.HasError());
+        CHECK(ownerAdmitted.ErrorValue().code.Value() == "packages.host.component_in_use");
+    }
+
     /** @brief Adds a second independently locked package with a declared runtime role. */
     Packages::PackageRestorePackage AddRetainedRuntime(HostFixture &fixture) {
         using namespace Packages;

@@ -483,7 +483,9 @@ checks saved behavior, Decision and service references. Mixed roles, unknown
 archive paths and unreviewed component, asset, query or persistence
 contributions block removal. Custom senses block removal when saved authoring
 sources still require a binding review. The host decodes each Scene and Prefab
-once for behavior and custom-sense review. Standalone Scenes without AI or
+once for behavior, native component and custom-sense review. Exact native
+component matches include saved property and topology overrides, including
+conflicts and orphans. Standalone Scenes without AI or
 generic gameplay bindings and standalone Prefabs containing only plain objects
 can pass this review. Authored AI, opaque components and unresolved composition
 still require review, including disabled attachments. An EQS source is independent of a

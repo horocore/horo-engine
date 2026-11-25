@@ -347,6 +347,36 @@ namespace Horo::Packages {
                 return Result<bool>::Failure(persistence.ErrorValue());
             return Result<bool>::Success(bool{queries.Value().schema} || !persistence.Value().empty());
         }
+
+        /** @brief Copies inert registration facts from an exact loaded gameplay role without retaining the image or invoking factories. */
+        Result<void> CaptureRegistrationContents(const Gameplay::LoadedGameModule &loaded,
+                                                 GameplayPackageModuleHost::RegistrationInventory &inventory) {
+            for (const auto &behavior : loaded.Registry().Registrations())
+                inventory.behaviors.push_back(behavior.descriptor.typeId);
+            const auto components = loaded.Components().Descriptors();
+            if (components.size() > GameplayPackageModuleHost::RegistrationInventory::MaximumComponentIds)
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+            for (const auto &component : components)
+                inventory.components.push_back(component.typeId);
+            for (const auto &service : loaded.Services().Registrations())
+                inventory.services.push_back(service.descriptor);
+            for (const auto &system : loaded.Systems().Registrations())
+                inventory.systems.push_back(system.descriptor);
+            auto decisionNodes = loaded.AcquireDecisionNodes();
+            if (decisionNodes.HasError())
+                return Result<void>::Failure(decisionNodes.ErrorValue());
+            for (const auto &node : decisionNodes.Value()->Contracts())
+                inventory.decisionNodes.push_back(node.descriptor.type);
+            const auto senses = loaded.AcquirePerceptionSenses();
+            if (senses.HasError())
+                return Result<void>::Failure(senses.ErrorValue());
+            inventory.hasCustomSenses = !senses.Value()->Contracts().empty();
+            const auto additional = HasAdditionalReferenceClasses(loaded);
+            if (additional.HasError())
+                return Result<void>::Failure(additional.ErrorValue());
+            inventory.hasAdditionalReferenceClasses = additional.Value();
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc GameplayPackageModuleHost::CaptureActiveRegistrations */
@@ -371,25 +401,8 @@ namespace Horo::Packages {
                 auto &inventory =
                     registrations.emplace_back(locked.package, locked.version, locked.artifactDigest, report.generation, report.module);
                 inventory.descriptorPath = state->verified.Descriptor().Value();
-                for (const auto &behavior : loaded.Registry().Registrations())
-                    inventory.behaviors.push_back(behavior.descriptor.typeId);
-                for (const auto &service : loaded.Services().Registrations())
-                    inventory.services.push_back(service.descriptor);
-                for (const auto &system : loaded.Systems().Registrations())
-                    inventory.systems.push_back(system.descriptor);
-                auto decisionNodes = loaded.AcquireDecisionNodes();
-                if (decisionNodes.HasError())
-                    return Inventory::Failure(decisionNodes.ErrorValue());
-                for (const auto &node : decisionNodes.Value()->Contracts())
-                    inventory.decisionNodes.push_back(node.descriptor.type);
-                const auto senses = loaded.AcquirePerceptionSenses();
-                if (senses.HasError())
-                    return Inventory::Failure(senses.ErrorValue());
-                inventory.hasCustomSenses = !senses.Value()->Contracts().empty();
-                const auto additional = HasAdditionalReferenceClasses(loaded);
-                if (additional.HasError())
-                    return Inventory::Failure(additional.ErrorValue());
-                inventory.hasAdditionalReferenceClasses = additional.Value();
+                if (auto captured = CaptureRegistrationContents(loaded, inventory); captured.HasError())
+                    return Inventory::Failure(captured.ErrorValue());
             }
             return Inventory::Success(std::move(registrations));
         } catch (const std::bad_alloc &) {

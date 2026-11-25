@@ -89,6 +89,7 @@ namespace Horo::Packages {
         /** @brief Owned, non-executable inventory copied from one published package module.
          * @details Artifact and generation attribute registrations to the exact admitted native image. */
         struct RegistrationInventory final {
+            static constexpr std::size_t MaximumComponentIds = 4096;
             HoroPackageId package;
             PackageVersion version;
             Sha256Digest artifact;
@@ -101,9 +102,10 @@ namespace Horo::Packages {
             std::vector<AI::DecisionNodeTypeId> decisionNodes; /**< Inert IDs from the exact native decision registry. */
             bool hasCustomSenses{}; /**< The role has a native Perception surface requiring saved-source review. */
             bool hasAdditionalReferenceClasses{}; /**< The role contributes assets, components, native queries, or persistent adapters. */
+            std::vector<Gameplay::ComponentTypeId> components; /**< Stable IDs from the exact native component registry. */
         };
 
-        /** @brief Copies behavior and decision IDs and service and system descriptors from exact published runtime roles.
+        /** @brief Copies behavior, component and decision IDs and service and system descriptors from exact published runtime roles.
          * @param lifecycle The package lifecycle which published those roles.
          * @return Owned metadata or typed owner/generation failure. An empty result means no active SDK roles.
          * @details Must run on the owner lane. No factories are called or retained. The result describes active roles only
