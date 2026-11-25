@@ -1172,6 +1172,11 @@ Each binding starts with neutral lighting. Omitted contributions use the same
 color as the ordinary projection, and withdrawing a contribution requires no
 change to scene lights, exposure, or the projection attachment layout.
 The app owns provider activation, permission, scope, and conversion to ACEScg.
+The native event owner withdraws light observations alongside passthrough when
+focus, origin, Play admission, or the session is lost. A later focus event
+cannot restore the withdrawn grant. Native calls already in progress may
+finish, but their results cannot become visible. Native estimator destruction
+remains on the owner lane after any in-flight borrow completes.
 
 The FB reconstruction passthrough route requires an explicitly enabled
 version-3-or-newer extension, a separate operator grant, two admitted layer

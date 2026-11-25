@@ -547,6 +547,12 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> DestroySession();
         /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
         [[nodiscard]] Result<void> RetireLightEstimation();
+        /** @brief Withdraws the exact light grant and cached observations without destroying native handles. */
+        void RevokeLightEstimation() noexcept;
+        /** @brief Rechecks the native session and light grant after a foreign call. */
+        [[nodiscard]] Result<void> RecheckLightObservation(const XRSessionId &session);
+        /** @brief Withdraws native light and passthrough admission before an owner-lane lifecycle transition. */
+        void RevokeCompositionObservations() noexcept;
         [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
         [[nodiscard]] Result<void> RetireSpatialAnchorStore();
         [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorStore(const XRAnchorScope &scope, XrSpace world) const;
@@ -664,6 +670,7 @@ namespace Horo::XR::OpenXRInternal {
             XRRuntimeTime lastSample;
             std::optional<XRLightEstimate> current;
             bool active{};
+            bool withdrawn{}; /**< A lifecycle event revoked publication, including during estimator creation. */
         };
 
         LightEstimator light_;

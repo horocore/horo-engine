@@ -119,6 +119,7 @@ namespace Horo::XR::OpenXRInternal {
         if (scope.grant <= lastLightGrant_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const LightOperation operation{lightCall_};
+        light_.withdrawn = false;
         const auto admission = ReadExtensionAdmission(scope.session, Extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
@@ -149,6 +150,8 @@ namespace Horo::XR::OpenXRInternal {
         candidate.scope = scope;
         candidate.limits = limits;
         lastLightGrant_ = scope.grant;
+        if (light_.withdrawn)
+            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         XrLightEstimatorCreateInfoANDROID info{XR_TYPE_LIGHT_ESTIMATOR_CREATE_INFO_ANDROID};
         const auto created = create(native.Value().session, &info, &candidate.handle);
         if (created != XR_SUCCESS) {
@@ -161,11 +164,13 @@ namespace Horo::XR::OpenXRInternal {
         }
         if (candidate.handle == XR_NULL_HANDLE)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Native light estimator returned no handle"));
+        candidate.withdrawn = light_.withdrawn;
         light_ = candidate;
-        if (const auto current = Borrow(scope.session); current.HasError()) {
+        if (const auto current = Borrow(scope.session); current.HasError() || light_.withdrawn) {
+            const auto failure = current.HasError() ? current.ErrorValue() : MakeError(XRErrors::PermissionDenied);
             if (auto retired = RetireLightEstimation(); retired.HasError())
-                return retired;
-            return Result<void>::Failure(current.ErrorValue());
+                return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), failure));
+            return Result<void>::Failure(failure);
         }
         light_.active = true;
         return Result<void>::Success();
@@ -189,11 +194,8 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
 
         const LightOperation operation{lightCall_};
-        if (const auto native = Borrow(scope.session); native.HasError()) {
-            light_.current.reset();
-            light_.active = false;
-            return Outcome::Failure(native.ErrorValue());
-        }
+        if (const auto admitted = RecheckLightObservation(scope.session); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         light_.lastClock = now;
         if (light_.lastRequest.IsValid() &&
             now.Nanoseconds() - light_.lastRequest.Nanoseconds() < light_.limits.minimumUpdateInterval.ToNanoseconds())
@@ -214,11 +216,8 @@ namespace Horo::XR::OpenXRInternal {
                 light_.active = false;
             return Outcome::Failure(MakeError(failure, "xrGetLightEstimateANDROID"));
         }
-        if (const auto current = Borrow(scope.session); current.HasError()) {
-            light_.current.reset();
-            light_.active = false;
-            return Outcome::Failure(current.ErrorValue());
-        }
+        if (const auto admitted = RecheckLightObservation(scope.session); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         const auto sample = DecodeLightEstimate(scope, native, ambient, directional);
         if (sample.HasError()) {
             light_.current.reset();
@@ -260,6 +259,8 @@ namespace Horo::XR::OpenXRInternal {
         const LightOperation operation{lightCall_};
         if (const auto native = Borrow(scope.session); native.HasError())
             return Outcome::Failure(native.ErrorValue());
+        if (!light_.active)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         light_.lastClock = now;
         if (now.Nanoseconds() - light_.current->sampledAt.Nanoseconds() > light_.limits.maximumAge.ToNanoseconds())
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
@@ -278,8 +279,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::RetireLightEstimation */
     Result<void> OpenXRNativeSession::RetireLightEstimation() {
-        light_.active = false;
-        light_.current.reset();
+        RevokeLightEstimation();
         if (light_.handle != XR_NULL_HANDLE) {
             const auto result = light_.destroy(light_.handle);
             if (result != XR_SUCCESS)
@@ -287,5 +287,29 @@ namespace Horo::XR::OpenXRInternal {
         }
         light_ = {};
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokeLightEstimation */
+    void OpenXRNativeSession::RevokeLightEstimation() noexcept {
+        light_.withdrawn = true;
+        light_.active = false;
+        light_.current.reset();
+    }
+
+    /** @copydoc OpenXRNativeSession::RecheckLightObservation */
+    Result<void> OpenXRNativeSession::RecheckLightObservation(const XRSessionId &session) {
+        if (const auto current = Borrow(session); current.HasError()) {
+            RevokeLightEstimation();
+            return Result<void>::Failure(current.ErrorValue());
+        }
+        if (!light_.active)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokeCompositionObservations */
+    void OpenXRNativeSession::RevokeCompositionObservations() noexcept {
+        RevokeLightEstimation();
+        RevokePassthrough();
     }
 }  // namespace Horo::XR::OpenXRInternal

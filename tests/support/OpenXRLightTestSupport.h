@@ -20,6 +20,7 @@ namespace Horo::Tests::OpenXR {
         bool directionalValid{true};
         bool malformedDirection{};
         bool sampleAtCutoff{};
+        std::function<void()> onCreate;
         std::function<void()> onSample;
         XrSpace expectedSpace{NativeHandle<XrSpace>(15)};
         bool failRetirement{};
@@ -44,6 +45,8 @@ namespace Horo::Tests::OpenXR {
                 CHECK_FALSE(active->live);
                 active->live = true;
                 *handle = NativeHandle<XrLightEstimatorANDROID>(73);
+                if (active->onCreate)
+                    active->onCreate();
             }
             return active->createResult;
         }

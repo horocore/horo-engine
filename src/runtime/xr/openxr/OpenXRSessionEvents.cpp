@@ -117,7 +117,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if ((sessions_->Snapshot().state == XRSessionState::Focused && event.state != XR_SESSION_STATE_FOCUSED) ||
             event.state == XR_SESSION_STATE_STOPPING || event.state == XR_SESSION_STATE_EXITING)
-            native_->RevokePassthrough();
+            native_->RevokeCompositionObservations();
         observed_ = event.state;
         switch (event.state) {
             using enum Horo::XR::XRSessionEvent;
@@ -144,7 +144,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRSessionEvents::RecordLoss */
     Result<void> OpenXRSessionEvents::RecordLoss(const NativeSessionEventLoss reason) {
-        native_->RevokePassthrough();
+        native_->RevokeCompositionObservations();
         const auto event = reason == NativeSessionEventLoss::Instance ? XRSessionEvent::InstanceLost : XRSessionEvent::SessionLost;
         if (auto applied = sessions_->ApplyEvent(session_, event); applied.HasError())
             return applied;
@@ -266,7 +266,7 @@ namespace Horo::XR::OpenXRInternal {
             XrEventDataReferenceSpaceChangePending event;
             std::memcpy(&event, &buffer, sizeof(event));
             if (event.session == session) {
-                native_->RevokePassthrough();
+                native_->RevokeCompositionObservations();
                 auto evidence = ReadReferenceChange(event);
                 if (evidence.HasError())
                     return Result<void>::Failure(evidence.ErrorValue());
@@ -303,7 +303,7 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Success({.exitRequested = true});
         DispatchScope scope{dispatching_};
         if (!wantsPlay)
-            native_->RevokePassthrough();
+            native_->RevokeCompositionObservations();
         auto current = Current();
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());

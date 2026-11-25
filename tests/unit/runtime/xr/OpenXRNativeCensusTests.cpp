@@ -1,6 +1,8 @@
 #include "Horo/XR/XRLightProjection.h"
 #include "OpenXRPlaneCapture.h"
 #include "OpenXRPlaneSnapshot.h"
+#include "OpenXRSessionEvents.h"
+#include "support/OpenXREventScriptTestSupport.h"
 #include "support/OpenXRLightTestSupport.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
 
@@ -40,10 +42,10 @@ namespace Horo::Tests::OpenXR {
             CensusFixture native;
             const XRCapabilitySnapshot capabilities{Capabilities()};
             const XRFeaturePlan plan{Plan(capabilities)};
-            const XRSessionId session{capabilities.System(), {1, 1}};
-            const XRLightEstimateScope scope{session,
-                                             {{session, {2, 1}}, XRSpaceKind::World, IdentityValue<XRWorldOriginRevision>(1)},
-                                             IdentityValue<XRLightEstimateGrant>(1)};
+            XRSessionId session{capabilities.System(), {1, 1}};
+            XRLightEstimateScope scope{session,
+                                       {{session, {2, 1}}, XRSpaceKind::World, IdentityValue<XRWorldOriginRevision>(1)},
+                                       IdentityValue<XRLightEstimateGrant>(1)};
             const XRLightEstimateLimits limits{Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
 
             void Create(bool enabled = true) {
@@ -74,6 +76,56 @@ namespace Horo::Tests::OpenXR {
 
             Result<XRLightEstimate> Read(const XrTime tick) const {
                 return native.owner.ReadLightEstimation(scope, Time(tick));
+            }
+        };
+
+        /** @brief Provides event admission for a native session already created by the light fixture. */
+        struct LightEventResources final : IXRSessionResources {
+            Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
+                return Result<void>::Success();
+            }
+
+            void Release(XRSessionPreparation, const XRSessionId &) noexcept override {
+                // The fixture owns native teardown independently of logical event admission.
+            }
+        };
+
+        struct LightEvents final {
+            LightEventResources resources;
+            XRSessionLifecycle sessions{resources};
+            XRFrameLifecycle frames{sessions};
+            EventScript script;
+            OpenXRSessionEvents events;
+
+            explicit LightEvents(LightFixture &fixture) : events{fixture.native.owner, sessions, frames} {
+                const auto activated =
+                    sessions.Activate(fixture.capabilities, fixture.capabilities.System(), fixture.capabilities.Revision(), fixture.plan);
+                REQUIRE(activated.HasValue());
+                fixture.session = activated.Value();
+                fixture.scope.session = fixture.session;
+                fixture.scope.space.id.session = fixture.session;
+                fixture.Create();
+                script.session = fixture.native.native.lastSession;
+                REQUIRE(events.Bind({&EventScript::GetProc}, {}).HasValue());
+                EventScript::active = &script;
+                script.Push(XR_SESSION_STATE_READY);
+                script.Push(XR_SESSION_STATE_VISIBLE);
+                script.Push(XR_SESSION_STATE_FOCUSED);
+                REQUIRE(events.Poll(true).HasValue());
+                REQUIRE(sessions.Snapshot().admitsActions);
+            }
+
+            ~LightEvents() {
+                EventScript::active = nullptr;
+            }
+
+            void InterruptFocus() {
+                script.Push(XR_SESSION_STATE_VISIBLE);
+                script.Push(XR_SESSION_STATE_FOCUSED);
+                const auto observed = events.Poll(true);
+                REQUIRE(observed.HasValue());
+                CHECK(observed.Value().actionsInterrupted);
+                CHECK(sessions.Snapshot().admitsActions);
             }
         };
 
@@ -236,6 +288,54 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(owner.Close().HasValue());
         CHECK_FALSE(fixture.script.live);
         CHECK(fixture.native.native.liveSessions == 0);
+    }
+
+    TEST_CASE("OpenXR focus interruption withdraws the exact light grant across native calls",
+              "[unit][xr][native][lighting][light-focus-revocation]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        auto &owner = fixture.native.owner;
+        LightEvents events{fixture};
+
+        SECTION("focus interruption during creation rolls back the unpublished estimator") {
+            fixture.script.onCreate = [&events] {
+                events.InterruptFocus();
+            };
+            RequireFailureIdentity(owner.StartLightEstimation(fixture.scope, fixture.limits), XRErrors::PermissionDenied);
+            CHECK_FALSE(fixture.script.live);
+            CHECK(fixture.script.retireCalls == 1);
+            REQUIRE(owner.Close().HasValue());
+        }
+        SECTION("the native query cannot publish after the same event batch restores focus") {
+            REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+            REQUIRE(fixture.Advance(100).Value());
+            fixture.script.onSample = [&events] {
+                events.InterruptFocus();
+            };
+            fixture.script.sampleTime = 110;
+            RequireFailureIdentity(fixture.Advance(110), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+            REQUIRE(owner.Close().HasValue());
+        }
+        SECTION("a read that loses focus during native validation cannot return its cached sample") {
+            REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+            REQUIRE(fixture.Advance(100).Value());
+            bool interrupt = true;
+            fixture.native.fence.onValidate = [&events, &interrupt] {
+                if (std::exchange(interrupt, false))
+                    events.InterruptFocus();
+            };
+            RequireFailureIdentity(fixture.Read(101), XRErrors::OperationUnavailable);
+            fixture.native.fence.onValidate = {};
+            RequireFailureIdentity(fixture.Read(102), XRErrors::OperationUnavailable);
+            REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
+            RequireFailureIdentity(owner.StartLightEstimation(fixture.scope, fixture.limits), XRErrors::IdentityStale);
+            auto fresh = fixture.scope;
+            fresh.grant = IdentityValue<XRLightEstimateGrant>(2);
+            REQUIRE(owner.StartLightEstimation(fresh, fixture.limits).HasValue());
+            RequireFailureIdentity(owner.ReadLightEstimation(fresh, LightFixture::Time(102)), XRErrors::OperationUnavailable);
+            REQUIRE(owner.Close().HasValue());
+        }
     }
 
     TEST_CASE("OpenXR discovery observes actual pre-session system views and distinct runtime implementation version",
