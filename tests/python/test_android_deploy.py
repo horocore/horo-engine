@@ -663,6 +663,33 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertNotIn("private-foreign-device", json.dumps(report))
 
+    def test_openxr_does_not_continue_after_android_foreground_user_changes(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        launch = launch_command(profile["applicationId"], openxr=True)
+        stop = ("shell", "am", "force-stop", "--user", "10", profile["applicationId"])
+        changed_user = "216037421"
+        for confirmed, stage, installed, launched in (
+            (1, "install", False, False),
+            (2, "launch", True, False),
+            (3, "diagnostics", True, True),
+        ):
+            with self.subTest(stage=stage):
+                status, report, commands = self.execute({
+                    LOGCAT: log_line(OPENXR),
+                    ("shell", "am", "get-current-user"): ["10"] * confirmed + [changed_user],
+                }, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["status"], report["stage"], report["error"]),
+                                 (1, "partial", stage, "device_user_changed"))
+                self.assertEqual(any(command[0] == "install" for command in commands), installed)
+                self.assertEqual(launch in commands, launched)
+                self.assertEqual(stop in commands, launched)
+                if launched:
+                    self.assertEqual(report["cleanup"], {"status": "stopped"})
+                self.assertNotIn("observed", report)
+                self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+                self.assertNotIn(changed_user, json.dumps(report))
+
     def test_openxr_discards_discovery_when_process_retirement_cannot_be_confirmed(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
         _, profile = project.load_contract(name, ["arm64-v8a"])

@@ -103,6 +103,9 @@ for the physical run, the diagnostic `profile`, and `adbConnection` (`usb`
 or `tcpip`). Store the diagnostic APK and receipt in the same evidence
 directory as the physical record. The checker verifies the source revision,
 package and device build, connection, runtime version and process retirement.
+Android deployment also checks that the foreground user is consistent before
+installation, launch, and evidence publication. A user switch invalidates the
+run. The receipt omits the Android user number.
 The physical smoke record must contain `provenance.androidDeviceBuildSha256`
 from the observed Android system build. It must match the row's
 `deviceBuildSha256` and the discovery receipt. Legacy smoke records remain

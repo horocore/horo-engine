@@ -1285,10 +1285,22 @@ def deploy_number(output: str, maximum: int, code: str) -> int:
     return int(output)
 
 
-def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: frozenset[str]) -> tuple[int, int, str]:
+def deploy_current_user(device: AdmittedAdbDevice) -> str:
+    """Read the canonical foreground user without including it in evidence."""
+    output = device.run("shell", "am", "get-current-user")
+    return str(deploy_number(output, 2**31 - 1, "device_user_unavailable"))
+
+
+def require_deploy_user(device: AdmittedAdbDevice, expected: str) -> None:
+    """Keep the deployment and its evidence bound to one foreground Android user."""
+    if deploy_current_user(device) != expected:
+        raise AndroidDeployError("device_user_changed")
+
+
+def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: frozenset[str]) -> tuple[str, int, str]:
     if device.run("get-state") != "device":
         raise AndroidDeployError("device_unavailable")
-    user = deploy_number(device.run("shell", "am", "get-current-user"), 2**31 - 1, "device_user_unavailable")
+    user = deploy_current_user(device)
     api = deploy_number(device.run("shell", "getprop", "ro.build.version.sdk"), 9999, "device_api_unavailable")
     abi = device.run("shell", "getprop", "ro.product.cpu.abi")
     if api < minimum_api or abi not in abis:
@@ -1713,6 +1725,7 @@ class AndroidPackageLaunch:
         nonce = secrets.token_hex(16)
         launch_options = ["--es", DEPLOY_LAUNCH_EXTRA, nonce]
         self.device.require_identity()
+        require_deploy_user(self.device, self.user)
         deadline_ms = None
         if self.openxr_diagnostic:
             remaining = math.ceil((self.device.deadline - time.monotonic()) * 1000)
@@ -2009,7 +2022,7 @@ def android_deploy_main(argv=None) -> int:
                 raise AndroidDeployError("device_connection_unverifiable")
             if arguments.connection and arguments.connection != device.connection:
                 raise AndroidDeployError("device_connection_mismatch")
-            current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
+            user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
             if openxr:
                 device_build = deploy_device_build_digest(device)
@@ -2020,11 +2033,11 @@ def android_deploy_main(argv=None) -> int:
                     if expected_build != device_build:
                         raise AndroidDeployError("device_build_mismatch")
                 report["artifact"]["openxrImages"] = select_openxr_device_images(artifact, abi)
-            user = str(current_user)
             report["stage"] = "install"
             if device.process_id(application) is not None:
                 raise AndroidDeployError("application_already_running")
             device.require_identity()
+            require_deploy_user(device, user)
             installed = device.run("install", "-r", "--user", user, str(artifact.path)).splitlines()
             if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
                 raise AndroidDeployError("install_unconfirmed")
@@ -2052,6 +2065,7 @@ def android_deploy_main(argv=None) -> int:
             if openxr and deploy_device_build_digest(device) != device_build:
                 raise AndroidDeployError("device_build_changed")
             device.require_identity()
+            require_deploy_user(device, user)
         report["observed"] = observed
         if openxr:
             runtime["status"] = "cold_system_discovered"
