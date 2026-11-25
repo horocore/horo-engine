@@ -2810,6 +2810,11 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(worldUi->source.scene == sources.Scope().scene);
         CHECK(worldUi->source.assignmentRevision != 0);
         CHECK(worldUi->source.assignmentRevision == sources.Scope().assignmentRevision);
+        CHECK(worldUi->cutoff == sources.Scope().cutoff);
+        REQUIRE(worldUi->poseTime);
+        CHECK(worldUi->poseTime->earliest.captureGeneration == 1);
+        CHECK(worldUi->sample.space.id.session == worldUi->source.device.session);
+        CHECK(worldUi->sample.confidence == confidence);
         CHECK(worldUi->sample.selectDown);
         CHECK(fixture.play->UsesXrScene());
         bool foreignScene{};

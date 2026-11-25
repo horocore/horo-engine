@@ -840,7 +840,8 @@ namespace Horo::Application::Internal {
         const auto geometry = BuildXRInteractionCandidates(*current.Value(), scope.cutoff, std::span{&probe, 1});
         if (geometry.HasError())
             return Outcome::Failure(geometry.ErrorValue());
-        return Outcome::Success({std::get<Math::Ray>(geometry.Value().Candidates().front().shape), select->x != 0.0F});
+        const auto &candidate = geometry.Value().Candidates().front();
+        return Outcome::Success({std::get<Math::Ray>(candidate.shape), select->x != 0.0F, candidate.space, candidate.confidence});
     }
 
     /** @copydoc OpenXRPlayHost::ReadWorldUiPointer */
@@ -869,7 +870,9 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         return OpenXRWorldUiPointerFrame{{device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player,
                                           scope.assignmentRevision},
-                                         sample.Value()};
+                                         sample.Value(),
+                                         scope.cutoff,
+                                         sources.PoseCaptureTime()};
     }
 
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */

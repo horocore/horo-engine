@@ -29,18 +29,13 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus Start(std::size_t input, bool foreground, const ImmersiveAuthoringContext &owner,
                                                       const ImmersivePlanningContext &context, std::string_view locale,
                                                       float minimumConfidence);
-        /** @brief Records one exact XR pose batch measured during the current listening generation.
-         * @param context Owner-issued planning generation.
-         * @param candidates Geometry from the XR owner for the measured cutoff.
-         * @param measuredAt Exact cutoff bound to the supplied clock interval.
-         * @param earliest First capture clock observation. @param latest Second capture clock observation.
-         * @return Recorded, stale, closed or over-capacity without partially retaining the batch.
+        /** @brief Records one XR pointing observation measured during the current listening generation.
+         * @param observation Exact cutoff, geometry and measured Audio interval from the XR owner.
+         * @param captureGeneration Listening generation bound to both clock readings.
+         * @return Recorded, stale, closed or over-capacity.
          */
-        [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPoseEvidence(const ImmersivePlanningContext &context,
-                                                                       const XR::XRInteractionCandidates &candidates,
-                                                                       const XR::XRInteractionCutoff &measuredAt,
-                                                                       EditorSpeechClockSample earliest,
-                                                                       EditorSpeechClockSample latest) noexcept;
+        [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPointing(const ImmersiveSpatialObservation &observation,
+                                                                   std::uint64_t captureGeneration) noexcept;
         /** @brief Returns clock evidence only while the active speech lease is accepting input. */
         [[nodiscard]] std::optional<EditorSpeechClockSample> ReadCaptureClock() const noexcept;
         /** @brief Detaches the microphone before letting the worker finalize the utterance. */

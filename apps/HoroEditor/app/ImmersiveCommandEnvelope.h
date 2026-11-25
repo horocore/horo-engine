@@ -108,6 +108,8 @@ namespace Horo::Editor {
         /** @brief Copies one complete, ordered batch without allocation or partially admitting an oversized batch. */
         [[nodiscard]] ImmersiveSpatialCaptureStatus Record(const ImmersivePlanningContext &context,
                                                            std::span<const ImmersiveSpatialObservation> observations) noexcept;
+        /** @brief Records one pointing observation in the bound listening context; rejects foreign XR sessions. */
+        [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPointing(const ImmersiveSpatialObservation &observation) noexcept;
 
         /** @brief Stops recording before the detached speech worker produces its final result. */
         void Seal() noexcept;

@@ -158,6 +158,8 @@ namespace Horo::Application::Internal {
     struct OpenXRPlayControllerPointerSample final {
         Math::Ray ray;
         bool selectDown{};
+        XR::XRCoordinateSpace space;
+        XR::XRTrackingConfidence confidence{XR::XRTrackingConfidence::None};
     };
 
     /** @brief Exact controller lineage used to cancel UI input before a source replacement. */
@@ -176,6 +178,8 @@ namespace Horo::Application::Internal {
     struct OpenXRWorldUiPointerFrame final {
         OpenXRWorldUiPointerSource source;
         OpenXRPlayControllerPointerSample sample;
+        XR::XRInteractionCutoff cutoff;
+        std::optional<OpenXRInputCaptureInterval> poseTime;
     };
 
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */

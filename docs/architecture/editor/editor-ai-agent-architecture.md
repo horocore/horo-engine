@@ -201,6 +201,10 @@ Ownership rules:
 - The macOS listening owner lends that clock only while its exact microphone
   lease accepts input. A pose batch must match both the measured XR cutoff
   and the listening generation before the editor retains it.
+- The editor observes the existing player-scoped XR pointer after Input commits.
+  A new selection press during the same listening operation retains its measured
+  ray. Held buttons and source replacement do not create new observations.
+  The button is a sampling trigger. Only the ray carries the pose time interval.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

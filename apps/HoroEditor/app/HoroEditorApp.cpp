@@ -2065,13 +2065,57 @@ namespace Horo::Editor {
         };
 
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+        /** @brief Retains a pointer pose only on a new press during the same listening and XR source. */
+        class EditorXrSpeechPointing final {
+            using PointerFrame = Application::Internal::OpenXRWorldUiPointerFrame;
+            using Source = Application::Internal::OpenXRWorldUiPointerSource;
+
+        public:
+            /** @brief Observes one committed input frame. Pointing contributes evidence only. */
+            void Update(EditorMicrophoneSpeechSession &speech, const std::optional<PointerFrame> &frame) noexcept {
+                if (!frame || !frame->poseTime) {
+                    Reset();
+                    return;
+                }
+                const auto &time = *frame->poseTime;
+                const auto capture = time.earliest.captureGeneration;
+                const bool pressed = source_ == frame->source && generation_ == capture && !down_ && frame->sample.selectDown;
+                source_ = frame->source;
+                generation_ = capture;
+                down_ = frame->sample.selectDown;
+                if (!pressed)
+                    return;
+
+                const auto &pointer = frame->sample;
+                const ImmersiveSpatialObservation observation{frame->cutoff,
+                                                              {frame->source.device, XR::XRControllerInteractionPose::Aim, pointer.space,
+                                                               pointer.confidence, pointer.ray},
+                                                              {time.earliest.clockDomain, time.earliest.nanoseconds},
+                                                              {time.latest.clockDomain, time.latest.nanoseconds}};
+                static_cast<void>(speech.RecordPointing(observation, capture));
+            }
+
+            /** @brief Disarms edges until the replacement input source reports a new neutral sample. */
+            void Reset() noexcept {
+                source_.reset();
+                generation_ = 0;
+                down_ = false;
+            }
+
+        private:
+            std::optional<Source> source_;
+            std::uint64_t generation_{};
+            bool down_{};
+        };
+#endif
+
         /** @brief Composes the selected XR input source with the shared World UI route. */
         class EditorXrWorldUiPointer final : private Runtime::Ui::UiEventHandler {
         public:
             /** @brief Delivers one current pointer or cancels the outgoing source when admission is lost. */
-            [[nodiscard]] Result<void> Update(const Application::Internal::OpenXRPlayHost &host, const Input::PlayerId player,
+            [[nodiscard]] Result<void> Update(const std::optional<Application::Internal::OpenXRWorldUiPointerFrame> &frame,
                                               const Application::Internal::RuntimeUiPaintPort &port, std::uint64_t milliseconds) {
-                const auto frame = host.ReadWorldUiPointer(player);
                 if (!frame)
                     return Cancel(port);
                 const auto target = port.ReadPresentedWorldCanvas(frame->source.scene);
@@ -2640,6 +2684,9 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 else if (composition.xrPlay) {
                     if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError()) {
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+                        xrSpeechPointing_.Reset();
+#endif
                         if (const auto cancelled = xrWorldUiPointer_.Cancel(authorities_.ui); cancelled.HasError())
                             return Result<void>::Failure(WithCause(built.ErrorValue(), cancelled.ErrorValue()));
                         return built;
@@ -2663,7 +2710,12 @@ namespace Horo::Editor {
                     constexpr auto nanosecondsPerMillisecond = 1'000'000;
                     const auto milliseconds =
                         static_cast<std::uint64_t>(context.presentationAdmittedDuration.ToNanoseconds() / nanosecondsPerMillisecond);
-                    return xrWorldUiPointer_.Update(*composition.xrPlay, p_->options.xrInputPlayer->player, authorities_.ui, milliseconds);
+                    const auto pointer = composition.xrPlay->ReadWorldUiPointer(p_->options.xrInputPlayer->player);
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+                    if (auto *speech = screenHost_->Services().TryGet<EditorMicrophoneSpeechSession>())
+                        xrSpeechPointing_.Update(*speech, pointer);
+#endif
+                    return xrWorldUiPointer_.Update(pointer, authorities_.ui, milliseconds);
                 }
 #endif
                 return Result<void>::Success();
@@ -3635,6 +3687,9 @@ namespace Horo::Editor {
             FrameState frameState_;
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             EditorXrWorldUiPointer xrWorldUiPointer_;
+#if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+            EditorXrSpeechPointing xrSpeechPointing_;
+#endif
 #endif
             bool nativeMenuInstalled_{false};
         };

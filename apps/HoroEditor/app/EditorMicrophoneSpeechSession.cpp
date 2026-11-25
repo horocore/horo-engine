@@ -53,22 +53,15 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc EditorMicrophoneSpeechSession::RecordPoseEvidence */
-    ImmersiveSpatialCaptureStatus EditorMicrophoneSpeechSession::RecordPoseEvidence(const ImmersivePlanningContext &context,
-                                                                                    const XR::XRInteractionCandidates &candidates,
-                                                                                    const XR::XRInteractionCutoff &measuredAt,
-                                                                                    const EditorSpeechClockSample earliest,
-                                                                                    const EditorSpeechClockSample latest) noexcept {
+    /** @copydoc EditorMicrophoneSpeechSession::RecordPointing */
+    ImmersiveSpatialCaptureStatus EditorMicrophoneSpeechSession::RecordPointing(const ImmersiveSpatialObservation &observation,
+                                                                                const std::uint64_t captureGeneration) noexcept {
         if (generation_ == 0 || sealed_)
             return ImmersiveSpatialCaptureStatus::Closed;
-        if (earliest.generation != generation_ || latest.generation != generation_ || candidates.Cutoff() != measuredAt)
+        if (captureGeneration != generation_)
             return ImmersiveSpatialCaptureStatus::StaleContext;
 
-        std::array<ImmersiveSpatialObservation, XR::XRInteractionCandidates::MaximumProbes> observations;
-        const auto geometry = candidates.Candidates();
-        for (std::size_t index = 0; index < geometry.size(); ++index)
-            observations[index] = {measuredAt, geometry[index], earliest.timestamp, latest.timestamp};
-        return spatial_.Record(context, std::span{observations}.first(geometry.size()));
+        return spatial_.RecordPointing(observation);
     }
 
     /** @copydoc EditorMicrophoneSpeechSession::ReadCaptureClock */

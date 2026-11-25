@@ -126,6 +126,15 @@ namespace Horo::Editor {
         return Status::Recorded;
     }
 
+    /** @copydoc ImmersiveSpatialCapture::RecordPointing */
+    ImmersiveSpatialCaptureStatus ImmersiveSpatialCapture::RecordPointing(const ImmersiveSpatialObservation &observation) noexcept {
+        if (!context_ || sealed_)
+            return ImmersiveSpatialCaptureStatus::Closed;
+        if (context_->Identity().xrSession != observation.cutoff.session)
+            return ImmersiveSpatialCaptureStatus::StaleContext;
+        return Record(*context_, std::span{&observation, 1});
+    }
+
     /** @copydoc ImmersiveSpatialCapture::Seal */
     void ImmersiveSpatialCapture::Seal() noexcept {
         sealed_ = true;

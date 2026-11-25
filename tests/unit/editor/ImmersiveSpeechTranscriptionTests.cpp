@@ -266,9 +266,12 @@ namespace Horo::Editor {
             CHECK(capture.Assemble(speech, sample.cutoff).status == CommandStatus::SpatialCaptureOpen);
             SpeechFixture foreign;
             CHECK(capture.Record(foreign.Context(), observation) == RecordStatus::StaleContext);
-            REQUIRE(capture.Record(context, observation) == RecordStatus::Recorded);
+            auto foreignPointer = sample;
+            ++foreignPointer.cutoff.session.slot.generation;
+            CHECK(capture.RecordPointing(foreignPointer) == RecordStatus::StaleContext);
+            REQUIRE(capture.RecordPointing(sample) == RecordStatus::Recorded);
             capture.Seal();
-            CHECK(capture.Record(context, observation) == RecordStatus::Closed);
+            CHECK(capture.RecordPointing(sample) == RecordStatus::Closed);
             const auto command = capture.Assemble(speech, sample.cutoff);
             REQUIRE(command.status == CommandStatus::Aligned);
             REQUIRE(command.envelope);
