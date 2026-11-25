@@ -33,13 +33,14 @@ namespace Horo::Audio::Backend {
         }
 
         /** @brief Polls within a fixed test deadline while the actual SDL recording thread supplies PCM. */
-        Sdl3CaptureReadout WaitForOverflow(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant) {
+        Sdl3CaptureReadout WaitForOverflow(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant,
+                                           const std::uint64_t afterSequence = 0) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
             AudioCapturedBlock ignored;
             while (std::chrono::steady_clock::now() < deadline) {
                 const auto read = backend.ReadCapture(grant.generation, grant, ignored, {});
                 REQUIRE(read.HasValue());
-                if (read.Value().latestDrop)
+                if (const auto &drop = read.Value().latestDrop; drop && drop->sequence > afterSequence)
                     return read.Value();
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
@@ -81,6 +82,12 @@ namespace Horo::Audio::Backend {
             REQUIRE(full.latestDrop);
             CHECK(full.latestDrop->start.clockDomain == descriptor.clockDomain);
             CHECK(full.latestDrop->droppedFramesBefore + full.latestDrop->frames <= full.droppedFrames);
+            const auto stalled = WaitForOverflow(backend, grant, full.latestDrop->sequence);
+            REQUIRE(stalled.latestDrop);
+            CHECK(stalled.status == AudioCaptureRead::InsufficientSpace);
+            CHECK(stalled.latestDrop->droppedFramesBefore > full.latestDrop->droppedFramesBefore);
+            CHECK(stalled.latestDrop->firstFrame > full.latestDrop->firstFrame);
+            CHECK(stalled.latestDrop->start.nanoseconds > full.latestDrop->start.nanoseconds);
             const auto activity = backend.CaptureActivity();
             CHECK(activity.state == Sdl3CaptureActivityState::Capturing);
             CHECK(activity.generation == descriptor.generation);

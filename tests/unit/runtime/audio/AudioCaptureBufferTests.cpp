@@ -93,10 +93,11 @@ namespace Horo::Audio::Backend {
             buffer.Cancel();
             buffer.Cancel();
             AudioCapturedBlock block{};
-            std::array<AudioSample, 2> output{};
+            auto output = stereo;
             CHECK(buffer.TryRead(block, output) == AudioCaptureRead::Cancelled);
             CHECK(buffer.TryWrite({5, 50}, 2, 1, stereo) == AudioCaptureWrite::Cancelled);
             CHECK(block.sequence == 0);
+            CHECK(output == stereo);
             CHECK(buffer.DroppedFrames() == 0);
         }
 

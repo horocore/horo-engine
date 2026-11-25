@@ -198,6 +198,10 @@ namespace Horo::Audio::Backend {
         const std::span sourcePcm{state.samples.data() + slot * state.samplesPerSlot, sampleCount};
         std::ranges::copy(sourcePcm, pcm.begin());
         Security::SecureZero(std::as_writable_bytes(sourcePcm));
+        if (state.cancelled.load()) {
+            Security::SecureZero(std::as_writable_bytes(pcm.first(sampleCount)));
+            return Cancelled;
+        }
         block = source;
         state.read.store(read + 1);
         return Copied;

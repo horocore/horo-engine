@@ -81,8 +81,9 @@ namespace Horo::Audio::Backend {
                                                  std::span<const AudioSample> pcm) noexcept;
         /** @brief Copies the oldest block into consumer-owned storage.
          * @param block Metadata destination, changed only on success.
-         * @param pcm Destination for the valid interleaved sample prefix, unchanged on failure.
+         * @param pcm Destination for the valid interleaved sample prefix.
          * @return Copy status. No internal storage escapes.
+         * @details If cancellation is observed after copying, the copied prefix is scrubbed before returning.
          */
         [[nodiscard]] AudioCaptureRead TryRead(AudioCapturedBlock &block, std::span<AudioSample> pcm) noexcept;
         /** @brief Borrows the exact admitted identity and format for every block. Null on a moved-from ring. */

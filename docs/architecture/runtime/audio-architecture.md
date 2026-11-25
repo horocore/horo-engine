@@ -2378,8 +2378,9 @@ its first observation. Consumers can distinguish a source discontinuity from
 queue backpressure, including when a gap precedes the last discarded block.
 A short destination leaves the block queued. Cancellation closes admission
 while the host retains storage until both participants detach. The reader
-scrubs consumed samples before releasing their slot. After detachment, the
-buffer scrubs all remaining PCM before releasing storage.
+scrubs consumed samples before releasing their slot. If it observes cancellation
+after copying, it also scrubs the copied samples before returning. After
+detachment, the buffer scrubs all remaining PCM before releasing storage.
 
 SDL3 can attach the buffer to an explicitly selected recording endpoint. It
 requires a matching purpose and background policy in the host grant and
