@@ -1,5 +1,6 @@
 #include "../../../../apps/HoroEditor/app/EditorMicrophoneRecording.h"
 #include "Horo/Application/Internal/AudioRecording.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "NativePublicationFiles.h"
@@ -15,16 +16,24 @@ namespace Horo::Application::Internal {
         using namespace Audio;
         using namespace Audio::Backend;
 
-        /** @brief Injects a disk write refusal after the first staged member was written. */
+        /** @brief Injects storage failures and cancellation at recording publication boundaries. */
         class RecordingStorage final : public TestSupport::NativePublicationFiles {
         public:
             bool failSecondWrite{};
+            CancellationSource *cancelDuringStageCleanup{};
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms permissions) override {
                 if (failSecondWrite && ++writes_ == 2)
                     return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed, "Injected full disk"));
                 return native.WritePrivateDurable(path, bytes, created, permissions);
+            }
+
+            Result<void> RemoveDurable(const std::filesystem::path &path) override {
+                auto removed = native.RemoveDurable(path);
+                if (removed.HasValue() && cancelDuringStageCleanup && path.filename().string().starts_with(".horo-import-"))
+                    cancelDuringStageCleanup->RequestCancellation();
+                return removed;
             }
 
         private:
@@ -161,6 +170,23 @@ namespace Horo::Application::Internal {
             CHECK(discarded.HasError());
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets/take.wav"));
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets/take.wav.horo"));
+            CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
+        }
+
+        TEST_CASE("Recording cancellation after source promotion rolls back before registry publication", "[audio][recording]") {
+            RecordingFixture fixture;
+            CancellationSource cancellation;
+            fixture.files.cancelDuringStageCleanup = &cancellation;
+            auto buffer = fixture.Buffer();
+            REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
+            auto recording = fixture.Recording();
+
+            const auto result = recording.Publish(std::move(buffer), fixture.destination, fixture.publisher, cancellation.Token());
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == Assets::AssetSourceErrors::Cancelled.code.Value());
+            CHECK(fixture.publisher.LastReceipt().status == ProjectAssetImportStatus::RolledBack);
+            CHECK(fixture.publisher.LastReceipt().rolledBackFiles == 2);
+            CHECK(std::filesystem::is_empty(fixture.root / "assets"));
             CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
         }
 
