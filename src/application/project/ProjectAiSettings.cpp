@@ -222,6 +222,52 @@ namespace Horo::Application {
             }
             return true;
         }
+
+        /** @brief Admits a bounded, distinct field set and stores it in canonical order. */
+        bool ReadDialogueFields(const Json &fields, std::vector<AI::NpcDialogueFactId> &output) {
+            if (!fields.is_array() || fields.size() > AI::NpcDialogueTurn::MaximumFacts)
+                return false;
+            output.reserve(fields.size());
+            for (const auto &entry : fields) {
+                const auto field = ReadIdentity<AI::NpcDialogueFactId>(entry);
+                if (!field.IsValid())
+                    return false;
+                output.push_back(field);
+            }
+            std::ranges::sort(output);
+            return std::ranges::adjacent_find(output) == output.end();
+        }
+
+        /** @brief Reads typed dialogue config without admitting a URL, credential or arbitrary text field. */
+        bool ReadNpcDialogue(const Json &root, std::optional<ProjectNpcDialogueSettings> &output) {
+            const auto object = root.find("npcDialogue");
+            if (object == root.end())
+                return true;
+            constexpr std::array<std::string_view, 4> keys{"provider", "destination", "version", "fields"};
+            if (!HasOnly(*object, keys) || object->size() != keys.size())
+                return false;
+            auto &dialogue = output.emplace();
+            auto &route = dialogue.route;
+            route.provider = ReadIdentity<AI::DecisionProviderId>((*object)["provider"]);
+            route.destination = ReadIdentity<AI::NpcDialogueDestinationId>((*object)["destination"]);
+            return route.provider.IsValid() && route.destination.IsValid() && ReadUnsigned(*object, "version", route.version) &&
+                   route.version == AI::NpcDialogueWireVersion && ReadDialogueFields((*object)["fields"], dialogue.fields);
+        }
+
+        /** @brief Reads and validates budgets under their owning scheduler, Perception and query rules. */
+        Result<void> ReadBudgets(const Json &root, Scheduler &scheduler, std::size_t &perceptionLimit, std::size_t &queryLimit,
+                                 std::optional<AI::QueryResultCacheLimits> &queryCache) {
+            const auto policy = root.find("scheduler");
+            if (policy != root.end() && !ReadScheduler(*policy, scheduler))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI scheduler settings."));
+            if (auto validated = AI::AiTaskScheduler::ValidateSettings(scheduler); validated.HasError())
+                return validated;
+            if (!ReadWorkUnitsLimit(root, "perception", perceptionLimit))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI perception budget."));
+            if (!ReadQueryPolicy(root, queryLimit, queryCache))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI query budget."));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ProjectAiSettings::AllowsDebug */
@@ -243,31 +289,23 @@ namespace Horo::Application {
         if (!source.aiSettingsSource)
             return Settings::Success(std::nullopt);
         const auto root = Json::parse(*source.aiSettingsSource, nullptr, false);
-        constexpr std::array<std::string_view, 6> keys{"schemaVersion", "scheduler", "perception", "query", "development", "localPolicy"};
+        constexpr std::array<std::string_view, 7> keys{"schemaVersion", "scheduler", "perception", "query", "development", "localPolicy",
+                                                       "npcDialogue"};
         std::uint32_t version{};
         if (!HasOnly(root, keys) || !ReadUnsigned(root, "schemaVersion", version) || version != 1)
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI settings schema."));
-        Scheduler scheduler;
+        ProjectAiSettings settings;
+        if (auto budgets = ReadBudgets(root, settings.scheduler_, settings.perceptionWorkUnitsLimit_, settings.queryWorkUnitsLimit_,
+                                       settings.queryCacheLimits_); budgets.HasError())
+            return Settings::Failure(std::move(budgets).ErrorValue());
         const auto policy = root.find("scheduler");
-        if (policy != root.end() && !ReadScheduler(*policy, scheduler))
-            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI scheduler settings."));
-        if (const auto validated = AI::AiTaskScheduler::ValidateSettings(scheduler); validated.HasError())
-            return Settings::Failure(validated.ErrorValue());
-        auto perceptionLimit = Scheduler::HardWorkUnits;
-        if (!ReadWorkUnitsLimit(root, "perception", perceptionLimit))
-            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI perception budget."));
-        auto queryLimit = Scheduler::HardWorkUnits;
-        std::optional<AI::QueryResultCacheLimits> queryCache;
-        if (!ReadQueryPolicy(root, queryLimit, queryCache))
-            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI query budget."));
-        bool mutation{}, capture{};
-        if (!ReadDevelopment(root, mutation, capture))
+        settings.authoredSchedulerMode_ = policy != root.end() && policy->contains("mode");
+        if (!ReadDevelopment(root, settings.mutation_, settings.capture_))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI development permissions."));
-        std::optional<ProjectLocalPolicySettings> localPolicy;
-        if (!ReadLocalPolicy(root, localPolicy))
+        if (!ReadLocalPolicy(root, settings.localPolicy_))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI local policy."));
-        const bool authoredMode = policy != root.end() && policy->contains("mode");
-        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, queryCache, mutation, capture,
-                                                   authoredMode, std::move(localPolicy)});
+        if (!ReadNpcDialogue(root, settings.npcDialogue_))
+            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project NPC dialogue policy."));
+        return Settings::Success(std::move(settings));
     }
 }  // namespace Horo::Application

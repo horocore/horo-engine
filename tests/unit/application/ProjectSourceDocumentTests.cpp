@@ -116,6 +116,37 @@ namespace {
         CHECK_FALSE(resolved.Value()->QueryCacheLimits());
     }
 
+    TEST_CASE("Project NPC dialogue allows typed IDs without accepting endpoint credentials", "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        auto &ai = document["settings"]["ai"];
+        ai = Json::parse(R"({"schemaVersion":1,"npcDialogue":{"provider":8,"destination":9,"version":1,"fields":[4,2]}})");
+        const auto resolve = [&] {
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            return ResolveProjectAiSettings(source.Value());
+        };
+        const auto accepted = resolve();
+        REQUIRE(accepted.HasValue());
+        REQUIRE(accepted.Value());
+        REQUIRE(accepted.Value()->NpcDialogue());
+        const auto &dialogue = *accepted.Value()->NpcDialogue();
+        CHECK(dialogue.route.provider.Value() == 8);
+        CHECK(dialogue.route.destination.Value() == 9);
+        CHECK(dialogue.fields[0].Value() == 2);
+        CHECK(dialogue.fields[1].Value() == 4);
+
+        auto &draft = ai["npcDialogue"];
+        SECTION("endpoint URL is host-owned") { draft["endpoint"] = "https://example.invalid/"; }
+        SECTION("duplicate fields are rejected") { draft["fields"] = Json::array({2, 2}); }
+        SECTION("unknown protocol is rejected") { draft["version"] = 2; }
+        SECTION("over-capacity field sets are rejected") {
+            draft["fields"] = Json::array();
+            for (std::size_t index = 0; index <= AI::NpcDialogueTurn::MaximumFacts; ++index)
+                draft["fields"].push_back(index + 1);
+        }
+        CHECK(resolve().HasError());
+    }
+
     TEST_CASE("Project AI admits only typed local-policy targets and controller bindings", "[unit][application][source-profile][ai]") {
         auto document = RegisteredSource();
         auto &ai = document["settings"]["ai"];

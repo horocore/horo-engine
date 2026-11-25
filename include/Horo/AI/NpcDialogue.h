@@ -15,6 +15,9 @@
 #include <span>
 
 namespace Horo::AI {
+    /** @brief Current project and HTTPS dialogue interchange version. */
+    inline constexpr std::uint32_t NpcDialogueWireVersion = 1;
+
     /** @brief Stable identifier for a host-approved destination. */
     using NpcDialogueDestinationId = AiStableIdentity<struct NpcDialogueDestinationIdentityTag>;
     /** @brief Stable authored context field. */

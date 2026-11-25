@@ -2336,9 +2336,19 @@ from cue IDs to the semantic caption catalog. It accepts increasing turn IDs
 for its exact Scene incarnation, follows the latest agent identity on each
 presentation update, and drains through the standard HUD caption timeline.
 Scene retirement cancels pending work and drops undelivered captions. The HUD
-owner resets the old caption session when switching Scenes. Project-authored
-activation, gameplay triggers, and production provider qualification remain
-open. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
+owner resets the old caption session when switching Scenes.
+
+Projects opt in with `settings.ai.npcDialogue` in `.horo/project.json`. The
+version-one object requires positive numeric `provider` and `destination` IDs,
+`version: 1`, and a `fields` array of distinct positive authored IDs. The
+application binds a remote provider only when its separate approval matches
+the authorized project source fingerprint, route, and provider generation.
+Only the intersection of the project and host field lists is disclosed. An
+absent policy leaves dialogue inactive. A policy without matching approval
+can use the authored offline fallback. The project document has no URL,
+certificate, or credentials fields. Gameplay triggers, executable host wiring,
+and production provider qualification remain open. See
+[ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 
 ### AI Runtime Ownership And Scene Generation Safety
 

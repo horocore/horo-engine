@@ -168,7 +168,8 @@ namespace Horo::App {
     Result<AI::NpcDialogueProviderBinding> MakeNpcDialogueHttpsProvider(NpcDialogueHttpsConfig config) {
         using Binding = Result<AI::NpcDialogueProviderBinding>;
         static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
-        if (!CurlReady || !config.route.provider.IsValid() || !config.route.destination.IsValid() || config.route.version != 1 ||
+        if (!CurlReady || !config.route.provider.IsValid() || !config.route.destination.IsValid() ||
+            config.route.version != AI::NpcDialogueWireVersion ||
             config.generation == 0 || !ValidEndpoint(config.endpoint) || config.caBundle.find('\0') != std::string::npos)
             return Binding::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         try {

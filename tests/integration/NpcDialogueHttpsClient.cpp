@@ -1,4 +1,5 @@
 #include "NpcDialogueHttpsProvider.h"
+#include "NpcDialogueProjectActivation.h"
 #include "NpcDialogueScenePresentation.h"
 
 #include <array>
@@ -80,25 +81,55 @@ namespace {
     }
 
     /** @brief Composes one Scene channel and exercises a complete presentation turn. */
-    int RunScene(const NpcDialogueProviderBinding &binding, const std::string_view mode) {
+    int RunScene(const App::NpcDialogueProjectActivation &activation, const std::string_view mode) {
         const NpcDialogueRequestIdentity owner{{AiRuntimeIncarnation::Create(8).Value(), {1, 1}}, 1, 3};
-        const std::array allowed{NpcDialogueFactId::Create(2).Value()};
-        const NpcDialogueGrant grant{binding.route, 1, allowed};
+        const auto grant = activation.Grant();
         const std::array facts{NpcDialogueFact{NpcDialogueFactId::Create(1).Value(), NpcDialogueValueId::Create(1234).Value()},
-                               NpcDialogueFact{allowed.front(), NpcDialogueValueId::Create(20).Value()}};
+                               NpcDialogueFact{NpcDialogueFactId::Create(2).Value(), NpcDialogueValueId::Create(20).Value()},
+                               NpcDialogueFact{NpcDialogueFactId::Create(3).Value(), NpcDialogueValueId::Create(5678).Value()}};
         const std::array cues{App::NpcDialogueCaption{NpcDialogueCueId::Create(4).Value(), 0, 0, 20},
                               App::NpcDialogueCaption{NpcDialogueCueId::Create(5).Value(), 1, 0, 20}};
         auto queue = MakeQueue();
         if (queue.HasError())
             return 5;
         JobSystem jobs({.ioWorkerCount = 1});
-        const bool offline = mode == "offline" || mode == "retired";
         auto channel = App::NpcDialogueScenePresentation::Create(jobs, owner.agent.incarnation, std::move(queue).Value(), cues,
-                                                                  cues.front().cue, offline ? std::nullopt : std::optional{binding});
+                                                                  cues.front().cue, activation.Binding());
         if (channel.HasError())
             return 6;
         auto scene = std::move(channel).Value();
         return RunTurn(scene, jobs, owner, grant, facts, mode);
+    }
+
+    /** @brief Captures the same canonical project bytes used to identify approval. */
+    auto CaptureProject() {
+        using namespace Application;
+        const auto version = ParseHoroVersion("0.2.0").Value();
+        const auto &decision = *BuiltInReleaseCompatibilityRegistry().Find({version});
+        const auto contract = FormatPersistentContractHash(decision.persistentContract);
+        const auto contents = R"({"horoVersion":"0.2.0","persistentContract":")" + contract + R"(","projectId":"npc-fixture",
+            "name":"NPC fixture","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",
+            "settings":{"renderBackend":"null","ai":{"schemaVersion":1,
+            "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2]}}}})";
+        return DecodeProjectSourceDocument(contents);
+    }
+
+    /** @brief Admits the project/host intersection, or runs the same Scene offline on mismatch. */
+    int RunProject(App::NpcDialogueHttpsConfig config, std::string_view mode) {
+        auto project = CaptureProject();
+        if (project.HasError() || !project.Value().sourceFingerprint)
+            return 12;
+        const std::array allowed{NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value()};
+        App::NpcDialogueEndpointApproval approval{*project.Value().sourceFingerprint, std::move(config), allowed};
+        if (mode == "stale-grant")
+            approval.projectSource.bytes[0] ^= 1;
+        if (mode == "other-route")
+            approval.endpoint.route.destination = NpcDialogueDestinationId::Create(3).Value();
+        const bool offline = mode == "offline" || mode == "retired";
+        const auto activation = App::NpcDialogueProjectActivation::Create(project.Value(), 1, offline ? nullptr : &approval);
+        if (activation.HasError() || !activation.Value())
+            return 13;
+        return RunScene(*activation.Value(), mode);
     }
 }  // namespace
 
@@ -106,12 +137,8 @@ int main(int argc, char **argv) {
     if (argc != 4)
         return 2;
     const NpcDialogueRoute route{DecisionProviderId::Create(1).Value(), NpcDialogueDestinationId::Create(2).Value(), 1};
-    auto binding = App::MakeNpcDialogueHttpsProvider({route, 1, argv[1], argv[2]});
     const std::string_view mode{argv[3]};
     if (mode == "invalid")
-        return binding.HasError() ? 0 : 3;
-    if (binding.HasError())
-        return 4;
-
-    return RunScene(binding.Value(), mode);
+        return App::MakeNpcDialogueHttpsProvider({route, 1, argv[1], argv[2]}).HasError() ? 0 : 3;
+    return RunProject({route, 1, argv[1], argv[2]}, mode);
 }

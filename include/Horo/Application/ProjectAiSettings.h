@@ -6,6 +6,7 @@
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/AI/LocalLearnedPolicy.h"
+#include "Horo/AI/NpcDialogue.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/AssetCookTargetId.h"
@@ -36,6 +37,12 @@ namespace Horo::Application {
         AI::AiCapabilityDescriptorSet tasks;
         std::optional<AI::BlackboardSchemaId> blackboard;
         std::vector<ProjectLocalPolicyController> controllers;
+    };
+
+    /** @brief Project-authored NPC dialogue request. The host owns endpoint and disclosure approval. */
+    struct ProjectNpcDialogueSettings final {
+        AI::NpcDialogueRoute route;
+        std::vector<AI::NpcDialogueFactId> fields; /**< Canonical increasing set of requested context fields. */
     };
 
     /** @brief Validated authoritative project settings with no renderer or local visualization inputs. */
@@ -70,6 +77,11 @@ namespace Horo::Application {
             return localPolicy_;
         }
 
+        /** @brief Returns the explicitly authored dialogue request, if present. */
+        [[nodiscard]] const std::optional<ProjectNpcDialogueSettings> &NpcDialogue() const noexcept {
+            return npcDialogue_;
+        }
+
         /** @brief Checks the authored operation permission for a host-selected execution profile.
          * @param profile Exact execution profile supplied by the host.
          * @param operation Explicit operation requested by the application.
@@ -80,21 +92,17 @@ namespace Horo::Application {
     private:
         friend Result<std::optional<ProjectAiSettings>> ResolveProjectAiSettings(const ProjectSourceDocument &);
 
-        ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, std::size_t queryWorkUnitsLimit,
-                          std::optional<AI::QueryResultCacheLimits> queryCacheLimits, bool mutation, bool capture,
-                          bool authoredSchedulerMode, std::optional<ProjectLocalPolicySettings> localPolicy)
-            : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit),
-              queryWorkUnitsLimit_(queryWorkUnitsLimit), queryCacheLimits_(queryCacheLimits), mutation_(mutation), capture_(capture),
-              authoredSchedulerMode_(authoredSchedulerMode), localPolicy_(std::move(localPolicy)) {}
+        ProjectAiSettings() = default;
 
         AI::AiTaskSchedulerSettings scheduler_;
-        std::size_t perceptionWorkUnitsLimit_;
-        std::size_t queryWorkUnitsLimit_;
+        std::size_t perceptionWorkUnitsLimit_{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::size_t queryWorkUnitsLimit_{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::optional<AI::QueryResultCacheLimits> queryCacheLimits_;
         bool mutation_{};
         bool capture_{};
         bool authoredSchedulerMode_{};
         std::optional<ProjectLocalPolicySettings> localPolicy_;
+        std::optional<ProjectNpcDialogueSettings> npcDialogue_;
     };
 
     /** @brief Resolves versioned settings.ai from the canonical project source without creating a Scene.
