@@ -437,6 +437,35 @@ namespace Horo::Application::Internal {
         return XR::QueryXRPlaneHits(source.Value(), liveRequest);
     }
 
+    /** @copydoc OpenXRPlayHost::ReadPressedPointer */
+    std::optional<OpenXRWorldUiPointerFrame> OpenXRPlayHost::ReadPressedPointer(const OpenXRWorldUiPointerFrame &frame) const {
+        const auto active = ReadWorldUiPointer(frame.source.player);
+        if (!active || active->source != frame.source || active->cutoff != frame.cutoff || !active->sample.selectDown)
+            return std::nullopt;
+        return active;
+    }
+
+    /** @copydoc OpenXRPlayHost::QueryPointedPlanes */
+    Result<XR::XRSpatialHits> OpenXRPlayHost::QueryPointedPlanes(const OpenXRWorldUiPointerFrame &frame,
+                                                                 const std::uint32_t maximumHits) const {
+        using Hits = Result<XR::XRSpatialHits>;
+        const auto active = ReadPressedPointer(frame);
+        if (!active)
+            return Hits::Failure(MakeError(XR::XRErrors::IdentityStale));
+        XR::XRRuntimeTime observedAt;
+        const auto source = ReadPlaneObservationsAtCurrentTime(observedAt);
+        if (source.HasError())
+            return Hits::Failure(source.ErrorValue());
+        const auto &snapshot = source.Value();
+        if (snapshot.Scope().space != active->sample.space || snapshot.SampledAt() > active->cutoff.sampledAt)
+            return Hits::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
+        // The publication owner already enforced its age at observedAt. Pin this exact admitted sample.
+        const auto admittedAge =
+            Duration::FromNanoseconds(std::max<std::int64_t>(1, observedAt.Nanoseconds() - snapshot.SampledAt().Nanoseconds()));
+        return XR::QueryXRPlaneHits(snapshot,
+                                    {snapshot.Scope(), active->sample.ray, observedAt, admittedAge, maximumHits, snapshot.SampledAt()});
+    }
+
     /** @copydoc Editor::IEditorXrPlaneCapturePreview::ReadPlaneCaptureState */
     Editor::EditorXrPlaneCaptureState OpenXRPlayHost::ReadPlaneCaptureState() const noexcept {
         using enum Editor::EditorXrPlaneCaptureState;

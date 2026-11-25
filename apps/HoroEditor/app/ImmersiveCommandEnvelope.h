@@ -3,6 +3,7 @@
 /** @file ImmersiveCommandEnvelope.h @brief Editor-owned alignment of speech and admitted spatial evidence. */
 
 #include "Horo/XR/XRInteraction.h"
+#include "Horo/XR/XRPlaneTracking.h"
 #include "ImmersiveSpeechTranscription.h"
 
 #include <array>
@@ -31,6 +32,22 @@ namespace Horo::Editor {
         std::size_t count{};
     };
 
+    /** @brief Short-lived surface coordinates tied to the exact press and plane grant. */
+    struct ImmersiveSurfaceHits final {
+        static constexpr std::size_t MaximumHits = 8;
+
+        struct Hit final {
+            XR::XRPlaneId plane;
+            XR::XRPlaneClassification classification{};
+            Math::Vec3 worldPosition;
+        };
+
+        XR::XRPlaneScope scope;
+        std::uint64_t worldGeneration{};
+        std::array<Hit, MaximumHits> hits{};
+        std::size_t count{};
+    };
+
     /** @brief Closed interval measured by the host around the exact XR cutoff in the capture clock domain. */
     struct ImmersiveSpatialObservation final {
         XR::XRInteractionCutoff cutoff;
@@ -39,6 +56,7 @@ namespace Horo::Editor {
         Audio::AudioMonotonicTimestamp latest;
         std::optional<ImmersiveControllerPress> controllerPress;
         std::optional<ImmersivePointingHits> pointing;
+        std::optional<ImmersiveSurfaceHits> surfaces;
     };
 
     /** @brief Borrowed history from one bounded editor/XR capture, in publication order. */
@@ -61,6 +79,11 @@ namespace Horo::Editor {
     [[nodiscard]] std::optional<ImmersivePointingHits> CollectImmersivePointingHits(std::span<const ImmersiveSpatialObservation> aligned,
                                                                                     std::uint64_t worldGeneration,
                                                                                     ImmersivePointingReviewKind kind) noexcept;
+
+    /** @brief Reviews press-time hits against the exact current grant and all referenced live planes. */
+    [[nodiscard]] std::optional<ImmersiveSurfaceHits> CollectImmersiveSurfaceHits(std::span<const ImmersiveSpatialObservation> aligned,
+                                                                                  std::uint64_t worldGeneration,
+                                                                                  const XR::XRPlaneSnapshot &current) noexcept;
 
     enum class ImmersiveCommandStatus : std::uint8_t {
         Aligned,

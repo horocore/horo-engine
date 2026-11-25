@@ -224,6 +224,10 @@ Ownership rules:
   Incomplete hit queries produce an unavailable result.
   Location review shows press-time world coordinates in meters for eligible
   objects. Separate points on one object remain separate location candidates.
+  Physical surface review uses the separate one-session plane grant. The
+  controller press copies bounded hit coordinates and plane identities from
+  the admitted publication. Each preview checks that the same grant and all
+  referenced plane identities are still live.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

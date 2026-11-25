@@ -92,7 +92,45 @@ namespace Horo::Editor {
             }
             return true;
         }
+
+        /** @brief Copies distinct current surface candidates or rejects the entire incomplete review. */
+        bool AppendSurfaceHits(ImmersiveSurfaceHits &output, const ImmersiveSurfaceHits &source,
+                               const std::span<const XR::XRPlaneObservation> current) noexcept {
+            if (source.count > source.hits.size())
+                return false;
+            for (const auto &hit : std::span{source.hits}.first(source.count)) {
+                if (std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id) == current.end())
+                    return false;
+                const auto previous = std::span{output.hits}.first(output.count);
+                if (std::ranges::any_of(previous, [&](const ImmersiveSurfaceHits::Hit &prior) {
+                    return prior.plane == hit.plane && prior.worldPosition == hit.worldPosition;
+                }))
+                    continue;
+                if (output.count == output.hits.size())
+                    return false;
+                output.hits[output.count++] = hit;
+            }
+            return true;
+        }
     }  // namespace
+
+    /** @copydoc CollectImmersiveSurfaceHits */
+    std::optional<ImmersiveSurfaceHits> CollectImmersiveSurfaceHits(const std::span<const ImmersiveSpatialObservation> aligned,
+                                                                    const std::uint64_t worldGeneration,
+                                                                    const XR::XRPlaneSnapshot &current) noexcept {
+        ImmersiveSurfaceHits result{.scope = current.Scope(), .worldGeneration = worldGeneration};
+        bool queried{};
+        for (const auto &observation : aligned) {
+            if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
+                continue;
+            const auto &surfaces = observation.surfaces;
+            if (!observation.controllerPress || !surfaces || surfaces->scope != result.scope ||
+                surfaces->worldGeneration != worldGeneration || !AppendSurfaceHits(result, *surfaces, current.Planes()))
+                return std::nullopt;
+            queried = true;
+        }
+        return queried ? std::optional{result} : std::nullopt;
+    }
 
     /** @copydoc CollectImmersivePointingHits */
     std::optional<ImmersivePointingHits> CollectImmersivePointingHits(const std::span<const ImmersiveSpatialObservation> aligned,

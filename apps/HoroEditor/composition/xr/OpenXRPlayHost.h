@@ -505,6 +505,11 @@ namespace Horo::Application::Internal {
          * @return Complete scoped hits, or an explicit stale, unavailable or capacity failure. */
         [[nodiscard]] Result<std::size_t> QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
                                                                 std::span<Editor::EditorXrGeometryHit> hits) const;
+        /** @brief Intersects the exact admitted pointer with the current consented plane publication.
+         * @param frame Pointer observation issued at the current Input cutoff.
+         * @param maximumHits Maximum complete hit count to return.
+         * @return Ordered hits or a stale, unavailable or capacity failure. */
+        [[nodiscard]] Result<XR::XRSpatialHits> QueryPointedPlanes(const OpenXRWorldUiPointerFrame &frame, std::uint32_t maximumHits) const;
         /** @brief Copies current reference identity and bounds from the selected Play session.
          * @param session Exact published session.
          * @return Immutable-by-copy evidence or typed stale/unavailable error.
@@ -568,6 +573,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool PlaneReadsAdmitted() const noexcept;
         /** @brief Validates plane freshness against current native time. @param observedAt Timestamp used for admission. */
         [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservationsAtCurrentTime(XR::XRRuntimeTime &observedAt) const;
+        /** @brief Revalidates the live pressed pointer and returns its canonical ray and scope. */
+        [[nodiscard]] std::optional<OpenXRWorldUiPointerFrame> ReadPressedPointer(const OpenXRWorldUiPointerFrame &frame) const;
         /** @brief Checks the exact local grant, Play and World ownership without calling platform authority.
          * @param scope Frozen session, World and operator grant. @return Whether all three are still current.
          */

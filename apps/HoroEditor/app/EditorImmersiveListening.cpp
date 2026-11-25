@@ -78,6 +78,19 @@ namespace Horo::Editor {
             {identity.documentOpening, identity.documentRevision, identity.worldGeneration, std::span{objects}.first(selection.size())});
     }
 
+    /** @copydoc EditorImmersiveListening::ReviewSurfaces */
+    std::optional<ImmersiveSurfaceHits> EditorImmersiveListening::ReviewSurfaces() const {
+        if (!preview_ || preview_->Spatial().empty())
+            return std::nullopt;
+        const auto current = Current();
+        if (!current || !preview_->IsCurrent(current->interaction.cutoff))
+            return std::nullopt;
+        const auto planes = xr_.ReadPlaneObservations();
+        if (planes.HasError())
+            return std::nullopt;
+        return CollectImmersiveSurfaceHits(preview_->Spatial(), current->interaction.scene.value, planes.Value());
+    }
+
     bool EditorImmersiveListening::CanListen() {
         return microphone_.CanRecord() && microphone_.Status() == EditorMicrophonePermissionStatus::Granted &&
                ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted && xr_.ReadListeningScope(player_).has_value();

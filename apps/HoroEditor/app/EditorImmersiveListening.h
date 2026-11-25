@@ -32,6 +32,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewReferences(
             const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
             AgentSceneReferenceSource source) const;
+        /** @brief Borrows a fresh plane publication before returning any captured surface coordinates. */
+        [[nodiscard]] std::optional<ImmersiveSurfaceHits> ReviewSurfaces() const;
         [[nodiscard]] bool CanListen();
         [[nodiscard]] bool NeedsMicrophonePermission();
         [[nodiscard]] bool NeedsSpeechPermission() const noexcept;

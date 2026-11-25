@@ -228,6 +228,51 @@ namespace Horo::Editor {
             CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
         }
 
+        TEST_CASE("Physical surface review requires its original grant and complete live plane identities", "[agent][immersive][speech]") {
+            constexpr std::uint64_t World = 7;
+            SpeechFixture fixture;
+            const auto context = fixture.Context();
+            const auto &identity = context.Identity();
+            const XR::XRPlaneScope scope{identity.xrSession,
+                                         {identity.referenceSpace, XR::XRSpaceKind::World, XR::XRWorldOriginRevision::Create(1).Value()},
+                                         XR::XRPlaneGrant::Create(1).Value()};
+            XR::XRPlanePublication publication;
+            const XR::XRPlaneLimits limits{2, Duration::FromNanoseconds(1), Duration::FromNanoseconds(100)};
+            REQUIRE(publication.Activate(scope, limits).HasValue());
+            const auto now = XR::XRRuntimeTime::Create(100).Value();
+            const XR::XRPlaneObservation wall{.id = {scope.session, {1, 1}},
+                                              .extentMeters = {2, 3},
+                                              .classification = XR::XRPlaneClassification::Wall,
+                                              .confidence = XR::XRTrackingConfidence::High};
+            REQUIRE(publication.Publish(scope, now, std::span{&wall, 1}).HasValue());
+            const auto live = publication.Read(scope, now);
+            REQUIRE(live.HasValue());
+            ImmersiveSpatialObservation press{.controllerPress = ImmersiveControllerPress{},
+                                              .surfaces = ImmersiveSurfaceHits{.scope = scope, .worldGeneration = World, .count = 1}};
+            press.candidate.shape = Math::Ray{};
+            press.surfaces->hits[0] = {wall.id, wall.classification, {1, 2, 3}};
+            const std::array repeated{press, press};
+            const auto candidates = CollectImmersiveSurfaceHits(repeated, World, live.Value());
+            REQUIRE(candidates);
+            REQUIRE(candidates->count == 1);
+            CHECK(candidates->hits[0].classification == wall.classification);
+            CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World + 1, live.Value()));
+
+            const auto later = XR::XRRuntimeTime::Create(101).Value();
+            REQUIRE(publication.Publish(scope, later, {}).HasValue());
+            const auto missing = publication.Read(scope, later);
+            REQUIRE(missing.HasValue());
+            CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World, missing.Value()));
+            publication.Revoke();
+            auto replacement = scope;
+            replacement.grant = XR::XRPlaneGrant::Create(2).Value();
+            REQUIRE(publication.Activate(replacement, limits).HasValue());
+            REQUIRE(publication.Publish(replacement, later, std::span{&wall, 1}).HasValue());
+            const auto regranted = publication.Read(replacement, later);
+            REQUIRE(regranted.HasValue());
+            CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World, regranted.Value()));
+        }
+
         TEST_CASE("Immersive commands reject uncertain timing and mismatched provenance", "[agent][immersive][speech]") {
             using enum ImmersiveCommandStatus;
             SpeechFixture fixture;

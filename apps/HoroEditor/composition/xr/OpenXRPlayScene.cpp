@@ -16,8 +16,8 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::QueryAuthoredPointing */
     Result<std::size_t> OpenXRPlayHost::QueryAuthoredPointing(const OpenXRWorldUiPointerFrame &frame,
                                                               const std::span<Editor::EditorXrGeometryHit> hits) const {
-        const auto active = ReadWorldUiPointer(frame.source.player);
-        if (!active || active->source != frame.source || active->cutoff != frame.cutoff || !active->sample.selectDown)
+        const auto active = ReadPressedPointer(frame);
+        if (!active)
             return Result<std::size_t>::Failure(MakeError(XRErrors::IdentityStale));
         if (!scene_ || !scene_->geometry || !scene_->geometry->authored)
             return Result<std::size_t>::Failure(MakeError(XRErrors::OperationUnavailable));

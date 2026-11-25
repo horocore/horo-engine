@@ -429,6 +429,7 @@ namespace Horo::Editor {
                 ResetListeningInput();
                 listeningReferences_.reset();
                 requestedListeningReferences_.reset();
+                reviewingSurfaces_ = false;
 #endif
             }
 
@@ -516,6 +517,7 @@ namespace Horo::Editor {
                 if (state == Idle || state == Interrupted) {
                     listeningReferences_.reset();
                     requestedListeningReferences_.reset();
+                    reviewingSurfaces_ = false;
                     DrawListeningStart(context);
                     return;
                 }
@@ -561,6 +563,13 @@ namespace Horo::Editor {
                     LoadListeningReferences(Pointing);
                 if (Button(locale, "xr_location_review", canReview))
                     LoadListeningReferences(Location);
+                if (Button(locale, "xr_surface_review", true)) {
+                    requestedListeningReferences_.reset();
+                    listeningReferences_.reset();
+                    reviewingSurfaces_ = true;
+                }
+                if (reviewingSurfaces_)
+                    DrawListeningSurfaces(context);
                 if (!requestedListeningReferences_)
                     return;
                 DrawListeningReferenceResult(context, *requestedListeningReferences_);
@@ -568,6 +577,7 @@ namespace Horo::Editor {
 
             /** @brief Refreshes the requested review using the current scoped receipt. */
             void LoadListeningReferences(const AgentSceneReferenceSource source) {
+                reviewingSurfaces_ = false;
                 listeningReferences_ = listening_->ReviewReferences(reviewAgentSceneReferences_, source);
                 requestedListeningReferences_ = source;
             }
@@ -596,10 +606,51 @@ namespace Horo::Editor {
                                     LocalizedText(locale, ReferenceStateKey(candidate.state)) + " #" + std::to_string(candidate.object),
                                     Theme::Text(), fonts);
                     if (const auto &point = candidate.worldPosition)
-                        Ui::WrappedText(width,
-                                        std::format("{} X {} · Y {} · Z {}", LocalizedText(locale, "xr_location_coordinates"), point->x,
-                                                    point->y, point->z),
-                                        Theme::Muted(), fonts);
+                        DrawListeningCoordinates(context, width, *point);
+                }
+            }
+
+            /** @brief Uses the same recorded World coordinate format for mesh and physical surface hits. */
+            void DrawListeningCoordinates(const EditorGuiContext &context, const float width, const Math::Vec3 point) const {
+                Ui::WrappedText(width,
+                                std::format("{} X {} · Y {} · Z {}", LocalizedText(context.localization, "xr_location_coordinates"),
+                                            point.x, point.y, point.z),
+                                Theme::Muted(), context.theme.fonts);
+            }
+
+            /** @brief Maps portable plane classification to localized presentation. */
+            static const char *SurfaceClassificationKey(const XR::XRPlaneClassification classification) noexcept {
+                using enum XR::XRPlaneClassification;
+                switch (classification) {
+                    case Floor:
+                        return "xr_surface_floor";
+                    case Ceiling:
+                        return "xr_surface_ceiling";
+                    case Wall:
+                        return "xr_surface_wall";
+                    case Platform:
+                        return "xr_surface_platform";
+                    default:
+                        return "xr_surface_unknown";
+                }
+            }
+
+            /** @brief Projects live-authorized matches without caching any room coordinates in the panel. */
+            void DrawListeningSurfaces(const EditorGuiContext &context) {
+                const auto review = listening_->ReviewSurfaces();
+                const auto width = ImGui::GetContentRegionAvail().x;
+                const auto &fonts = context.theme.fonts;
+                const auto &locale = context.localization;
+                if (!review || review->count == 0) {
+                    Ui::WrappedText(width, LocalizedText(locale, review ? "xr_surface_empty" : "xr_surface_unavailable"), Theme::Muted(),
+                                    fonts);
+                    return;
+                }
+                if (review->count > 1)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
+                for (const auto &hit : std::span{review->hits}.first(review->count)) {
+                    Ui::WrappedText(width, LocalizedText(locale, SurfaceClassificationKey(hit.classification)), Theme::Text(), fonts);
+                    DrawListeningCoordinates(context, width, hit.worldPosition);
                 }
             }
 
@@ -609,6 +660,7 @@ namespace Horo::Editor {
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
             std::optional<AgentSceneReferenceReview> listeningReferences_;
             std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
+            bool reviewingSurfaces_{};
 #endif
 
             enum class BuildContextChoice {

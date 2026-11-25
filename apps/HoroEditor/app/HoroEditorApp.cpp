@@ -2099,7 +2099,8 @@ namespace Horo::Editor {
                                                               {time.earliest.clockDomain, time.earliest.nanoseconds},
                                                               {time.latest.clockDomain, time.latest.nanoseconds},
                                                               press,
-                                                              press ? QueryAuthoredHits(xr, *frame) : std::nullopt};
+                                                              press ? QueryAuthoredHits(xr, *frame) : std::nullopt,
+                                                              press ? QuerySurfaceHits(xr, *frame) : std::nullopt};
                 static_cast<void>(speech.RecordPointing(observation, capture));
             }
 
@@ -2112,6 +2113,19 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Retains only bounded hit coordinates under the current plane grant. */
+            static std::optional<ImmersiveSurfaceHits> QuerySurfaceHits(const Application::Internal::OpenXRPlayHost &xr,
+                                                                        const PointerFrame &frame) {
+                const auto result = xr.QueryPointedPlanes(frame, ImmersiveSurfaceHits::MaximumHits);
+                if (result.HasError())
+                    return std::nullopt;
+                const auto &batch = result.Value();
+                ImmersiveSurfaceHits captured{.scope = batch.Source(), .worldGeneration = frame.source.scene.value};
+                for (const auto &hit : batch.Hits())
+                    captured.hits[captured.count++] = {hit.plane, hit.classification, hit.intersection.position};
+                return captured;
+            }
+
             /** @brief Captures copied Scene identities at the press cutoff while both owners are live. */
             static std::optional<ImmersivePointingHits> QueryAuthoredHits(const Application::Internal::OpenXRPlayHost &xr,
                                                                           const PointerFrame &frame) {
