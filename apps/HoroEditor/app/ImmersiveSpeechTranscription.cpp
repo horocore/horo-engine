@@ -1,6 +1,7 @@
 #include "ImmersiveSpeechTranscription.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Security/SecureMemory.h"
 
 #include <algorithm>
 #include <cmath>
@@ -87,6 +88,11 @@ namespace Horo::Editor {
                       providerStop.request_stop();
               }) {}
     };
+
+    /** @copydoc ImmersiveSpeechEvidence::~ImmersiveSpeechEvidence */
+    ImmersiveSpeechEvidence::~ImmersiveSpeechEvidence() noexcept {
+        Security::SecureZero(std::as_writable_bytes(std::span{text_}));
+    }
 
     /** @copydoc ImmersiveSpeechEvidence::IsCurrent */
     bool ImmersiveSpeechEvidence::IsCurrent() const noexcept {

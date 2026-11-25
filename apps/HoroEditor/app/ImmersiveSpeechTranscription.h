@@ -88,6 +88,14 @@ namespace Horo::Editor {
     class ImmersiveSpeechEvidence final {
     public:
         static constexpr std::size_t MaximumTextBytes = 4096;
+        ImmersiveSpeechEvidence() = default;
+        ImmersiveSpeechEvidence(const ImmersiveSpeechEvidence &) = default;
+        ImmersiveSpeechEvidence &operator=(const ImmersiveSpeechEvidence &) = default;
+        ImmersiveSpeechEvidence(ImmersiveSpeechEvidence &&) noexcept = default;
+        ImmersiveSpeechEvidence &operator=(ImmersiveSpeechEvidence &&) noexcept = default;
+        /** @brief Clears the owned transcript bytes before releasing the evidence. */
+        ~ImmersiveSpeechEvidence() noexcept;
+
         /** @brief Checks the context generation and both cancellation authorities before adoption. */
         [[nodiscard]] bool IsCurrent() const noexcept;
 

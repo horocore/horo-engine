@@ -1,8 +1,12 @@
 #include "../../../apps/HoroEditor/app/ImmersiveCommandEnvelope.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 
 namespace Horo::Editor {
@@ -175,6 +179,25 @@ namespace Horo::Editor {
             CHECK(provider.observedStop);
             CHECK_FALSE(fixture.stop.stop_requested());
             CHECK_FALSE(prepared.stream->Poll().evidence);
+        }
+
+        TEST_CASE("Immersive evidence clears the transcript bytes it owns on release", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto final = FinalEvidence(fixture);
+            alignas(ImmersiveSpeechEvidence) std::array<std::byte, sizeof(ImmersiveSpeechEvidence)> memory{};
+            auto *const copy = std::construct_at(reinterpret_cast<ImmersiveSpeechEvidence *>(memory.data()), final);
+            const auto text = copy->PreviewText(Kind::Final);
+            const auto offset = reinterpret_cast<std::uintptr_t>(text.data()) - reinterpret_cast<std::uintptr_t>(memory.data());
+            const auto length = text.size();
+            const bool exactCopy = text == final.PreviewText(Kind::Final);
+            std::destroy_at(copy);
+            REQUIRE(length > 0);
+            REQUIRE(exactCopy);
+            REQUIRE(offset <= memory.size() - length);
+            CHECK(std::ranges::all_of(std::span{memory}.subspan(offset, length), [](const std::byte value) {
+                return value == std::byte{};
+            }));
+            CHECK(final.PreviewText(Kind::Final) == Transcript().text);
         }
 
         TEST_CASE("Immersive speech can produce a local Play diagnostics preview without model authority", "[agent][immersive][speech]") {

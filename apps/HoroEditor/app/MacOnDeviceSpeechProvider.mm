@@ -1,5 +1,7 @@
 #include "MacOnDeviceSpeechProvider.h"
 
+#include "Horo/Security/SecureMemory.h"
+
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
 #include <algorithm>
@@ -159,6 +161,7 @@ namespace Horo::Editor {
 
             /** @copydoc ISpeechProviderStream::Poll */
             SpeechProviderPoll Poll(const std::stop_token stop) noexcept override {
+                ClearTranscript();
                 @autoreleasepool {
                     if (!Authorized(stop))
                         return SpeechProviderUnavailable{};
@@ -174,6 +177,7 @@ namespace Horo::Editor {
 
             /** @copydoc ISpeechProviderStream::Cancel */
             void Cancel() noexcept override {
+                ClearTranscript();
                 @autoreleasepool {
                     mailbox_->Close();
                     [task_ cancel];
@@ -184,6 +188,11 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Clears the adapter-owned text after its borrowed view expires. */
+            void ClearTranscript() noexcept {
+                Security::SecureZero(std::as_writable_bytes(std::span{text_}));
+            }
+
             /** @brief Checks revocation before every worker handoff. */
             bool Authorized(const std::stop_token stop) const noexcept {
                 return request_ != nil && !stop.stop_requested() && recognizer_.supportsOnDeviceRecognition &&
