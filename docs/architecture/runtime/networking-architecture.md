@@ -882,6 +882,11 @@ codec/packet negotiation, encryption, peer/session routing, jitter/reorder/loss,
 bitrate, QoS, mute/block and moderation. Audio never receives sockets, packet
 headers, credentials or remote peer authority.
 
+SDL capture exposes a purpose-scoped read for one host-admitted network voice
+generation. It returns interleaved PCM with the capture clock and overrun
+evidence. Withdrawing the grant retires the generation and drops its queued
+samples. Recording and speech readers cannot consume that generation.
+
 Delivery policies:
 
 - **UnreliableUnordered**: Fast state updates (e.g. high-frequency physics/transform telemetry); latest packet overwrites previous.

@@ -353,6 +353,50 @@ namespace Horo::Audio::Backend {
             CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
         }
 
+        TEST_CASE("SDL network voice copies timestamped PCM only for its current capture grant", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::NetworkVoice},
+                                   .foreground = true};
+            SECTION("a speech generation is inaccessible on the network endpoint") {
+                grant.intent.purpose = Sdl3CapturePurpose::Speech;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                AudioCapturedBlock block;
+                const auto rejected = backend->ReadNetworkVoiceCapture(grant.generation, grant, block, {});
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                CHECK(backend->CaptureActivity().purpose == Sdl3CapturePurpose::Speech);
+            }
+            SECTION("only the voice consumer receives PCM until its grant is withdrawn") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                WaitForActivity(*backend);
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 1.0F);
+                const auto local = backend->ReadCapture(grant.generation, grant, block, pcm);
+                REQUIRE(local.HasError());
+                CHECK(local.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                const auto admitted = backend->ReadNetworkVoiceCapture(grant.generation, grant, block, pcm);
+                REQUIRE(admitted.HasValue());
+                CHECK(admitted.Value().status == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+                CHECK(block.start.clockDomain == descriptor.clockDomain);
+                std::ranges::fill(pcm, 1.0F);
+                const auto withdrawn = backend->ReadNetworkVoiceCapture(grant.generation, std::nullopt, block, pcm);
+                REQUIRE(withdrawn.HasError());
+                CHECK(withdrawn.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                CHECK(block.sequence == 1);
+                CHECK(std::ranges::all_of(pcm, [](AudioSample sample) { return sample == 1.0F; }));
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            }
+        }
+
         TEST_CASE("SDL connection tests expose a level without granting access to PCM", "[audio][sdl3][capture]") {
             auto backend = MakeBackend();
             const auto discovery = backend->DiscoverCapture();

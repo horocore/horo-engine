@@ -333,11 +333,29 @@ namespace Horo::Audio::Backend {
     /** @copydoc Sdl3AudioBackend::ReadCapture */
     Result<Sdl3CaptureReadout> Sdl3AudioBackend::ReadCapture(const std::uint64_t generation, const std::optional<Sdl3CaptureGrant> &grant,
                                                              AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
+        return ReadBufferedCapture(generation, grant, block, pcm, std::nullopt);
+    }
+
+    /** @copydoc Sdl3AudioBackend::ReadNetworkVoiceCapture */
+    Result<Sdl3CaptureReadout> Sdl3AudioBackend::ReadNetworkVoiceCapture(const std::uint64_t generation,
+                                                                        const std::optional<Sdl3CaptureGrant> &grant,
+                                                                        AudioCapturedBlock &block, const std::span<AudioSample> pcm) {
+        return ReadBufferedCapture(generation, grant, block, pcm, Sdl3CapturePurpose::NetworkVoice);
+    }
+
+    /** @copydoc Sdl3AudioBackend::ReadBufferedCapture */
+    Result<Sdl3CaptureReadout> Sdl3AudioBackend::ReadBufferedCapture(const std::uint64_t generation,
+                                                                    const std::optional<Sdl3CaptureGrant> &grant,
+                                                                    AudioCapturedBlock &block, const std::span<AudioSample> pcm,
+                                                                    const std::optional<Sdl3CapturePurpose> expectedPurpose) {
         using Output = Result<Sdl3CaptureReadout>;
         auto &capture = impl_->capture;
         if (!capture.stream || generation != capture.lastGeneration)
             return Output::Failure(MakeError(AudioErrors::HandleStale));
-        if (capture.activeGrant.intent.purpose == Sdl3CapturePurpose::ConnectionTest || capture.activeGrant.intent.monitor.has_value())
+        using enum Sdl3CapturePurpose;
+        const auto purpose = capture.activeGrant.intent.purpose;
+        const bool admitted = expectedPurpose ? purpose == *expectedPurpose : purpose == Recording || purpose == Speech;
+        if (!admitted)
             return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
         if (const auto reconciled = ReconcileCapture(generation, grant); reconciled.HasError())
             return Output::Failure(reconciled.ErrorValue());
