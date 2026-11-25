@@ -218,6 +218,16 @@ namespace Horo::Editor {
             CHECK_FALSE(update.evidence);
         }
 
+        TEST_CASE("Immersive speech distinguishes adapter-reported malformed output from unavailability", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            fixture.provider.next = SpeechProviderInvalidTranscript{};
+            const auto update = fixture.stream->Poll();
+            CHECK(update.status == Status::InvalidTranscript);
+            CHECK_FALSE(update.evidence);
+            CHECK(fixture.provider.cancelled == 1);
+        }
+
         TEST_CASE("Immersive speech bounds provider attempts, hypotheses and audio time", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             SECTION("provider unavailable") {

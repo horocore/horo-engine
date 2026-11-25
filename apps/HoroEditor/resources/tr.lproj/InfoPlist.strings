@@ -1,1 +1,2 @@
 "NSMicrophoneUsageDescription" = "Horo Editör, ses kaydını veya sesli girişi açıkça etkinleştirdiğinizde mikrofonu kullanır.";
+"NSSpeechRecognitionUsageDescription" = "Horo Editör, XR sesli girişini açıkça etkinleştirdiğinizde konuşmanızı bu cihazda metne dönüştürür.";

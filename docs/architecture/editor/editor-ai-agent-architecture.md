@@ -170,6 +170,10 @@ Ownership rules:
   and issues final evidence only after input is explicitly sealed. The Editor
   rechecks context and cancellation when it adopts evidence. PCM is borrowed
   for one provider call and is never replayed into a replacement provider.
+- The macOS adapter requires speech authorization and checks that the selected
+  locale supports device-local recognition before creating a Speech request.
+  It uses Audio-owned PCM and retains only the latest framework result. Its
+  authorization action is separate from microphone permission and stream opening.
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.

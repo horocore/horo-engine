@@ -164,6 +164,8 @@ namespace Horo::Editor {
             return Admit(*hypothesis);
         if (std::holds_alternative<SpeechProviderUnavailable>(update))
             return {CloseWith(ProviderUnavailable), {}};
+        if (std::holds_alternative<SpeechProviderInvalidTranscript>(update))
+            return {CloseWith(InvalidTranscript), {}};
         return {Pending, {}};
     }
 

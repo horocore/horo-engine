@@ -31,7 +31,10 @@ namespace Horo::Editor {
 
     struct SpeechProviderUnavailable final {};
 
-    using SpeechProviderPoll = std::variant<std::monostate, SpeechHypothesisView, SpeechProviderUnavailable>;
+    struct SpeechProviderInvalidTranscript final {};
+
+    using SpeechProviderPoll =
+        std::variant<std::monostate, SpeechHypothesisView, SpeechProviderUnavailable, SpeechProviderInvalidTranscript>;
 
     /** @brief One host-admitted provider stream. All calls are serialized on a worker outside Audio and XR callbacks.
      * @details Implementations bound their own work, honor cancellation, and never retain caller spans. Transport,

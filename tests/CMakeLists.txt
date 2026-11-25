@@ -353,6 +353,13 @@ target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOU
 target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController
     HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal HoroEngine::PlatformProjectReadFiles
     HoroEngine::XRApi HoroEngine::SceneSourceModel HoroAudioCaptureBuffer)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_HORO_TEST_MAC_SPEECH_SOURCE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/MacOnDeviceSpeechProvider.mm")
+    set_source_files_properties("${_HORO_TEST_MAC_SPEECH_SOURCE}" PROPERTIES
+        LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+    target_sources(HoroEditorAgentTurnTests PRIVATE "${_HORO_TEST_MAC_SPEECH_SOURCE}" unit/editor/MacOnDeviceSpeechProviderTests.cpp)
+    target_link_libraries(HoroEditorAgentTurnTests PRIVATE "-framework Speech" "-framework AVFoundation" "-framework Foundation")
+endif()
 horo_register_catch_test(HoroEditorAgentTurnTests LABELS "unit;agent;headless;ci-windows")
 
 add_executable(HoroEditorAgentHistoryTests unit/editor/AgentConversationStoreTests.cpp)

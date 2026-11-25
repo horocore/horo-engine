@@ -32,5 +32,7 @@
     <string>${MACOSX_BUNDLE_COPYRIGHT}</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Horo Editor uses the microphone when you explicitly enable audio recording or voice input.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Horo Editor transcribes your voice on this device when you explicitly enable immersive voice input.</string>
 </dict>
 </plist>
