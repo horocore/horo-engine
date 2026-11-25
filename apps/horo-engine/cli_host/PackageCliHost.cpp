@@ -5,6 +5,7 @@
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "PackageBehaviorReferences.h"
 #include "PackageProjectSession.h"
+#include "PackageUpdateReferences.h"
 #include "ProjectProtocolIdentity.h"
 
 #include <algorithm>
@@ -13,7 +14,6 @@
 #include <cstdio>
 #include <format>
 #include <iterator>
-#include <map>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -227,6 +227,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Reports saved importer references and lock-level blockers before issuing an offline approval. */
         Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
+        /** @brief Checks the verified archives if the caller requested a reference-aware preview. */
+        Result<void> ReviewCachedUpdate(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
+                                        const Cli::CliExecutionContext &context);
 
         class PackageUpdatePreviewAdapter final : public Cli::ICliCommandAdapter {
         public:
@@ -245,10 +248,10 @@ namespace Horo::Application::Internal {
                 const auto preview = InspectUpdate(request, operation_, context.Cancellation());
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
-                if (operation_ == PackageOperation::Removal) {
-                    if (const auto references = ReviewOfflineRemoval(preview.Value(), context); references.HasError())
-                        return Output::Failure(references.ErrorValue());
-                }
+                const auto review = operation_ == PackageOperation::Removal ? ReviewOfflineRemoval(preview.Value(), context)
+                                                                           : ReviewCachedUpdate(preview.Value(), request, context);
+                if (review.HasError())
+                    return Output::Failure(review.ErrorValue());
                 return Output::Success(EncodePreview(preview.Value(), offset.Value()));
             }
 
@@ -301,40 +304,27 @@ namespace Horo::Application::Internal {
             return Output::Failure(UpdateStopped(context));
         }
 
-        /** @brief Rejects changes to selected versions, source, policy, or exported contribution classes. */
-        bool CanPreserveAssetReferences(const Packages::PackageUpdateChange &change) {
-            if (!change.current)
-                return true;
-            if (!change.candidate)
-                return false;
-            const auto &next = *change.candidate;
-            auto compatible = *change.current;
-            compatible.artifactDigest = next.artifactDigest;
-            compatible.fileManifestDigest = next.fileManifestDigest;
-            return compatible == next && std::ranges::equal(next.contributions, std::array<std::string_view, 1>{"assets"});
-        }
-
-        /** @brief Verifies that every old content path retains its bytes and contribution owner. */
-        bool PreservesAssetFiles(const Packages::ValidatedPackageArchive &previous, const Packages::ValidatedPackageArchive &candidate) {
-            const auto contributionPath = [](const Packages::PackageFileEntry &file) -> std::string_view {
-                return file.contributionRoot ? std::string_view{file.contributionRoot->Value()} : std::string_view{};
-            };
-            std::map<std::string_view, const Packages::PackageFileEntry *, std::less<>> byPath;
-            for (const auto &file : candidate.Manifest().Entries()) {
-                const std::string_view path = file.id.path.Value();
-                if (file.executable || (path != "horo-package.toml" && !path.starts_with("assets/")))
-                    return false;
-                byPath.emplace(path, &file);
+        Result<void> ReviewCachedUpdate(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
+                                        const Cli::CliExecutionContext &context) {
+            if (std::ranges::find(request.options, "package-cache-root", &Cli::CliParsedOption::name) == request.options.end())
+                return Result<void>::Success();
+            const auto root = PathOption(request, "package-cache-root");
+            if (root.HasError())
+                return Result<void>::Failure(root.ErrorValue());
+            NativeDurableFileSystem files;
+            const auto cache = Packages::PackageCacheStore::Create(files, root.Value(), update.policy.limits.validation);
+            if (cache.HasError())
+                return Result<void>::Failure(cache.ErrorValue());
+            auto diagnostics = ReviewUpdateLock(update.preview);
+            for (const auto &change : update.preview.changes) {
+                if (context.IsStopRequested())
+                    return Result<void>::Failure(UpdateStopped(context));
+                if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics); reviewed.HasError())
+                    return reviewed;
             }
-            return std::ranges::all_of(previous.Manifest().Entries(), [&byPath, &contributionPath](const auto &oldFile) {
-                const auto next = byPath.find(oldFile.id.path.Value());
-                return next != byPath.end() && !oldFile.executable && oldFile.digest == next->second->digest &&
-                       oldFile.size == next->second->size && contributionPath(oldFile) == contributionPath(*next->second);
-            });
-        }
-
-        Error UpdateNeedsMigration() {
-            return Error{ErrorCode{"packages.host.update_requires_migration_review"}, ErrorDomainId{"packages.host"}};
+            if (context.IsStopRequested())
+                return Result<void>::Failure(UpdateStopped(context));
+            return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
 
         /** @brief Carries the admitted command deadline into project reads and publication. */
@@ -426,8 +416,11 @@ namespace Horo::Application::Internal {
 
         /** @brief Checks the exact old and staged archives for each replaced asset package before publication. */
         Result<void> CheckAssetReplacements(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
-                                            Packages::PackageCacheStore &cache) {
+                                            const Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
+            std::vector<Diagnostic> diagnostics;
             for (const auto &change : update.preview.changes) {
+                if (context.IsStopRequested())
+                    return Result<void>::Failure(UpdateStopped(context));
                 if (!change.current)
                     continue;
                 const auto &old = *change.current;
@@ -436,15 +429,12 @@ namespace Horo::Application::Internal {
                 });
                 if (next == staged.packages.end() || !next->archive)
                     return Result<void>::Failure(UpdateNeedsMigration());
-                const auto previous = cache.Load(old.artifactDigest);
+                const auto previous = ReadUpdateArchive(cache, old);
                 if (previous.HasError())
                     return Result<void>::Failure(previous.ErrorValue());
-                if (!previous.Value() || previous.Value()->PackageManifestDigest() != old.manifestDigest ||
-                    previous.Value()->Manifest().Digest() != old.fileManifestDigest ||
-                    !PreservesAssetFiles(*previous.Value(), *next->archive))
-                    return Result<void>::Failure(UpdateNeedsMigration());
+                ReviewAssetFiles(old.package, previous.Value(), *next->archive, diagnostics);
             }
-            return Result<void>::Success();
+            return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
 
         /** @brief Verifies and publishes a candidate whose existing package references remain valid. */
@@ -460,7 +450,7 @@ namespace Horo::Application::Internal {
                                                files, cache, context);
             if (staged.HasError())
                 return Output::Failure(staged.ErrorValue());
-            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), cache); content.HasError())
+            if (const auto content = CheckAssetReplacements(update, *staged.Value().Graph(), cache, context); content.HasError())
                 return Output::Failure(content.ErrorValue());
 
             const auto admission = ReadAuthority(update.policy, context);
@@ -477,8 +467,11 @@ namespace Horo::Application::Internal {
             using Output = Result<Cli::CliCommandResult>;
             if (UpdateApproval(request) != update.ApprovalFingerprint())
                 return Output::Failure(Error{ErrorCode{"packages.host.update_approval_mismatch"}, ErrorDomainId{"packages.host"}});
-            if (!update.removalPackage && !std::ranges::all_of(update.preview.changes, CanPreserveAssetReferences))
-                return Output::Failure(UpdateNeedsMigration());
+            if (!update.removalPackage) {
+                auto blockers = ReviewUpdateLock(update.preview);
+                if (!blockers.empty())
+                    return Output::Failure(UpdateNeedsMigration(std::move(blockers)));
+            }
             const auto cachePath = PathOption(request, "package-cache-root");
             if (cachePath.HasError())
                 return Output::Failure(cachePath.ErrorValue());
@@ -533,7 +526,10 @@ namespace Horo::Application::Internal {
                             {.name = "offset",
                              .summary = "Zero-based offset into the ordered changes.",
                              .valueKind = CliOptionValueKind::SignedInteger,
-                             .numericRange = {.minimumInteger = 0, .maximumInteger = 1024}}},
+                             .numericRange = {.minimumInteger = 0, .maximumInteger = 1024}},
+                            {.name = "package-cache-root",
+                             .summary = "Optional absolute verified cache root for a read-only migration review.",
+                             .valueKind = CliOptionValueKind::Path}},
                 .requiredCapabilities = {{"horo.package.manage"}},
                 .output = {.id = "horo.package.preview-update",
                            .version = 1,
@@ -559,7 +555,9 @@ namespace Horo::Application::Internal {
         auto descriptor = DescribePackageUpdatePreviewCommand();
         descriptor.path = {{"package", "apply-update"}};
         descriptor.summary = "Apply an approved offline update that preserves existing package references.";
-        descriptor.options.pop_back();
+        std::erase_if(descriptor.options, [](const auto &option) {
+            return option.name == "offset" || option.name == "package-cache-root";
+        });
         descriptor.options.insert(descriptor.options.begin(), {.name = "approve",
                                                                .summary = "Exact fingerprint from the update preview.",
                                                                .valueKind = CliOptionValueKind::String,
@@ -621,6 +619,7 @@ namespace Horo::Application::Internal {
         auto descriptor = DescribePackageRollbackPreviewCommand();
         descriptor.path = {{"package", "preview-remove"}};
         descriptor.summary = "Review the exact package withdrawal and its approval fingerprint.";
+        std::erase_if(descriptor.options, [](const auto &option) { return option.name == "package-cache-root"; });
         descriptor.options.insert(descriptor.options.begin(), {.name = "package-id",
                                                                .summary = "Portable ID of a directly requested package.",
                                                                .valueKind = Cli::CliOptionValueKind::String,

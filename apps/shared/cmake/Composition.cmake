@@ -21,9 +21,10 @@ configure_file(shared/packages/PackageProjectHost.h "${HORO_PACKAGE_HOST_HEADERS
 configure_file(shared/packages/PackageHostPolicy.h "${HORO_PACKAGE_HOST_HEADERS}/PackageHostPolicy.h" COPYONLY)
 configure_file(shared/packages/ApprovedGameplayPackageHost.h "${HORO_PACKAGE_HOST_HEADERS}/ApprovedGameplayPackageHost.h" COPYONLY)
 configure_file(shared/packages/PackageBehaviorReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageBehaviorReferences.h" COPYONLY)
+configure_file(shared/packages/PackageUpdateReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageUpdateReferences.h" COPYONLY)
 add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.cpp shared/packages/PackageProjectPreparation.cpp
     shared/packages/PackageProjectRemovalReferences.cpp shared/packages/PackageBehaviorReferences.cpp
-    shared/packages/PackageDecisionReferences.cpp
+    shared/packages/PackageDecisionReferences.cpp shared/packages/PackageUpdateReferences.cpp
     shared/packages/PackageProjectHost.cpp shared/packages/PackageProjectMetadata.cpp shared/packages/PackageHostPolicy.cpp
     shared/packages/ApprovedGameplayPackageHost.cpp)
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)

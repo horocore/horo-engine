@@ -209,6 +209,12 @@ namespace {
         stream.put('x');
         stream.close();
 
+        const auto inspected = fixture.store.InspectArchive(digest);
+        REQUIRE(inspected.HasError());
+        CHECK(inspected.ErrorValue().code.Value() == "packages.cache.corrupt");
+        CHECK(std::filesystem::exists(path));
+        CHECK_FALSE(std::filesystem::exists(fixture.temporary.Path() / "quarantine"));
+
         const auto loaded = fixture.store.Load(digest);
         REQUIRE(loaded.HasError());
         CHECK(loaded.ErrorValue().code.Value() == "packages.cache.corrupt");

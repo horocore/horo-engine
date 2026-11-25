@@ -100,6 +100,13 @@ namespace Horo::Packages {
          * @note A readable corrupt hit is moved to quarantine before this method returns failure.
          */
         [[nodiscard]] Result<std::optional<ValidatedPackageArchive>> Load(const Sha256Digest &digest);
+        /** @brief Verifies a content-addressed archive without claiming cache locks or changing cache contents.
+         * @param digest Expected immutable artifact identity.
+         * @return Verified bytes, an empty cache miss, or a typed corruption/storage failure.
+         * @details Suitable for read-only previews. An archive concurrently replaced during a read is accepted only if its
+         * complete bytes match the requested digest and pass validation.
+         */
+        [[nodiscard]] Result<std::optional<ValidatedPackageArchive>> InspectArchive(const Sha256Digest &digest) const;
 
         /**
          * @brief Durably isolates untrusted or failed download bytes with bounded safe diagnostics.

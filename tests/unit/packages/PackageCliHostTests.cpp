@@ -182,10 +182,13 @@ namespace {
                                         .options = {NativeProject::PathOption("project", root),
                                                     NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
                                                     NativeProject::PathOption("candidate-lock", metadata / "candidate.lock")}};
-        const auto execute = [&] {
-            return admitted.Dispatch(command, {.invocation = {1}, .configuration = &configuration.Value()});
-        };
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        const auto execute = [&](const bool cacheReview = false) {
+            auto preview = command;
+            if (cacheReview)
+                preview.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            return admitted.Dispatch(preview, {.invocation = {1}, .configuration = &configuration.Value()});
+        };
         const auto apply = [&](const std::string &fingerprint) {
             auto approved = command;
             approved.command = applyDescriptor.path;
@@ -211,6 +214,45 @@ namespace {
             const auto stale = apply(fingerprint);
             REQUIRE(stale.Outcome().HasError());
             CHECK(stale.Outcome().ErrorValue().code.Value() == "packages.host.update_approval_mismatch");
+        }
+        SECTION("a cache-backed review reports a version change even when archive bytes match") {
+            const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
+            auto changed = nlohmann::json::parse(originalRequest);
+            changed["dependencies"][fixture.graph.package.Value()]["version"] = version.ToString();
+            auto request = Packages::ValidatedPackageRequest::Parse(changed.dump());
+            REQUIRE(request.HasValue());
+            const auto &archive = fixture.graph.archive;
+            const Packages::PackageResolutionPlan plan{
+                .packages = {{fixture.graph.package, version, fixture.graph.source, archive.Digest(), {}}}};
+            const Packages::PackageLockArtifact entry{.package = fixture.graph.package,
+                                                     .version = version,
+                                                     .source = fixture.graph.source,
+                                                     .artifactDigest = archive.Digest(),
+                                                     .manifestDigest = archive.PackageManifestDigest(),
+                                                     .fileManifestDigest = archive.Manifest().Digest(),
+                                                     .packageFormatVersion = 1,
+                                                     .contributions = {"assets"}};
+            const auto next = Packages::ValidatedPackageLockfileV1::Generate(
+                plan, std::span{&fixture.graph.package, 1}, request.Value().Digest(), std::span{&entry, 1});
+            REQUIRE(next.HasValue());
+            fixture.Write("candidate.json", changed.dump());
+            fixture.Write("candidate.lock", next.Value().SerializeCanonical());
+            const auto missing = execute(true);
+            REQUIRE(missing.Outcome().HasError());
+            CHECK(missing.Outcome().ErrorValue().code.Value() == "packages.host.update_archive_evidence_unavailable");
+            CHECK_FALSE(std::filesystem::exists(cacheRoot));
+
+            NativeDurableFileSystem files;
+            auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+            REQUIRE(cache.HasValue());
+            auto verifiedCache = std::move(cache).Value();
+            REQUIRE(verifiedCache.Publish(archive).HasValue());
+            const auto reviewed = execute(true);
+            REQUIRE(reviewed.Outcome().HasError());
+            const auto &why = reviewed.Outcome().ErrorValue();
+            REQUIRE(why.diagnostics.size() == 1);
+            CHECK(why.diagnostics.front().code.Value() == "packages.host.update_version_migration_required");
+            CHECK(read(metadata / "packages.lock") == originalLock);
         }
         SECTION("an approved update can change a request while preserving the verified locked packages") {
             auto next = nlohmann::json::parse(originalRequest);
@@ -273,13 +315,33 @@ namespace {
                 fixture.Write("candidate.lock", nextLock.dump());
                 const auto preview = execute();
                 REQUIRE(preview.Outcome().HasValue());
+                const auto reviewed = execute(true);
                 const auto result = apply(std::get<std::string>(preview.Outcome().Value().fields.back().value));
                 if (!preserves) {
+                    REQUIRE(reviewed.Outcome().HasError());
+                    const auto &why = reviewed.Outcome().ErrorValue();
+                    CHECK(why.code.Value() == "packages.host.update_requires_migration_review");
+                    REQUIRE(why.diagnostics.size() == 1);
+                    CHECK(why.diagnostics.front().code.Value() == "packages.host.update_asset_content_changed");
+                    CHECK(why.diagnostics.front().path == "assets/data.bin");
                     REQUIRE(result.Outcome().HasError());
                     CHECK(result.Outcome().ErrorValue().code.Value() == "packages.host.update_requires_migration_review");
+                    REQUIRE(result.Outcome().ErrorValue().diagnostics.size() == 1);
+                    CHECK(result.Outcome().ErrorValue().diagnostics.front().path == "assets/data.bin");
                     CHECK(read(metadata / "packages.lock") == originalLock);
                 } else {
+                    REQUIRE(reviewed.Outcome().HasValue());
                     REQUIRE(result.Outcome().HasValue());
+                    CHECK(read(metadata / "packages.lock") == nextLock.dump());
+                    const auto rollback = admitted.Dispatch({.command = rollbackPreviewPath,
+                                                             .options = {NativeProject::PathOption("project", root),
+                                                                         NativeProject::PathOption("package-cache-root", cacheRoot)}},
+                                                            {.invocation = {3}, .configuration = &configuration.Value()});
+                    REQUIRE(rollback.Outcome().HasError());
+                    const auto &why = rollback.Outcome().ErrorValue();
+                    REQUIRE(why.diagnostics.size() == 1);
+                    CHECK(why.diagnostics.front().code.Value() == "packages.host.update_asset_removed");
+                    CHECK(why.diagnostics.front().path == "assets/extra.bin");
                     CHECK(read(metadata / "packages.lock") == nextLock.dump());
                 }
             }
