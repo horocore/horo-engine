@@ -579,6 +579,23 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.script.liveInstances == 0);
     }
 
+    TEST_CASE("An absent optional OpenXR extension preserves the usable baseline session", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view depth = "XR_KHR_composition_layer_depth";
+        auto request = fixture.Request();
+        const std::array extensions{NativeExtensionRequest{.name = depth}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const auto evidence = fixture.owner.ReadExtensionAdmission(request.candidate, depth);
+        REQUIRE(evidence.HasValue());
+        CHECK(evidence.Value().state == NativeExtensionState::Absent);
+        CHECK(evidence.Value().discoveredVersion == 0);
+        CHECK(evidence.Value().minimumVersion == 1);
+        CHECK_FALSE(fixture.owner.HasExtension(depth));
+        CHECK(fixture.owner.Borrow(request.candidate).HasValue());
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
+
     TEST_CASE("OpenXR extension evidence separates discovery version compatibility and missing dependencies", "[unit][xr][native]") {
         Fixture fixture;
         constexpr std::string_view depth = "XR_KHR_composition_layer_depth";
@@ -677,8 +694,10 @@ namespace Horo::Tests::OpenXR {
         const std::array extensions{NativeExtensionRequest{.name = extension, .promotedToCore = request.preflight.LoaderApiVersion()}};
         request.extensions = extensions;
         REQUIRE(fixture.owner.Create(request).HasValue());
+        const auto beforeRegistration = fixture.script.dispatchLookups;
         const auto first = fixture.owner.RegisterFeatureProvider(request.candidate, route);
         REQUIRE(first.HasValue());
+        CHECK(fixture.script.dispatchLookups == beforeRegistration + 1);
         REQUIRE_FALSE(fixture.owner.RegisterFeatureProvider(request.candidate, route).HasValue());
         const auto borrowed = fixture.owner.BorrowFeatureProvider(first.Value());
         REQUIRE(borrowed.HasValue());
@@ -686,6 +705,8 @@ namespace Horo::Tests::OpenXR {
         CHECK(borrowed.Value().admission.coreVersion == request.preflight.LoaderApiVersion());
         CHECK(borrowed.Value().function == reinterpret_cast<PFN_xrVoidFunction>(&Script::System));
         CHECK_FALSE(fixture.owner.HasExtension(extension));
+        CHECK(fixture.owner.BorrowFeatureProvider(first.Value()).HasValue());
+        CHECK(fixture.script.dispatchLookups == beforeRegistration + 1);
 
         fixture.owner.RevokeFeatureProvider(first.Value());
         CHECK(fixture.owner.BorrowFeatureProvider(first.Value()).HasError());

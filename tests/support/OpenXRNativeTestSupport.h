@@ -55,6 +55,7 @@ namespace Horo::Tests::OpenXR {
         bool throwUnknownAfterInstance{};
         std::uint32_t liveInstances{};
         std::uint32_t liveSessions{};
+        std::size_t dispatchLookups{};
         XrSession lastSession{}; /**< Observes the actual script-created native handle; never issues a Horo identity. */
 
         struct RetirementProbe final {
@@ -197,6 +198,7 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
+            ++active->dispatchLookups;
             *function = nullptr;
             if (active->absent == name || (instance != XR_NULL_HANDLE && active->instanceDispatchAbsent == name))
                 return XR_ERROR_FUNCTION_UNSUPPORTED;
