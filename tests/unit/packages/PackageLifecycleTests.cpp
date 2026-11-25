@@ -226,16 +226,31 @@ TEST_CASE("Package removal inventory retains native package identity until the o
     auto retained = fixture.service->Active();
     REQUIRE(retained);
     const auto package = fixture.enabled.front().package;
+    const std::array departing{LockedPackageReference{package, retained->install->Graph()->packages.front().lock.version}};
     const PackageRestoreGraph replacement;
     REQUIRE(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
     CHECK(fixture.service->MissingRetainedPackages(*retained->install->Graph()).Value().empty());
+    const auto active = fixture.service->ReserveRemoval(departing);
+    REQUIRE(active.HasError());
+    REQUIRE(active.ErrorValue().diagnostics.size() == 1);
+    CHECK(active.ErrorValue().diagnostics.front().path == package.Value());
 
     REQUIRE(fixture.service->Activate({}, PackageActivationBoundary::Quiescent, fixture.cancellation.Token()).HasValue());
     CHECK(fixture.service->Active()->activations.empty());
     CHECK(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
+    CHECK(fixture.service->ReserveRemoval(departing).HasError());
     retained.reset();
     fixture.service->FinalizeRetirements();
     CHECK(fixture.service->MissingRetainedPackages(replacement).Value().empty());
+    auto pending = fixture.service->ReserveRemoval(departing);
+    REQUIRE(pending.HasValue());
+    const auto blocked = fixture.Activate();
+    REQUIRE(blocked.HasError());
+    CHECK(blocked.ErrorValue().code.Value() == "packages.activation.removal_reserved");
+    CHECK(fixture.service->ReserveRemoval(departing).HasError());
+    std::jthread worker{[lease = std::move(pending).Value()]() mutable { lease.reset(); }};
+    worker.join();
+    CHECK(fixture.Activate().HasValue());
 }
 
 TEST_CASE("Package lifecycle shutdown during native preparation cannot publish or resurrect a graph", "[packages][activation]") {

@@ -144,11 +144,12 @@ namespace Horo::Application::Internal {
     /** @brief Publishes an approved removal and retains the prior metadata pair for explicit rollback.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.
-     * @param sources Read authorities for the same project and exact registration evidence.
-     * @pre The caller has checked remaining reference classes, completeness of registration evidence and executable ownership,
-     * and approved this removal.
+     * @param sources Read authorities for the same project, exact registration evidence, and a native withdrawal reservation
+     * or verified offline staging evidence.
+     * @pre The caller has checked remaining reference classes and approved this removal.
      * @details Acquires the shared project mutation lease before recovery or reference scans and retains it through publication.
-     * The project must still authorize removal before publishing the journal. Once published, the journal owns recovery.
+     * The project must still authorize removal before publishing the journal. Once published, the journal owns recovery and
+     * the old live reservation continues to block native activation.
      * @return Committed publication, potentially with a recovery diagnostic, or a pre-commit failure. */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                                   const PreparedPackageProject &expected,

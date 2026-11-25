@@ -33,6 +33,11 @@ namespace Horo::Packages::PackageLifecycleErrors {
                                            .summary = "The replacement would remove packages still owned by active or retiring modules.",
                                            .remediationHint =
                                                "Disable the affected modules and let their callbacks drain before retrying."};
+    const ErrorCodeDescriptor RemovalReserved{.domain = Domain,
+                                               .code = ErrorCode{"packages.activation.removal_reserved"},
+                                               .defaultSeverity = ErrorSeverity::Warning,
+                                               .summary = "The package session has a pending or published removal.",
+                                               .remediationHint = "Wait for the removal outcome and reload the project package plan."};
     const ErrorCodeDescriptor
         InvalidLifecycle{.domain = Domain,
                          .code = ErrorCode{"packages.activation.invalid_lifecycle"},

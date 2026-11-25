@@ -15,6 +15,8 @@ namespace Horo::Packages::PackageLifecycleErrors {
     extern const ErrorCodeDescriptor StaleInstall;
     /** @brief A replacement would remove one or more packages with retained executable owners. */
     extern const ErrorCodeDescriptor PackageInUse;
+    /** @brief Live removal has reserved or withdrawn this session's native admission. */
+    extern const ErrorCodeDescriptor RemovalReserved;
     /** @brief Owner-lane, lifecycle boundary or retained-owner limit rejected activation. */
     extern const ErrorCodeDescriptor InvalidLifecycle;
     /** @brief Private verified content could not be materialized. */

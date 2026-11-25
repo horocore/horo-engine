@@ -197,12 +197,13 @@ namespace Horo::Application::Internal {
 
         /** @brief Reads declared roles of one exact locked artifact and collects missing observations. */
         Result<void> InspectRuntimeCoverage(const PackageRemovalSources &sources, const Packages::PackageRestoreGraph &graph,
-                                            const Packages::LockedPackage &locked, std::vector<Diagnostic> &missing) {
+                                            const Packages::VerifiedPackageInstallRecord &install, const Packages::LockedPackage &locked,
+                                            std::vector<Diagnostic> &missing) {
             if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
                 return authority;
             if (!FindExactArchive(graph, locked))
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
-            const auto declared = Packages::InspectPackageRuntimeRoles(*sources.install, locked.package);
+            const auto declared = Packages::InspectPackageRuntimeRoles(install, locked.package);
             if (declared.HasError())
                 return Result<void>::Failure(declared.ErrorValue());
             for (const auto &role : declared.Value()) {
@@ -245,6 +246,27 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+        /** @brief Reads the sealed archives from the removal reservation and checks required registration coverage. */
+        Result<void> CheckLiveRemovalCoverage(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                              const Packages::PackageRemovalGraphPreview &removal) {
+            if (!sources.live)
+                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+            const auto install = sources.live->InstalledRecord();
+            const auto graph = install->Graph();
+            if (!graph || graph->requestHash != lock.RequestHash())
+                return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+            Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
+            const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
+            for (const auto &entry : lock.Packages()) {
+                if (!inspectRetained && !IsDeparting(removal, entry.package))
+                    continue;
+                if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, missing.diagnostics); checked.HasError())
+                    return checked;
+            }
+            if (!missing.diagnostics.empty())
+                return Result<void>::Failure(std::move(missing));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc OfflineRemovalContributionBlocker */
@@ -264,20 +286,7 @@ namespace Horo::Application::Internal {
             return valid;
         if (sources.offline)
             return CheckOfflineRemovalCoverage(*sources.offline, lock, removal);
-        const auto graph = sources.install ? sources.install->Graph() : nullptr;
-        if (!graph || graph->requestHash != lock.RequestHash())
-            return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
-        Error missing = ReferenceError("packages.host.runtime_registration_unobserved");
-        const bool inspectRetained = HasDepartingService(sources.registrations, lock, removal);
-        for (const auto &entry : lock.Packages()) {
-            if (!inspectRetained && !IsDeparting(removal, entry.package))
-                continue;
-            if (auto checked = InspectRuntimeCoverage(sources, *graph, entry, missing.diagnostics); checked.HasError())
-                return checked;
-        }
-        if (!missing.diagnostics.empty())
-            return Result<void>::Failure(std::move(missing));
-        return Result<void>::Success();
+        return CheckLiveRemovalCoverage(sources, lock, removal);
     }
 
     /** @copydoc InspectPackageServiceReferences */

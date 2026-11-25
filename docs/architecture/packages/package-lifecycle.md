@@ -454,6 +454,14 @@ checks and mutation. Application and editor consumers can call `InspectRemoval`
 for both graph effects and blockers. `PreviewRemoval` continues to provide the
 graph effects alone.
 
+Before a live removal can publish, the lifecycle owner issues a reservation
+for the same project and exact departing set. Packages with active or retiring
+module owners cannot be reserved. The reservation retains the verified install
+record and prevents activation while the transaction inspects references and
+publishes metadata. Dropping an uncommitted reservation reopens admission.
+Once the lock commits, admission on the old session remains revoked until
+the host composes from the new lock.
+
 `horo-engine package preview-remove --project /path/to/project --package-id
 com.vendor.pack` checks saved asset importer references and reports any locked
 contributions that require a live lifecycle owner. When those checks pass, it

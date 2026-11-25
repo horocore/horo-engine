@@ -152,7 +152,9 @@ namespace {
         ControlledSource source{graph.bytes};
         std::unique_ptr<PackageProjectHost> host;
         std::shared_ptr<const Platform::IProjectReadFiles> projectReadFiles;
-        std::shared_ptr<const Packages::VerifiedPackageInstallRecord> removalInstall;
+        std::optional<Packages::PackageInstallService> removalInstall;
+        std::unique_ptr<Packages::PackageLifecycleService> removalLifecycle;
+        std::shared_ptr<const Packages::PackageRemovalLease> removalLease;
 
         explicit HostFixture(bool runtime = false) : graph(runtime, runtime) {
             const auto root = std::filesystem::canonical(project.Path());
@@ -223,9 +225,20 @@ namespace {
                 Packages::PackageRestoreGraph{.requestHash = lock.Value().RequestHash(),
                                               .platform = {"linux", "x64", "horo-sdk-2"},
                                               .packages = std::move(installed)});
-            auto service = std::move(install).Value();
-            REQUIRE(service.Install(verified, {}).HasValue());
-            removalInstall = service.InstalledRecord();
+            removalInstall.emplace(std::move(install).Value());
+            REQUIRE(removalInstall->Install(verified, {}).HasValue());
+            auto lifecycle = Packages::PackageLifecycleService::Create(
+                *removalInstall, trust, {.temporaryRoot = std::filesystem::canonical(content.Path()),
+                                        .artifactGate = Horo::Tests::CreateAcceptingArtifactGate()});
+            REQUIRE(lifecycle.HasValue());
+            removalLifecycle = std::move(lifecycle).Value();
+            const auto request = Packages::ValidatedPackageRequest::Parse(Read("packages.json"));
+            REQUIRE(request.HasValue());
+            const auto plan = Packages::PackageRemovalPlan::Prepare(request.Value(), lock.Value(), graph.package);
+            REQUIRE(plan.HasValue());
+            auto reserved = removalLifecycle->ReserveRemoval(plan.Value().graph.removed);
+            REQUIRE(reserved.HasValue());
+            removalLease = std::move(reserved).Value();
             auto native = Platform::CreateNativeProjectReadFiles(root, "package-removal-test", 1);
             REQUIRE(native.HasValue());
             projectReadFiles = std::move(native).Value();
@@ -241,7 +254,7 @@ namespace {
         }
 
         PackageRemovalSources RemovalSources(const Assets::IAssetRegistrySource &assets) const {
-            return {assets, *projectReadFiles, ReadContext(), {}, removalInstall};
+            return {assets, *projectReadFiles, ReadContext(), {}, removalLease};
         }
 
         std::shared_ptr<PackageApplication> Acquire() {
@@ -257,6 +270,36 @@ namespace {
             return {};
         }
     };
+
+    TEST_CASE("Live removal requires the right project's reservation and revokes activation after commit", "[packages][application][host]") {
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        auto sources = fixture.RemovalSources(*assets);
+        const auto publish = [&] {
+            return PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        };
+        HostFixture other;
+        const auto otherAssets = other.AssetSource();
+        const auto oldLock = fixture.Read("packages.lock");
+        sources.live = other.RemovalSources(*otherAssets).live;
+        const auto foreign = publish();
+        REQUIRE(foreign.HasError());
+        CHECK(foreign.ErrorValue().code.Value() == "packages.host.removal_reservation_mismatch");
+        CHECK(fixture.Read("packages.lock") == oldLock);
+
+        sources.live = fixture.removalLease;
+        REQUIRE(publish().HasValue());
+        CHECK(fixture.Read("packages.lock") != oldLock);
+        sources.live.reset();
+        fixture.removalLease.reset();
+        const auto activated = fixture.removalLifecycle->Activate({}, Packages::PackageActivationBoundary::Quiescent, {});
+        REQUIRE(activated.HasError());
+        CHECK(activated.ErrorValue().code.Value() == "packages.activation.removal_reserved");
+    }
 
     TEST_CASE("Package metadata removal recovers both sides of the lock commit point", "[packages][application][host][removal-rollback]") {
         HostFixture fixture;

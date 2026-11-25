@@ -1,4 +1,5 @@
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Packages/PackageRestoreErrors.h"
 #include "PackageBehaviorReferences.h"
@@ -538,9 +539,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(std::move(*blocking));
         }
 
-        /** @brief Constructs replacement documents after checking departing importers against current assets. */
+        /** @brief Constructs replacement documents after checking native authority and saved references. */
         Result<MetadataDocuments> PrepareRemovalDocuments(const MetadataDocuments &previous, const Packages::PackageLockfileLimits &limits,
-                                                          const Packages::HoroPackageId &package, const PackageRemovalSources &sources) {
+                                                          const std::filesystem::path &root, const Packages::HoroPackageId &package,
+                                                          const PackageRemovalSources &sources) {
             using Prepared = Result<MetadataDocuments>;
             const auto validated = ValidateDocuments(previous.request, previous.lock, limits);
             if (validated.HasError())
@@ -548,12 +550,23 @@ namespace Horo::Application::Internal {
             const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
             if (plan.HasError())
                 return Prepared::Failure(plan.ErrorValue());
+            if (!sources.offline && (!sources.live || !sources.live->Matches(root, plan.Value().graph.removed)))
+                return Prepared::Failure(Error{ErrorCode{"packages.host.removal_reservation_mismatch"}, ErrorDomainId{"packages.host"}});
             if (auto references = CheckRemovalReferences(sources, validated.Value().lock, plan.Value().graph); references.HasError())
                 return Prepared::Failure(references.ErrorValue());
             MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
             if (!next.Fits(limits))
                 return Prepared::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
             return Prepared::Success(std::move(next));
+        }
+
+        /** @brief Keeps offline staging and live reservations exclusive and bound to the approved project. */
+        bool MatchesRemovalProject(const std::filesystem::path &root, const PreparedPackageProject &expected,
+                                   const PackageRemovalSources &sources) {
+            if (root != expected.application.restore.projectRoot)
+                return false;
+            return !sources.offline ||
+                   (!sources.live && sources.offline->ProjectRoot() == root && sources.offline->LockDigest() == expected.lockDigest);
         }
     }  // namespace
 
@@ -681,10 +694,8 @@ namespace Horo::Application::Internal {
         if (directory.HasError())
             return Publication::Failure(directory.ErrorValue());
         const auto &metadata = directory.Value();
-        if (metadata.parent_path() != expected.application.restore.projectRoot)
-            return Publication::Failure(MetadataConflict());
-        if (sources.offline &&
-            (sources.offline->ProjectRoot() != metadata.parent_path() || sources.offline->LockDigest() != expected.lockDigest))
+        const auto root = metadata.parent_path();
+        if (!MatchesRemovalProject(root, expected, sources))
             return Publication::Failure(MetadataConflict());
         auto acquired = AcquireProjectMutation(metadata, files, "package-removal");
         if (acquired.HasError())
@@ -694,11 +705,14 @@ namespace Horo::Application::Internal {
         const auto previous = ReadApprovedDocuments(metadata, policy.limits.lockfile, expected, files, cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
-        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, package, sources);
+        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, root, package, sources);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
         if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
             return Publication::Failure(stable.ErrorValue());
-        return CommitWithRollbackPoint(metadata, previous.Value(), next.Value(), policy.limits.lockfile, files, sources.context);
+        auto published = CommitWithRollbackPoint(metadata, previous.Value(), next.Value(), policy.limits.lockfile, files, sources.context);
+        if (published.HasValue() && sources.live)
+            sources.live->MarkPublished();
+        return published;
     }
 }  // namespace Horo::Application::Internal

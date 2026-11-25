@@ -7,6 +7,10 @@ namespace Horo::Assets {
     class IAssetRegistrySource;
 }
 
+namespace Horo::Packages {
+    class PackageRemovalLease;
+}
+
 namespace Horo::Application::Internal {
     /** @brief Inert evidence from one open project session. Unobserved modules remain unknown.
      * @details Retains observed behavior IDs and the latest service and system descriptors per exact package artifact and role. */
@@ -20,7 +24,7 @@ namespace Horo::Application::Internal {
         const Platform::IProjectReadFiles &files;
         Platform::ProjectReadContext context;
         std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> registrations;
-        std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install; /**< Sealed archive evidence for the current lock. */
+        std::shared_ptr<const Packages::PackageRemovalLease> live; /**< Owner-issued native reservation and sealed archive evidence. */
         const Packages::StagedPackageRestoreRecord *offline{}; /**< Read-only staging evidence for an asset-only withdrawal. */
     };
 

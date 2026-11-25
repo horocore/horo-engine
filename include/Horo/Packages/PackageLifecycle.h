@@ -17,6 +17,37 @@ namespace Horo::Extensions {
 }
 
 namespace Horo::Packages {
+    /** @brief Owner-issued guard held by the live package removal transaction.
+     * @details Holds the sealed install record and the exact departing packages. A failed or abandoned attempt releases native
+     * admission when its last lease ends. A published attempt keeps the old lifecycle closed to new activation until its host
+     * builds a session for the new lock. The lease does not borrow the lifecycle service and may be used or released on a worker.
+     */
+    class PackageRemovalLease final {
+    public:
+        ~PackageRemovalLease() noexcept;
+        PackageRemovalLease(const PackageRemovalLease &) = delete;
+        PackageRemovalLease &operator=(const PackageRemovalLease &) = delete;
+
+        /** @brief Checks that the pending claim covers this exact project and computed graph impact.
+         * @param projectRoot Canonical root of the transaction.
+         * @param departing Exact removal order from the validated plan.
+         * @return True only for the pending matching claim.
+         */
+        [[nodiscard]] bool Matches(const std::filesystem::path &projectRoot, std::span<const LockedPackageReference> departing) const;
+        /** @brief Returns the verified availability used when reserving removal. @return Owning immutable archive evidence. */
+        [[nodiscard]] std::shared_ptr<const VerifiedPackageInstallRecord> InstalledRecord() const noexcept;
+        /** @brief Revokes activation on the old session once the lock replacement commits.
+         * @pre The transaction reached its durable commit point while holding the project mutation lease. */
+        void MarkPublished() const noexcept;
+
+    private:
+        friend class PackageLifecycleService;
+        struct State;
+        /** @brief Seals the owner-created claim. @param state Exact project, plan, and installed archive evidence. */
+        explicit PackageRemovalLease(std::shared_ptr<State> state) noexcept;
+        std::shared_ptr<State> state_;
+    };
+
     /** @brief Runtime role declared by a verified package, independent of activation or host compatibility. */
     struct PackageRuntimeRoleDeclaration final {
         PackagePath descriptor;
@@ -167,6 +198,14 @@ namespace Horo::Packages {
          * @details Native ownership is matched by package ID. A generation from a different version of the same package can
          * still be draining. This inspection has no side effects. */
         [[nodiscard]] Result<std::vector<HoroPackageId>> RetainedRemovalPackages(std::span<const LockedPackageReference> departing) const;
+        /** @brief Reserves a live removal after checking that no departing package still owns executable modules.
+         * @param departing Exact nonempty departing set from the validated removal plan.
+         * @return Worker-safe lease or a typed owner, installed-record, or retained-module failure.
+         * @details Only the composition lane can reserve. This blocks new lifecycle activation while the lease lives and after
+         * publication. It does not publish metadata, mutate project documents, or unload modules.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PackageRemovalLease>> ReserveRemoval(
+            std::span<const LockedPackageReference> departing);
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */
         [[nodiscard]] PackageLifecycleState State() const;
         /** @brief Finalizes reverse-order retirement after outstanding importer/callback leases are released. */
