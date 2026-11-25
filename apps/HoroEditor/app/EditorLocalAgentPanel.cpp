@@ -559,6 +559,8 @@ namespace Horo::Editor {
                     LoadListeningReferences(Selection);
                 if (Button(locale, "xr_pointing_review", canReview))
                     LoadListeningReferences(Pointing);
+                if (Button(locale, "xr_location_review", canReview))
+                    LoadListeningReferences(Location);
                 if (!requestedListeningReferences_)
                     return;
                 DrawListeningReferenceResult(context, *requestedListeningReferences_);
@@ -575,7 +577,7 @@ namespace Horo::Editor {
                 const auto &locale = context.localization;
                 const auto width = ImGui::GetContentRegionAvail().x;
                 const auto &fonts = context.theme.fonts;
-                const bool pointing = source == AgentSceneReferenceSource::Pointing;
+                const bool pointing = source != AgentSceneReferenceSource::Selection;
                 if (!listeningReferences_) {
                     Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_unavailable" : "xr_reference_stale"),
                                     Theme::Muted(), fonts);
@@ -589,10 +591,16 @@ namespace Horo::Editor {
                                     fonts);
                 if (review.RequiresClarification())
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
-                for (const auto &candidate : review.Candidates())
+                for (const auto &candidate : review.Candidates()) {
                     Ui::WrappedText(width,
                                     LocalizedText(locale, ReferenceStateKey(candidate.state)) + " #" + std::to_string(candidate.object),
                                     Theme::Text(), fonts);
+                    if (const auto &point = candidate.worldPosition)
+                        Ui::WrappedText(width,
+                                        std::format("{} X {} · Y {} · Z {}", LocalizedText(locale, "xr_location_coordinates"), point->x,
+                                                    point->y, point->z),
+                                        Theme::Muted(), fonts);
+                }
             }
 
             EditorImmersiveListening *listening_{};

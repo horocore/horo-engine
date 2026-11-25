@@ -24,6 +24,7 @@ namespace Horo::Editor {
     struct EditorXrGeometryHit final {
         Runtime::SceneObjectId object;
         float distanceMeters{};
+        Math::Vec3 worldPosition;
     };
 
     namespace XrSceneDetail {

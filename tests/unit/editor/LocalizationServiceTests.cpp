@@ -208,6 +208,8 @@ namespace {
             "workspace.local_agent.xr_listening_discard",
             "workspace.local_agent.xr_reference_review",
             "workspace.local_agent.xr_pointing_review",
+            "workspace.local_agent.xr_location_review",
+            "workspace.local_agent.xr_location_coordinates",
             "workspace.local_agent.xr_pointing_unavailable",
             "workspace.local_agent.xr_pointing_empty",
             "workspace.local_agent.xr_reference_stale",

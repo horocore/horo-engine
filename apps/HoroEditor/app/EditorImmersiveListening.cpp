@@ -3,40 +3,38 @@
 #include "EditorMicrophonePermission.h"
 #include "MacOnDeviceSpeechProvider.h"
 
-#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Adds distinct hits to the caller's complete candidate set. */
-        bool AppendPointedObjects(const ImmersivePointingHits &pointing, const std::span<std::uint64_t> objects, std::size_t &count) {
-            if (pointing.count > pointing.hits.size())
-                return false;
-            for (const auto &hit : std::span{pointing.hits}.first(pointing.count)) {
-                const auto previous = objects.first(count);
-                if (std::ranges::find(previous, hit.object.value) != previous.end())
-                    continue;
-                if (count == objects.size())
-                    return false;
-                objects[count++] = hit.object.value;
+        /** @brief Requests complete point or object evidence from the workspace owning the captured revision. */
+        std::optional<AgentSceneReferenceReview> ReviewPointedReferences(
+            const ImmersiveCommandEnvelope &preview, const ImmersiveContextIdentity &identity,
+            const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
+            const AgentSceneReferenceSource source) {
+            const auto kind = source == AgentSceneReferenceSource::Location ? ImmersivePointingReviewKind::Locations
+                                                                            : ImmersivePointingReviewKind::Objects;
+            const auto pointing = CollectImmersivePointingHits(preview.Spatial(), identity.worldGeneration, kind);
+            if (!pointing)
+                return std::nullopt;
+            AgentSceneReferenceRequest request{.documentEpoch = identity.documentOpening,
+                                               .documentRevision = identity.documentRevision,
+                                               .worldGeneration = identity.worldGeneration,
+                                               .source = source};
+            if (kind == ImmersivePointingReviewKind::Locations) {
+                std::array<AgentSceneReferencePoint, ImmersivePointingHits::MaximumObjects> locations;
+                auto captured = std::span{locations}.first(pointing->count);
+                for (std::size_t index = 0; index < captured.size(); ++index)
+                    captured[index] = {pointing->hits[index].object.value, pointing->hits[index].worldPosition};
+                request.locations = captured;
+                return review(request);
             }
-            return true;
-        }
-
-        /** @brief Collects the complete union of aligned, same-world pointing candidates. */
-        std::optional<std::size_t> CollectPointedObjects(const ImmersiveCommandEnvelope &preview, std::span<std::uint64_t> objects) {
-            const auto world = preview.Speech().Context().Identity().worldGeneration;
-            std::size_t count{};
-            bool queried{};
-            for (const auto &observation : preview.Spatial()) {
-                if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
-                    continue;
-                if (!observation.controllerPress || !observation.pointing || observation.pointing->worldGeneration != world ||
-                    !AppendPointedObjects(*observation.pointing, objects, count))
-                    return std::nullopt;
-                queried = true;
-            }
-            return queried ? std::optional{count} : std::nullopt;
+            std::array<std::uint64_t, ImmersivePointingHits::MaximumObjects> objects;
+            auto captured = std::span{objects}.first(pointing->count);
+            for (std::size_t index = 0; index < captured.size(); ++index)
+                captured[index] = pointing->hits[index].object.value;
+            request.objects = captured;
+            return review(request);
         }
     }  // namespace
 
@@ -67,14 +65,9 @@ namespace Horo::Editor {
             return std::nullopt;
         const auto &context = preview_->Speech().Context();
         const auto &identity = context.Identity();
+        if (source != AgentSceneReferenceSource::Selection)
+            return ReviewPointedReferences(*preview_, identity, review, source);
         std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
-        if (source == AgentSceneReferenceSource::Pointing) {
-            const auto count = CollectPointedObjects(*preview_, objects);
-            if (!count)
-                return std::nullopt;
-            return review(
-                {identity.documentOpening, identity.documentRevision, identity.worldGeneration, std::span{objects}.first(*count), source});
-        }
         const auto selection = context.Selection();
         if (selection.size() > AgentSceneSelectionSnapshot::MaximumObjects)
             return std::nullopt;

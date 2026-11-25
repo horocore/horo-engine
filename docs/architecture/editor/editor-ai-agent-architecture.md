@@ -222,6 +222,8 @@ Ownership rules:
   authored geometry on the owner lane and applies a fixed triangle and hit budget.
   The Agent panel can review the same-world hits aligned to the speech interval.
   Incomplete hit queries produce an unavailable result.
+  Location review shows press-time world coordinates in meters for eligible
+  objects. Separate points on one object remain separate location candidates.
 - Each listening operation retains at most one fixed-capacity spatial history
   on the editor owner lane. A batch that exceeds the remaining capacity makes
   that history unusable for the utterance. Sealing stops both PCM and spatial

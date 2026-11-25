@@ -256,7 +256,8 @@ namespace Horo::Editor {
                 continue;
             if (count == output.size())
                 return Hits::Failure(GeometryError("XR pointing exceeded its hit capacity."));
-            hits[count++] = {{objects[index].value}, *distance.Value()};
+            const auto &world = segment.Value();
+            hits[count++] = {{objects[index].value}, *distance.Value(), world.origin + world.direction * *distance.Value()};
         }
         const auto complete = std::span{hits}.first(count);
         std::ranges::sort(complete, {}, [](const EditorXrGeometryHit &hit) {

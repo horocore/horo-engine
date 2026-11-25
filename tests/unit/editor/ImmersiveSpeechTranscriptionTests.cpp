@@ -205,6 +205,29 @@ namespace Horo::Editor {
             CHECK_FALSE(speechOnly.envelope->IsCurrent());
         }
 
+        TEST_CASE("Pointing review preserves distinct locations on the same object", "[agent][immersive][speech]") {
+            constexpr std::uint64_t World = 9;
+            ImmersiveSpatialObservation first{.controllerPress = ImmersiveControllerPress{},
+                                              .pointing = ImmersivePointingHits{.worldGeneration = World, .count = 1}};
+            first.candidate.shape = Math::Ray{};
+            first.pointing->hits[0] = {{17}, 2, {1, 2, 3}};
+            auto second = first;
+            second.pointing->hits[0].worldPosition = {1, 2, 4};
+            std::array observations{first, second, first};
+
+            using enum ImmersivePointingReviewKind;
+            const auto objects = CollectImmersivePointingHits(observations, World, Objects);
+            REQUIRE(objects);
+            CHECK(objects->count == 1);
+            const auto locations = CollectImmersivePointingHits(observations, World, Locations);
+            REQUIRE(locations);
+            REQUIRE(locations->count == 2);
+            CHECK(locations->hits[0].worldPosition == first.pointing->hits[0].worldPosition);
+            CHECK(locations->hits[1].worldPosition == second.pointing->hits[0].worldPosition);
+            ++observations[1].pointing->worldGeneration;
+            CHECK_FALSE(CollectImmersivePointingHits(observations, World, Locations));
+        }
+
         TEST_CASE("Immersive commands reject uncertain timing and mismatched provenance", "[agent][immersive][speech]") {
             using enum ImmersiveCommandStatus;
             SpeechFixture fixture;

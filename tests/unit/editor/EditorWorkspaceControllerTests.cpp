@@ -827,6 +827,27 @@ namespace {
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
     }
 
+    /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */
+    void VerifyPlayLocationReview(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene, const SceneObjectId selected) {
+        const auto captured = workspace.CaptureAgentSceneSelection();
+        REQUIRE(captured);
+        const std::array locations{AgentSceneReferencePoint{selected.value, {1, 2, 3}}, AgentSceneReferencePoint{selected.value, {1, 2, 4}},
+                                   AgentSceneReferencePoint{999999, {5, 6, 7}}};
+        const AgentSceneReferenceRequest request{.documentEpoch = captured->documentEpoch,
+                                                 .documentRevision = captured->documentRevision,
+                                                 .worldGeneration = scene.value,
+                                                 .source = AgentSceneReferenceSource::Location,
+                                                 .locations = locations};
+        const auto review = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(review);
+        REQUIRE(review->Candidates().size() == 3);
+        CHECK(review->RequiresClarification());
+        CHECK(review->Candidates()[0].worldPosition == locations[0].worldPosition);
+        CHECK(review->Candidates()[1].worldPosition == locations[1].worldPosition);
+        CHECK(review->Candidates()[2].state == AgentSceneReferenceState::Deleted);
+        CHECK_FALSE(review->Candidates()[2].worldPosition);
+    }
+
     /** @brief Verifies that immersive capture can borrow the Play scope with an empty selection. */
     void VerifyUnselectedPlayCapture(EditorWorkspaceController &workspace, const Runtime::SceneRuntimeId scene) {
         REQUIRE(workspace.ViewModel().selectedObjects.empty());
@@ -983,6 +1004,7 @@ namespace {
         CHECK(workspace.ViewModel().primarySelection == original);
         CHECK(workspace.ViewModel().hierarchyRevealObject == original);
         VerifyPlayReferenceReview(workspace, first.scene, original);
+        VerifyPlayLocationReview(workspace, first.scene, original);
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);

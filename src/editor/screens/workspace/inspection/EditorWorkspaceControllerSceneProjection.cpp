@@ -630,6 +630,27 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Projects press-time coordinates only for objects still eligible in this Play scene. */
+        std::optional<AgentSceneReferenceReview> ReviewAgentReferenceLocations(const AgentSceneReferenceRequest &request,
+                                                                               const std::span<const SceneObjectSnapshot> objects,
+                                                                               const Runtime::RuntimeSceneView &play) {
+            if (!request.objects.empty() || request.locations.size() > AgentSceneSelectionSnapshot::MaximumObjects)
+                return std::nullopt;
+            AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
+            for (const auto &location : request.locations) {
+                if (!Math::IsFinite(location.worldPosition))
+                    return std::nullopt;
+                const auto state = ClassifyAgentReference(objects, true, play, {location.object});
+                auto &candidate = review.candidates[review.count++];
+                candidate = {location.object, state};
+                if (state == AgentSceneReferenceState::Available)
+                    candidate.worldPosition = location.worldPosition;
+            }
+            return review;
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceController::ReviewAgentSceneReferences */
     std::optional<AgentSceneReferenceReview> EditorWorkspaceController::ReviewAgentSceneReferences(
         const AgentSceneReferenceRequest &request) const {
@@ -641,6 +662,10 @@ namespace Horo::Editor {
             return std::nullopt;
 
         const auto objects = m_document.Objects();
+        if (request.source == AgentSceneReferenceSource::Location)
+            return ReviewAgentReferenceLocations(request, objects, *play);
+        if (!request.locations.empty())
+            return std::nullopt;
         const auto &selection = m_selection.Current().objects;
         AgentSceneReferenceReview review{.documentRevision = request.documentRevision};
         for (const auto object : request.objects) {

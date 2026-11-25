@@ -72,7 +72,44 @@ namespace Horo::Editor {
                 return AmbiguousTiming;
             return Overlap(sample.earliest, sample.latest, phrase);
         }
+
+        /** @brief Adds a complete support set without picking a preferred hit. */
+        bool AppendPointingHits(ImmersivePointingHits &output, const ImmersivePointingHits &source,
+                                const ImmersivePointingReviewKind kind) noexcept {
+            if (source.count > source.hits.size())
+                return false;
+            for (const auto &hit : std::span{source.hits}.first(source.count)) {
+                const auto previous = std::span{output.hits}.first(output.count);
+                const auto sameHit = [&](const ImmersivePointingHits::Hit &prior) {
+                    return prior.object == hit.object &&
+                           (kind == ImmersivePointingReviewKind::Objects || prior.worldPosition == hit.worldPosition);
+                };
+                if (std::ranges::any_of(previous, sameHit))
+                    continue;
+                if (output.count == output.hits.size())
+                    return false;
+                output.hits[output.count++] = hit;
+            }
+            return true;
+        }
     }  // namespace
+
+    /** @copydoc CollectImmersivePointingHits */
+    std::optional<ImmersivePointingHits> CollectImmersivePointingHits(const std::span<const ImmersiveSpatialObservation> aligned,
+                                                                      const std::uint64_t worldGeneration,
+                                                                      const ImmersivePointingReviewKind kind) noexcept {
+        ImmersivePointingHits result{.worldGeneration = worldGeneration};
+        bool queried{};
+        for (const auto &observation : aligned) {
+            if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
+                continue;
+            if (!observation.controllerPress || !observation.pointing || observation.pointing->worldGeneration != worldGeneration ||
+                !AppendPointingHits(result, *observation.pointing, kind))
+                return std::nullopt;
+            queried = true;
+        }
+        return queried ? std::optional{result} : std::nullopt;
+    }
 
     /** @copydoc ImmersiveCommandEnvelope::IsCurrent */
     bool ImmersiveCommandEnvelope::IsCurrent(const XR::XRInteractionCutoff &cutoff) const noexcept {

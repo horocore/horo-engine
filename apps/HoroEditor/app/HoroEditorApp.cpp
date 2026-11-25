@@ -2121,7 +2121,7 @@ namespace Horo::Editor {
                     return std::nullopt;
                 ImmersivePointingHits copied{.worldGeneration = frame.source.scene.value, .count = result.Value()};
                 for (std::size_t index = 0; index < copied.count; ++index)
-                    copied.hits[index] = {{hits[index].object.value}, hits[index].distanceMeters};
+                    copied.hits[index] = {{hits[index].object.value}, hits[index].distanceMeters, hits[index].worldPosition};
                 return copied;
             }
 

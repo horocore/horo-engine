@@ -3,6 +3,7 @@
 /** @file AgentSceneSelectionSnapshot.h @brief Bounded scene selection evidence for explicit agent consent. */
 
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Math/SceneMath.h"
 
 #include <array>
 #include <cstddef>
@@ -80,16 +81,24 @@ namespace Horo::Editor {
     /** @brief Source of the object IDs carried by a scene review request. */
     enum class AgentSceneReferenceSource : std::uint8_t {
         Selection,
-        Pointing
+        Pointing,
+        Location
     };
 
-    /** @brief Read-only request to review the captured selection against its exact authoring and Play scope. */
+    /** @brief One press-time location on an authored object in the issued Play world. */
+    struct AgentSceneReferencePoint final {
+        std::uint64_t object{};
+        Math::Vec3 worldPosition;
+    };
+
+    /** @brief Read-only request to review captured references against their exact authoring and Play scope. */
     struct AgentSceneReferenceRequest final {
         std::uint64_t documentEpoch{};
         std::uint64_t documentRevision{};
         std::uint64_t worldGeneration{};
         std::span<const std::uint64_t> objects;
         AgentSceneReferenceSource source{AgentSceneReferenceSource::Selection};
+        std::span<const AgentSceneReferencePoint> locations;
     };
 
     /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */
@@ -97,13 +106,14 @@ namespace Horo::Editor {
         struct Candidate final {
             std::uint64_t object{};
             AgentSceneReferenceState state{AgentSceneReferenceState::OutOfScope};
+            std::optional<Math::Vec3> worldPosition;
         };
 
         std::uint64_t documentRevision{};
         std::array<Candidate, AgentSceneSelectionSnapshot::MaximumObjects> candidates{};
         std::size_t count{};
 
-        /** @brief Indicates that selection alone cannot establish the intended referent. */
+        /** @brief Indicates that the captured evidence admits multiple distinct referents. */
         [[nodiscard]] bool RequiresClarification() const noexcept {
             return count > 1;
         }

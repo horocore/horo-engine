@@ -23,6 +23,7 @@ namespace Horo::Editor {
         struct Hit final {
             SceneSource::SceneObjectId object;
             float distanceMeters{};
+            Math::Vec3 worldPosition;
         };
 
         std::uint64_t worldGeneration{};
@@ -46,6 +47,20 @@ namespace Horo::Editor {
         XR::XRInteractionCutoff cutoff;
         std::span<const ImmersiveSpatialObservation> observations;
     };
+
+    enum class ImmersivePointingReviewKind : std::uint8_t {
+        Objects,
+        Locations
+    };
+
+    /** @brief Collects complete same-world pointing evidence from spatial observations already aligned to final speech.
+     * @param aligned Borrowed observations admitted by the command envelope.
+     * @param worldGeneration Exact Play occurrence in the command context.
+     * @param kind Selects whether distinct points on the same object remain separate.
+     * @return Complete evidence, including empty for a verified miss, or no value for incomplete evidence. */
+    [[nodiscard]] std::optional<ImmersivePointingHits> CollectImmersivePointingHits(std::span<const ImmersiveSpatialObservation> aligned,
+                                                                                    std::uint64_t worldGeneration,
+                                                                                    ImmersivePointingReviewKind kind) noexcept;
 
     enum class ImmersiveCommandStatus : std::uint8_t {
         Aligned,

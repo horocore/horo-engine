@@ -145,6 +145,8 @@ namespace {
         CHECK(hits[1].object.value == 1);
         CHECK(NearlyEqual(hits[0].distanceMeters, 2));
         CHECK(NearlyEqual(hits[1].distanceMeters, 4));
+        CHECK(hits[0].worldPosition == Math::Vec3{0.2F, 0.2F, 2.0F});
+        CHECK(hits[1].worldPosition == Math::Vec3{0.2F, 0.2F, 0.0F});
         hits.front() = {{}, -1};
         CHECK(QueryPointingDraws(ray, instances, objects, meshes, std::span{hits}.first(1)).HasError());
         CHECK(hits.front().distanceMeters == -1);
