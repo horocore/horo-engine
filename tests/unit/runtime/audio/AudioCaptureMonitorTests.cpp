@@ -70,6 +70,9 @@ namespace Horo::Audio::Backend {
             auto stale = fixture.route;
             ++stale.captureGeneration;
             CHECK(ReadAudioMonitorBlock(buffer, stale, {5, 21'000}, block, pcm) == AudioMonitorRead::Cancelled);
+            auto wrongBus = fixture.route;
+            wrongBus.bus.owner = AudioRuntimeId::Create(10).Value();
+            CHECK(ReadAudioMonitorBlock(buffer, wrongBus, {5, 21'000}, block, pcm) == AudioMonitorRead::Cancelled);
             CHECK((pcm == std::array{0.0F, 0.0F, 99.0F}));
             REQUIRE(ReadAudioMonitorBlock(buffer, fixture.route, {5, 21'000}, block, pcm) == AudioMonitorRead::Copied);
             CHECK(block.sequence == 1);
@@ -92,6 +95,15 @@ namespace Horo::Audio::Backend {
             REQUIRE(AcceptAudioEchoReference(route, reference, fixture.output, {5, 2}));
             SECTION("reference was not opted in") {
                 route.echoReference = AudioEchoReferenceTap::Disabled;
+            }
+            SECTION("the capture identity is missing") {
+                route.input = {};
+            }
+            SECTION("the capture generation is missing") {
+                route.captureGeneration = 0;
+            }
+            SECTION("the bus belongs to another output runtime") {
+                route.bus.owner = AudioRuntimeId::Create(10).Value();
             }
             SECTION("the output changed") {
                 ++reference.output.formatRevision;

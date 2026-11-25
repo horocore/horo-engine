@@ -10,10 +10,20 @@ namespace Horo::Audio::Backend {
     namespace {
         constexpr std::uint64_t MaximumQueueAgeNs = 250'000'000;
 
-        /** @brief Matches the exact admitted capture identity and rejects empty scope values. */
+        /** @brief Rejects an unscoped monitor input before either signal can be consumed. */
+        bool HasCaptureIdentity(const AudioCaptureMonitorRoute &route) noexcept {
+            return route.input.IsValid() && route.captureGeneration != 0 && route.clockDomain != 0;
+        }
+
+        /** @brief Matches the exact admitted capture identity. */
         bool BoundCapture(const AudioCaptureMonitorRoute &route, const AudioCaptureBufferDescriptor &capture) noexcept {
-            return route.input.IsValid() && route.captureGeneration != 0 && route.clockDomain != 0 && route.input == capture.device &&
-                   route.captureGeneration == capture.generation && route.clockDomain == capture.clockDomain;
+            return HasCaptureIdentity(route) && route.input == capture.device && route.captureGeneration == capture.generation &&
+                   route.clockDomain == capture.clockDomain;
+        }
+
+        /** @brief Keeps the destination bus within the admitted playback runtime. */
+        bool HasScopedBus(const AudioCaptureMonitorRoute &route) noexcept {
+            return route.bus.IsValid() && route.bus.owner == route.output.device.owner;
         }
 
         /** @brief Requires independently refreshed output evidence in the same clock domain. */
@@ -30,6 +40,11 @@ namespace Horo::Audio::Backend {
                    route.gain <= 1.0F &&
                    (route.echoReference == AudioEchoReferenceTap::Disabled ||
                     route.echoReference == AudioEchoReferenceTap::ProgramBeforeMonitor);
+        }
+
+        /** @brief Checks consumer-side route evidence before acquiring the unread input block. */
+        bool AdmittedMonitorInput(const AudioCaptureMonitorRoute &route, const AudioCaptureBufferDescriptor &capture) noexcept {
+            return BoundCapture(route, capture) && HasScopedBus(route) && ValidPolicy(route);
         }
 
         /** @brief Bounds the playable output, including finite source overload and invalid native sample values. */
@@ -52,7 +67,7 @@ namespace Horo::Audio::Backend {
             return Result<void>::Failure(MakeError(AudioErrors::IdentityInvalid));
         if (!MatchesAudioDeviceEpoch(activeOutput, route.output))
             return Result<void>::Failure(MakeError(AudioErrors::DeviceUnavailable));
-        if (!route.bus.IsValid() || route.bus.owner != activeOutput.device.owner)
+        if (!HasScopedBus(route))
             return Result<void>::Failure(MakeError(AudioErrors::IdentityInvalid));
         if (!ValidPolicy(route))
             return Result<void>::Failure(MakeError(AudioErrors::CapturePermissionDenied));
@@ -64,7 +79,7 @@ namespace Horo::Audio::Backend {
                                            const AudioMonotonicTimestamp now, AudioCapturedBlock &block,
                                            const std::span<AudioSample> output) noexcept {
         const auto *descriptor = buffer.Descriptor();
-        if (!descriptor || !BoundCapture(route, *descriptor) || !ValidPolicy(route))
+        if (!descriptor || !AdmittedMonitorInput(route, *descriptor))
             return AudioMonitorRead::Cancelled;
         AudioCapturedBlock candidate;
         switch (buffer.TryRead(candidate, output)) {
@@ -91,8 +106,9 @@ namespace Horo::Audio::Backend {
     /** @copydoc AcceptAudioEchoReference */
     bool AcceptAudioEchoReference(const AudioCaptureMonitorRoute &route, const AudioEchoReferenceBlock &reference,
                                   const AudioDeviceEpoch &activeOutput, const AudioMonotonicTimestamp now) noexcept {
-        return ValidPolicy(route) && route.clockDomain != 0 && route.echoReference == AudioEchoReferenceTap::ProgramBeforeMonitor &&
-               reference.tap == route.echoReference && MatchesAudioDeviceEpoch(activeOutput, route.output) &&
-               reference.output == route.output && IsTimely(route, reference.start, now) && CompleteReference(reference);
+        return HasCaptureIdentity(route) && HasScopedBus(route) && ValidPolicy(route) &&
+               route.echoReference == AudioEchoReferenceTap::ProgramBeforeMonitor && reference.tap == route.echoReference &&
+               MatchesAudioDeviceEpoch(activeOutput, route.output) && reference.output == route.output &&
+               IsTimely(route, reference.start, now) && CompleteReference(reference);
     }
 }  // namespace Horo::Audio::Backend
