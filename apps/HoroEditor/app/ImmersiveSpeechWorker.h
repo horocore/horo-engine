@@ -36,6 +36,8 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus Seal(Audio::Backend::AudioCaptureBuffer tail) noexcept;
         /** @brief Reads a partial or terminal update without blocking while the worker is busy. */
         [[nodiscard]] SpeechTranscriptionUpdate Poll();
+        /** @brief Checks whether the current listening operation issued this still-admissible evidence. */
+        [[nodiscard]] bool OwnsEvidence(const ImmersiveSpeechEvidence &evidence) const noexcept;
         /** @brief Invalidates queued and already-delivered evidence and requests worker cancellation. */
         void Cancel() noexcept;
         /** @brief Reports whether one operation still needs to be drained. */

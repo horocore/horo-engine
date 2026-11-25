@@ -232,6 +232,11 @@ namespace Horo::Editor {
                                      : SpeechTranscriptionUpdate{StaleContext, {}};
     }
 
+    /** @copydoc ImmersiveSpeechWorker::OwnsEvidence */
+    bool ImmersiveSpeechWorker::OwnsEvidence(const ImmersiveSpeechEvidence &evidence) const noexcept {
+        return state_ && evidence.stop_ == state_->cancel.get_token() && evidence.IsCurrent();
+    }
+
     /** @copydoc ImmersiveSpeechWorker::Cancel */
     void ImmersiveSpeechWorker::Cancel() noexcept {
         if (state_)

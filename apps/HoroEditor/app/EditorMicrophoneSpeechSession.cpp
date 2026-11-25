@@ -42,7 +42,9 @@ namespace Horo::Editor {
             channels_ = lease.source.format.layout.orderedChannels.size();
             scratch_.resize(lease.source.maximumFrames * channels_);
             const auto status = worker_.Start(owner, context, lease.source, lease.revoked, std::move(provider), locale, minimumConfidence);
-            if (status != Accepted)
+            if (status == Accepted)
+                spatial_.Begin(context);
+            else
                 Cancel();
             return status;
         } catch (const std::bad_alloc &) {
@@ -51,17 +53,37 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorMicrophoneSpeechSession::RecordSpatial */
+    ImmersiveSpatialCaptureStatus EditorMicrophoneSpeechSession::RecordSpatial(
+        const ImmersivePlanningContext &context, const std::span<const ImmersiveSpatialObservation> observations) noexcept {
+        return spatial_.Record(context, observations);
+    }
+
     /** @copydoc EditorMicrophoneSpeechSession::Seal */
     SpeechTranscriptionStatus EditorMicrophoneSpeechSession::Seal(const bool foreground) {
         if (generation_ == 0 || sealed_ || !worker_.Busy())
             return Closed;
         auto tail = microphone_.SealSpeechCapture(generation_, foreground);
         const auto status = tail.HasValue() ? worker_.Seal(std::move(tail).Value()) : CaptureInterrupted;
-        if (status == Accepted)
+        if (status == Accepted) {
             sealed_ = true;
-        else
+            spatial_.Seal();
+        } else {
             Cancel();
+        }
         return status;
+    }
+
+    /** @copydoc EditorMicrophoneSpeechSession::AssembleCommand */
+    ImmersiveCommandAssembly EditorMicrophoneSpeechSession::AssembleCommand(const bool foreground, const ImmersiveSpeechEvidence &speech,
+                                                                            const XR::XRInteractionCutoff &cutoff) {
+        if (generation_ == 0 || microphone_.ReconcileSpeechLease(generation_, foreground).HasError()) {
+            Cancel();
+            return {ImmersiveCommandStatus::StaleEvidence, {}};
+        }
+        if (!worker_.OwnsEvidence(speech))
+            return {ImmersiveCommandStatus::StaleEvidence, {}};
+        return spatial_.Assemble(speech, cutoff);
     }
 
     /** @copydoc EditorMicrophoneSpeechSession::Advance */
@@ -108,6 +130,7 @@ namespace Horo::Editor {
     /** @copydoc EditorMicrophoneSpeechSession::Cancel */
     void EditorMicrophoneSpeechSession::Cancel() noexcept {
         worker_.Cancel();
+        spatial_.Reset();
         if (generation_ != 0)
             microphone_.CancelSpeechCapture(std::exchange(generation_, 0));
         Security::SecureZero(std::as_writable_bytes(std::span{scratch_}));

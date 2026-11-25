@@ -194,6 +194,10 @@ Ownership rules:
   explicitly. Missing spatial evidence produces a speech-only result. The
   envelope retains the speech lease and rechecks XR origin and binding revisions
   when the editor adopts it.
+- Each listening operation retains at most one fixed-capacity spatial history
+  on the editor owner lane. A batch that exceeds the remaining capacity makes
+  that history unusable for the utterance. Sealing stops both PCM and spatial
+  input before the worker completes, and cancellation clears the observations.
 - Physics, XR interaction, and gameplay own point, grab, contact, throw, and
   trigger mechanics. AIA may adapt those events into spatial evidence but does
   not own the mechanics or gameplay meaning.

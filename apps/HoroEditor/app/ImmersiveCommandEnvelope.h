@@ -32,7 +32,8 @@ namespace Horo::Editor {
         PartialSpeech,
         InvalidSpatialEvidence,
         AmbiguousTiming,
-        CapacityExceeded
+        CapacityExceeded,
+        SpatialCaptureOpen
     };
 
     struct ImmersiveCommandAssembly;
@@ -86,5 +87,43 @@ namespace Horo::Editor {
     struct ImmersiveCommandAssembly final {
         ImmersiveCommandStatus status;
         std::optional<ImmersiveCommandEnvelope> envelope;
+    };
+
+    enum class ImmersiveSpatialCaptureStatus : std::uint8_t {
+        Recorded,
+        Closed,
+        StaleContext,
+        CapacityExceeded
+    };
+
+    /** @brief Fixed storage for admitted XR evidence during one listening operation.
+     * @details All operations belong to the editor owner lane. Source owners submit observations in publication
+     * order with measured timestamps. Once sealed, the history remains frozen until the speech worker completes.
+     */
+    class ImmersiveSpatialCapture final {
+    public:
+        /** @brief Clears the last operation and opens one capture using the exact current planning generation. */
+        void Begin(const ImmersivePlanningContext &context) noexcept;
+
+        /** @brief Copies one complete, ordered batch without allocation or partially admitting an oversized batch. */
+        [[nodiscard]] ImmersiveSpatialCaptureStatus Record(const ImmersivePlanningContext &context,
+                                                           std::span<const ImmersiveSpatialObservation> observations) noexcept;
+
+        /** @brief Stops recording before the detached speech worker produces its final result. */
+        void Seal() noexcept;
+
+        /** @brief Assembles final evidence using the latest cutoff from the same XR owner. */
+        [[nodiscard]] ImmersiveCommandAssembly Assemble(const ImmersiveSpeechEvidence &speech,
+                                                        const XR::XRInteractionCutoff &cutoff) const noexcept;
+
+        /** @brief Discards the captured generation and its stored observations. */
+        void Reset() noexcept;
+
+    private:
+        std::optional<ImmersivePlanningContext> context_;
+        std::array<ImmersiveSpatialObservation, ImmersiveCommandEnvelope::MaximumObservations> observations_{};
+        std::size_t count_{};
+        bool sealed_{};
+        bool overflowed_{};
     };
 }  // namespace Horo::Editor

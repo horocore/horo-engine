@@ -252,6 +252,62 @@ namespace Horo::Editor {
                       .status == CapacityExceeded);
         }
 
+        TEST_CASE("Immersive listening freezes one context's spatial history at seal", "[agent][immersive][speech]") {
+            using RecordStatus = ImmersiveSpatialCaptureStatus;
+            using CommandStatus = ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            ImmersiveSpatialCapture capture;
+            const auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            const std::span observation{&sample, 1};
+            CHECK(capture.Record(context, observation) == RecordStatus::Closed);
+            capture.Begin(context);
+            CHECK(capture.Assemble(speech, sample.cutoff).status == CommandStatus::SpatialCaptureOpen);
+            SpeechFixture foreign;
+            CHECK(capture.Record(foreign.Context(), observation) == RecordStatus::StaleContext);
+            REQUIRE(capture.Record(context, observation) == RecordStatus::Recorded);
+            capture.Seal();
+            CHECK(capture.Record(context, observation) == RecordStatus::Closed);
+            const auto command = capture.Assemble(speech, sample.cutoff);
+            REQUIRE(command.status == CommandStatus::Aligned);
+            REQUIRE(command.envelope);
+            REQUIRE(command.envelope->Spatial().size() == 1);
+            CHECK(command.envelope->Spatial().front().cutoff == sample.cutoff);
+            fixture.owner.Revoke();
+            CHECK(capture.Assemble(speech, sample.cutoff).status == CommandStatus::StaleEvidence);
+        }
+
+        TEST_CASE("Immersive listening never assembles a truncated spatial history", "[agent][immersive][speech]") {
+            using RecordStatus = ImmersiveSpatialCaptureStatus;
+            using CommandStatus = ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            std::array<ImmersiveSpatialObservation, ImmersiveCommandEnvelope::MaximumObservations> samples;
+            for (std::size_t index = 0; index < samples.size(); ++index) {
+                const auto timestamp = 1'000'000 + index * 1'000;
+                samples[index] = SpatialObservation(context, index + 1, timestamp, timestamp);
+            }
+            CHECK(capture.Record(context, samples) == RecordStatus::Recorded);
+            CHECK(capture.Record(context, std::span{samples}.first(1)) == RecordStatus::CapacityExceeded);
+            capture.Seal();
+            const auto overflow = capture.Assemble(speech, samples.back().cutoff);
+            CHECK(overflow.status == CommandStatus::CapacityExceeded);
+            CHECK_FALSE(overflow.envelope);
+
+            capture.Reset();
+            CHECK(capture.Assemble(speech, samples.back().cutoff).status == CommandStatus::StaleEvidence);
+            capture.Begin(context);
+            capture.Seal();
+            const auto restarted = capture.Assemble(speech, {});
+            REQUIRE(restarted.status == CommandStatus::SpeechOnly);
+            REQUIRE(restarted.envelope);
+            CHECK(restarted.envelope->Spatial().empty());
+        }
+
         TEST_CASE("Immersive speech issues owned partial and final evidence after sealing PCM", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             fixture.StartWithAudio();

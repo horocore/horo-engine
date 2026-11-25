@@ -145,7 +145,11 @@ namespace Horo::Editor {
             REQUIRE(completed.status == Finished);
             REQUIRE(completed.evidence);
             CHECK(completed.evidence->Hypothesis().text == "Both blocks");
+            CHECK(fixture.worker.OwnsEvidence(*completed.evidence));
+            const ImmersiveSpeechWorker foreign;
+            CHECK_FALSE(foreign.OwnsEvidence(*completed.evidence));
             fixture.capture.request_stop();
+            CHECK_FALSE(fixture.worker.OwnsEvidence(*completed.evidence));
             CHECK_FALSE(completed.evidence->IsCurrent());
             CHECK_FALSE(partial.evidence->IsCurrent());
         }

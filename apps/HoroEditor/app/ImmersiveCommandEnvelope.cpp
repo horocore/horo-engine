@@ -1,5 +1,6 @@
 #include "ImmersiveCommandEnvelope.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
@@ -99,5 +100,58 @@ namespace Horo::Editor {
         }
         cutoff_ = history.cutoff;
         return count_ ? Aligned : SpeechOnly;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::Begin */
+    void ImmersiveSpatialCapture::Begin(const ImmersivePlanningContext &context) noexcept {
+        Reset();
+        if (context.IsCurrent())
+            context_ = context;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::Record */
+    ImmersiveSpatialCaptureStatus ImmersiveSpatialCapture::Record(
+        const ImmersivePlanningContext &context, const std::span<const ImmersiveSpatialObservation> observations) noexcept {
+        using Status = ImmersiveSpatialCaptureStatus;
+        if (!context_ || sealed_)
+            return Status::Closed;
+        if (!context_->SharesGeneration(context) || !context.IsCurrent())
+            return Status::StaleContext;
+        if (overflowed_ || observations.size() > observations_.size() - count_) {
+            overflowed_ = true;
+            return Status::CapacityExceeded;
+        }
+        std::ranges::copy(observations, std::span{observations_}.subspan(count_).begin());
+        count_ += observations.size();
+        return Status::Recorded;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::Seal */
+    void ImmersiveSpatialCapture::Seal() noexcept {
+        sealed_ = true;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::Assemble */
+    ImmersiveCommandAssembly ImmersiveSpatialCapture::Assemble(const ImmersiveSpeechEvidence &speech,
+                                                               const XR::XRInteractionCutoff &cutoff) const noexcept {
+        if (!context_ || !context_->IsCurrent())
+            return {StaleEvidence, {}};
+        if (!sealed_)
+            return {SpatialCaptureOpen, {}};
+        if (overflowed_)
+            return {CapacityExceeded, {}};
+        if (count_ == 0)
+            return ImmersiveCommandEnvelope::Assemble(*context_, speech);
+        return ImmersiveCommandEnvelope::Assemble(*context_, speech,
+                                                  ImmersiveSpatialHistoryView{*context_, cutoff, std::span{observations_}.first(count_)});
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::Reset */
+    void ImmersiveSpatialCapture::Reset() noexcept {
+        std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
+        count_ = 0;
+        context_.reset();
+        overflowed_ = false;
+        sealed_ = false;
     }
 }  // namespace Horo::Editor

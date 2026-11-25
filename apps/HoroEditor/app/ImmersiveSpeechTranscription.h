@@ -107,6 +107,7 @@ namespace Horo::Editor {
 
     private:
         friend class ImmersiveSpeechTranscription;
+        friend class ImmersiveSpeechWorker;
         static constexpr std::size_t MaximumLocaleBytes = 35;
         ImmersivePlanningContext context_;
         std::stop_token release_;
