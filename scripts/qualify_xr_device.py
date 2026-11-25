@@ -115,7 +115,7 @@ def validate_check(value: object, name: str) -> None:
         require(check["issue"] is None, f"Use PassedWithLimitations for a qualified {name} observation")
 
 
-def validate_display(value: object) -> None:
+def validate_display(value: object) -> dict:
     display = fields(value, {"evidenceSha256", "refreshMilliHertz", "viewExtents"}, "display enumeration")
     require(is_digest(display["evidenceSha256"]), "Display must reference a runtime capture")
     refresh = display["refreshMilliHertz"]
@@ -128,6 +128,34 @@ def validate_display(value: object) -> None:
     for view in views:
         extent = fields(view, {"width", "height"}, "view extent")
         require(all(type(size) is int and 0 < size <= 65536 for size in extent.values()), "Invalid runtime view extent")
+    return display
+
+
+def validate_summary(status: str, checks: dict) -> None:
+    """Reject aggregate outcomes that contradict the individual observations."""
+    check_statuses = {check["status"] for check in checks.values()}
+    if status == "Passed":
+        require(check_statuses == {"Passed"}, "A fully passed record requires every check to pass")
+    elif status == "PassedWithLimitations":
+        require("Failed" not in check_statuses, "A failed check requires a Failed record")
+        require(bool(check_statuses & {"Passed", "PassedWithLimitations"}),
+                "A record passed with limitations requires a passing observation")
+        require(check_statuses != {"Passed"}, "Record the limitation in the affected check")
+    elif status == "NotRun":
+        require(check_statuses == {"NotRun"}, "A NotRun record cannot contain completed checks")
+
+
+def validate_display_check(value: object, check: dict) -> None:
+    """Bind enumerated display data to the capture that supports the check."""
+    result = check["status"]
+    if result in {"Passed", "PassedWithLimitations"}:
+        display = validate_display(value)
+        require(display["evidenceSha256"] == check["evidenceSha256"],
+                "Display data must reference the display check's runtime capture")
+        if result == "Passed":
+            require(bool(display["refreshMilliHertz"]), "A passed display check requires enumerated refresh rates")
+    else:
+        require(value is None, "Display data requires a completed runtime enumeration")
 
 
 def validate_record(value: object) -> dict:
@@ -151,25 +179,8 @@ def validate_record(value: object) -> dict:
     checks = fields(record["checks"], ALL_CHECKS, "checks")
     for name, check in checks.items():
         validate_check(check, name)
-    check_statuses = {check["status"] for check in checks.values()}
-    if record["status"] == "Passed":
-        require(check_statuses == {"Passed"}, "A fully passed record requires every check to pass")
-    if record["status"] == "PassedWithLimitations":
-        require("Failed" not in check_statuses, "A failed check requires a Failed record")
-        require(bool(check_statuses & {"Passed", "PassedWithLimitations"}),
-                "A record passed with limitations requires a passing observation")
-        require(check_statuses != {"Passed"}, "Record the limitation in the affected check")
-    if record["status"] == "NotRun":
-        require(check_statuses == {"NotRun"}, "A NotRun record cannot contain completed checks")
-    result = checks["displayEnumeration"]["status"]
-    if result in {"Passed", "PassedWithLimitations"}:
-        validate_display(record["display"])
-        require(record["display"]["evidenceSha256"] == checks["displayEnumeration"]["evidenceSha256"],
-                "Display data must reference the display check's runtime capture")
-        if result == "Passed":
-            require(bool(record["display"]["refreshMilliHertz"]), "A passed display check requires enumerated refresh rates")
-    else:
-        require(record["display"] is None, "Display data requires a completed runtime enumeration")
+    validate_summary(record["status"], checks)
+    validate_display_check(record["display"], checks["displayEnumeration"])
     return record
 
 
