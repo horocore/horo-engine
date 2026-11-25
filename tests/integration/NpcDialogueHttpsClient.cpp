@@ -16,10 +16,10 @@ namespace {
     using Runtime::Ui::CaptionTimeline;
 
     /** @brief Waits only within the test budget for owner-lane caption publication. */
-    bool PublishCaption(App::NpcDialogueScenePresentation &scene, const NpcDialogueRequestIdentity &owner, const NpcDialogueGrant &grant,
+    bool PublishCaption(App::NpcDialogueScenePresentation &scene, const NpcDialogueGrant &grant,
                         std::chrono::steady_clock::time_point stop) {
         while (std::chrono::steady_clock::now() < stop) {
-            if (const auto admission = scene.Pump(owner, grant, 2))
+            if (const auto admission = scene.Pump(grant, 2))
                 return *admission == Accessibility::CaptionAdmission::Accepted;
             std::this_thread::sleep_for(1ms);
         }
@@ -42,13 +42,11 @@ namespace {
         if (timeline.Reset(9).HasError())
             return false;
         timeline.BeginFrame(2);
-        if (retired)
-            scene.Retire();
         static_cast<void>(scene.Drain(timeline));
         const auto cues = timeline.Cues();
         if (retired)
             return cues.empty();
-        return cues.size() == 1 && cues.front().cue.text == text && cues.front().cue.id == Accessibility::CaptionCueId{9, 3} &&
+        return cues.size() == 1 && cues.front().cue.text == text && cues.front().cue.id == Accessibility::CaptionCueId{9, 1} &&
                cues.front().cue.startTick == 2 && cues.front().cue.durationTicks == 20;
     }
 
@@ -59,30 +57,95 @@ namespace {
         });
     }
 
-    /** @brief Drives the accepted turn through either Scene retirement or HUD publication. */
-    int RunTurn(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, const NpcDialogueRequestIdentity &owner, const NpcDialogueGrant &grant,
-                std::span<const NpcDialogueFact> facts, std::string_view mode) {
-        const auto deadline = std::chrono::steady_clock::now() + (mode == "timeout" ? 500ms : 5s);
-        const bool retireQueued = mode == "queued-retire";
+    /** @brief Publishes an authored NPC with the runtime's normal Behavior Tree admission path. */
+    std::unique_ptr<AiSceneActivationCandidate> PublishAgent(AiSceneRuntime &runtime) {
+        const std::array keys{BlackboardKeyDescriptor{.key = BlackboardKeyId::Create(1).Value(),
+                                                       .kind = BlackboardValueKind::Boolean,
+                                                       .cardinality = BlackboardValueCardinality::Scalar,
+                                                       .maximumCollectionElements = 1,
+                                                       .presence = BlackboardKeyPresence::Required,
+                                                       .access = BlackboardKeyAccess::ReadWrite,
+                                                       .defaultValue = BlackboardScalarValue{false}}};
+        auto schema = BlackboardSchema::Capture({.identity = BlackboardSchemaId::Create(1).Value(), .keys = keys});
+        if (schema.HasError())
+            return {};
+        auto blackboard = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+        const SourceLocation location{"assets/ai/npc.horo", 1, 1};
+        const DecisionNodeDescriptor node{.type = DecisionNodeTypeId::Create(1).Value(),
+                                          .origin = {DecisionDescriptorSourceKind::Native, DecisionProviderId::Create(1).Value(), 1},
+                                          .source = location};
+        const DecisionAssetDescriptor asset{.asset = DecisionGraphAssetId::Create(1).Value(),
+                                            .kind = DecisionPlanKind::BehaviorTree,
+                                            .schemaVersion = CurrentDecisionAssetSchemaVersion,
+                                            .blackboardSchema = blackboard->Identity(),
+                                            .requiredBlackboardSchemaVersion = {1, 1},
+                                            .nodes = {{.id = DecisionNodeId::Create(1).Value(), .type = node.type,
+                                                       .descriptorVersion = {1, 1}, .source = location}},
+                                            .source = location};
+        auto compiled = DecisionAssetCompiler::Compile(asset, {}, std::array{node}, std::array{blackboard});
+        if (compiled.HasError() || !compiled.Value().IsValid())
+            return {};
+        const auto controller = ControllerTypeId::Create(1).Value();
+        const AiControllerDescriptor descriptor{.controller = controller, .decisionAsset = asset.asset, .decisionKind = asset.kind,
+                                                .blackboardSchema = blackboard, .decisionPlan = compiled.Value().plan};
+        const AiSceneActivationBinding scene{AiRuntimeIncarnation::Create(8).Value(), Runtime::SceneRuntimeId{8}};
+        const AiSceneAgentDescriptor agent{.owner = {scene.scene, Runtime::EntityId{.index = 0, .generation = 1}},
+                                           .agent = {.agent = AgentId::Create(1).Value()},
+                                           .controller = AiControllerComponent{.controller = controller, .decisionAsset = asset.asset,
+                                                                              .blackboardSchema = blackboard->Identity()}};
+        auto prepared = runtime.PrepareScene(scene, std::array{agent}, std::array{descriptor});
+        if (prepared.HasError() || prepared.Value()->ValidatePublication().HasError())
+            return {};
+        auto publication = std::move(prepared).Value();
+        publication->Publish();
+        return publication;
+    }
+
+    /** @brief Cancels a queued remote turn before the I/O worker can send any request. */
+    int RunQueuedRetirement(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
+                            const NpcDialogueGrant &grant, std::span<const NpcDialogueFact> facts, bool disableAgent) {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
         std::promise<void> release;
-        if (retireQueued && HoldIo(jobs, release).HasError())
+        if (HoldIo(jobs, release).HasError())
             return 11;
         if (scene.Start(owner, grant.route, grant, facts, 1, 10, deadline, {}).HasError())
             return 7;
-        if (retireQueued) {
+        if (disableAgent) {
+            if (runtime.DisableAtSafePoint(owner).HasError() || scene.Pump(grant, 2) ||
+                scene.Start(owner, grant.route, grant, facts, 2, 10, deadline, {}).HasValue())
+                return 14;
+        } else {
             scene.Retire();
-            release.set_value();
-            jobs.Shutdown(ShutdownPolicy::Drain);
-            return CheckTimeline(scene, true, 0) ? 0 : 10;
         }
-        if (!PublishCaption(scene, owner, grant, deadline + 1s))
+        release.set_value();
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        return CheckTimeline(scene, true, 0) ? 0 : 10;
+    }
+
+    /** @brief Drives a live NPC turn to HUD publication, then optionally retires its Scene. */
+    int RunTurn(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner, const NpcDialogueGrant &grant,
+                std::span<const NpcDialogueFact> facts, std::string_view mode) {
+        const auto deadline = std::chrono::steady_clock::now() + (mode == "timeout" ? 500ms : 5s);
+        if (scene.Start(owner, grant.route, grant, facts, 1, 10, deadline, {}).HasError())
+            return 7;
+        if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
+        if (mode == "retired")
+            runtime.BeginShutdown();
         return CheckTimeline(scene, mode == "retired", mode == "approved" ? 1 : 0) ? 0 : 9;
     }
 
     /** @brief Composes one Scene channel and exercises a complete presentation turn. */
     int RunScene(const App::NpcDialogueProjectActivation &activation, const std::string_view mode) {
-        const NpcDialogueRequestIdentity owner{{AiRuntimeIncarnation::Create(8).Value(), {1, 1}}, 1, 3};
+        auto created = AiSceneRuntime::Create();
+        if (created.HasError())
+            return 15;
+        auto runtime = std::move(created).Value();
+        const auto publication = PublishAgent(runtime);
+        const auto snapshot = runtime.Snapshot();
+        if (!publication || snapshot.HasError() || snapshot.Value().Agents().empty())
+            return 16;
+        const auto owner = snapshot.Value().Agents().front().handle;
         const auto grant = activation.Grant();
         const std::array facts{NpcDialogueFact{NpcDialogueFactId::Create(1).Value(), NpcDialogueValueId::Create(1234).Value()},
                                NpcDialogueFact{NpcDialogueFactId::Create(2).Value(), NpcDialogueValueId::Create(20).Value()},
@@ -93,12 +156,14 @@ namespace {
         if (queue.HasError())
             return 5;
         JobSystem jobs({.ioWorkerCount = 1});
-        auto channel = App::NpcDialogueScenePresentation::Create(jobs, owner.agent.incarnation, std::move(queue).Value(), cues,
+        auto channel = App::NpcDialogueScenePresentation::Create(jobs, runtime, std::move(queue).Value(), cues,
                                                                   cues.front().cue, activation.Binding());
         if (channel.HasError())
             return 6;
         auto scene = std::move(channel).Value();
-        return RunTurn(scene, jobs, owner, grant, facts, mode);
+        if (mode == "queued-retire" || mode == "disabled-agent")
+            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, facts, mode == "disabled-agent");
+        return RunTurn(scene, runtime, owner, grant, facts, mode);
     }
 
     /** @brief Captures the same canonical project bytes used to identify approval. */

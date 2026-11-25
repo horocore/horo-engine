@@ -1,6 +1,7 @@
 #include "NpcDialogueScenePresentation.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace Horo::App {
@@ -21,23 +22,39 @@ namespace Horo::App {
     }  // namespace
 
     /** @brief Binds the Scene scheduler and caption owner without touching gameplay state. */
-    NpcDialogueScenePresentation::NpcDialogueScenePresentation(const JobSystem &jobs, AI::AiRuntimeIncarnation scene,
+    NpcDialogueScenePresentation::NpcDialogueScenePresentation(const JobSystem &jobs, const AI::AiSceneRuntime &runtime,
+                                                               AI::AiSceneActivationBinding scene,
                                                                std::unique_ptr<Runtime::Ui::CaptionCueQueue> queue,
                                                                std::optional<AI::NpcDialogueProviderBinding> provider) noexcept
-        : jobs_(&jobs), scene_(scene), queue_(std::move(queue)), provider_(std::move(provider)) {}
+        : jobs_(&jobs), runtime_(&runtime), scene_(scene), queue_(std::move(queue)), provider_(std::move(provider)) {}
+
+    /** @copydoc NpcDialogueScenePresentation::SceneIsCurrent */
+    bool NpcDialogueScenePresentation::SceneIsCurrent() const {
+        const auto binding = runtime_->ActiveBinding();
+        return binding.HasValue() && binding.Value() == scene_;
+    }
+
+    /** @copydoc NpcDialogueScenePresentation::AgentIsActive */
+    bool NpcDialogueScenePresentation::AgentIsActive(AI::AgentHandle agent) const {
+        const auto record = runtime_->Find(agent);
+        return record.HasValue() && record.Value().state == AI::AiAgentActivationState::Active;
+    }
 
     /** @copydoc NpcDialogueScenePresentation::Create */
     Result<NpcDialogueScenePresentation> NpcDialogueScenePresentation::Create(
-        const JobSystem &jobs, AI::AiRuntimeIncarnation scene, std::unique_ptr<Runtime::Ui::CaptionCueQueue> queue,
+        const JobSystem &jobs, const AI::AiSceneRuntime &runtime, std::unique_ptr<Runtime::Ui::CaptionCueQueue> queue,
         std::span<const NpcDialogueCaption> captions, AI::NpcDialogueCueId fallback,
         std::optional<AI::NpcDialogueProviderBinding> provider) {
         using Channel = Result<NpcDialogueScenePresentation>;
-        if (!scene.IsValid() || !queue || queue->Producer() != Accessibility::CaptionProducerKind::Semantic)
+        const auto scene = runtime.ActiveBinding();
+        if (scene.HasError())
+            return Channel::Failure(scene.ErrorValue());
+        if (!queue || queue->Producer() != Accessibility::CaptionProducerKind::Semantic)
             return Channel::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (!ValidCaptions(captions, queue->Catalog()->size()) ||
             !std::ranges::binary_search(captions, fallback, {}, &NpcDialogueCaption::cue))
             return Channel::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
-        NpcDialogueScenePresentation channel{jobs, scene, std::move(queue), std::move(provider)};
+        NpcDialogueScenePresentation channel{jobs, runtime, scene.Value(), std::move(queue), std::move(provider)};
         std::ranges::copy(captions, channel.captions_.begin());
         std::ranges::transform(captions, channel.cues_.begin(), &NpcDialogueCaption::cue);
         channel.count_ = captions.size();
@@ -46,20 +63,22 @@ namespace Horo::App {
     }
 
     /** @copydoc NpcDialogueScenePresentation::Start */
-    Result<void> NpcDialogueScenePresentation::Start(const AI::NpcDialogueRequestIdentity &request, const AI::NpcDialogueRoute &route,
+    Result<void> NpcDialogueScenePresentation::Start(AI::AgentHandle agent, const AI::NpcDialogueRoute &route,
                                                     const AI::NpcDialogueGrant &grant, std::span<const AI::NpcDialogueFact> facts,
                                                     std::uint64_t tick, std::uint64_t deadlineTick,
                                                     std::chrono::steady_clock::time_point deadline,
                                                     const CancellationToken &cancellation) {
-        if (!queue_ || request.agent.incarnation != scene_ || request.turn <= lastTurn_)
-            return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
-        if (!std::holds_alternative<std::monostate>(pending_))
+        if (!queue_ || !SceneIsCurrent() || !AgentIsActive(agent))
+            return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
+        if (!std::holds_alternative<std::monostate>(pending_) || lastTurn_ == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+        const AI::NpcDialogueRequestIdentity request{agent, grant.providerGeneration, lastTurn_ + 1};
         auto captured = AI::NpcDialogueTurn::Capture(request, route, grant, facts, std::span{cues_}.first(count_), fallback_, deadlineTick);
         if (captured.HasError())
             return Result<void>::Failure(std::move(captured).ErrorValue());
         auto turn = std::move(captured).Value();
         lastTurn_ = request.turn;
+        request_ = request;
         cancellation_ = cancellation;
         if (provider_) {
             auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation);
@@ -73,9 +92,15 @@ namespace Horo::App {
     }
 
     /** @copydoc NpcDialogueScenePresentation::Pump */
-    std::optional<Accessibility::CaptionAdmission> NpcDialogueScenePresentation::Pump(const AI::NpcDialogueRequestIdentity &current,
-                                                                                       const AI::NpcDialogueGrant &grant,
+    std::optional<Accessibility::CaptionAdmission> NpcDialogueScenePresentation::Pump(const AI::NpcDialogueGrant &grant,
                                                                                        std::uint64_t tick) {
+        if (std::holds_alternative<std::monostate>(pending_))
+            return std::nullopt;
+        if (!SceneIsCurrent()) {
+            Retire();
+            return std::nullopt;
+        }
+        const auto current = AgentIsActive(request_.agent) ? request_ : AI::NpcDialogueRequestIdentity{};
         std::optional<AI::NpcDialogueOutcome> outcome;
         if (auto *job = std::get_if<AI::NpcDialogueJob>(&pending_))
             outcome = job->Poll(current, grant, tick);
@@ -94,7 +119,9 @@ namespace Horo::App {
     }
 
     /** @copydoc NpcDialogueScenePresentation::Drain */
-    std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline) noexcept {
+    std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline) {
+        if (queue_ && !SceneIsCurrent())
+            Retire();
         return queue_ ? timeline.Drain(*queue_) : 0;
     }
 
