@@ -309,6 +309,68 @@ namespace Horo::XR {
                                  XRErrors::OperationInvalid));
     }
 
+    TEST_CASE("Controller Grip and Aim produce distinct geometry from the same XR cutoff", "[xr][interaction]") {
+        TrackingFixture fixture;
+        const Math::Vec3 grip{1, 2, 3};
+        const Math::Vec3 aim{4, 5, 6};
+        fixture.poses.back().sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World, grip);
+        fixture.poses.emplace_back(XRTrackedPoseRecord{fixture.controller.id, XRTrackedPoseKind::Aim,
+                                                       PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World, aim)});
+        const auto snapshot = fixture.Snapshot();
+        const auto cutoff = DescribeXRInteractionCutoff(snapshot);
+        const auto device = fixture.controller.id;
+        const auto confidence = XRTrackingConfidence::High;
+        const std::array probes{XRInteractionProbe{device, XRControllerInteractionPose::Grip, XRInteractionDirectProbe{}, confidence},
+                                XRInteractionProbe{device, XRControllerInteractionPose::Aim, XRInteractionRayProbe{{0, 0, -1}, 4},
+                                                   confidence},
+                                XRInteractionProbe{device, XRControllerInteractionPose::Grip, XRInteractionProximityProbe{0.25F},
+                                                   confidence}};
+        const auto before = Tests::AllocationProbe::Count();
+        const auto geometry = BuildXRInteractionCandidates(snapshot, cutoff, probes);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(geometry.HasValue());
+        CHECK(after == before);
+        CHECK(geometry.Value().Cutoff() == cutoff);
+        const auto candidates = geometry.Value().Candidates();
+        REQUIRE(candidates.size() == probes.size());
+        CHECK(std::get<Math::Vec3>(candidates[0].shape) == grip);
+        CHECK(std::get<Math::Ray>(candidates[1].shape).origin == aim);
+        CHECK(std::get<Math::BoundingSphere>(candidates[2].shape).center == grip);
+    }
+
+    TEST_CASE("Controller interaction withdraws when its tracking authority changes", "[xr][interaction]") {
+        TrackingFixture fixture;
+        fixture.poses.back().sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World);
+        const std::array probes{XRInteractionProbe{fixture.controller.id, XRControllerInteractionPose::Grip, XRInteractionDirectProbe{},
+                                                   XRTrackingConfidence::High}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 19;
+        auto retiredCutoff = XRInteractionCutoff{fixture.session, fixture.revision, fixture.origin, fixture.sampledAt, 19};
+        auto expected = XRErrors::OperationUnavailable;
+        SECTION("focus is withdrawn") {
+            descriptor.focus = XRTrackingFocusState::Unfocused;
+        }
+        SECTION("visibility is withdrawn") {
+            descriptor.visibility = XRTrackingVisibilityState::Hidden;
+        }
+        SECTION("bindings are replaced without a pose revision change") {
+            ++descriptor.bindingRevision;
+            expected = XRErrors::TrackingSnapshotStale;
+        }
+        SECTION("session is replaced") {
+            retiredCutoff.session = ActiveSession(6);
+            expected = XRErrors::IdentityStale;
+        }
+        SECTION("session is retired") {
+            retiredCutoff.session = {};
+            expected = XRErrors::IdentityInvalid;
+        }
+        const auto snapshot = XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin);
+        REQUIRE(snapshot.HasValue());
+        CHECK(HasErrorIdentity(BuildXRInteractionCandidates(snapshot.Value(), retiredCutoff, probes), expected));
+    }
+
     TEST_CASE("XR action snapshots bind exact generation and plan revision independently of pose validity",
               "[unit][xr][tracking-snapshot]") {
         TrackingFixture fixture;
