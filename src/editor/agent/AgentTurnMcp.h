@@ -6,7 +6,19 @@
 #include "Horo/Mcp/McpInProcessAdapter.h"
 #include "Horo/Security/SecureMemory.h"
 
+namespace Horo::Mcp {
+    enum class McpToolEffect : std::uint8_t;
+    class McpToolSnapshot;
+}  // namespace Horo::Mcp
+
 namespace Horo::Agent {
+    /** @brief Decodes a bounded model intent and inspects it against the host's admitted registry snapshot.
+     * @param registry Exact registry generation selected by the host. @param capabilities Its granted capability names.
+     * @param intent Untrusted proposed call. @return Registered effect or typed rejection, without executing or admitting the call.
+     */
+    [[nodiscard]] Result<Mcp::McpToolEffect> InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry,
+                                                                std::span<const std::string> capabilities, const ModelToolIntent &intent);
+
     inline constexpr std::string_view ProjectDiagnosticsTool = "project.diagnostics"; /**< Shared name of the diagnostic Query. */
 
     /** @brief Captured by the host alongside the exact authenticated project-bound MCP session. */

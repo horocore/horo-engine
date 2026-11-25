@@ -139,6 +139,13 @@ namespace Horo::Mcp {
         /** @brief Resolves effect only after checking capability grants. @param id Tool identity.
          * @param capabilities Host-approved grants. @return Exact immutable effect or typed denial. */
         [[nodiscard]] Result<McpToolEffect> Effect(const McpToolId &id, std::span<const std::string> capabilities) const;
+        /** @brief Validates a proposed input against this registry generation without granting or consuming execution authority.
+         * @param id Proposed registered tool. @param arguments Decoded, inert input.
+         * @param capabilities Host-approved capability identities.
+         * @return Registered effect for review or a typed registration, grant or input rejection.
+         */
+        [[nodiscard]] Result<McpToolEffect> InspectDraft(const McpToolId &id, const nlohmann::json &arguments,
+                                                         std::span<const std::string> capabilities) const;
 
     private:
         friend class McpToolRegistry;

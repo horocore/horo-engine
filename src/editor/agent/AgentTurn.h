@@ -87,6 +87,17 @@ namespace Horo::Agent {
     /** @brief Cold caller's synchronous revocation check over an owned turn authority snapshot. */
     using AgentTurnFreshness = std::function<bool()>;
 
+    /** @brief Validates one proposed tool against host policy. Builds no operation and consumes no approval. */
+    using AgentPlanToolValidator = std::function<AgentTurnStatus(const ModelToolIntent &)>;
+
+    /** @brief One bounded inference for review. Draft intents carry neither execution authority nor tool results. */
+    struct AgentTurnPlan final {
+        AgentTurnStatus status{AgentTurnStatus::InvalidRequest};
+        std::optional<ModelMessage> draft;
+        std::optional<ModelErrorCode> providerError;
+        std::optional<ModelUsage> usage;
+    };
+
     /** @brief Editor-owned admission for at most one active authoring turn.
      * @details The owner must outlive its worker. The atomic flag protects turn admission across host callers and
      * rejects reentrant entry without blocking the provider, tool adapters or editor thread.
@@ -115,7 +126,28 @@ namespace Horo::Agent {
                                           const AgentTurnContext *context = nullptr, const AgentTurnTextObserver &observeText = {},
                                           const AgentToolActivityObserver &observeTool = {});
 
+        /** @brief Collects one model round and validates every proposed tool without dispatching any.
+         * @param provider Exact host-selected provider. @param turnId Nonzero host-issued identity.
+         * @param request Conversation and host-approved tool definitions.
+         * @param limits Budget covering the entire draft. @param validateTool Independent, side-effect-free admission.
+         * @param cancellation Host cancellation. @return A complete review draft or a typed failure with no draft.
+         */
+        [[nodiscard]] AgentTurnPlan Plan(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
+                                         const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
+                                         std::stop_token cancellation = {});
+
     private:
+        struct TurnPorts final {
+            const IAgentTurnTools *tools;
+            const AgentTurnContext *context;
+            const AgentTurnTextObserver &observeText;
+            const AgentToolActivityObserver &observeTool;
+            const AgentPlanToolValidator *plan;
+        };
+
+        [[nodiscard]] AgentTurnResult RunTurn(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
+                                              const AgentTurnLimits &limits, std::stop_token cancellation, const TurnPorts &ports);
+
         AgentTurnFreshness isCurrent_;
         std::atomic_flag active_{};
     };

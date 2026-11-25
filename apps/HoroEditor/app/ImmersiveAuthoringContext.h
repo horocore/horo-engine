@@ -112,12 +112,21 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Agent::AgentTurnResult Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop = {});
 
+        /** @brief Runs an explicitly captured plan for review without any tool execution port.
+         * @param provider Host-selected provider. @param turnId Nonzero host-issued identity.
+         * @param limits Host draft budget. @param validateTool Host registry and policy check.
+         * @param stop Worker cancellation. @return Inert draft or terminal rejection.
+         */
+        [[nodiscard]] Agent::AgentTurnPlan Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
+                                                const Agent::AgentPlanToolValidator &validateTool, std::stop_token stop = {});
+
     private:
         friend class ImmersiveAuthoringContext;
-        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request);
+        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, bool reviewOnly = false);
 
         ImmersivePlanningContext context_;
         Agent::ModelRequest request_;
+        bool reviewOnly_{};
     };
 
     /** @brief Cold owner-lane publication and admission for one Editor opening. */
@@ -146,6 +155,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureRequest(const ImmersivePlanningContext &context,
                                                                           ImmersiveRequestKind kind, Agent::ModelRequest &&request) const;
+        /** @brief Captures a bounded planning request with host-selected tools for inert review only.
+         * @param context Exact current Edit or Simulate context. @param request Host-authored model request without tool history.
+         * @return One owned request or empty if mode, context, policy or payload cannot be admitted.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlan(const ImmersivePlanningContext &context,
+                                                                       Agent::ModelRequest &&request) const;
 
     private:
         std::shared_ptr<ImmersiveContextEpoch> epoch_;

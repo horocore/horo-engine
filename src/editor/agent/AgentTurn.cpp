@@ -147,17 +147,37 @@ namespace Horo::Agent {
         }
 
         /** @brief Admits the entire sibling request set before submitting its first tool. */
-        AgentTurnStatus PrepareTools(const IAgentTurnTools &tools, const ModelRequest &history, const ModelMessage &message) {
+        template <typename Validate>
+        AgentTurnStatus PrepareTools(const ModelRequest &history, const ModelMessage &message, const Validate &validate) {
             for (const auto &intent : message.toolIntents) {
                 if (std::ranges::find(history.tools, intent.name, &ModelTool::name) == history.tools.end())
                     return ToolDenied;
                 for (const auto &earlier : history.messages)
                     if (std::ranges::find(earlier.toolIntents, intent.callId, &ModelToolIntent::callId) != earlier.toolIntents.end())
                         return InvalidModelResponse;
-                if (!tools.ValidArguments(intent.argumentsJson))
-                    return InvalidModelResponse;
+                if (const auto status = validate(intent); status != Completed)
+                    return status;
             }
             return Completed;
+        }
+
+        /** @brief Validates an inert draft and rechecks freshness before it can leave the runtime. */
+        AgentTurnStatus ValidatePlanRound(const ModelRequest &request, const ModelMessage &message, const AgentPlanToolValidator &plan,
+                                          const TurnStop &stop, TurnContextGate &context) {
+            try {
+                const auto status = PrepareTools(request, message, [&](const ModelToolIntent &intent) {
+                    if (const auto stopped = stop.Status())
+                        return *stopped;
+                    return context.Check() ? plan(intent) : ContextDenied;
+                });
+                if (const auto stopped = stop.Status())
+                    return *stopped;
+                return context.Check() ? status : ContextDenied;
+            } catch (const std::bad_alloc &) {
+                throw;
+            } catch (...) {
+                return stop.Status().value_or(ToolFailed);
+            }
         }
 
         /** @brief Maintains the terminal boundary even if a provider implementation throws. */
@@ -246,7 +266,9 @@ namespace Horo::Agent {
         /** @brief Appends the assistant intent round and related results only after successful dispatch. */
         AgentTurnStatus AppendToolRound(const IAgentTurnTools &tools, ModelRequest &request, ModelMessage message, TurnProgress &progress) {
             try {
-                const auto admission = PrepareTools(tools, request, message);
+                const auto admission = PrepareTools(request, message, [&](const ModelToolIntent &intent) {
+                    return tools.ValidArguments(intent.argumentsJson) ? Completed : InvalidModelResponse;
+                });
                 if (const auto stopped = progress.stop.Status())
                     return *stopped;
                 if (admission != Completed)
@@ -287,6 +309,25 @@ namespace Horo::Agent {
                                           ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation,
                                           const AgentTurnContext *context, const AgentTurnTextObserver &observeText,
                                           const AgentToolActivityObserver &observeTool) {
+        return RunTurn(provider, turnId, std::move(request), limits, cancellation, {tools, context, observeText, observeTool, nullptr});
+    }
+
+    /** @copydoc AgentTurnRuntime::Plan */
+    AgentTurnPlan AgentTurnRuntime::Plan(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
+                                         const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
+                                         const std::stop_token cancellation) {
+        if (!validateTool)
+            return {InvalidRequest};
+        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, nullptr, {}, {}, &validateTool});
+        if (result.status != Completed)
+            return {.status = result.status, .providerError = result.providerError};
+        return {.status = Completed, .draft = std::move(result.messages.back()), .usage = result.finalUsage};
+    }
+
+    /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
+    AgentTurnResult AgentTurnRuntime::RunTurn(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
+                                              const AgentTurnLimits &limits, const std::stop_token cancellation, const TurnPorts &ports) {
+        const auto &[tools, context, observeText, observeTool, plan] = ports;
         if (cancellation.stop_requested())
             return {Cancelled, {}};
         if (active_.test_and_set())
@@ -296,7 +337,8 @@ namespace Horo::Agent {
             constexpr ModelFeatures known{static_cast<std::uint32_t>(ModelFeature::Streaming) |
                                           static_cast<std::uint32_t>(ModelFeature::Tools) |
                                           static_cast<std::uint32_t>(ModelFeature::Usage)};
-            if (turnId == 0 || !ValidLimits(limits) || (!request.tools.empty() && !tools) || !AdmitModelRequest(request, known).Succeeded())
+            if (turnId == 0 || !ValidLimits(limits) || (!request.tools.empty() && !tools && !plan) ||
+                !AdmitModelRequest(request, known).Succeeded())
                 return {InvalidRequest, {}};
             if (observeText && tools)
                 return {InvalidRequest, {}};
@@ -336,7 +378,12 @@ namespace Horo::Agent {
                 tokens -= static_cast<std::uint32_t>(used);
                 progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
-                if (message.toolIntents.empty()) {
+                if (plan) {
+                    const auto status = ValidatePlanRound(request, message, *plan, stop, contextGate);
+                    if (status != Completed)
+                        return FailedRound(status);
+                }
+                if (plan || message.toolIntents.empty()) {
                     if (context) {
                         const auto firstContext = request.messages.begin() + contextOffset;
                         request.messages.erase(firstContext, firstContext + contextCount);

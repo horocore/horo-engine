@@ -55,13 +55,14 @@ namespace Horo::Editor {
         }
 
         /** @brief Rejects tool-bearing history and malformed payloads before transferring them to the queue. */
-        bool ValidTextRequest(const Agent::ModelRequest &request) {
+        bool ValidFreshRequest(const Agent::ModelRequest &request, const bool withTools) {
             using Agent::ModelFeature;
             constexpr Agent::ModelFeatures textFeatures{static_cast<std::uint32_t>(ModelFeature::Streaming) |
                                                         static_cast<std::uint32_t>(ModelFeature::Usage)};
-            return Agent::AdmitModelRequest(request, textFeatures).Succeeded() &&
+            const Agent::ModelFeatures features{textFeatures.bits | (withTools ? static_cast<std::uint32_t>(ModelFeature::Tools) : 0U)};
+            return Agent::AdmitModelRequest(request, features).Succeeded() &&
                    std::ranges::none_of(request.messages, [](const Agent::ModelMessage &message) {
-                return message.role == Agent::ModelRole::Tool;
+                return message.role == Agent::ModelRole::Tool || !message.toolIntents.empty();
             });
         }
     }  // namespace
@@ -70,15 +71,29 @@ namespace Horo::Editor {
         return epoch_ && generation_ != 0 && epoch_->current.load(std::memory_order_acquire) == generation_;
     }
 
-    ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request)
-        : context_(std::move(context)), request_(std::move(request)) {}
+    ImmersiveAgentRequest::ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, const bool reviewOnly)
+        : context_(std::move(context)), request_(std::move(request)), reviewOnly_(reviewOnly) {}
 
     /** @copydoc ImmersiveAgentRequest::Run */
     Agent::AgentTurnResult ImmersiveAgentRequest::Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop) {
+        if (reviewOnly_)
+            return {.status = Agent::AgentTurnStatus::InvalidRequest};
         Agent::AgentTurnRuntime runtime{[this] {
             return IsCurrent();
         }};
         return runtime.Run(provider, nullptr, turnId, std::exchange(request_, {}), {}, stop);
+    }
+
+    /** @copydoc ImmersiveAgentRequest::Plan */
+    Agent::AgentTurnPlan ImmersiveAgentRequest::Plan(Agent::IModelProvider &provider, const std::uint64_t turnId,
+                                                     const Agent::AgentTurnLimits &limits,
+                                                     const Agent::AgentPlanToolValidator &validateTool, const std::stop_token stop) {
+        if (!reviewOnly_)
+            return {.status = Agent::AgentTurnStatus::InvalidRequest};
+        Agent::AgentTurnRuntime runtime{[this] {
+            return IsCurrent();
+        }};
+        return runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, validateTool, stop);
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}
@@ -133,8 +148,16 @@ namespace Horo::Editor {
                                                                                    Agent::ModelRequest &&request) const {
         if (context.Identity().localSpeechOnly || kind == ImmersiveRequestKind::SpeechCapture)
             return std::nullopt;
-        if (Admit(context, kind) != ImmersiveAdmission::Admitted || !ValidTextRequest(request))
+        if (Admit(context, kind) != ImmersiveAdmission::Admitted || !ValidFreshRequest(request, false))
             return std::nullopt;
         return ImmersiveAgentRequest{context, std::move(request)};
+    }
+
+    /** @copydoc ImmersiveAuthoringContext::CapturePlan */
+    std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CapturePlan(const ImmersivePlanningContext &context,
+                                                                                Agent::ModelRequest &&request) const {
+        if (Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted || !ValidFreshRequest(request, true))
+            return std::nullopt;
+        return ImmersiveAgentRequest{context, std::move(request), true};
     }
 }  // namespace Horo::Editor

@@ -23,18 +23,20 @@ namespace Horo::Agent::TestSupport {
         std::shared_ptr<SceneTool> scene = std::make_shared<SceneTool>();
         std::shared_ptr<Mcp::McpController> owner;
         std::shared_ptr<Mcp::McpInProcessAdapter> adapter;
+        std::shared_ptr<const Mcp::McpToolSnapshot> snapshot;
 
         explicit Tools(const Mcp::McpToolEffect effect = Mcp::McpToolEffect::Query) {
             const auto auth = Mcp::Test::Authorization();
             auto registry = std::make_shared<Mcp::McpToolRegistry>(auth);
             auto revision = registry->Publish({{.descriptor = {.id = {"scene.inspect"},
                                                                .description = "Test scene summary",
-                                                               .inputSchema = {{"type", "object"}},
+                                                               .inputSchema = {{"type", "object"}, {"additionalProperties", false}},
                                                                .outputSchema = {{"type", "object"}},
                                                                .effect = effect},
                                                 .adapter = scene,
                                                 .owner = Mcp::McpOwnerContext::Editor}});
             REQUIRE(revision.HasValue());
+            snapshot = registry->Read();
             auto created = Mcp::McpController::Create(registry, {}, auth);
             REQUIRE(created.HasValue());
             owner = std::move(created).Value();

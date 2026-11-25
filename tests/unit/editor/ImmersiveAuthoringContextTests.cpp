@@ -236,6 +236,36 @@ namespace Horo::Editor {
             CHECK_FALSE(request->IsCurrent());
         }
 
+        TEST_CASE("Immersive plan review requires current authoring mode", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            ImmersiveAuthoringContext owner;
+            auto identity = Opening();
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+            auto request = owner.CapturePlan(*context, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            CHECK(request->Run(model, 1).status == InvalidRequest);
+            const auto validate = [](const Agent::ModelToolIntent &) {
+                return ToolDenied;
+            };
+            const auto valid = request->Plan(model, 2, {}, validate);
+            REQUIRE(valid.status == Completed);
+            REQUIRE(valid.draft);
+            CHECK(valid.draft->text == "Plan");
+            auto old = owner.CapturePlan(*context, Prompt());
+            REQUIRE(old);
+            identity.mode = ImmersiveAuthoringMode::Play;
+            identity.worldGeneration = 1;
+            const auto play = owner.Publish(identity, {});
+            REQUIRE(play);
+            CHECK_FALSE(owner.CapturePlan(*play, Prompt()));
+            const auto rejected = old->Plan(model, 3, {}, validate);
+            CHECK(rejected.status == ContextDenied);
+            CHECK_FALSE(rejected.draft);
+            CHECK(model.calls == 1);
+        }
+
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {
             ImmersiveAuthoringContext owner;
             const auto context = owner.Publish(Opening(), {});

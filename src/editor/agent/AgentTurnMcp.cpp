@@ -1,6 +1,7 @@
 #include "AgentTurnMcp.h"
 
 #include "Horo/Mcp/McpErrors.h"
+#include "Horo/Mcp/McpToolRegistry.h"
 
 #include <algorithm>
 #include <thread>
@@ -81,6 +82,15 @@ namespace Horo::Agent {
             return Result<Json>::Failure(MakeError(ControllerFailed));
         }
     }  // namespace
+
+    /** @copydoc InspectMcpPlanTool */
+    Result<Mcp::McpToolEffect> InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry, const std::span<const std::string> capabilities,
+                                                  const ModelToolIntent &intent) {
+        const auto arguments = DecodeArguments(intent.argumentsJson);
+        if (!arguments.is_object())
+            return Result<Mcp::McpToolEffect>::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
+        return registry.InspectDraft({intent.name}, arguments, capabilities);
+    }
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */
     AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project,

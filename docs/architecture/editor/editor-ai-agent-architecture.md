@@ -270,6 +270,11 @@ Ownership rules:
   document revision, or Scene structural revision withdraws the captured review.
 - MCP validates admitted tools. The editor document/command owner validates and
   commits mutations. AIA owns orchestration and presentation only.
+  The plan-only agent turn performs one bounded model round. It holds proposed
+  tools inert, validates the complete batch against host policy and the selected
+  registry generation, and discards it if admission is withdrawn. Registry
+  inspection uses the same input schema and bounds as execution and consumes no
+  approvals.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,
