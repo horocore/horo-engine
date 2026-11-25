@@ -865,6 +865,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskScheduler.h
     Horo/AI/SymbolicPlanning.h
     Horo/AI/LocalLearnedPolicy.h
+    Horo/AI/NpcDialogue.h
     Horo/AI/AiDecisionTaskReservation.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h

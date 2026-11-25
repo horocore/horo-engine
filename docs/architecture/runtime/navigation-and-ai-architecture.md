@@ -2312,6 +2312,16 @@ Horo Engine strictly isolates runtime gameplay AI (`HoroAI` / `HoroEngine::AI`) 
 - **Editor AI Agent Tooling (`AIA-001`)**: An authoring and development assistant embedded in `HoroEditor` using external or local large language models (LLMs) and the Model Context Protocol (MCP). It operates asynchronously on human authoring requests (code generation, scene inspection, asset imports) and is never compiled into runtime game packages or dedicated servers.
 - **Optional NPC LLM Dialogue Seam (`GAI-007.4`)**: Generative AI dialogue or narrative agents exist strictly as bounded, asynchronous gameplay service providers (`INpcDialogueService`). They communicate through network/async jobs with explicit fallback behaviors and never block the fixed simulation tick or hold raw pointers to ECS memory.
 
+`NpcDialogueTurn` is the provider-independent admission contract in `HoroAI`.
+It copies only authored fact tokens allowed by the exact provider, destination,
+schema version and activation grant. The host keeps agent and turn identities
+local. Before transport and presentation, the owner rechecks the live grant and
+the turn deadline. The reply envelope carries a host-attached turn identity.
+Only an approved, authored dialogue cue can reach presentation. Failed or late
+responses select a deterministic authored fallback, while cancelled or stale
+turns publish no cue. Host transport, moderation and runtime composition are
+separate delivery work. See [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
+
 ### AI Runtime Ownership And Scene Generation Safety
 
 `HoroAI` / `HoroEngine::AI` owns the canonical gameplay-AI identity contract.

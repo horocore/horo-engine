@@ -1323,6 +1323,7 @@ add_executable(HoroAITests
         unit/runtime/ai/StateMachineTests.cpp
         unit/runtime/ai/SymbolicPlanningTests.cpp
         unit/runtime/ai/LocalLearnedPolicyTests.cpp
+        unit/runtime/ai/NpcDialogueTests.cpp
         unit/runtime/ai/EnvironmentQuerySchemaTests.cpp
         unit/runtime/ai/EnvironmentQueryContextTests.cpp
         unit/runtime/ai/EnvironmentQueryExecutionTests.cpp
