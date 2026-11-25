@@ -820,6 +820,131 @@ namespace {
         bool fail{}, retire{};
     };
 
+    /** @brief Ready facades for the Scene and Physics already owned by the standalone Play fixture. */
+    class PlayHearingService final : public Network::INetworkModeService {
+    public:
+        Result<void> Prepare() override {
+            return Result<void>::Success();
+        }
+        Result<void> Activate() override {
+            return Result<void>::Success();
+        }
+        Result<void> RunPhase(Runtime::RuntimePhase) override {
+            return Result<void>::Success();
+        }
+        Result<void> RunFixedTick(const Runtime::FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+        void Shutdown() noexcept override {}
+    };
+
+    /** @brief Opens a silent standalone role scoped to the actual Play Scene. */
+    Network::NetworkModeComposition MakePlayHearingAuthority(const Runtime::SceneRuntimeId scene) {
+        using namespace Network;
+        using AI::TestSupport::MakeIdentity;
+        NetworkModeFactories factories;
+        const auto ready = [](const NetworkModeServiceRequest &) {
+            return Result<std::unique_ptr<INetworkModeService>>::Success(std::make_unique<PlayHearingService>());
+        };
+        factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)] = ready;
+        factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)] = ready;
+        auto authority = NetworkModeComposition::Create(
+            {.mode = NetworkProjectRole::Standalone,
+             .hostGeneration = 1,
+             .build = MakeIdentity<NetworkProductBuildId>(1),
+             .productRevision = MakeIdentity<NetworkProductCapabilityRevision>(1),
+             .hostRevision = MakeIdentity<NetworkHostCapabilityRevision>(1),
+             .projectRevision = MakeIdentity<NetworkProjectSettingsRevision>(1),
+             .worlds = {{{NetworkModeWorldKind::Standalone, scene}}},
+             .worldCount = 1},
+            std::move(factories));
+        REQUIRE(authority.HasValue());
+        auto owner = std::move(authority).Value();
+        REQUIRE(owner.Start().HasValue());
+        return owner;
+    }
+
+    /** @brief Publishes a single explicit Gameplay sound through the same scheduler as Editor Play. */
+    class PlayHearingProducer final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        PlayHearingProducer(AI::AgentId allowed, AI::AgentId denied, Runtime::SceneObjectId emitter)
+            : allowed_(allowed), denied_(denied), emitter_(emitter) {}
+
+        void Bind(const Runtime::RuntimeSceneView &scene, Runtime::RuntimeDispatchSource dispatch) {
+            authority_.emplace(MakePlayHearingAuthority(scene.RuntimeId()));
+            publisher_.emplace(std::move(dispatch), scene);
+        }
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (context.simulationTick != 1)
+                return Result<void>::Success();
+            REQUIRE(scene_);
+            return publisher_->PrepareForSceneTick(*scene_, context.dispatchEvidence, 1, deliveries_);
+        }
+        void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            if (context.simulationTick == 1)
+                committed = publisher_->Commit(context.dispatchEvidence);
+        }
+        void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            publisher_->Abort(context.dispatchEvidence);
+        }
+        void Shutdown() noexcept override {
+            authority_->Shutdown();
+        }
+
+        /** @brief Records the approved recipient decisions and captures only committed data. */
+        Result<std::optional<Gameplay::PerceptionEventSource>> Capture(
+            const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai, const AI::PerceptionDescriptorRegistry &registry,
+            const AI::PerceptionSpatialBroadphase &spatial, std::uint64_t tick, AI::PerceptionListenerTypeId listener) {
+            using Window = Result<std::optional<Gameplay::PerceptionEventSource>>;
+            if (tick == 1)
+                SelectDeliveries(scene, ai, listener);
+            const auto batch = publisher_->Read(scene, tick);
+            if (batch.HasError())
+                return Window::Failure(batch.ErrorValue());
+            if (batch.Value().empty())
+                return Window::Success(std::nullopt);
+            auto captured = Gameplay::PerceptionEventSource::Capture(scene, ai, *authority_, Network::NetworkModeWorldKind::Standalone,
+                                                                       registry, spatial, batch.Value());
+            if (captured.HasError())
+                return Window::Failure(captured.ErrorValue());
+            return Window::Success(std::move(captured).Value());
+        }
+
+        bool committed{};
+
+    private:
+        /** @brief Uses only Gameplay facts and live handles from this Scene generation. */
+        void SelectDeliveries(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai, AI::PerceptionListenerTypeId listener) {
+            const auto source = scene.Find(emitter_);
+            REQUIRE(source);
+            const auto capability = ai.CapabilityAtSafePoint();
+            const auto allowed = capability.ResolveAgent(allowed_);
+            const auto denied = capability.ResolveAgent(denied_);
+            REQUIRE(allowed.HasValue());
+            REQUIRE(denied.HasValue());
+            const AI::HearingPerceptionEvent sound{AI::ProjectPerceptionSource(*source),
+                                                  Math::WorldCoordinate64::FromMillimeters(1000, 0, 0), 0.5, 4, 1, 0, 1};
+            using enum Gameplay::PerceptionFilterDecision;
+            deliveries_ = {{{allowed.Value(), listener, sound, Accept}, {denied.Value(), listener, sound, Reject}}};
+            scene_ = scene;
+        }
+
+        std::optional<Runtime::RuntimeSceneView> scene_;
+        std::optional<Network::NetworkModeComposition> authority_;
+        std::optional<Gameplay::GameplayHearingPublisher> publisher_;
+        std::array<Gameplay::GameplayHearingDelivery, 2> deliveries_{};
+        AI::AgentId allowed_;
+        AI::AgentId denied_;
+        Runtime::SceneObjectId emitter_;
+    };
+
     struct PlayFixedFixture final {
         explicit PlayFixedFixture(const ConfigurationService *configuration = nullptr, Gameplay::BehaviorRegistry behaviors = Registry())
             : registry(std::move(behaviors)), play(nullptr, configuration) {
@@ -1041,6 +1166,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     const auto decision = inputs.Compile(std::span{&graph, 1}, 84);
     const auto controller = Decisions::MakeIdentity<AI::ControllerTypeId>(402);
     const auto agent = Decisions::MakeIdentity<AI::AgentId>(403);
+    const auto peer = Decisions::MakeIdentity<AI::AgentId>(404);
+    constexpr Runtime::SceneObjectId peerObject{8};
     const auto decisionId = Assets::AssetId::FromBytes({0x42});
     const auto schemaId = Assets::AssetId::FromBytes({0x43});
     constexpr auto sceneType = "core.scene";
@@ -1073,7 +1200,7 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
             watchedScheduler = AI::AiSchedulingMode::Deterministic;
         }
     }
-    SECTION("An approved Gameplay producer borrows the Play registry for authored hearing without Audio") {
+    SECTION("A committed Gameplay sound reaches only its approved Play listener without Audio") {
         livePerception = true;
         hearingOnly = true;
     }
@@ -1088,10 +1215,10 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     if (livePerception) {
         auto *configured = &*source.objects.front().components.aiController;
         configured->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
-        source.objects.push_back({.id = {8},
+        source.objects.push_back({.id = {peerObject.value},
                                   .name = "Sensed peer",
                                   .localTransform = {.translation = {1.0F, 0.0F, 0.0F}},
-                                  .components = {.aiAgent = AI::AiAgentComponent{.agent = Decisions::MakeIdentity<AI::AgentId>(404)},
+                                  .components = {.aiAgent = AI::AiAgentComponent{.agent = peer},
                                                  .aiController = *configured}});
     }
     const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
@@ -1227,20 +1354,25 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                               "}" + relationships + "}");
     }
     std::size_t hearingCaptures{};
+    std::unique_ptr<PlayHearingProducer> hearing;
+    PlayHearingProducer *hearingProbe{};
     EditorPlayPerceptionEventFactory hearingProducer;
     if (hearingOnly) {
-        hearingProducer = [&](const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &,
+        hearing = std::make_unique<PlayHearingProducer>(agent, peer, peerObject);
+        hearingProbe = hearing.get();
+        hearingProducer = [&](const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
                               const AI::PerceptionDescriptorRegistry &registry, const AI::PerceptionSpatialBroadphase &spatial,
                               const std::uint64_t tick) {
             REQUIRE(spatial.CurrentFor(scene));
-            const auto listener = registry.FindListener(Decisions::MakeIdentity<AI::PerceptionListenerTypeId>(listenerId));
+            const auto identity = Decisions::MakeIdentity<AI::PerceptionListenerTypeId>(listenerId);
+            const auto listener = registry.FindListener(identity);
             REQUIRE(listener.HasValue());
             CHECK(listener.Value().availability == AI::PerceptionListenerAvailability::Available);
             CHECK(listener.Value().descriptor.sense == AI::SenseTypeIds::Hearing);
             REQUIRE(listener.Value().descriptor.stimulusCount == 1);
             CHECK(listener.Value().descriptor.stimuli.front().identity == AI::StimulusTypeIds::Sound);
             CHECK(tick == ++hearingCaptures);
-            return Result<std::optional<Gameplay::PerceptionEventSource>>::Success(std::nullopt);
+            return hearingProbe->Capture(scene, ai, registry, spatial, tick, identity);
         };
     }
     const auto projectFactory =
@@ -1305,6 +1437,10 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK(play.QuiesceForReload().HasError());
     Runtime::RuntimeLifecycle lifecycle;
     REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play)).HasValue());
+    if (hearing) {
+        hearing->Bind(*play.SceneView(), scheduler.Value()->DispatchSource());
+        REQUIRE(lifecycle.AddParticipant(std::move(hearing)).HasValue());
+    }
     auto gate = std::make_unique<PlayFixedGate>();
     auto *gateView = gate.get();
     REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
@@ -1406,12 +1542,35 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     if (livePerception) {
         CHECK_FALSE(inspection.snapshot->perceptionFailure);
         if (hearingOnly) {
+            REQUIRE(hearingProbe->committed);
             CHECK(hearingCaptures == 1);
             CHECK(inspection.snapshot->stimuli.empty());
-            REQUIRE(tick().HasValue());
-            CHECK(hearingCaptures == 2);
+            for (std::uint64_t step = 0; step < Editor::EditorPlayAgentInspectionTickSpacing; ++step)
+                REQUIRE(tick().HasValue());
+            const auto active = play.SceneView();
+            REQUIRE(active);
+            const auto peerEntity = active->Find(peerObject);
+            REQUIRE(peerEntity);
+            play.RefreshAgentInspection(entity);
+            REQUIRE(play.AgentInspectionHistory().size() == 2);
+            const auto &accepted = play.AgentInspectionHistory().back();
+            REQUIRE(accepted.snapshot);
+            REQUIRE(accepted.snapshot->stimuli.size() == 1);
+            const auto &stimulus = accepted.snapshot->stimuli.front();
+            CHECK(stimulus.key.sense == AI::SenseTypeIds::Hearing);
+            CHECK(stimulus.key.stimulus == AI::StimulusTypeIds::Sound);
+            CHECK(stimulus.key.source.slot == peerEntity->entity.index);
+            CHECK(stimulus.firstSensedTick == 2);
+            for (std::uint64_t step = 0; step < Editor::EditorPlayAgentInspectionTickSpacing; ++step)
+                REQUIRE(tick().HasValue());
+            play.RefreshAgentInspection(peerEntity);
+            REQUIRE(play.AgentInspectionHistory().size() == 1);
+            REQUIRE(play.AgentInspectionHistory().back().snapshot);
+            CHECK(play.AgentInspectionHistory().back().snapshot->stimuli.empty());
+            const auto capturesBeforeStop = hearingCaptures;
             play.Stop();
-            CHECK(hearingCaptures == 2);
+            REQUIRE(tick().HasValue());
+            CHECK(hearingCaptures == capturesBeforeStop);
             lifecycle.Shutdown();
             return;
         }
