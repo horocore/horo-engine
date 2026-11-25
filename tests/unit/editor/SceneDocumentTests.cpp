@@ -115,6 +115,42 @@ namespace {
         }
     }
 
+    TEST_CASE("Scene replacement review derives impact from effective edits", "[unit][editor][scene-review]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const SceneSource::SceneObjectSnapshot camera{.id = {1}, .name = "Camera", .components = {.camera = Runtime::CameraComponent{}}};
+        const SceneSource::SceneObjectSnapshot prop{.id = {2}, .name = "Prop"};
+        const SceneSource::SceneObjectSnapshot unchanged{.id = {3}, .name = "Unchanged"};
+        const SceneSource::SceneObjectSnapshot created{.id = {4}, .name = "Added"};
+        auto owner = SceneDocumentTransactions::Create({Assets::AssetId::FromBytes({1}), 1}, {camera, prop, unchanged}).Value();
+        const auto base = owner.Snapshot().Value();
+        const SceneTransactionContext context{base.session, base.revision, base.state, true, {}};
+        const auto fingerprint = [](const auto &object) {
+            return FingerprintSceneObjectContent(object, MaximumSceneObjectFingerprintBytes).Value();
+        };
+        auto moved = prop;
+        moved.localTransform.translation.x = 2.0F;
+        const auto reviewed =
+            owner.PreviewReplacements(context, {
+                                                   {.object = camera.id, .priorContent = fingerprint(camera)},
+                                                   {.object = prop.id, .priorContent = fingerprint(prop), .desired = moved},
+                                                   {.object = unchanged.id, .priorContent = fingerprint(unchanged), .desired = unchanged},
+                                                   {.object = created.id, .desired = created},
+                                               });
+        REQUIRE(reviewed.HasValue());
+        const auto &preview = reviewed.Value();
+        REQUIRE(preview.Changes().size() == 3);
+        const auto impact = preview.Impact();
+        CHECK(impact.createdObjects == 1);
+        CHECK(impact.updatedObjects == 1);
+        CHECK(impact.removedObjects == 1);
+        CHECK(impact.changesWorldTransforms);
+        CHECK(impact.changesCameras);
+        CHECK(owner.Snapshot().Value().revision == base.revision);
+        CHECK_FALSE(owner.IsDirty().Value());
+        CHECK(owner.Replay(context, false).HasError());
+    }
+
     TEST_CASE("Viewport Scene State Advances Its Mesh Resource Generation Only For Resource Changes", "[unit][editor]") {
         using namespace Horo::Editor;
 

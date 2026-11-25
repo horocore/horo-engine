@@ -16,6 +16,30 @@ namespace Horo::Editor {
             return MakeError(SceneTransactionError(reason));
         }
 
+        /** @brief Reports pose changes from the validated object values on both sides of an edit. */
+        bool ChangesWorldTransform(const SceneObjectReplacementDelta &edit) noexcept {
+            if (!edit.before || !edit.after)
+                return false;
+            const auto &before = edit.before->object;
+            const auto &after = edit.after->object;
+            return before.parent != after.parent || before.localTransform != after.localTransform;
+        }
+
+        /** @brief Summarizes canonical differences without copying object snapshots. */
+        SceneReplacementImpact DescribeReplacementImpact(const SceneObjectsReplacedDelta &delta) noexcept {
+            SceneReplacementImpact impact;
+            for (const auto &edit : delta.objects) {
+                impact.createdObjects += !edit.before;
+                impact.updatedObjects += edit.before.has_value() && edit.after.has_value();
+                impact.removedObjects += !edit.after;
+                impact.changesWorldTransforms |= ChangesWorldTransform(edit);
+                const auto before = edit.before ? edit.before->object.components.camera : std::nullopt;
+                const auto after = edit.after ? edit.after->object.components.camera : std::nullopt;
+                impact.changesCameras |= before != after;
+            }
+            return impact;
+        }
+
     }  // namespace
 
     struct SceneDocumentTransactions::State final {
@@ -472,17 +496,18 @@ namespace Horo::Editor {
         auto prepared = Prepare(context, changes, limits);
         if (prepared.HasError())
             return Result<ReplacementPreview>::Failure(prepared.ErrorValue());
+        ReplacementPreview preview;
         if (!prepared.Value()->history) {
             changes.clear();
         } else {
-            const auto &affected = prepared.Value()->history->undo.back().affectedObjects;
-            std::erase_if(changes, [&affected](const SceneObjectReplacement &change) {
-                return std::ranges::find(affected, change.object) == affected.end();
+            const auto &edit = prepared.Value()->history->undo.back();
+            preview.impact_ = DescribeReplacementImpact(std::get<SceneObjectsReplacedDelta>(edit.delta));
+            std::erase_if(changes, [&edit](const SceneObjectReplacement &change) {
+                return std::ranges::find(edit.affectedObjects, change.object) == edit.affectedObjects.end();
             });
         }
         if (auto valid = ValidatePrepared(*prepared.Value()); valid.HasError())
             return Result<ReplacementPreview>::Failure(valid.ErrorValue());
-        ReplacementPreview preview;
         preview.owner_ = lifetime_;
         preview.context_ = context;
         preview.limits_ = limits;

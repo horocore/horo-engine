@@ -3592,6 +3592,7 @@
     "workspace.viewport.shaded": {"text": "Gölgeli"},
     "workspace.viewport.review_with_agent": {"text": "AI ile incele"},
     "workspace.viewport.agent_review.summary": {"text": "Yapay zekâ {} nesnede değişiklik öneriyor."},
+    "workspace.viewport.agent_review.spatial_warning": {"text": "Öneriyi uygulamadan önce nesne yerleşimini ve kameraya etkilerini inceleyin."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (nesne {})"},
     "workspace.viewport.agent_review.enable_light": {"text": "{} üzerindeki ışığı aç (nesne {})"},
     "workspace.viewport.agent_review.disable_light": {"text": "{} üzerindeki ışığı kapat (nesne {})"},

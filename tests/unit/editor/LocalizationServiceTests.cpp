@@ -61,6 +61,7 @@ namespace {
         "workspace.mcp_commands.open_debug_capture",
         "workspace.mcp_commands.open_scene_proposals",
         "workspace.viewport.agent_review.summary",
+        "workspace.viewport.agent_review.spatial_warning",
         "workspace.viewport.agent_review.rename",
         "workspace.viewport.agent_review.enable_light",
         "workspace.viewport.agent_review.disable_light",

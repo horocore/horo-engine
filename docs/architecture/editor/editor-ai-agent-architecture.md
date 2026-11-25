@@ -723,6 +723,9 @@ and UI refresh. Agent tools do not bypass it.
 
 For authored object replacements, `SceneDocumentTransactions::PreviewReplacements`
 validates the complete batch and returns the effective typed changes for review.
+The same validated changes determine the counts of created, updated, and removed
+objects and flag camera or world-transform changes. The viewport review displays
+a spatial impact warning before approval when either flag is set.
 The review owns detached values tied to the original document opening and
 revision. After approval, the owner calls `ApplyReviewedReplacements` with fresh
 edit admission. It revalidates the reviewed batch against the live document and

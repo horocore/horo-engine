@@ -3592,6 +3592,7 @@
     "workspace.viewport.shaded": {"text": "Shaded"},
     "workspace.viewport.review_with_agent": {"text": "Review with AI"},
     "workspace.viewport.agent_review.summary": {"text": "AI proposes changes to {} object(s)."},
+    "workspace.viewport.agent_review.spatial_warning": {"text": "Review object placement and camera effects before applying this proposal."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (object {})"},
     "workspace.viewport.agent_review.enable_light": {"text": "Enable light on {} (object {})"},
     "workspace.viewport.agent_review.disable_light": {"text": "Disable light on {} (object {})"},

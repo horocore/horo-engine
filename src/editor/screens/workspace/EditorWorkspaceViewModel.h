@@ -1201,6 +1201,7 @@ namespace Horo::Editor {
             std::size_t objectCount{};
             std::vector<Rename> renames;
             std::vector<Light> lights;
+            bool requiresSpatialWarning{};
         };
 
         std::optional<AgentSceneReviewView> agentSceneReview;

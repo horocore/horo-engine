@@ -91,6 +91,15 @@ namespace Horo::Editor {
         bool committed{};
     };
 
+    /** @brief Impact derived from the effective, validated edits before approval. */
+    struct SceneReplacementImpact final {
+        std::size_t createdObjects{};
+        std::size_t updatedObjects{};
+        std::size_t removedObjects{};
+        bool changesWorldTransforms{}; /**< At least one existing object moves or changes parent. */
+        bool changesCameras{};         /**< Adds, removes or changes an authored camera component. */
+    };
+
     /** @brief Owner-thread headless port to the actual SceneDocument and EditorHistory, never a parallel authoring model.
      * @details Create owns those same canonical types for headless hosts. Bind borrows the existing editor document
      * and its one history; both outlive this port and the host admits only one port per opening. All preparation,
@@ -116,6 +125,11 @@ namespace Horo::Editor {
                 return changes_;
             }
 
+            /** @brief Summarizes the exact effective changes presented by this review. @return Detached impact values. */
+            [[nodiscard]] SceneReplacementImpact Impact() const noexcept {
+                return impact_;
+            }
+
         private:
             friend class SceneDocumentTransactions;
             ReplacementPreview() = default;
@@ -123,6 +137,7 @@ namespace Horo::Editor {
             SceneTransactionContext context_;
             SceneTransactionLimits limits_;
             std::vector<SceneObjectReplacement> changes_;
+            SceneReplacementImpact impact_;
         };
 
         /** @brief Validate a detached batch for review without mutating the document or history.

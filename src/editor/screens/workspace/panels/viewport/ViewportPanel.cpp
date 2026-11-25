@@ -47,6 +47,8 @@ namespace Horo::Editor {
             const auto summary = std::vformat(localization.Get("editor", "workspace.viewport.agent_review.summary"),
                                               std::make_format_args(review.objectCount));
             ImGui::TextWrapped("%s", summary.c_str());
+            if (review.requiresSpatialWarning)
+                ImGui::TextWrapped("%s", localization.Get("editor", "workspace.viewport.agent_review.spatial_warning").c_str());
             DrawSceneReviewDetails(review, localization);
             const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
             const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");

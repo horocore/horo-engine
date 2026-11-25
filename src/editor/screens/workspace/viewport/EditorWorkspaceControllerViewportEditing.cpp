@@ -20,6 +20,31 @@ namespace Horo::Editor {
         Error RejectReview(SceneTransactionFailure failure) {
             return MakeError(SceneTransactionError(failure));
         }
+
+        /** @brief Detached view data and position changes consumed by the existing viewport preview. */
+        struct AgentSceneReviewProjection final {
+            EditorWorkspaceViewModel::AgentSceneReviewView view;
+            std::vector<SceneObjectTransformUpdate> transforms;
+        };
+
+        /** @brief Projects only effective, validated changes to existing objects. */
+        AgentSceneReviewProjection ProjectAgentSceneReview(const SceneDocumentTransactions::ReplacementPreview &preview,
+                                                           const std::span<const SceneObjectSnapshot> objects) {
+            const auto impact = preview.Impact();
+            AgentSceneReviewProjection result;
+            result.view.objectCount = impact.updatedObjects;
+            result.view.requiresSpatialWarning = impact.changesWorldTransforms || impact.changesCameras;
+            for (const auto &change : preview.Changes()) {
+                const auto &prior = *std::ranges::find(objects, change.object, &SceneObjectSnapshot::id);
+                if (prior.localTransform != change.desired->localTransform)
+                    result.transforms.push_back({change.object, change.desired->localTransform});
+                if (prior.name != change.desired->name)
+                    result.view.renames.push_back({prior.id.value, prior.name, change.desired->name});
+                if (prior.components.light != change.desired->components.light)
+                    result.view.lights.push_back({prior.id.value, prior.name, change.desired->components.light->enabled});
+            }
+            return result;
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::CanReviewAgentSceneEdits */
@@ -135,21 +160,11 @@ namespace Horo::Editor {
             return Output::Failure(preview.ErrorValue());
         if (preview.Value().Changes().empty())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        EditorWorkspaceViewModel::AgentSceneReviewView view{.objectCount = preview.Value().Changes().size()};
-        std::vector<SceneObjectTransformUpdate> effective;
-        const auto &objects = m_document.Objects();
-        for (const auto &change : preview.Value().Changes()) {
-            const auto &prior = *std::ranges::find(objects, change.object, &SceneObjectSnapshot::id);
-            if (prior.localTransform != change.desired->localTransform)
-                effective.push_back({change.object, change.desired->localTransform});
-            if (prior.name != change.desired->name)
-                view.renames.push_back({prior.id.value, prior.name, change.desired->name});
-            if (prior.components.light != change.desired->components.light)
-                view.lights.push_back({prior.id.value, prior.name, change.desired->components.light->enabled});
-        }
-        if (!effective.empty())
-            PreviewObjectTransforms(effective);
-        if (m_viewport.Current().transformPreviews.size() != effective.size())
+        auto projection = ProjectAgentSceneReview(preview.Value(), m_document.Objects());
+        auto &view = projection.view;
+        if (!projection.transforms.empty())
+            PreviewObjectTransforms(projection.transforms);
+        if (m_viewport.Current().transformPreviews.size() != projection.transforms.size())
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
         auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
         if (!view.lights.empty())
