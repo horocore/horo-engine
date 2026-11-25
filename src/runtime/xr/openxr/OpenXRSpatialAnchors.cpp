@@ -97,6 +97,19 @@ namespace Horo::XR::OpenXRInternal {
                ResolveFunction(native, getProc, "xrLocateSpace", locate);
     }
 
+    /** @copydoc OpenXRNativeSession::SpatialAnchors::AttachSpace */
+    XrResult OpenXRNativeSession::SpatialAnchors::AttachSpace(Slot &slot, XrSession session) {
+        const XrSpatialAnchorSpaceCreateInfoMSFT info{XR_TYPE_SPATIAL_ANCHOR_SPACE_CREATE_INFO_MSFT,
+                                                      nullptr,
+                                                      slot.anchor,
+                                                      {{0, 0, 0, 1}, {0, 0, 0}}};
+        XrSpace space{XR_NULL_HANDLE};
+        const auto status = createSpace(session, &info, &space);
+        if (XR_SUCCEEDED(status))
+            slot.space = space;
+        return status;
+    }
+
     Result<void> OpenXRNativeSession::SpatialAnchors::Release(Slot &slot) {
         slot.id = {};
         if (slot.space != XR_NULL_HANDLE) {
@@ -206,16 +219,9 @@ namespace Horo::XR::OpenXRInternal {
         auto status = anchors_.create(session_, &info, &created);
         if (XR_SUCCEEDED(status))
             free->anchor = created;
-        if (status == XR_SUCCESS && free->anchor != XR_NULL_HANDLE) {
-            const XrSpatialAnchorSpaceCreateInfoMSFT space{XR_TYPE_SPATIAL_ANCHOR_SPACE_CREATE_INFO_MSFT,
-                                                           nullptr,
-                                                           free->anchor,
-                                                           {{0, 0, 0, 1}, {0, 0, 0}}};
-            XrSpace located{XR_NULL_HANDLE};
-            status = anchors_.createSpace(session_, &space, &located);
-            if (XR_SUCCEEDED(status))
-                free->space = located;
-        }
+        const auto prepared = publication.Value()->CheckScope(scope);
+        if (status == XR_SUCCESS && free->anchor != XR_NULL_HANDLE && prepared.HasValue())
+            status = anchors_.AttachSpace(*free, session_);
         const auto current = publication.Value()->Read(scope, id.Value(), now);
         if (status == XR_SUCCESS && free->space != XR_NULL_HANDLE && current.HasValue()) {
             free->id = id.Value();
@@ -226,11 +232,10 @@ namespace Horo::XR::OpenXRInternal {
             anchors_.Withdraw(*reason);
         else
             (void)publication.Value()->Retire(scope, id.Value());
-        if (const auto released = anchors_.Release(*free); released.HasError())
-            return Outcome::Failure(released.ErrorValue());
-        if (current.HasError())
-            return Outcome::Failure(current.ErrorValue());
-        return Outcome::Failure(AnchorFailure("OpenXR anchor creation", status));
+        auto failure = current.HasError() ? current.ErrorValue() : AnchorFailure("OpenXR anchor creation", status);
+        if (auto released = anchors_.Release(*free); released.HasError())
+            failure = WithCause(std::move(released).ErrorValue(), std::move(failure));
+        return Outcome::Failure(std::move(failure));
     }
 
     Result<void> OpenXRNativeSession::SampleSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id,

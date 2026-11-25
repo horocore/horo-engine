@@ -706,6 +706,8 @@ namespace Horo::XR::OpenXRInternal {
             bool withdrawn{}; /**< A lifecycle event withdrew consent, including during provider preparation. */
 
             [[nodiscard]] bool Resolve(const NativeSessionBorrow &native, PFN_xrGetInstanceProcAddr getProc);
+            /** @brief Creates the reference space for an owned anchor, retaining any handle returned on success for retirement. */
+            [[nodiscard]] XrResult AttachSpace(Slot &slot, XrSession session);
             [[nodiscard]] Result<void> Release(Slot &slot);
             void Withdraw(XRAnchorWithdrawal reason);
         } anchors_;

@@ -710,6 +710,20 @@ namespace Horo::Tests::OpenXR {
                 RequireFailureIdentity(advance(122), XRErrors::PermissionDenied);
                 RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
             }
+            SECTION("native query denial revokes old geometry even when snapshot cleanup fails") {
+                geometry.result = XR_ERROR_PERMISSION_INSUFFICIENT;
+                script.failSnapshotDestroy = true;
+                const auto failed = advance(122);
+                RequireFailureIdentity(failed, XRErrors::OperationUnavailable);
+                REQUIRE(failed.ErrorValue().cause.Get());
+                CHECK(failed.ErrorValue().cause.Get()->code.Value() == XRErrors::PermissionDenied.code.Value());
+                CHECK(script.hasSnapshot);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+                RequireFailureIdentity(capture.Close(), XRErrors::OperationUnavailable);
+                script.failSnapshotDestroy = false;
+                REQUIRE(capture.Close().HasValue());
+                CHECK_FALSE(script.hasSnapshot);
+            }
             SECTION("withdrawal in a native callback stops the remaining reads and permits a new grant after retirement") {
                 enum class Revocation {
                     Poll,

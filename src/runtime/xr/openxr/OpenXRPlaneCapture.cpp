@@ -37,6 +37,12 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
+        /** @brief Identifies errors that invalidate all observations already published under the grant. */
+        bool ObservationAccessLost(const Error &failure) noexcept {
+            const auto code = failure.code.Value();
+            return code == XRErrors::PermissionDenied.code.Value() || code == XRErrors::IdentityStale.code.Value();
+        }
+
         /** @brief Resolves one enabled native symbol from the exact instance's loader. */
         template <typename Function> bool Load(const NativeDiscoveryBorrow &owner, const char *name, Function &output) {
             PFN_xrVoidFunction function{};
@@ -240,8 +246,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto result = dispatch_.startScan(context_, &request, &future_);
         if (result != XR_SUCCESS) {
             const auto failure = CaptureError("xrCreateSpatialDiscoverySnapshotAsyncEXT", result);
-            if (failure.code.Value() == XRErrors::PermissionDenied.code.Value() ||
-                failure.code.Value() == XRErrors::IdentityStale.code.Value())
+            if (ObservationAccessLost(failure))
                 publication_.Revoke();
             return Result<bool>::Failure(failure);
         }
@@ -266,25 +271,29 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(
                 CaptureError("xrCreateSpatialDiscoverySnapshotCompleteEXT", result != XR_SUCCESS ? result : completed.futureResult));
         }
+        return ReadCompletedScan(now);
+    }
+
+    /** @copydoc OpenXRPlaneCapture::ReadCompletedScan */
+    Result<bool> OpenXRPlaneCapture::ReadCompletedScan(XRRuntimeTime now) {
+        using Outcome = Result<bool>;
         const NativePlaneReadAuthorization authorization{this, [](const void *context) {
             const auto &capture = *static_cast<const OpenXRPlaneCapture *>(context);
             return capture.ConsentCurrent() && capture.publication_.IsDue(capture.scope_, capture.lastCutoff_).HasValue();
         }};
         const auto batch = ReadNativeSpatialPlanes(snapshot_, dispatch_.query, census_, limits_.maximumPlanes, authorization);
-        const auto destroyed = ReleaseSnapshot();
+        if (batch.HasError() && ObservationAccessLost(batch.ErrorValue()))
+            publication_.Revoke();
+        auto destroyed = ReleaseSnapshot();
         if (destroyed.HasError())
-            return Outcome::Failure(destroyed.ErrorValue());
+            return Outcome::Failure(batch.HasError() ? WithCause(std::move(destroyed).ErrorValue(), batch.ErrorValue())
+                                                     : std::move(destroyed).ErrorValue());
         if (!ConsentCurrent()) {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         }
-        if (batch.HasError()) {
-            const auto &failure = batch.ErrorValue();
-            if (failure.code.Value() == XRErrors::PermissionDenied.code.Value() ||
-                failure.code.Value() == XRErrors::IdentityStale.code.Value())
-                publication_.Revoke();
-            return Outcome::Failure(failure);
-        }
+        if (batch.HasError())
+            return Outcome::Failure(batch.ErrorValue());
         const auto published = Publish(batch.Value(), now);
         return published.HasError() ? Outcome::Failure(published.ErrorValue()) : Outcome::Success(true);
     }

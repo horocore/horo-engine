@@ -1182,6 +1182,12 @@ admission to the anchor store and invalidates the consent generation used by
 plane capture and eye gaze. The editor checks that same generation before
 returning its cached gaze sample. Native handle destruction remains on the
 owner lane after any in-flight borrow completes.
+Anchor creation and restore recheck their grants before creating a reference
+space. If access was withdrawn while the native anchor call was in flight,
+the owner retires the partial anchor and leaves existing durable records intact.
+If a native plane query reports permission or session loss, previous geometry
+is withdrawn before snapshot retirement. Failed destruction remains retryable
+without restoring access to the observations.
 
 The FB reconstruction passthrough route requires an explicitly enabled
 version-3-or-newer extension, a separate operator grant, two admitted layer

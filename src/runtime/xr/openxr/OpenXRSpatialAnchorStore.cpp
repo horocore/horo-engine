@@ -292,30 +292,23 @@ namespace Horo::XR::OpenXRInternal {
         auto status = anchorStore_.restore(session_, &info, &restored);
         if (XR_SUCCEEDED(status))
             slot->anchor = restored;
-        if (status == XR_SUCCESS && restored != XR_NULL_HANDLE) {
-            const XrSpatialAnchorSpaceCreateInfoMSFT space{XR_TYPE_SPATIAL_ANCHOR_SPACE_CREATE_INFO_MSFT,
-                                                           nullptr,
-                                                           restored,
-                                                           {{0, 0, 0, 1}, {0, 0, 0}}};
-            XrSpace located{XR_NULL_HANDLE};
-            status = anchors_.createSpace(session_, &space, &located);
-            if (XR_SUCCEEDED(status))
-                slot->space = located;
+        auto current = BorrowAnchorStore(scope, world);
+        if (status == XR_SUCCESS && slot->anchor != XR_NULL_HANDLE && current.HasValue()) {
+            status = anchors_.AttachSpace(*slot, session_);
+            current = BorrowAnchorStore(scope, world);
         }
-        const auto current = BorrowAnchorStore(scope, world);
         if (status == XR_SUCCESS && slot->space != XR_NULL_HANDLE && current.HasValue()) {
             slot->id = id.Value();
             slot->lastSample = now;
             return Outcome::Success(id.Value());
         }
         (void)active.Value()->Retire(scope, id.Value());
+        auto failure = current.HasError() ? current.ErrorValue() : StoreFailure(status);
         if (auto retired = anchors_.Release(*slot); retired.HasError())
-            return Outcome::Failure(retired.ErrorValue());
-        if (current.HasError())
-            return Outcome::Failure(current.ErrorValue());
-        if (status == XR_ERROR_SPATIAL_ANCHOR_NAME_NOT_FOUND_MSFT)
+            return Outcome::Failure(WithCause(std::move(retired).ErrorValue(), std::move(failure)));
+        if (current.HasValue() && status == XR_ERROR_SPATIAL_ANCHOR_NAME_NOT_FOUND_MSFT)
             return Outcome::Success(std::nullopt);
-        return Outcome::Failure(StoreFailure(status));
+        return Outcome::Failure(std::move(failure));
     }
 
     Result<void> OpenXRNativeSession::SpatialAnchorStore::UndoPendingWrite() {

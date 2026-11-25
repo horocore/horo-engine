@@ -70,6 +70,7 @@ namespace Horo::Tests::OpenXR {
         static inline const auto ScanFuture = NativeHandle<XrFutureEXT>(17);
         bool ready{};
         bool failDestroy{};
+        bool failSnapshotDestroy{};
         XrResult completeResult{XR_SUCCESS};
         std::uint32_t contextStarts{};
         std::uint32_t scans{};
@@ -158,6 +159,8 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL DestroySnapshot(XrSpatialSnapshotEXT) {
             CHECK(current->hasSnapshot);
+            if (current->failSnapshotDestroy)
+                return XR_ERROR_RUNTIME_FAILURE;
             current->hasSnapshot = false;
             return XR_SUCCESS;
         }

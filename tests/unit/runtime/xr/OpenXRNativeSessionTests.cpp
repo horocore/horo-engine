@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <string>
 
 namespace Horo::Tests::OpenXR {
@@ -97,7 +98,9 @@ namespace Horo::Tests::OpenXR {
         struct AnchorStoreScript final {
             static inline thread_local AnchorStoreScript *active{};
             std::optional<XrSpatialAnchorPersistenceNameMSFT> entry;
+            std::function<void()> afterCreate;
             CancellationSource *revokeOnPersist{};
+            CancellationSource *revokeOnRestore{};
 
             AnchorStoreScript() {
                 active = this;
@@ -105,6 +108,14 @@ namespace Horo::Tests::OpenXR {
 
             ~AnchorStoreScript() {
                 active = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession session, const XrSpatialAnchorCreateInfoMSFT *info,
+                                                         XrSpatialAnchorMSFT *out) {
+                const auto status = AnchorScript::Create(session, info, out);
+                if (active->afterCreate)
+                    active->afterCreate();
+                return status;
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Open(XrSession, XrSpatialAnchorStoreConnectionMSFT *out) {
@@ -139,6 +150,8 @@ namespace Horo::Tests::OpenXR {
                 if (!active->entry || std::string_view{active->entry->name} != info->spatialAnchorPersistenceName.name)
                     return XR_ERROR_SPATIAL_ANCHOR_NAME_NOT_FOUND_MSFT;
                 *out = NativeHandle<XrSpatialAnchorMSFT>(21);
+                if (active->revokeOnRestore)
+                    active->revokeOnRestore->RequestCancellation();
                 return Script::Record("anchor-store-restore");
             }
 
@@ -150,7 +163,8 @@ namespace Horo::Tests::OpenXR {
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance instance, const char *name, PFN_xrVoidFunction *out) {
-                const std::array entries{std::pair{"xrCreateSpatialAnchorStoreConnectionMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Open)},
+                const std::array entries{std::pair{"xrCreateSpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Create)},
+                                         std::pair{"xrCreateSpatialAnchorStoreConnectionMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Open)},
                                          std::pair{"xrDestroySpatialAnchorStoreConnectionMSFT",
                                                    reinterpret_cast<PFN_xrVoidFunction>(&Close)},
                                          std::pair{"xrPersistSpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Persist)},
@@ -293,6 +307,14 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
         const auto createdAt = XRRuntimeTime::Create(10).Value();
         const auto observedAt = XRRuntimeTime::Create(20).Value();
+        SECTION("focus interruption after native creation skips reference-space creation") {
+            storage.afterCreate = [&fixture, &lifecycle] { InterruptAnchorFocus(fixture.owner, *lifecycle, fixture.script.lastSession); };
+            RequireFailureIdentity(fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt), XRErrors::IdentityStale);
+            CHECK(std::ranges::find(fixture.script.calls, "anchor-space") == fixture.script.calls.end());
+            CHECK(fixture.script.calls.back() == "destroy-anchor");
+            REQUIRE(fixture.owner.Close().HasValue());
+            return;
+        }
         const auto anchor = fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt);
         REQUIRE(anchor.HasValue());
         RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
@@ -361,6 +383,18 @@ namespace Horo::Tests::OpenXR {
             CHECK(fixture.script.calls.back() == "anchor-store-remove");
             REQUIRE(fixture.owner.CloseSpatialAnchorStore(scope).HasValue());
             REQUIRE(publication->Read(scope, anchor.Value(), observedAt).HasValue());
+            REQUIRE(fixture.owner.Close().HasValue());
+        }
+        SECTION("revocation during native restore skips the space and preserves the stored record") {
+            REQUIRE(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one").HasValue());
+            REQUIRE(fixture.owner.RetireSpatialAnchor(scope, world, anchor.Value()).HasValue());
+            const auto spacesBefore = std::ranges::count(fixture.script.calls, "anchor-space");
+            storage.revokeOnRestore = &consent;
+            RequireFailureIdentity(fixture.owner.RestoreSpatialAnchor(scope, world, observedAt, "key-one"), XRErrors::PermissionDenied);
+            CHECK(std::ranges::count(fixture.script.calls, "anchor-space") == spacesBefore);
+            CHECK(fixture.script.calls.back() == "destroy-anchor");
+            REQUIRE(storage.entry);
+            CHECK(std::string_view{storage.entry->name} == "key-one");
             REQUIRE(fixture.owner.Close().HasValue());
         }
         SECTION("failed compensation fences the store until explicit retirement retries") {

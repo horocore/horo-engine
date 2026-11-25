@@ -66,6 +66,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<bool> Poll(const NativeSessionBorrow &native, XRRuntimeTime now);
         [[nodiscard]] Result<bool> FinishContext(const NativeSessionBorrow &native);
         [[nodiscard]] Result<bool> FinishScan(XRRuntimeTime now);
+        /** @brief Reads the completed scan and revokes denied observations before attempting native cleanup. */
+        [[nodiscard]] Result<bool> ReadCompletedScan(XRRuntimeTime now);
         [[nodiscard]] Result<bool> QueueScan(XRRuntimeTime now);
         [[nodiscard]] Result<void> Publish(const NativeSpatialPlaneBatch &batch, XRRuntimeTime now);
         [[nodiscard]] Result<void> ReleaseSnapshot();
