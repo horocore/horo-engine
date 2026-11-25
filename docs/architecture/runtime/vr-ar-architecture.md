@@ -1380,6 +1380,10 @@ Every result is `Passed`, `PassedWithLimitations`, `Failed`, `Blocked`, or
 `NotRun`, with evidence provenance and known issues. Simulator and replay results
 are never reported as physical-device qualification. Refresh rates and render
 extents are recorded from runtime enumeration, not a static headset table.
+The OpenXR editor host enables the optional display refresh rate extension
+when the runtime exposes it. The prepared session records its bounded,
+ascending list in integer millihertz. Unsupported or invalid enumeration
+leaves the list empty. Session loss during enumeration rejects preparation.
 
 ## Performance, Concurrency, And Shutdown
 

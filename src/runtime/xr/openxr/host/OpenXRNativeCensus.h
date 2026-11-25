@@ -63,11 +63,20 @@ namespace Horo::XR::OpenXRInternal {
         std::array<Render::FramebufferExtent, 2> extents{}; /**< Both set only after an enabled and validated native query. */
     };
 
+    /** @brief Bounded rates from the current session's optional native enumeration. */
+    struct NativeDisplayRates final {
+        static constexpr std::size_t MaximumRates = 32;
+        XRCapabilityState state{XRCapabilityState::Unsupported};
+        std::array<std::uint32_t, MaximumRates> milliHertz{};
+        std::uint32_t count{};
+    };
+
     /** @brief Session-dependent exact publications, observed only after actual native session creation. */
     struct NativeSessionCensus final {
         std::array<XrReferenceSpaceType, 16> spaces{};
         std::uint32_t spaceCount{};
         std::array<std::int64_t, 128> formats{};
         std::uint32_t formatCount{};
+        NativeDisplayRates displayRates;
     };
 }  // namespace Horo::XR::OpenXRInternal

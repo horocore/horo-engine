@@ -104,6 +104,7 @@ namespace Horo::Application::Internal {
                 Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
+                Selection{{XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME}, true},
                 Selection{{XR_HTC_FOVEATION_EXTENSION_NAME}, fixedFoveation},
                 Selection{{XR_VARJO_QUAD_VIEWS_EXTENSION_NAME}, quadViews},
                 Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},

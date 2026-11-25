@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <format>
 #include <iterator>
 
@@ -413,6 +414,50 @@ namespace Horo::XR::OpenXRInternal {
             return XRCapabilityState::DependencyMissing;
         }
 
+        /** @brief Converts the complete ascending native list to the evidence unit without partial publication. */
+        NativeDisplayRates ConvertDisplayRates(const std::span<const float> rates) {
+            NativeDisplayRates result{XRCapabilityState::Available};
+            constexpr double MaximumMilliHertz = 1'000'000;
+            std::uint32_t previous{};
+            for (const auto rate : rates) {
+                const double scaled = static_cast<double>(rate) * 1000;
+                if (!std::isfinite(scaled) || scaled <= 0 || scaled > MaximumMilliHertz)
+                    return {XRCapabilityState::Incompatible};
+                const auto value = static_cast<std::uint32_t>(std::lround(scaled));
+                if (value <= previous)
+                    return {XRCapabilityState::Incompatible};
+                result.milliHertz[result.count++] = value;
+                previous = value;
+            }
+            return result;
+        }
+
+        /** @brief Reads the optional display rates from the exact prepared session. */
+        Result<NativeDisplayRates> ReadDisplayRates(const NativeDiscoveryBorrow &owner, const XrSession session) {
+            using Outcome = Result<NativeDisplayRates>;
+            if (!Enabled(owner, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
+                return Outcome::Success({});
+            constexpr auto operation = "xrEnumerateDisplayRefreshRatesFB";
+            const auto query = Resolve<PFN_xrEnumerateDisplayRefreshRatesFB>(owner, operation);
+            if (query.HasError())
+                return Outcome::Success({XRCapabilityState::Unavailable});
+            std::array<float, NativeDisplayRates::MaximumRates> storage{};
+            XrResult status{};
+            const auto count = Enumerate([&](XrSession target, std::uint32_t capacity, std::uint32_t *written, float *values) {
+                status = query.Value()(target, capacity, written, values);
+                return status == XR_SESSION_LOSS_PENDING ? XR_ERROR_SESSION_LOST : status;
+            }, operation, storage, session);
+            if (status == XR_SESSION_LOSS_PENDING || status == XR_ERROR_SESSION_LOST || status == XR_ERROR_INSTANCE_LOST)
+                return Outcome::Failure(QueryFailure(operation, status));
+            if (count.HasError()) {
+                const auto &code = count.ErrorValue().code;
+                if (code.Value() == XRErrors::OperationUnsupported.code.Value())
+                    return Outcome::Success({});
+                return Outcome::Success({status == XR_SUCCESS ? XRCapabilityState::Incompatible : SpatialCensusFailure(status)});
+            }
+            return Outcome::Success(ConvertDisplayRates(std::span{storage}.first(count.Value())));
+        }
+
         /** @brief Reads only session-dependent publications from the exact existing unpublished native session. */
         Result<NativeSessionCensus> ReadSession(const NativeDiscoveryBorrow &owner, const XrSession session) {
             using Outcome = Result<NativeSessionCensus>;
@@ -433,6 +478,10 @@ namespace Horo::XR::OpenXRInternal {
             census.formatCount = formatCount.Value();
             if (!Unique(census.spaces, census.spaceCount) || !Unique(census.formats, census.formatCount))
                 return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Duplicate native session publication"));
+            auto displayRates = ReadDisplayRates(owner, session);
+            if (displayRates.HasError())
+                return Outcome::Failure(std::move(displayRates).ErrorValue());
+            census.displayRates = displayRates.Value();
             return Outcome::Success(census);
         }
     }  // namespace

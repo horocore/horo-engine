@@ -17,6 +17,9 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t spaces{2};
         std::uint32_t formats{2};
         std::span<const std::int64_t> formatPublication;
+        std::span<const float> displayRates;
+        bool changedDisplayRateCount{};
+        XrResult displayRateResult{XR_SUCCESS};
         bool duplicateSpaces{};
         bool invalidView{};
         bool handsSupported{};
@@ -204,6 +207,21 @@ namespace Horo::Tests::OpenXR {
             return Record("formats");
         }
 
+        static XRAPI_ATTR XrResult XRAPI_CALL DisplayRates(XrSession session, const std::uint32_t capacity, std::uint32_t *count,
+                                                           float *values) {
+            CHECK(session == Script::active->lastSession);
+            *count = static_cast<std::uint32_t>(active->displayRates.size());
+            if (capacity && capacity < *count)
+                return XR_ERROR_SIZE_INSUFFICIENT;
+            if (capacity) {
+                std::ranges::copy(active->displayRates, values);
+                if (active->changedDisplayRateCount)
+                    --*count;
+            }
+            active->calls.push_back("display-rates");
+            return active->displayRateResult;
+        }
+
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
             if (active->extraProc && instance != XR_NULL_HANDLE) {
                 const auto extra = active->extraProc(instance, name, function);
@@ -225,7 +243,8 @@ namespace Horo::Tests::OpenXR {
                                      Entry{"xrEnumerateViewConfigurationViews", std::bit_cast<PFN_xrVoidFunction>(&Views)},
                                      Entry{"xrEnumerateEnvironmentBlendModes", std::bit_cast<PFN_xrVoidFunction>(&BlendModes)},
                                      Entry{"xrEnumerateReferenceSpaces", std::bit_cast<PFN_xrVoidFunction>(&Spaces)},
-                                     Entry{"xrEnumerateSwapchainFormats", std::bit_cast<PFN_xrVoidFunction>(&Formats)}};
+                                     Entry{"xrEnumerateSwapchainFormats", std::bit_cast<PFN_xrVoidFunction>(&Formats)},
+                                     Entry{"xrEnumerateDisplayRefreshRatesFB", std::bit_cast<PFN_xrVoidFunction>(&DisplayRates)}};
             const auto found = std::ranges::find(entries, std::string_view{name}, &Entry::name);
             if (found == entries.end())
                 return Script::GetProc(instance, name, function);

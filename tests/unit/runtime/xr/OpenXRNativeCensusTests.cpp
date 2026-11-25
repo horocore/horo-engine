@@ -975,6 +975,62 @@ namespace Horo::Tests::OpenXR {
         CHECK(actual.Value().spaces[1] == XR_REFERENCE_SPACE_TYPE_LOCAL);
         CHECK(actual.Value().formatCount == 2);
         CHECK(actual.Value().formats[0] == 37);
+        CHECK(actual.Value().displayRates.state == XRCapabilityState::Unsupported);
+        CHECK(std::ranges::find(fixture.census.calls, "display-rates") == fixture.census.calls.end());
+        CHECK_FALSE(fixture.owner.Session().IsValid());
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR display census validates the optional runtime list before publishing any rates", "[unit][xr][native][display]") {
+        CensusFixture fixture;
+        constexpr std::array<std::string_view, 1> extensions{XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME};
+        const std::array routes{NativeExtensionRequest{extensions.front()}};
+        fixture.native.extraExtensions = extensions;
+        ++fixture.native.extensionCount;
+        auto discovery = fixture.Discovery();
+        discovery.extensions = routes;
+        std::array rates{59.94F, 72.0F, 120.0F};
+        std::array<float, NativeDisplayRates::MaximumRates + 1> overflow{};
+        fixture.census.displayRates = rates;
+        auto expected = XRCapabilityState::Available;
+        SECTION("the exact runtime rates are expressed in millihertz") {}
+        SECTION("too many rates leave no partial observation") {
+            fixture.census.displayRates = overflow;
+            expected = XRCapabilityState::Incompatible;
+        }
+        SECTION("a changed count leaves no partial observation") {
+            fixture.census.changedDisplayRateCount = true;
+            expected = XRCapabilityState::Incompatible;
+        }
+        SECTION("invalid rates leave no partial observation") {
+            rates.back() = std::numeric_limits<float>::quiet_NaN();
+            expected = XRCapabilityState::Incompatible;
+        }
+        SECTION("out-of-order rates leave no partial observation") {
+            std::swap(rates.front(), rates.back());
+            expected = XRCapabilityState::Incompatible;
+        }
+        SECTION("observed session loss prevents a successful census") {
+            fixture.census.displayRateResult = XR_SESSION_LOSS_PENDING;
+        }
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+        REQUIRE(fixture.owner.PrepareSession(fixture.Preparation()).HasValue());
+        const auto observed = fixture.owner.DiscoverSession(fixture.Preparation());
+        if (fixture.census.displayRateResult == XR_SESSION_LOSS_PENDING) {
+            CHECK(observed.HasError());
+        } else {
+            REQUIRE(observed.HasValue());
+            const auto &display = observed.Value().displayRates;
+            CHECK(display.state == expected);
+            if (expected == XRCapabilityState::Available) {
+                REQUIRE(display.count == 3);
+                const std::array expectedRates{59'940U, 72'000U, 120'000U};
+                CHECK(std::ranges::equal(std::span{display.milliHertz}.first(display.count), expectedRates));
+            } else {
+                CHECK(display.count == 0);
+                CHECK(display.milliHertz.front() == 0);
+            }
+        }
         CHECK_FALSE(fixture.owner.Session().IsValid());
         REQUIRE(fixture.owner.Close().HasValue());
     }
