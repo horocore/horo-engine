@@ -2364,12 +2364,21 @@ The application validates the localized message references before binding its
 HUD timeline. The project can omit this presentation object, and caption text
 stays in the presentation owner.
 
+The desktop Editor Play preview supplies the `gameplay.interact` action and
+a dedicated caption timeline. The project input profile chooses its physical
+binding. The viewport preview consumes the current semantic timeline through
+the editor text surface, the captured caption appearance and the canonical
+safe-area placement rules. Captions appear when the user's caption setting
+is enabled. Preview drawing is scoped to the desktop authored-camera view.
+The timeline issues a new caption session when Play changes Scenes, including
+when a new workspace restarts its local Scene identity sequence.
+
 The application binds a remote provider only when its separate approval matches
 the authorized project source fingerprint, route, and provider generation.
 Only the intersection of the project and host field lists is disclosed. An
 absent policy leaves dialogue inactive. A policy without matching approval
 can use the authored offline fallback. The project document has no URL,
-certificate, or credentials fields. Default executable HUD wiring and
+certificate, or credentials fields. Packaged and headset caption output and
 production provider qualification remain open. See
 [ADR-182](../../adr/182-advanced-gameplay-ai-provider-authority.md).
 

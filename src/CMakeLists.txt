@@ -4505,6 +4505,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/game/GameAgentInspection.cpp
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
+            editor/screens/workspace/panels/viewport/ViewportPlayCaptions.cpp
             editor/screens/workspace/panels/viewport/sources/WorldSourceViewportTool.cpp
             editor/screens/workspace/panels/viewport/sources/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
@@ -4652,6 +4653,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
     target_link_libraries(HoroGui PRIVATE HoroFoundationJsonInternal)
     target_link_libraries(HoroGui PRIVATE HoroEditorControlMetadataInternal)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::RuntimeUi)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui

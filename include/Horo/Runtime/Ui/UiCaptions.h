@@ -153,6 +153,14 @@ namespace Horo::Runtime::Ui {
      */
     class CaptionTimeline final {
     public:
+        /** @brief Returns the next generation available to this UI owner, or zero after exhaustion.
+         * @return Candidate generation to use for a queue and its matching timeline reset.
+         * @details Read and admit it synchronously on the owner thread. It does not activate a session.
+         */
+        [[nodiscard]] std::uint64_t NextSessionId() const noexcept {
+            return lastSession_ + 1;
+        }
+
         /** @brief Starts a new non-reusable session and cancels all old cues/catalog leases.
          * @param session Strictly increasing host generation; zero cancels without permitting generation reuse.
          * @return Success or CaptionInvalid for a reused generation, preserving current cues on failure.

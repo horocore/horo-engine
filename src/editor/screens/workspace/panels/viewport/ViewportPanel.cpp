@@ -6,6 +6,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
+#include "ViewportPlayCaptions.h"
 #include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/terrain/viewport/TerrainViewportTool.h"
@@ -18,6 +19,14 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Presents captions only over the active desktop Play camera. */
+        void DrawDesktopPlayCaptions(ImDrawList &draw, ImVec2 origin, ImVec2 extent, const EditorWorkspaceViewModel &view,
+                                     const EditorGuiContext &context) {
+            if (context.playCaptions && view.playViewSource == EditorPlayViewSource::AuthoredCamera &&
+                (view.playState == EditorPlayState::Playing || view.playState == EditorPlayState::Paused))
+                DrawViewportPlayCaptions(draw, origin, extent, context.theme.fonts, *context.playCaptions);
+        }
+
         /** @brief Formats an authored vector for the text alternative to a spatial preview. */
         std::string ReviewValue(const Math::Vec3 &value) {
             return std::format("({}, {}, {})", value.x, value.y, value.z);
@@ -285,6 +294,7 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F) {
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
             DrawViewportStreamingPreview(drawList, origin, {width, height}, viewModel, context, viewportRenderer_->ClipDepthRange());
+            DrawDesktopPlayCaptions(drawList, origin, {width, height}, viewModel, context);
         } else
             interaction_.CancelForUnavailableSurface(command);
 

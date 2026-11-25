@@ -137,6 +137,7 @@
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
+#include "editor/screens/workspace/panels/viewport/ViewportPlayCaptions.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/renderer/EditorGuiComposition.h"
 #include "editor/renderer/EditorGuiRenderer.h"
@@ -4552,6 +4553,11 @@ namespace Horo::Editor {
                 };
             }
 #endif
+            const auto playCaptionTimeline = std::make_shared<Runtime::Ui::CaptionTimeline>();
+            const EditorPlayCaptionPreview playCaptionPreview{*playCaptionTimeline, p.configuration, p.localization};
+            guiContext.playCaptions = &playCaptionPreview;
+            playPolicy.authoredNpcDialogue =
+                Application::Internal::EditorPlayAuthoredNpcDialogue{Gameplay::GameplayActionId{kGameplayInteractAction}, playCaptionTimeline};
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, std::move(playPolicy));
             auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.

@@ -32,6 +32,7 @@ namespace Horo::Editor {
     class ILocalizationService;
     class UpdateExperienceSession;
     struct EditorSettingsSnapshot;
+    struct EditorPlayCaptionPreview;
 
     /** @brief Editor-facing microphone permission status, independent of any capture session. */
     enum class EditorMicrophonePermissionStatus {
@@ -136,5 +137,6 @@ namespace Horo::Editor {
         const Input::InputRouter *inputRouter = nullptr; /**< Borrowed host-owned effective binding authority, outliving GUI draws. */
         IEditorMicrophonePermission *microphonePermission = nullptr; /**< Optional host-owned microphone permission controls. */
         IEditorMicrophoneRecorder *microphoneRecorder = nullptr;     /**< Optional host-owned project recording controls. */
+        const EditorPlayCaptionPreview *playCaptions = nullptr; /**< Owner-lane desktop Play HUD preview. */
     };
 }  // namespace Horo::Editor

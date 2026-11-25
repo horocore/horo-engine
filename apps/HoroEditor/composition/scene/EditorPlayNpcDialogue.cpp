@@ -110,7 +110,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::BindNpcDialogueScene(NpcDialogueState &state, const AI::AiSceneActivationBinding &binding) {
         if (state.channel)
             RetireNpcDialogueScene(state);
-        auto queue = Runtime::Ui::CaptionCueQueue::Create(binding.scene.value, state.selection.messages);
+        const auto sessionId = state.selection.timeline->NextSessionId();
+        auto queue = Runtime::Ui::CaptionCueQueue::Create(sessionId, state.selection.messages);
         if (queue.HasError())
             return Result<void>::Failure(queue.ErrorValue());
         auto channel = App::NpcDialogueScenePresentation::Create(*state.jobs, *ai_, std::move(queue).Value(), state.selection.captions,
@@ -118,7 +119,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                                  state.activation.Binding());
         if (channel.HasError())
             return Result<void>::Failure(channel.ErrorValue());
-        auto session = state.selection.timeline->Reset(binding.scene.value);
+        auto session = state.selection.timeline->Reset(sessionId);
         if (session.HasError())
             return session;
         state.binding = binding;
