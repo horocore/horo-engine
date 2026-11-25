@@ -632,8 +632,7 @@ namespace Horo::Application::Internal {
         if (evidence.HasError())
             return Result<void>::Failure(evidence.ErrorValue());
         const auto &pose = character.pose;
-        if (!pose.controller.IsValid() || !character.owner || !character.issue || character.targetTick == 0 ||
-            pose.sourceTick != character.targetTick - 1)
+        if (!pose.controller.IsValid() || !character.owner || !character.issue || pose.sourceTick >= character.targetTick)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         const float yaw = YawAroundWorldUp(pose.heading);
 

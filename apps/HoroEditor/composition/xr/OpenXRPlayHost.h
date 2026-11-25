@@ -155,7 +155,8 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief One fixed-step Character publication and a lazily issued command capability.
-     * @details The Scene owner reads the committed pose. The synchronous issuance callback is called only when the binding
+     * @details The Scene owner reads the latest committed pose, which can predate the preceding tick if no command ran.
+     * The synchronous issuance callback is called only when the binding
      * changes and is never retained. XR consumes the copied pose and the opaque command capability.
      */
     struct OpenXRPlayCharacterStep final {

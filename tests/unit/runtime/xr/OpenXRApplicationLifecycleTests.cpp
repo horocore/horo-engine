@@ -252,9 +252,9 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false,
                                         const bool anchorPersistence = false, const bool fixedFoveation = false,
                                         const std::uint32_t maximumProjectionViews = 2, const bool quadPlay = false,
-                                        const ProjectionTiming timing = ProjectionTiming::Synthetic)
+                                        const ProjectionTiming timing = ProjectionTiming::Synthetic,
+                                        ConfigurationResolutionRequest request = {})
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
-                ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (quadPlay) {
                     request.invocation.emplace(SettingKey{"xr.capability_profile"},
@@ -376,6 +376,12 @@ namespace Horo::Tests::OpenXRApplication {
                                                               RequireValue(Render::EncodeReflectedShaderArtifact(cooked.reflected))))));
                 }
             }
+
+            ApplicationFixture(std::string bindingsDocument, ConfigurationResolutionRequest settings, const std::int64_t spaces)
+                : ApplicationFixture(true, spaces, XR::XRProjectFeaturePolicy::Unrequested, XR::XRProjectFeaturePolicy::Unrequested,
+                                     XR::XRProjectFeaturePolicy::Unrequested, false, std::move(bindingsDocument),
+                                     XR::XRProjectFeaturePolicy::Unrequested, false, {}, nullptr, false, false, false, 2, false,
+                                     ProjectionTiming::Synthetic, std::move(settings)) {}
 
             ApplicationFixture(const ApplicationFixture &) = delete;
             ApplicationFixture &operator=(const ApplicationFixture &) = delete;
@@ -3615,22 +3621,43 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
-    TEST_CASE("Installed XR Play sends one authored teleport to the Character commit on a fresh button edge",
-              "[xr][application][play][locomotion][teleport]") {
+    TEST_CASE("Installed XR Play gates authored teleport at the Character commit", "[xr][application][play][locomotion][teleport]") {
         using namespace Character::TestDetail;
-        using enum XR::XRProjectFeaturePolicy;
+        enum class TeleportRoute {
+            Primary,
+            ReducedMotionOptIn,
+            ReducedMotionOptOut
+        };
+        const auto route = GENERATE(TeleportRoute::Primary, TeleportRoute::ReducedMotionOptIn, TeleportRoute::ReducedMotionOptOut);
+        const bool alternative = route != TeleportRoute::Primary;
+        const bool shouldTeleport = route != TeleportRoute::ReducedMotionOptOut;
+        CAPTURE(alternative, shouldTeleport);
         auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
-        document["locomotion"] = {{"actor", 17},
-                                  {"speedMetersPerSecond", 2.5},
-                                  {"teleport", {{"action", "select"}, {"maximumDistanceMeters", 6.0}}}};
-        document["poses"].push_back({{"profile", 1},
-                                     {"set", 1},
-                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
-                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
-                                     {"path", "/user/hand/left/input/aim/pose"},
-                                     {"label", "Aim"}});
-        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        auto &locomotion = document["locomotion"];
+        locomotion = {{"actor", 17}, {"speedMetersPerSecond", 2.5}};
+        locomotion[alternative ? "reducedMotionTeleport" : "teleport"] = {{"action", "select"}, {"maximumDistanceMeters", 6.0}};
+        const auto addPose = [&](const XR::XRTrackedDeviceRole role, const XR::XRTrackedPoseKind kind, const char *path,
+                                 const char *label) {
+            document["poses"].push_back({{"profile", 1},
+                                         {"set", 1},
+                                         {"role", static_cast<unsigned>(role)},
+                                         {"kind", static_cast<unsigned>(kind)},
+                                         {"path", path},
+                                         {"label", label}});
+        };
+        addPose(XR::XRTrackedDeviceRole::LeftController, XR::XRTrackedPoseKind::Aim, "/user/hand/left/input/aim/pose", "Aim");
+        if (alternative) {
+            locomotion["armSwing"] = {{"gain", 1.25}, {"maximumTrackingGapMilliseconds", 120}};
+            addPose(XR::XRTrackedDeviceRole::LeftController, XR::XRTrackedPoseKind::Grip, "/user/hand/left/input/grip/pose", "Grip");
+            addPose(XR::XRTrackedDeviceRole::RightController, XR::XRTrackedPoseKind::Grip, "/user/hand/right/input/grip/pose", "Grip");
+        }
+        ConfigurationResolutionRequest settings;
+        settings.invocation.emplace(SettingKey{"xr.locomotion.reduced_motion"}, ConfigurationInputValue{alternative, std::nullopt});
+        settings.invocation.emplace(SettingKey{"xr.locomotion.teleport_when_reduced"},
+                                    ConfigurationInputValue{route == TeleportRoute::ReducedMotionOptIn, std::nullopt});
+        ApplicationFixture fixture{document.dump(), std::move(settings), alternative ? 9 : 6};
         fixture.script.actions.tracking.enabled = true;
+        fixture.script.actions.tracking.suggestedPoseBindings = static_cast<unsigned>(document["poses"].size());
         fixture.script.actions.sample.boolean = XR_FALSE;
         auto scene = PublishPlay(fixture, Input::PlayerId{7});
         auto character = SpawnedActiveWorldWithController();
@@ -3682,15 +3709,20 @@ namespace Horo::Tests::OpenXRApplication {
         };
         sample();
         sample();  // Neutral fixed sample.
+        sample();  // Idle tick preserves the last controller publication.
         CHECK(probe.queries == 0);
-        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == before.position);
+        const auto idle = RequireValue(character.world->ControllerTransform(character.controller));
+        CHECK(idle.position == before.position);
+        CHECK(idle.sourceTick < character.world->PublishedTick().completedTick);
 
         fixture.script.actions.sample.boolean = XR_TRUE;
         sample();
-        CHECK(probe.queries == 1);
-        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == probe.target);
+        const unsigned expectedQueries = shouldTeleport ? 1 : 0;
+        CHECK(probe.queries == expectedQueries);
+        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position ==
+              (shouldTeleport ? probe.target : before.position));
         sample();
-        CHECK(probe.queries == 1);
+        CHECK(probe.queries == expectedQueries);
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
