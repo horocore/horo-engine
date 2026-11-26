@@ -1185,6 +1185,8 @@ prediction, session, and calibrated World scope before binding renderer inputs.
 An absent, invalid, or withdrawn publication leaves that frame neutral.
 When an installed platform owner provides light permission evidence, Play can
 start the native estimator after a separate World-scoped application grant.
+The native owner retires that grant even when it observes denial before
+estimator creation. Restoring permission then requires a fresh grant.
 It samples at the admitted tracking cutoff, projects through the bounded
 calibration policy, and rechecks the grant before encoding a lit frame.
 Withdrawal prevents further sampling. The native session retains any pending

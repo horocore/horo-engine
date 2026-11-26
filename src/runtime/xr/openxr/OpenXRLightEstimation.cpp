@@ -253,8 +253,12 @@ namespace Horo::XR::OpenXRInternal {
         light_.world = world;
         light_.lastRequest = now;
         const auto result = light_.get(light_.handle, &info, &native);
-        if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
-            return Outcome::Failure(admitted.ErrorValue());
+        if (auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError()) {
+            auto failure = std::move(admitted).ErrorValue();
+            if (result != XR_SUCCESS)
+                failure = WithCause(std::move(failure), MakeError(LightFailure(result), "xrGetLightEstimateANDROID"));
+            return Outcome::Failure(std::move(failure));
+        }
         if (result != XR_SUCCESS) {
             light_.current.reset();
             const auto &failure = LightFailure(result);

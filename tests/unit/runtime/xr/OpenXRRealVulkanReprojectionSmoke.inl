@@ -831,7 +831,7 @@ namespace Horo::Tests::OpenXRApplication {
         const auto session = fixture.session->RetainedSession();
         REQUIRE(session);
         const auto world = RequireValue(fixture.session->WorldSpace(*session));
-        const XR::XRLightEstimateScope scope{*session, world, RequireValue(XR::XRLightEstimateGrant::Create(1))};
+        const XR::XRLightEstimateScope deniedScope{*session, world, RequireValue(XR::XRLightEstimateGrant::Create(1))};
         const XR::XRLightEstimateLimits limits{Duration::FromMilliseconds(1), Duration::FromMilliseconds(100)};
         const XR::XRLightProjectionPolicy policy{.ambientColor = {Render::SceneColorEncoding::LinearAcesCg},
                                                  .directionalColor = {Render::SceneColorEncoding::LinearAcesCg},
@@ -841,9 +841,16 @@ namespace Horo::Tests::OpenXRApplication {
                                                  .maximumAbsoluteChannel = 4.0F,
                                                  .directionalIdentity = 1,
                                                  .maximumAge = limits.maximumAge};
-        CHECK(fixture.play->StartNativeLighting(scope, limits, policy).HasError());
+        const auto denied = fixture.play->StartNativeLighting(deniedScope, limits, policy);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == XR::XRErrors::PermissionDenied.code.Value());
         CHECK(nativeLight.createCalls == 0);
         permission->allowed = true;
+        const auto stale = fixture.play->StartNativeLighting(deniedScope, limits, policy);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::IdentityStale.code.Value());
+        CHECK(nativeLight.createCalls == 0);
+        const XR::XRLightEstimateScope scope{*session, world, RequireValue(XR::XRLightEstimateGrant::Create(2))};
         RequireValue(fixture.play->StartNativeLighting(scope, limits, policy));
         fixture.script.frames.prediction = 120'000'000;
         SECTION("The platform withdraws capability while the grant remains allowed") {

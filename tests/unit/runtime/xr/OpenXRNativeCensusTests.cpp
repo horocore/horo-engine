@@ -243,6 +243,14 @@ namespace Horo::Tests::OpenXR {
             RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
             CHECK(fixture.script.createCalls == 0);
         }
+        SECTION("initial denial retires the grant before any native estimator creation") {
+            fixture.lightPermitted = false;
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
+            CHECK(fixture.script.createCalls == 0);
+            fixture.lightPermitted = true;
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::IdentityStale);
+            CHECK(fixture.script.createCalls == 0);
+        }
         SECTION("denial inside native creation rolls back the unpublished estimator") {
             fixture.script.onCreate = [&fixture] { fixture.lightPermitted = false; };
             RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::PermissionDenied);
@@ -271,7 +279,9 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(fixture.Advance(100).Value());
             fixture.script.onSample = [&fixture] { fixture.lightPermitted = false; };
             fixture.script.sampleResult = XR_ERROR_RUNTIME_FAILURE;
-            RequireFailureIdentity(fixture.Advance(110), XRErrors::PermissionDenied);
+            const auto denied = fixture.Advance(110);
+            RequireFailureIdentity(denied, XRErrors::PermissionDenied);
+            CHECK(ErrorChainContains(denied.ErrorValue(), XRErrors::OperationUnavailable.domain, XRErrors::OperationUnavailable.code));
             CHECK(owner.NeedsLightRetirement(fixture.scope));
 
             fixture.lightPermitted = true;

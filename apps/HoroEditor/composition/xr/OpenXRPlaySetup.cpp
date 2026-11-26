@@ -21,8 +21,6 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         if (!scope.IsValid() || scope.session != scene_->session || scope.space != scene_->worldReference)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        if (!LightingCutoff(scope))
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         if (scene_->nativeLighting)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         auto projection = XRLightProjection::Create(scope, policy);
