@@ -83,6 +83,16 @@ namespace Horo::Packages {
     [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(
         const PackageRestorePackage &package, const PackageRemovalLease &reservation);
 
+    /** @brief Verifies live removal while retaining independently verified runtime declarations for diagnostics.
+     * @param package Exact sealed archive and lock being withdrawn.
+     * @param reservation Owner-issued withdrawal claim after active and retiring roles have drained.
+     * @param verifiedOnFailure Replaced with declarations from verified descriptors if review fails, or cleared on success.
+     * @return Complete declarations or the blocking error. Partial declarations are for diagnostics only.
+     */
+    [[nodiscard]] Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(
+        const PackageRestorePackage &package, const PackageRemovalLease &reservation,
+        std::vector<PackageRuntimeRoleDeclaration> &verifiedOnFailure);
+
     /** @brief Explicit portable enablement selection; it carries no execution trust or host path. */
     struct EnabledPackageExtension final {
         HoroPackageId package;

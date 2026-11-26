@@ -508,13 +508,14 @@ namespace Horo::Application::Internal {
         /** @brief Separates data archives from executable ones and verifies the editor's supported executable owner. */
         Result<std::vector<Packages::PackageRuntimeRoleDeclaration>> DeclaredRemovalRoles(const Packages::VerifiedPackageInstallRecord &install,
                                                                                        const Packages::PackageRestorePackage &package,
-                                                                                       const Packages::PackageRemovalLease *reservation) {
+                                                                                       const Packages::PackageRemovalLease *reservation,
+                                                                                       std::vector<Packages::PackageRuntimeRoleDeclaration> &verifiedOnFailure) {
             using Roles = Result<std::vector<Packages::PackageRuntimeRoleDeclaration>>;
             if (!reservation)
                 return Packages::InspectPackageRuntimeRoles(install, package.lock.package);
             if (!OfflineRemovalContributionBlocker(package.lock) && IsOfflineAssetArchive(package))
                 return Roles::Success({});
-            auto roles = Packages::InspectLivePackageRemovalRoles(package, *reservation);
+            auto roles = Packages::InspectLivePackageRemovalRoles(package, *reservation, verifiedOnFailure);
             if (roles.HasError()) {
                 auto cause = std::move(roles).ErrorValue();
                 auto error = ReferenceError("packages.host.removal_requires_lifecycle_owner", package.lock.package.Value());
@@ -547,15 +548,23 @@ namespace Horo::Application::Internal {
             const auto *package = FindExactArchive(graph, locked);
             if (!package)
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable", locked.package.Value()));
-            const auto declared = DeclaredRemovalRoles(install, *package,
-                                                       departing && sources.requireGameplayOwner ? sources.live.get() : nullptr);
+            std::vector<Packages::PackageRuntimeRoleDeclaration> verifiedOnFailure;
+            auto declared = DeclaredRemovalRoles(install, *package, departing && sources.requireGameplayOwner ? sources.live.get() : nullptr,
+                                                 verifiedOnFailure);
+            std::optional<Error> incomplete;
             if (declared.HasError())
-                return Result<void>::Failure(declared.ErrorValue());
-            if (!declared.Value().empty() && sources.registrationFailure)
+                incomplete.emplace(std::move(declared).ErrorValue());
+            const auto &roles = incomplete ? verifiedOnFailure : declared.Value();
+            if (!incomplete && !roles.empty() && sources.registrationFailure)
                 return Result<void>::Failure(WithCause(
                     ReferenceError("packages.host.runtime_registration_unavailable", locked.package.Value()), *sources.registrationFailure));
-            for (const auto &role : declared.Value())
-                ObserveRuntimeRole(sources, locked, role, blockers);
+            if (!sources.registrationFailure) {
+                auto &diagnostics = incomplete ? incomplete->diagnostics : blockers;
+                for (const auto &role : roles)
+                    ObserveRuntimeRole(sources, locked, role, diagnostics);
+            }
+            if (incomplete)
+                return Result<void>::Failure(std::move(*incomplete));
             return Result<void>::Success();
         }
 

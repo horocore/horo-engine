@@ -1151,12 +1151,15 @@ namespace {
         REQUIRE(attempted.HasError());
         CHECK(attempted.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
         const auto &diagnostics = attempted.ErrorValue().diagnostics;
-        REQUIRE(diagnostics.size() == 5);
+        REQUIRE(diagnostics.size() == 6);
         CHECK(diagnostics.front().code.Value() == "packages.lifecycle.removal_contribution_owner_required");
         CHECK(diagnostics.front().location.source == "extensions/native/extension.json");
         CHECK(diagnostics.front().path == "fixture.importer");
         CHECK(diagnostics.front().message == "asset.importer / com.horo.application-fixture.native");
-        const auto references = std::span{diagnostics}.subspan(1);
+        CHECK(diagnostics[1].code.Value() == "packages.host.removal_reference_coverage_unavailable");
+        CHECK(diagnostics[1].location.source == owners.front().descriptorPath);
+        CHECK(diagnostics[1].path == owners.front().moduleId);
+        const auto references = std::span{diagnostics}.subspan(2);
         REQUIRE(references.size() == 4);
         for (const auto &reference : references)
             CHECK(reference.code.Value() == "packages.host.component_in_use");
@@ -1297,6 +1300,15 @@ namespace {
         CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
             return diagnostic.code.Value() == "packages.host.runtime_registration_unobserved" &&
                    diagnostic.path == "com.horo.retained.native";
+        }));
+        sources.registrations = {};
+        const auto unobserved = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        REQUIRE(unobserved.HasError());
+        CHECK(unobserved.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        CHECK(std::ranges::any_of(unobserved.ErrorValue().diagnostics, [&registration](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.runtime_registration_unobserved" &&
+                   diagnostic.location.source == registration.descriptorPath &&
+                   diagnostic.path == "com.horo.application-fixture.native";
         }));
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);

@@ -341,7 +341,8 @@ namespace Horo::Packages {
 
     /** @brief Verifies every archived executable member before allowing its role-specific reference review. */
     static Result<std::vector<PackageRuntimeRoleDeclaration>> InspectRemovalRoles(const PackageRestorePackage &package,
-                                                                                  const bool allowImporters) {
+                                                                                  const bool allowImporters,
+                                                                                  std::vector<PackageRuntimeRoleDeclaration> *verifiedOnFailure) {
         using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
         auto outsideOwner = MakeError(PackageLifecycleErrors::InvalidCandidate);
         if (!package.archive)
@@ -370,22 +371,32 @@ namespace Horo::Packages {
         }
         CollectUnownedContributions(package.lock, artifacts, outsideOwner.diagnostics);
         CollectUnownedFiles(*package.archive, artifacts, outsideOwner.diagnostics);
-        if (firstDescriptorFailure)
-            return Roles::Failure(WithCause(std::move(outsideOwner), std::move(*firstDescriptorFailure)));
-        if (!std::ranges::any_of(artifacts, [](const auto &owner) { return !owner.second.empty(); }) || !outsideOwner.diagnostics.empty())
-            return Roles::Failure(std::move(outsideOwner));
-        return Roles::Success(std::move(roles));
+        const bool hasOwnedFiles = std::ranges::any_of(artifacts, [](const auto &owner) { return !owner.second.empty(); });
+        if (hasOwnedFiles && outsideOwner.diagnostics.empty())
+            return Roles::Success(std::move(roles));
+        if (verifiedOnFailure)
+            *verifiedOnFailure = std::move(roles);
+        return Roles::Failure(firstDescriptorFailure ? WithCause(std::move(outsideOwner), std::move(*firstDescriptorFailure))
+                                                     : std::move(outsideOwner));
     }
 
     /** @copydoc InspectGameplayRemovalRoles */
     Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
-        return InspectRemovalRoles(package, false);
+        return InspectRemovalRoles(package, false, nullptr);
     }
 
     /** @copydoc InspectLivePackageRemovalRoles */
     Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(const PackageRestorePackage &package,
                                                                                       const PackageRemovalLease &reservation) {
-        return InspectRemovalRoles(package, reservation.AllowsNativeImporterReview(package));
+        return InspectRemovalRoles(package, reservation.AllowsNativeImporterReview(package), nullptr);
+    }
+
+    /** @copydoc InspectLivePackageRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(
+        const PackageRestorePackage &package, const PackageRemovalLease &reservation,
+        std::vector<PackageRuntimeRoleDeclaration> &verifiedOnFailure) {
+        verifiedOnFailure.clear();
+        return InspectRemovalRoles(package, reservation.AllowsNativeImporterReview(package), &verifiedOnFailure);
     }
 
     /** @copydoc InspectPackageRuntimeRoles */

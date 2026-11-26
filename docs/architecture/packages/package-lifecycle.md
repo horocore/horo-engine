@@ -502,7 +502,9 @@ or additional capability requirements. This path excludes mounted assets. The pr
 importer sidecars and observes gameplay registrations, and the reservation
 waits for live and retiring role receipts to drain. Otherwise, the review
 identifies the blocked contribution, module, or archive path and keeps any
-confirmed references found in saved sources.
+confirmed references found in saved sources. Incomplete descriptor or archive
+review also preserves independently verified gameplay roles for registration
+diagnostics while the unsupported archive remains blocked.
 
 The desktop editor can apply a reviewed removal for verified asset packages
 and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before
