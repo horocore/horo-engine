@@ -1,4 +1,4 @@
-"""Project an explicitly approved headless replay into a redacted evaluation manifest."""
+"""Export or verify a redacted evaluation manifest under an explicit offline approval."""
 
 from __future__ import annotations
 
@@ -16,6 +16,10 @@ REPLAY_FORMAT = "horo-ai-replay-evidence"
 MAX_FRAME_BYTES = 128 * 1024
 MAX_FRAMES = 32
 MAX_APPROVAL_BYTES = 4096
+MAX_MANIFEST_BYTES = 32 * 1024
+MANIFEST_FORMAT = "horo-ai-evaluation-manifest"
+APPROVAL_PURPOSE = "offline-evaluation"
+QUALIFICATION_SOURCE = "operator-declared"
 OUTCOMES = ("idle", "running", "succeeded", "failed", "cancelled")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 VERSION = re.compile(r"[0-9]{1,9}(?:\.[0-9]{1,9}){0,3}")
@@ -102,7 +106,7 @@ def qualification_tuple(value: object) -> dict:
 
 def validate_approval(value: object, replay_digest: str, today: date) -> dict:
     record = exact_fields(value, {"schemaVersion", "purpose", "replaySha256", "expiresOnUtc", "qualification"}, "export approval")
-    require(schema(record["schemaVersion"]) == 1 and record["purpose"] == "offline-evaluation", "Unsupported export approval")
+    require(schema(record["schemaVersion"]) == 1 and record["purpose"] == APPROVAL_PURPOSE, "Unsupported export approval")
     require(digest(record["replaySha256"]) == replay_digest, "Approval does not match this replay")
     expiry = record["expiresOnUtc"]
     require(isinstance(expiry, str) and len(expiry) == 10, "Invalid approval expiry")
@@ -163,25 +167,69 @@ def summarize_replay(frames: list[dict]) -> dict:
     return {"frameCount": len(frames), "decisionOutcomes": {name: outcomes[name] for name in OUTCOMES}, "frames": provenance}
 
 
+def validate_retained_frame(value: object) -> None:
+    fields = {
+        "sceneInput": ("schemaVersion", "sha256"),
+        "canonicalAi": ("recordVersion", "sha256"),
+        "decision": ("traceVersion", "planSha256"),
+        "blackboard": ("schemaVersion",),
+    }
+    frame = exact_fields(value, set(fields), "manifest frame")
+    for name, (version_field, *hash_fields) in fields.items():
+        record = exact_fields(frame[name], {version_field, *hash_fields}, "manifest provenance")
+        schema(record[version_field])
+        for hash_field in hash_fields:
+            digest(record[hash_field])
+
+
+def validate_retained_evidence(value: object) -> None:
+    evidence = exact_fields(value, {"frameCount", "decisionOutcomes", "frames"}, "manifest evidence")
+    count = schema(evidence["frameCount"])
+    frames = evidence["frames"]
+    require(isinstance(frames, list) and len(frames) == count <= MAX_FRAMES, "Invalid manifest frame count")
+    counts = exact_fields(evidence["decisionOutcomes"], set(OUTCOMES), "manifest decision counts")
+    require(all(type(total) is int and 0 <= total <= count for total in counts.values()), "Invalid manifest decision count")
+    require(sum(counts.values()) == count, "Manifest decisions do not match frame count")
+    for frame in frames:
+        validate_retained_frame(frame)
+
+
+def validate_retained_manifest(value: object, approval: object, today: date) -> None:
+    record = exact_fields(value, {"format", "schemaVersion", "purpose", "qualificationSource", "sourceReplaySha256",
+                                  "expiresOnUtc", "qualification", "evidence"}, "evaluation manifest")
+    require(record["format"] == MANIFEST_FORMAT and schema(record["schemaVersion"]) == 1, "Unsupported evaluation manifest")
+    require(record["purpose"] == APPROVAL_PURPOSE and record["qualificationSource"] == QUALIFICATION_SOURCE,
+            "Unsupported manifest purpose or qualification source")
+    allowed = validate_approval(approval, digest(record["sourceReplaySha256"]), today)
+    require(record["expiresOnUtc"] == allowed["expiresOnUtc"] and qualification_tuple(record["qualification"]) == allowed["qualification"],
+            "Manifest does not match its approval")
+    validate_retained_evidence(record["evidence"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("replay", type=Path, help="Existing headless evidence.json")
+    parser.add_argument("input", type=Path, help="Existing headless evidence.json or retained evaluation manifest")
     parser.add_argument("--approval", required=True, type=Path, help="Explicit, digest-bound offline export approval")
+    parser.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
     args = parser.parse_args()
     try:
-        data = read_bounded(args.replay, MAX_FRAME_BYTES * MAX_FRAMES)
-        replay_digest = hashlib.sha256(data).hexdigest()
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
-        allowed = validate_approval(approval, replay_digest, datetime.now(UTC).date())
+        today = datetime.now(UTC).date()
+        if args.verify_retained:
+            validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
+            return 0
+        data = read_bounded(args.input, MAX_FRAME_BYTES * MAX_FRAMES)
+        replay_digest = hashlib.sha256(data).hexdigest()
+        allowed = validate_approval(approval, replay_digest, today)
         evidence = summarize_replay(replay_frames(decode(data), len(data)))
     except _EvidenceError as error:
         print(error, file=sys.stderr)
         return 1
     except (OSError, ValueError, RecursionError):
-        print("Replay or approval could not be read as bounded JSON", file=sys.stderr)
+        print("AI evaluation input could not be read as bounded JSON", file=sys.stderr)
         return 1
-    manifest = {"format": "horo-ai-evaluation-manifest", "schemaVersion": 1, "purpose": "offline-evaluation",
-                "qualificationSource": "operator-declared", "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
+    manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
+                "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
     print(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
     return 0
 

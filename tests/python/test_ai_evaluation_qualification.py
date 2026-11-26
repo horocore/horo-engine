@@ -117,3 +117,34 @@ def test_requires_explicit_approval_argument(monkeypatch, capsys):
     result = capsys.readouterr()
     assert exit_status.value.code == 2
     assert not result.out and "--approval" in result.err
+
+
+@pytest.mark.parametrize("scenario", ["valid", "expired", "extended", "different-replay", "different-provider", "raw-record", "bad-count"])
+def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatch, capsys, scenario):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    status, result = export(data, approval)
+    assert status == 0, result.err
+    manifest = json.loads(result.out)
+    if scenario == "expired":
+        approval["expiresOnUtc"] = manifest["expiresOnUtc"] = datetime.now(UTC).date().isoformat()
+    elif scenario == "extended":
+        manifest["expiresOnUtc"] = "2099-01-01"
+    elif scenario == "different-replay":
+        manifest["sourceReplaySha256"] = "7" * 64
+    elif scenario == "different-provider":
+        manifest["qualification"]["provider"]["version"] = "3"
+    elif scenario == "raw-record":
+        manifest["evidence"]["frames"][0]["decision"]["rawText"] = PRIVATE
+    elif scenario == "bad-count":
+        manifest["evidence"]["decisionOutcomes"]["succeeded"] = False
+
+    retained = tmp_path / "retained.json"
+    grant = tmp_path / "approval.json"
+    retained.write_text(json.dumps(manifest), encoding="utf-8")
+    grant.write_text(json.dumps(approval), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(retained), "--approval", str(grant), "--verify-retained"])
+    assert evaluation.main() == (0 if scenario == "valid" else 1)
+    result = capsys.readouterr()
+    assert not result.out and PRIVATE not in result.err
+    assert bool(result.err) == (scenario != "valid")

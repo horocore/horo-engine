@@ -129,7 +129,19 @@ already retained elsewhere.
 python scripts/qualify_ai_evaluation.py evidence.json --approval approval.json > evaluation-manifest.json
 ```
 
-This emits schema 1 with decision outcome counts and exact source, scene,
+Before admitting a stored manifest for evaluation, check it against the
+original approval using the current UTC date.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --verify-retained
+```
+
+The check returns zero for a current, schema-valid manifest. It rejects expired
+approvals, mismatched replay digests or qualification tuples, and extra fields
+outside the redacted schema. The check reads the manifest and approval only.
+The storage owner enforces deletion and controls write access to both records.
+
+The exporter emits schema 1 with decision outcome counts and exact source, scene,
 canonical AI and plan digests. It omits IDs, paths, observation records and
 Blackboard values. The versioned provider, model, platform and workload tuple
 is marked operator-declared. Use separate reproducible qualification runs to
