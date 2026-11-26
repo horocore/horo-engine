@@ -553,7 +553,9 @@ point-query schema. Perception queries and queries with unresolved stages still
 require review. Unreadable queries are reported with their project-relative
 paths and block the operation. An unreadable Scene, Prefab or Decision source
 also blocks removal. The review reports its path alongside references from the
-other readable documents. A degraded asset inventory also blocks removal.
+other readable documents. When an otherwise decoded Scene contains an unknown
+component owner, the review keeps confirmed typed references from that Scene
+alongside the unsupported-source blocker. A degraded asset inventory also blocks removal.
 Review still reports confirmed references from individually admitted sources
 and defers checks that require a complete inventory, such as resolving
 composition links. Importer, Scene, Prefab and Decision checks share one

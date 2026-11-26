@@ -1048,6 +1048,25 @@ namespace {
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
 
+        auto opaqueScene = nlohmann::json::parse(scene);
+        opaqueScene["objects"][0]["components"]["futurePackageComponent"] = {{"unknown", true}};
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", opaqueScene.dump());
+        const auto opaque = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(opaque.HasError());
+        CHECK(opaque.ErrorValue().code.Value() == "packages.host.scene_reference_unsupported");
+        const auto &opaqueDetails = opaque.ErrorValue().diagnostics;
+        REQUIRE(std::ranges::any_of(opaqueDetails, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.saved_reference_source_unreadable" &&
+                   diagnostic.location.source == "Assets/Scene.horoasset";
+        }));
+        CHECK(std::ranges::any_of(opaqueDetails, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.behavior_in_use" &&
+                   diagnostic.location.source == "Assets/Scene.horoasset" && diagnostic.path == "7/3";
+        }));
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        writeAsset("Scene.horoasset", sceneAsset, "core.scene", scene);
+
         const auto invalidSource = policy.projectRoot / "Assets/Unrelated.horoasset";
         const auto invalidSidecar = policy.projectRoot / "Assets/Unrelated.horoasset.horo";
         std::ofstream{invalidSource} << "{}";

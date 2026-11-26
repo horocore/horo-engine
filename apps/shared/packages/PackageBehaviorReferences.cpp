@@ -304,8 +304,11 @@ namespace Horo::Application::Internal {
             if (scene.HasError())
                 return scan.failures.Record(path,
                     WithCause(ReferenceError("packages.host.scene_reference_unreadable", path), scene.ErrorValue()));
-            if (!scene.Value().unsupportedComponentOwners.empty())
-                return scan.failures.Record(path, ReferenceError("packages.host.scene_reference_unsupported", path));
+            if (!scene.Value().unsupportedComponentOwners.empty()) {
+                const auto unverified = scan.failures.Record(path, ReferenceError("packages.host.scene_reference_unsupported", path));
+                if (unverified.HasError())
+                    return unverified;
+            }
             const auto &owners = review.owners;
             if (auto found = InspectSceneObjects(scene.Value(), scan, owners, path); found.HasError())
                 return found;
