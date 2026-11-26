@@ -2909,7 +2909,8 @@ and uses the standard Behavior Tree compiler. Its result uses the existing task
 start, resume, cancellation and cleanup lifecycle.
 The HTN adapter composes the same registered primitives into guarded compound
 methods. It tries methods in stable ID order, preserves authored child order,
-and backtracks on copied facts. The work allowance and hard bound on pending
+and backtracks on copied facts. An admitted empty method adds no primitive
+steps and continues the existing pending tasks. The work allowance and hard bound on pending
 tasks and decomposition depth terminate recursive methods with a typed result.
 
 The local learned-policy reference provider evaluates bounded signed 16-bit

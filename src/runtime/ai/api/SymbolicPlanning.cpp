@@ -312,6 +312,8 @@ namespace Horo::AI {
 
         /** @brief Expands one admitted method while preserving the caller's pending stack for backtracking. */
         Outcome ExpandMethod(const Method &method, const Pending &pending, const std::uint64_t state, const std::size_t depth) noexcept {
+            if (method.childCount == 0)
+                return Solve(pending, state, depth);
             if (method.childCount > pending.tasks.size() - pending.count)
                 return Outcome::BranchBound;
             if (!budget.Consume(method.childCount))

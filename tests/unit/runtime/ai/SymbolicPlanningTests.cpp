@@ -215,6 +215,44 @@ namespace Horo::AI {
             CHECK(blocked.Steps().empty());
         }
 
+        TEST_CASE("HTN empty methods use only the work of admitting the compound and its method", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, {}}};
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto exhausted = hierarchy.Value().Search({}, root, 1);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            const auto solved = hierarchy.Value().Search({}, root, 2);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            CHECK(solved.Steps().empty());
+            CHECK(solved.Cost() == 0);
+        }
+
+        TEST_CASE("HTN continues an ordered plan after an empty nested method", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto optional = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 2> children{optional, Id<SymbolicActionId>(30)};
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, children},
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), optional, {}, {}},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto exhausted = hierarchy.Value().Search({}, root, 6);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            const auto solved = hierarchy.Value().Search({}, root, 7);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(solved.Steps().size() == 1);
+            CHECK(solved.Steps().front().task == input.forceTask);
+            CHECK(solved.Cost() == 10);
+        }
+
         TEST_CASE("HTN validates references and caps recursive decomposition", "[ai][planning][htn]") {
             DomainFixture input;
             const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
