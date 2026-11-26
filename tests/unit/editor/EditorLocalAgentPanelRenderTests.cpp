@@ -51,8 +51,8 @@ namespace {
         EditorLocalAgentPanelHost agent;
 
         explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {},
-                                   std::shared_ptr<EditorCloudModelProfileStore> profiles = {})
-            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(profiles))) {
+                                   std::shared_ptr<EditorCloudModelProfileStore> profiles = {}, EditorModelOperationLimits limits = {})
+            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(profiles), nullptr, nullptr, limits)) {
             ImGui::GetIO().IniFilename = nullptr;
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
@@ -770,6 +770,48 @@ namespace {
             return text.find("Replacement workspace answer") != std::string::npos;
         }));
         CHECK_FALSE(leaked);
+    }
+
+    TEST_CASE("AI model operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US", {}, {}, {.session = 2, .project = 1}};
+        const auto attach = [&](const std::string_view project) {
+            fixture.panels.DetachAll();
+            PanelContext context{.dataBus = fixture.gui.editorEvents,
+                                 .inputRouter = &fixture.gui.input,
+                                 .workspaceInputContext = &fixture.workspace,
+                                 .projectIdentity = project};
+            fixture.panels.AttachAll(context);
+            fixture.Draw(420);
+        };
+        const auto shows = [&](std::string_view message) {
+            return fixture.DrawnText().find(message) != std::string::npos;
+        };
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "limited");
+        fixture.Enter("##Prompt", "Submit a request that the provider will throttle");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] { return shows("The local provider limited requests."); }));
+        CHECK(shows("Project AI operations 1/1"));
+        CHECK(shows("Editor session AI operations 1/2"));
+
+        attach("layout-test");
+        fixture.Activate("###discover");
+        CHECK(shows("The AI model operation limit for this project has been reached."));
+        CHECK(shows("Editor session AI operations 1/2"));
+
+        attach("other-project");
+        CHECK(shows("Project AI operations 0/1"));
+        fixture.Activate("###discover");
+        REQUIRE(Await([&] { return shows("Editor session AI operations 2/2") && !shows("Waiting for the local model service"); }));
+        CHECK(shows("Project AI operations 1/1"));
+
+        attach("third-project");
+        fixture.Activate("###discover");
+        CHECK(shows("The AI model operation limit for this editor session has been reached."));
+        CHECK(shows("Project AI operations 0/1"));
     }
 
     TEST_CASE("A completed source reply opens only its exact publication for review", "[.][chat-http]") {

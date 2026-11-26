@@ -398,6 +398,8 @@ namespace Horo::Editor {
             bool xrInputPlayerValid{true};
             bool xrSimulator{};
             bool localAgent{};
+            EditorModelOperationLimits aiOperationLimits;
+            bool aiOperationLimitsValid{true};
             std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
@@ -740,14 +742,17 @@ namespace Horo::Editor {
         FrameRateLimit,
         ExitAfterFrames,
         XrTrackingRoot,
-        XrInputPlayer
+        XrInputPlayer,
+        AiSessionOperations,
+        AiProjectOperations
     };
 
     /** @brief Consumes one value before interpreting flag syntax, preserving existing argument ordering. */
     [[nodiscard]] static bool ConsumeEditorOptionValue(const std::string_view value, PendingEditorOption &pending,
                                                        EditorGuiOptions &opts) noexcept {
         using enum PendingEditorOption;
-        switch (std::exchange(pending, None)) {
+        const auto option = std::exchange(pending, None);
+        switch (option) {
             case Renderer:
                 opts.rendererBackend = value;
                 return true;
@@ -816,6 +821,17 @@ namespace Horo::Editor {
                     opts.xrInputPlayer = EditorXrInputPlayerSelection{static_cast<Input::PlayerId>(player)};
                 return true;
             }
+            case AiSessionOperations:
+            case AiProjectOperations: {
+                auto &limit = option == AiSessionOperations ? opts.aiOperationLimits.session : opts.aiOperationLimits.project;
+                std::uint32_t count{};
+                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
+                opts.aiOperationLimitsValid =
+                    opts.aiOperationLimitsValid && !limit && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
+                if (opts.aiOperationLimitsValid)
+                    limit = count;
+                return true;
+            }
             case None:
                 return false;
         }
@@ -833,6 +849,10 @@ namespace Horo::Editor {
             opts.cameraPreviewCrossFade = true;
         else if (argument == "--local-agent")
             opts.localAgent = true;
+        else if (argument == "--ai-session-operations")
+            pending = AiSessionOperations;
+        else if (argument == "--ai-project-operations")
+            pending = AiProjectOperations;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
         else if (argument == "--qualify-opengl-surface-lifecycle")
             opts.qualifySurfaceLifecycle = true;
@@ -1086,6 +1106,8 @@ namespace Horo::Editor {
             opts.xrTrackingRootValid = false;
         if (pending == XrInputPlayer)
             opts.xrInputPlayerValid = false;
+        if (pending == AiSessionOperations || pending == AiProjectOperations)
+            opts.aiOperationLimitsValid = false;
         if (pending == PlayNavigationScene)
             opts.playNavigationSceneValid = false;
         if (pending == PlayDecisionScene)
@@ -1172,6 +1194,10 @@ namespace Horo::Editor {
             arguments.insert(arguments.end(), {"--prefab", options.prefabGranted.value() ? "grant" : "deny"});
             if (options.localAgent)
                 arguments.emplace_back("--local-agent");
+            if (options.aiOperationLimits.session)
+                arguments.insert(arguments.end(), {"--ai-session-operations", std::to_string(*options.aiOperationLimits.session)});
+            if (options.aiOperationLimits.project)
+                arguments.insert(arguments.end(), {"--ai-project-operations", std::to_string(*options.aiOperationLimits.project)});
             if (!options.cookedRoot.empty()) {
                 arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
             }
@@ -4637,7 +4663,8 @@ namespace Horo::Editor {
                         std::make_shared<EditorCloudModelProfileStore>(ResolveEditorSettingsPath().parent_path() / "cloud_model.profile",
                                                                        std::move(credentials));
                 }
-                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles), &externalProcesses, listening);
+                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles), &externalProcesses, listening,
+                                                       p.options.aiOperationLimits);
             }
             if (localAgent.panel)
                 workspacePanelRegistry.RegisterPanel(localAgent.panel);
@@ -4926,6 +4953,11 @@ namespace Horo::Editor {
 
     /** @brief Composes independent startup option validation without merging subsystem policy. */
     [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
+        if (!options.aiOperationLimitsValid ||
+            (!options.localAgent && (options.aiOperationLimits.session || options.aiOperationLimits.project))) {
+            LOG_CRITICAL("editor.agent", "AI operation limits require --local-agent and one non-negative integer per limit.");
+            return false;
+        }
         return ValidateEditorColorOptions(options) && ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) &&
                ValidateEditorLightingOptions(options);
     }

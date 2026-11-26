@@ -1174,6 +1174,16 @@ model inference. The policy can limit requests, tokens/audio duration, monetary
 estimate, concurrency, retries, and session/project totals. Usage presentation
 must distinguish an estimate from provider-authoritative billing.
 
+When the AI panel is enabled, `--ai-session-operations <count>` caps model
+operations across the editor process and `--ai-project-operations <count>`
+caps them independently for each attached project in that process. An omitted
+option leaves its scope uncapped. Zero disallows provider operations. Local and
+cloud modes share the counts, and detaching or reopening the dock or project
+does not reset them. Restarting the editor starts a new session. A submitted
+turn or model-list load counts once when accepted by the worker, including
+failed or cancelled operations. The panel displays the accepted operations
+against each enabled ceiling.
+
 Rate limiting, quota exhaustion, offline state, credential loss, and provider
 failure are normal lifecycle results. They may offer an admitted local provider,
 queue a user-visible retry, or stop the request. They never trigger unbounded
