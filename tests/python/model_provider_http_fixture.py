@@ -25,16 +25,18 @@ class Handler(BaseHTTPRequestHandler):
             # The cancellation tests deliberately close the active connection.
             pass
 
-    def send_records(self, records, content_type="application/json", status=200):
+    def send_records(self, records, content_type="application/json", status=200, retry_after=None):
         data = "".join(records).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        if retry_after is not None:
+            self.send_header("Retry-After", retry_after)
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path == "/api/tags":
+        if self.path in {"/api/tags", "/other/api/tags"}:
             self.send_records([json.dumps({"models": [{"name": "normal"}]})])
         elif self.path == "/v1/models" and self.headers.get("Authorization") == "Bearer fixture-token":
             self.send_records([json.dumps({"data": [{"id": "normal"}]})])
@@ -83,6 +85,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if payload["model"] == "limited":
             self.send_records([json.dumps({"error": "private"})], status=429)
+            return
+        retry_after = {"limited-with-delay": "30", "limited-with-long-delay": "3600", "limited-with-invalid-delay": "invalid"}.get(
+            payload["model"]
+        )
+        if retry_after is not None:
+            self.send_records([json.dumps({"error": "private"})], status=429, retry_after=retry_after)
             return
         if payload["model"] in {"truncated-authentication", "truncated-rate-limit"}:
             status = 401 if payload["model"] == "truncated-authentication" else 429

@@ -139,7 +139,7 @@ namespace Horo::Agent {
             if (status == ContextDenied)
                 return StaleContextResult();
             if (status == ProviderFailed && providerError)
-                return {status, {}, providerError->code};
+                return {.status = status, .providerError = providerError->code, .retryAfter = providerError->retryAfter};
             return {status, {}};
         }
 
@@ -369,7 +369,10 @@ namespace Horo::Agent {
         auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation,
                               {nullptr, context, {}, {}, &review, providerAuthority ? &providerAuthority : nullptr});
         if (result.status != Completed)
-            return {.status = result.status, .providerError = result.providerError, .contextError = result.contextError};
+            return {.status = result.status,
+                    .providerError = result.providerError,
+                    .contextError = result.contextError,
+                    .retryAfter = result.retryAfter};
         return {.status = Completed,
                 .draft = std::move(result.messages.back()),
                 .usage = result.finalUsage,

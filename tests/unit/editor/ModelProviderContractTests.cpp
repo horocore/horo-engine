@@ -356,6 +356,23 @@ TEST_CASE("Cloud adapter preserves HTTP failure status after a truncated error b
     CHECK(recovered.Succeeded());
 }
 
+TEST_CASE("HTTP adapters preserve a typed retry hint without publishing provider data", "[agent][model][http]") {
+    auto provider = Create(GENERATE(false, true));
+    using Delay = std::optional<std::chrono::seconds>;
+    const auto [model, delay] = GENERATE(Catch::Generators::table<const char *, Delay>({
+        {"limited-with-delay", std::chrono::seconds{30}},
+        {"limited-with-long-delay", std::chrono::minutes{5}},
+        {"limited-with-invalid-delay", std::nullopt},
+    }));
+    const auto outcome = provider->Stream(Request(model), [](const ModelEvent &) {
+        FAIL("An HTTP error cannot publish a model event");
+        return true;
+    }, {});
+    REQUIRE(outcome.error);
+    CHECK(outcome.error->code == ModelErrorCode::RateLimited);
+    CHECK(outcome.error->retryAfter == delay);
+}
+
 TEST_CASE("HTTP adapters bound response records even without a final newline", "[agent][model][http]") {
     const auto cloud = GENERATE(false, true);
     const auto model = GENERATE("oversized-record", "oversized-final-fragment");

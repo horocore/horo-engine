@@ -113,7 +113,7 @@ namespace Horo::Agent {
         }
 
         /** @brief Map an HTTP status without retaining remote response text. */
-        ModelError HttpError(long status) {
+        ModelError HttpError(long status, CURL *curl) {  // NOSONAR: libcurl's opaque handle is declared as void.
             using enum ModelErrorCode;
             ModelErrorCode code = Unavailable;
             if (status == 401 || status == 403)
@@ -124,7 +124,13 @@ namespace Horo::Agent {
                 code = InvalidRequest;
             std::ostringstream message;
             message << "Model provider returned HTTP " << status;
-            return {code, message.str(), status};
+            ModelError error{code, message.str(), status};
+            curl_off_t seconds{};
+            constexpr std::chrono::seconds maxRetryDelay = std::chrono::minutes{5};
+            if (code == RateLimited && curl_easy_getinfo(curl, CURLINFO_RETRY_AFTER, &seconds) == CURLE_OK && seconds > 0) {
+                error.retryAfter = std::chrono::seconds{(std::min)(seconds, static_cast<curl_off_t>(maxRetryDelay.count()))};
+            }
+            return error;
         }
 
         /** @brief Own the bounded response buffer and cancellation state for one HTTP transfer. */
@@ -253,11 +259,11 @@ namespace Horo::Agent {
             if (context.invalid)
                 return {ModelError{Protocol, "Invalid model response", std::nullopt}};
             if (status >= 300)
-                return {HttpError(status)};
+                return {HttpError(status, context.curl)};
             if (result != CURLE_OK)
                 return {TransportError(context, protocol, result)};
             if (status < 200)
-                return {HttpError(status)};
+                return {HttpError(status, context.curl)};
             return FinishHttpFragment(context);
         }
 

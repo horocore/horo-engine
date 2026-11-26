@@ -113,6 +113,7 @@ namespace Horo::Agent {
         ModelErrorCode code{ModelErrorCode::Protocol};
         std::string message;
         std::optional<long> httpStatus;
+        std::optional<std::chrono::seconds> retryAfter{}; /**< Bounded provider hint for an explicit future request after throttling. */
     };
 
     /** @brief Exact result of a synchronous stream or discovery operation. */

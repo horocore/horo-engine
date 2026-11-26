@@ -39,6 +39,7 @@ namespace Horo::Agent {
         std::optional<ModelErrorCode> providerError{};             /**< Structured provider failure without response text or credentials. */
         std::optional<Security::AgentPolicyReason> contextError{}; /**< Structured context admission or freshness denial. */
         std::optional<ModelUsage> finalUsage{};                    /**< Provider-reported counts for the final successful inference only. */
+        std::optional<std::chrono::seconds> retryAfter{};         /**< Bounded retry hint for a throttled provider. */
     };
 
     /** @brief Optional consented evidence borrowed on the synchronous turn caller's Security policy owner lane. */
@@ -124,6 +125,7 @@ namespace Horo::Agent {
         std::optional<ModelUsage> usage;
         std::vector<AgentPlannedTool> tools; /**< One host result per draft intent, in the same order. */
         std::optional<Security::AgentPolicyReason> contextError;
+        std::optional<std::chrono::seconds> retryAfter{}; /**< Bounded retry hint for a throttled provider. */
     };
 
     /** @brief Editor-owned admission for at most one active authoring turn.

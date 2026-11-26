@@ -1219,6 +1219,12 @@ Rate limiting, quota exhaustion, offline state, credential loss, and provider
 failure are normal lifecycle results. They may offer an admitted local provider,
 queue a user-visible retry, or stop the request. They never trigger unbounded
 background retries, silently switch data residency, or mutate scene state.
+HTTP model adapters expose a positive `Retry-After` on a throttled response as
+an optional duration, capped at five minutes so a remote hint cannot suspend an
+editor route indefinitely. The panel uses a monotonic deadline for the configured
+provider and endpoint. Until it expires, explicit discovery and model turn retries
+for that route consume no additional quota. Speech and other routes retain their
+own admission paths. An absent hint leaves existing manual retry behavior intact.
 Cancellation and shutdown revoke retries and release provider work. While a
 recognition operation is active, the speech deadline watchdog also observes the
 immutable authoring context. Retirement of the document or context generation

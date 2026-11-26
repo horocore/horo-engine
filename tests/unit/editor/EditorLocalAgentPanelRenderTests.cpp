@@ -907,6 +907,34 @@ namespace {
         CHECK(shows("Project AI operations 0/1"));
     }
 
+    TEST_CASE("A model retry delay blocks discovery without spending another operation", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US", {}, {}, {.limits = {.session = 2}}};
+        const auto shows = [&](std::string_view message) {
+            return fixture.DrawnText().find(message) != std::string::npos;
+        };
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "limited-with-delay");
+        fixture.Enter("##Prompt", "Ask the throttled model");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] { return shows("The local provider limited requests."); }));
+        REQUIRE(shows("Editor session AI operations 1/2"));
+
+        const auto sameEndpoint = std::string{endpoint} + "/";
+        fixture.Enter("##Endpoint", sameEndpoint.c_str());
+        fixture.Activate("###discover");
+        CHECK(shows("The local provider limited requests."));
+        CHECK(shows("Editor session AI operations 1/2"));
+
+        const auto otherEndpoint = std::string{endpoint} + "/other";
+        fixture.Enter("##Endpoint", otherEndpoint.c_str());
+        fixture.Activate("###discover");
+        REQUIRE(Await([&] { return shows("Editor session AI operations 2/2") && !shows("Waiting for the local model service"); }));
+        CHECK_FALSE(shows("The local provider limited requests."));
+    }
+
     TEST_CASE("A completed source reply opens only its exact publication for review", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);

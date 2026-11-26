@@ -27,6 +27,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -53,6 +54,7 @@ namespace Horo::Editor {
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
         using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
         using SceneReviewClock = std::chrono::steady_clock;
+        using ModelRoute = std::pair<bool, std::string>;
 
         /** @brief The exact disclosed destination and payload retained until a local decision. */
         struct CloudTurnReview final {
@@ -1043,11 +1045,12 @@ namespace Horo::Editor {
                 response_.clear();
                 modelUsage_.reset();
                 try {
+                    const auto endpoint = reviewed.config.endpoint;
                     BackgroundTurn::Operation task{[review = std::move(reviewed), credentials = cloudProfiles_->Provider(),
                                                     turn = ++turn_](std::stop_token stop) mutable {
                         return RunCloudOperation(std::move(review), std::move(credentials), turn, stop);
                     }};
-                    status_ = StartModelOperation(std::move(task));
+                    status_ = StartModelOperation(endpoint, std::move(task));
                     if (!status_)
                         status_ = "cloud_working";
                 } catch (const std::bad_alloc &) {
@@ -2148,9 +2151,27 @@ namespace Horo::Editor {
             }
 
             /** @brief Charges admitted provider work once even if a failure or cancellation suppresses its result. */
-            const char *StartModelOperation(BackgroundTurn::Operation task) {
-                const auto admitted = providerBudget_.TryStart(contextProject_, [&] { return background_->Start(std::move(task)); });
+            const char *StartModelOperation(std::string_view endpoint, BackgroundTurn::Operation task) {
+                if (endpoint.ends_with('/'))
+                    endpoint.remove_suffix(1);
+                ModelRoute route{cloudMode_, std::string{endpoint}};
+                const auto now = std::chrono::steady_clock::now();
+                std::erase_if(modelRetryDeadlines_, [now](const auto &entry) { return entry.second <= now; });
+                if (modelRetryDeadlines_.contains(route))
+                    return FailureKey(ModelErrorCode::RateLimited, cloudMode_);
+                const auto admitted = providerBudget_.TryStart(contextProject_, [&] {
+                    if (!background_->Start(std::move(task)))
+                        return false;
+                    activeModelRoute_ = std::move(route);
+                    return true;
+                });
                 return admitted == EditorProviderAdmission::NotStarted ? "failed" : ProviderBudgetFailureKey(admitted);
+            }
+
+            /** @brief Records a provider hint only for the exact completed model operation. */
+            void RememberModelRetry(const std::optional<std::chrono::seconds> delay) {
+                if (delay && activeModelRoute_)
+                    modelRetryDeadlines_.insert_or_assign(*activeModelRoute_, std::chrono::steady_clock::now() + *delay);
             }
 
             /** @brief Displays the operation counts for the enabled scopes in either provider mode. */
@@ -2179,7 +2200,7 @@ namespace Horo::Editor {
                         return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, draft,
                                                  sceneQuery, stop);
                     }};
-                    status_ = StartModelOperation(std::move(task));
+                    status_ = StartModelOperation(endpoint_, std::move(task));
                     if (!status_) {
                         liveDraft_ = std::move(draft);
                         sceneQuery_ = std::move(sceneQuery);
@@ -2237,6 +2258,7 @@ namespace Horo::Editor {
                 }
                 submittedPrompt_.reset();
                 submittedReference_.reset();
+                activeModelRoute_.reset();
             }
 
             /** @brief Installs the current durable binding without resolving its key. */
@@ -2278,6 +2300,7 @@ namespace Horo::Editor {
             void Adopt(ProviderDiscovery &discovery) {
                 if (!discovery.outcome.Succeeded()) {
                     models_.clear();
+                    RememberModelRetry(discovery.outcome.error->retryAfter);
                     status_ = FailureKey(discovery.outcome.error->code, cloudMode_);
                     return;
                 }
@@ -2305,6 +2328,7 @@ namespace Horo::Editor {
                     }
                     return;
                 }
+                RememberModelRetry(result.retryAfter);
                 status_ = TurnFailureKey(result, cloudMode_);
                 if (cloudMode_)
                     return;
@@ -2390,6 +2414,8 @@ namespace Horo::Editor {
             std::shared_ptr<BackgroundTurn> background_;
             const EditorModelProviderPolicy providerPolicy_;
             EditorProviderOperationBudget providerBudget_;
+            std::optional<ModelRoute> activeModelRoute_;
+            std::map<ModelRoute, std::chrono::steady_clock::time_point> modelRetryDeadlines_;
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
             std::shared_ptr<SceneQueryProgress> sceneQuery_;
