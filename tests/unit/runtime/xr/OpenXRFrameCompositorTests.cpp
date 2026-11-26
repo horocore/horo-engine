@@ -285,6 +285,31 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.native.owner.StopPassthrough(unrelated).HasValue());
         }
 
+        TEST_CASE("A failed passthrough capability query still withdraws a revoked grant", "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            f.census.fail = "passthrough-properties";
+            const NativePassthroughAuthorization authorization{&f.census, [](void *context, const XRPassthroughScope &) {
+                const auto &census = *static_cast<const CensusScript *>(context);
+                return census.fail.empty() || std::ranges::find(census.calls, census.fail) == census.calls.end();
+            }};
+            const auto denied = f.native.owner.StartPassthrough(scope, authorization);
+            REQUIRE(std::ranges::find(f.census.calls, f.census.fail) != f.census.calls.end());
+            RequireFailureIdentity(denied, XRErrors::PermissionDenied);
+            CHECK(ErrorChainContains(denied.ErrorValue(), XRErrors::OperationUnavailable.domain, XRErrors::OperationUnavailable.code));
+            CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
+            CHECK(f.passthrough.featuresCreated == 0);
+
+            f.census.fail = {};
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope, authorization), XRErrors::IdentityStale);
+            CHECK(f.passthrough.featuresCreated == 0);
+            scope.grant = IdentityValue<XRPassthroughGrant>(2);
+            REQUIRE(f.native.owner.StartPassthrough(scope, authorization).HasValue());
+            REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+        }
+
         TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
             if (!NativePassthroughExtensionRequest())
                 SKIP("This test requires the Meta Quest provider.");

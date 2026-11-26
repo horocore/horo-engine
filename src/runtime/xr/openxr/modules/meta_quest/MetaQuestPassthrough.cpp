@@ -139,17 +139,24 @@ namespace Horo::XR::OpenXRInternal {
         PFN_xrPassthroughStartFB start{};
         PFN_xrPassthroughLayerResumeFB resume{};
 
+        /** @brief Retires revoked consent even when the native step also failed. */
+        Result<void> CheckPermission(Result<void> step) const {
+            if (preparation.Allows(authorization))
+                return step;
+            owner.RevokePassthrough();
+            auto denied = MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup");
+            if (step.HasError())
+                denied = WithCause(std::move(denied), std::move(step).ErrorValue());
+            return Result<void>::Failure(std::move(denied));
+        }
+
         /** @brief Validates a native transition and rechecks the still-pending grant. */
         Result<void> Check(const char *operation, const XrResult result = XR_SUCCESS, const bool validHandle = true) const {
             if (result != XR_SUCCESS)
-                return Result<void>::Failure(PassthroughFailure(operation, result));
-            if (!preparation.Allows(authorization)) {
-                owner.RevokePassthrough();
-                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup"));
-            }
+                return CheckPermission(Result<void>::Failure(PassthroughFailure(operation, result)));
             if (!validHandle)
-                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, operation));
-            return Result<void>::Success();
+                return CheckPermission(Result<void>::Failure(MakeError(XRErrors::OperationInvalid, operation)));
+            return CheckPermission(Result<void>::Success());
         }
 
         /** @brief Requires the complete native activation and cleanup routes before allocating any handle. */
@@ -193,7 +200,7 @@ namespace Horo::XR::OpenXRInternal {
                 return step;
             const auto current = owner.Borrow(candidate.scope.session);
             if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
+                return CheckPermission(Result<void>::Failure(current.ErrorValue()));
             return Check("passthrough publication");
         }
 
@@ -201,12 +208,12 @@ namespace Horo::XR::OpenXRInternal {
         Result<void> Activate(const NativeSessionBorrow &native) {
             if (auto permit = Check("passthrough preflight"); permit.HasError())
                 return permit;
-            if (auto bound = BindDispatch(native.instance); bound.HasError())
+            if (auto bound = CheckPermission(BindDispatch(native.instance)); bound.HasError())
                 return bound;
-            if (auto supported = CheckPassthroughSystem(system, native); supported.HasError())
+            if (auto supported = CheckPermission(CheckPassthroughSystem(system, native)); supported.HasError())
                 return supported;
             if (const auto current = owner.Borrow(candidate.scope.session); current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
+                return CheckPermission(Result<void>::Failure(current.ErrorValue()));
             if (auto permit = Check("passthrough startup"); permit.HasError())
                 return permit;
             owner.lastPassthroughGrant_ = candidate.scope.grant;
