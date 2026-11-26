@@ -21,7 +21,10 @@ A world hit is qualified against the retained logical layout and its actual
 presentation receipt. The world case passes the selected target and logical
 point to the existing dispatcher, verifies modal-bounded propagation and
 default prevention, and proves that a replacement presentation rejects the old
-hit snapshot. XR motion controllers and native world-canvas rendering have their
+hit snapshot. The pointer recognizer also checks that a skipped or failed World
+presentation drains capture before a long press or accessibility activation
+can dispatch. The first release after a new presentation cannot activate the
+retired contact. XR motion controllers and native world-canvas rendering have their
 own device and rendering qualification.
 
 Failures must preserve the last published generation, or cancel the affected

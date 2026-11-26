@@ -183,14 +183,14 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiPointerInteraction::Validate */
-    Result<void> UiPointerInteraction::Validate(const UiPointerInteractionEnvironment &environment) const {
+    Result<void> UiPointerInteraction::Validate(const UiPointerInteractionEnvironment &environment) {
         if (stopped_ || !descriptor_.owner.IsValid())
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
         if (pumping_)
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchReentrant));
         const auto &owner = descriptor_.owner;
-        if (const auto &hit = environment.hitTesting.Descriptor();
-            environment.tree.State() != UiElementTreeState::Active || environment.tree.Instance() != owner.instance ||
+        const auto &hit = environment.hitTesting.Descriptor();
+        if (environment.tree.State() != UiElementTreeState::Active || environment.tree.Instance() != owner.instance ||
             environment.tree.Canvas() != owner.canvas || environment.tree.SourceDocument() != owner.document ||
             environment.tree.Revision() != owner.tree || hit.instance != owner.instance || hit.canvas != owner.canvas ||
             hit.document != owner.document || hit.tree != owner.tree || hit.interaction != owner.interaction ||
@@ -198,6 +198,10 @@ namespace Horo::Runtime::Ui {
             environment.presented.LastPresentedInteraction() != owner.interaction ||
             environment.captures.Ownership() != owner.instance.ownership)
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchSourceStale));
+        if (hit.renderMode == UiRenderMode::WorldSpace && !environment.presented.WorldProjection()) {
+            CancelTransient();
+            return Result<void>::Failure(MakeError(UiErrors::HitTestNotPresented));
+        }
         return Result<void>::Success();
     }
 

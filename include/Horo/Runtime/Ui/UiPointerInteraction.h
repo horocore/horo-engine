@@ -116,7 +116,8 @@ namespace Horo::Runtime::Ui {
          * @param milliseconds Monotonic unscaled owner time; equal times are allowed, backwards time rejects before effects.
          * @param nextSequence Application-owned next routed event sequence, shared with keyboard/control delivery.
          * @return Bounded result or typed geometry, timing, ownership, capture, capacity or handler error.
-         * @post Any lost capture is cancelled before another gesture default. No long-press catch-up burst is generated.
+         * @post Any lost capture is cancelled before another gesture default. For World Space, loss of the bound
+         * presentation plane also retires the capture on an empty tick. No long-press catch-up burst is generated.
          */
         [[nodiscard]] Result<UiPointerInteractionResult> Pump(const UiPointerInteractionEnvironment &environment,
                                                               const UiResolvedScreenCanvas &canvasSpace,
@@ -217,7 +218,7 @@ namespace Horo::Runtime::Ui {
         bool stopped_{};
 
         /** @brief Admits actual owner lineage and presentation before any dispatch. @return Admission or typed failure. */
-        [[nodiscard]] Result<void> Validate(const UiPointerInteractionEnvironment &environment) const;
+        [[nodiscard]] Result<void> Validate(const UiPointerInteractionEnvironment &environment);
         /** @brief Resolves one complete copied target policy without allocation. @return Policy or null. */
         [[nodiscard]] const UiPointerTargetPolicy *Policy(UiElementHandle target) const noexcept;
         /** @brief Routes a closed gesture and accumulates bounded consumption evidence. @return Default admitted or typed failure. */

@@ -218,6 +218,51 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.sequence == 1);
         }
 
+        TEST_CASE("World presentation loss retires capture before physical or accessible defaults", "[runtime_ui][pointer][world]") {
+            PointerFixture fixture{true, UiRenderMode::WorldSpace};
+            const auto plane = *fixture.presented.WorldProjection();
+            const std::array press{WorldSample(UiPointerEdge::Press)};
+            REQUIRE(fixture.PumpWorld(press, 1).Value().activePointers == 1);
+
+            const bool skipped = GENERATE(false, true);
+            UiPresentationReceipt receipt{fixture.view,
+                                          fixture.descriptor.canvas,
+                                          fixture.layout.Descriptor().interaction,
+                                          UiRenderSnapshotRevision::Create(2).Value(),
+                                          skipped ? UiPresentationOutcome::Skipped : UiPresentationOutcome::Failed,
+                                          skipped ? UiPresentationReason::Suppressed : UiPresentationReason::ExecutionFailure};
+            REQUIRE(fixture.presented.Apply(receipt).HasValue());
+            const auto sequenceBeforeLoss = fixture.sequence;
+            SECTION("an empty tick cannot fire a pending long press") {
+                const auto rejected = fixture.PumpWorld({}, 600);
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestNotPresented.code.Value());
+                CHECK(fixture.observer.Count(UiGestureKind::LongPress) == 0);
+            }
+            SECTION("a retained focus target cannot activate through accessibility") {
+                const auto rejected =
+                    fixture.interaction->Accessible({fixture.tree, fixture.hit, fixture.presented, fixture.captures, fixture.dispatcher,
+                                                     fixture.observer},
+                                                    fixture.target, UiAccessibleGesture::Activate, fixture.sequence);
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestNotPresented.code.Value());
+            }
+            CHECK(fixture.captures.IsDrained());
+            CHECK(fixture.sequence == sequenceBeforeLoss);
+
+            receipt.snapshotRevision = UiRenderSnapshotRevision::Create(3).Value();
+            receipt.outcome = UiPresentationOutcome::Presented;
+            receipt.reason = UiPresentationReason::None;
+            receipt.worldProjection = plane;
+            REQUIRE(fixture.presented.Apply(receipt).HasValue());
+            const std::array release{WorldSample(UiPointerEdge::Release)};
+            REQUIRE(fixture.PumpWorld(release, 601).HasValue());
+            CHECK(fixture.observer.Count(UiGestureKind::Tap) == 0);
+            REQUIRE(fixture.PumpWorld(press, 602).HasValue());
+            REQUIRE(fixture.PumpWorld(release, 603).HasValue());
+            CHECK(fixture.observer.Count(UiGestureKind::Tap) == 1);
+        }
+
         TEST_CASE("A world ray cannot apply a default after its presented plane is replaced", "[runtime_ui][pointer][world]") {
             PointerFixture fixture{true, UiRenderMode::WorldSpace};
 
