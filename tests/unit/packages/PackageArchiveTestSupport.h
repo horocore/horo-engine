@@ -92,11 +92,9 @@ namespace Horo::Tests::Packages {
 
     inline std::vector<std::byte> FinalizeArchive(mz_zip_archive &zip);
 
-    /** @brief Packs trusted fixture paths and bytes with matching file inventory entries. */
-    inline std::vector<std::byte> PackageArchiveBytes(const std::span<const std::pair<std::string, std::string>> files) {
-        nlohmann::json entries = nlohmann::json::array();
-        for (const auto &[name, content] : files)
-            entries.push_back(FileInventoryEntry(name, content));
+    /** @brief Packs fixture files with explicit inventory metadata for ownership tests. */
+    inline std::vector<std::byte> PackageArchiveBytes(const std::span<const std::pair<std::string, std::string>> files,
+                                                      const nlohmann::json &entries) {
         const std::string inventory = nlohmann::json{{"schemaVersion", 1}, {"files", entries}}.dump();
 
         mz_zip_archive zip{};
@@ -105,6 +103,14 @@ namespace Horo::Tests::Packages {
             REQUIRE(mz_zip_writer_add_mem(&zip, name.c_str(), content.data(), content.size(), MZ_BEST_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", inventory.data(), inventory.size(), MZ_BEST_COMPRESSION));
         return FinalizeArchive(zip);
+    }
+
+    /** @brief Packs trusted fixture paths and bytes with matching file inventory entries. */
+    inline std::vector<std::byte> PackageArchiveBytes(const std::span<const std::pair<std::string, std::string>> files) {
+        auto entries = nlohmann::json::array();
+        for (const auto &[name, content] : files)
+            entries.push_back(FileInventoryEntry(name, content));
+        return PackageArchiveBytes(files, entries);
     }
 
     inline std::vector<std::byte> ValidPackageArchiveBytes(const std::string_view asset = "verified bytes",

@@ -46,12 +46,17 @@ namespace Horo::Packages {
             });
         }
 
+        /** @brief Returns the canonical owner root for a mounted file, or an empty view for package-owned data. */
+        std::string_view ContributionRoot(const PackageFileEntry &file) {
+            return file.contributionRoot ? std::string_view{file.contributionRoot->Value()} : std::string_view{};
+        }
+
         /** @brief Allows only existing non-executable source and target assets from the two sealed inventories. */
         std::optional<bool> VerifyAssetMove(const PackagePath &from, const PackagePath &to, const ValidatedPackageArchive &previous,
                                             const ValidatedPackageArchive &candidate) {
             const auto *oldFile = FindFile(previous, from.Value());
             const auto *newFile = FindFile(candidate, to.Value());
-            if (!oldFile || !newFile || oldFile->executable || newFile->executable ||
+            if (!oldFile || !newFile || oldFile->executable || newFile->executable || ContributionRoot(*oldFile) != ContributionRoot(*newFile) ||
                 OccupiesPortablePath(candidate, from) || OccupiesPortablePath(previous, to))
                 return std::nullopt;
             return oldFile->size == newFile->size && oldFile->digest == newFile->digest;

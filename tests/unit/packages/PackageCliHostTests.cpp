@@ -699,9 +699,11 @@ namespace {
         NativeProject fixture;
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
-        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, PortableSourceAlias, Duplicate, InvalidBehavior };
+        enum class Source {
+            Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, PortableSourceAlias, OwnerChanged, Duplicate, InvalidBehavior
+        };
         const auto mode = GENERATE(Source::Verified, Source::ChangedBytes, Source::Stale, Source::OutsideAssets, Source::MissingTarget,
-                                   Source::PortableSourceAlias, Source::Duplicate, Source::InvalidBehavior);
+                                   Source::PortableSourceAlias, Source::OwnerChanged, Source::Duplicate, Source::InvalidBehavior);
         const auto id = fixture.graph.package.Value();
         const auto previousDigest = FormatSha256(fixture.graph.archive.Digest());
         const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
@@ -722,7 +724,14 @@ namespace {
             entries.emplace_back(Packages::PackageBehaviorRenameDeclarationPath, "{}");
         if (mode == Source::PortableSourceAlias)
             entries.emplace_back("assets/DATA.bin", "verified bytes");
-        const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
+        auto inventory = nlohmann::json::array();
+        for (const auto &[path, content] : entries) {
+            auto field = Tests::Packages::FileInventoryEntry(path, content);
+            if (path == "assets/moved.bin" && mode == Source::OwnerChanged)
+                field["contributionRoot"] = "assets";
+            inventory.push_back(std::move(field));
+        }
+        const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries, inventory));
         REQUIRE(archive.HasValue());
         WriteAssetCandidate(fixture, version, archive.Value());
         NativeDurableFileSystem files;
@@ -746,7 +755,7 @@ namespace {
             const auto &error = result.ErrorValue();
             if (mode == Source::OutsideAssets) {
                 CHECK(error.code.Value() == "packages.migration.invalid_path");
-            } else if (mode == Source::MissingTarget || mode == Source::PortableSourceAlias) {
+            } else if (mode == Source::MissingTarget || mode == Source::PortableSourceAlias || mode == Source::OwnerChanged) {
                 CHECK(error.code.Value() == "packages.migration.archive_paths_mismatch");
             } else if (mode == Source::Duplicate) {
                 CHECK(error.code.Value() == "packages.migration.duplicate_transition");
