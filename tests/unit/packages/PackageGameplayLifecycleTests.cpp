@@ -644,6 +644,17 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
         CHECK(retainedImporters->FindByExtension("raw") == contribution->strategy.get());
         CHECK(host->ComposeImporters(content, builtinImporters).Value() == builtinImporters);
         CHECK(host->ComposeImporters(root, retainedImporters).HasError());
+        auto existing = *contribution;
+        existing.contributionId = "zzz.host.importer";
+        Assets::AssetImporterCatalog hostCatalog;
+        REQUIRE(hostCatalog.Register(std::move(existing)).HasValue());
+        auto published = hostCatalog.Publish();
+        REQUIRE(published.HasValue());
+        const auto prioritized = host->ComposeImporters(root, std::move(published).Value());
+        REQUIRE(prioritized.HasValue());
+        REQUIRE(prioritized.Value()->FindContributionByExtension("raw"));
+        CHECK(prioritized.Value()->FindContributionByExtension("raw")->contributionId == "zzz.host.importer");
+        CHECK(prioritized.Value()->FindById("fixture.importer"));
     }
     CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
     {

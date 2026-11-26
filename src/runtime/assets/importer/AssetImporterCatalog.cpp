@@ -96,18 +96,15 @@ namespace Horo::Assets {
         if (project.empty())
             return Snapshot::Success(std::move(host));
 
-        AssetImporterCatalog candidate;
-        if (auto registered = candidate.RegisterBatch(host->entries_); registered.HasError())
-            return Snapshot::Failure(std::move(registered).ErrorValue());
+        std::vector<AssetImporterContribution> entries = host->entries_;
         for (const auto &catalog : project) {
             if (!catalog)
                 return Snapshot::Failure(MakeError(CookErrors::MalformedArtifact));
-            if (auto registered = candidate.RegisterBatch(catalog->entries_); registered.HasError())
-                return Snapshot::Failure(std::move(registered).ErrorValue());
+            entries.insert(entries.end(), catalog->entries_.begin(), catalog->entries_.end());
         }
-        auto published = candidate.Publish();
-        if (published.HasError())
-            return published;
+        AssetImporterCatalog candidate;
+        if (auto valid = candidate.ValidateBatch(entries); valid.HasError())
+            return Snapshot::Failure(std::move(valid).ErrorValue());
         struct RetainedCatalog final {
             std::shared_ptr<const AssetImporterCatalogSnapshot> host;
             std::vector<std::shared_ptr<const AssetImporterCatalogSnapshot>> project;
@@ -115,7 +112,8 @@ namespace Horo::Assets {
         };
         // Retire the composed view before releasing its owning module snapshots.
         auto retained = std::make_shared<RetainedCatalog>(RetainedCatalog{std::move(host), {project.begin(), project.end()},
-                                                                         std::move(published).Value()});
+                                                                         std::make_shared<const AssetImporterCatalogSnapshot>(
+                                                                             std::move(entries))});
         const auto *catalog = retained->catalog.get();
         return Snapshot::Success({std::move(retained), catalog});
     }

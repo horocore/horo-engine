@@ -186,8 +186,8 @@ namespace Horo::Assets {
 
     /**
      * @brief Immutable sealed catalog snapshot.
-     * @details Entries are sorted by extension, then contribution ID.
-     *          Lookup is allocation-free on the pinned snapshot.
+     * @details A source catalog is sorted by extension, then contribution ID. A composed catalog keeps host
+     *          entries first so existing implicit lookup choices remain stable. Lookup is allocation-free.
      */
     class AssetImporterCatalogSnapshot final {
     public:
