@@ -8,7 +8,7 @@ from pathlib import Path
 
 from qualify_xr_android import check_android_preflight_file, validate_android_preflight
 from qualify_xr_device import (
-    CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
+    CATEGORIES, CORE_CHECKS, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
     is_source_revision, load_record, require, validate_declaration, validate_record, verify_artifact,
 )
@@ -19,6 +19,7 @@ MAX_TUPLES = 64
 MAX_TIMING_WINDOW_NS = 86_400_000_000_000
 MAX_TIMING_FRAMES = 10_000_000
 PRIMARY_STEREO_VIEW_COUNT = 2
+SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 TIMING_LIMITS = {
     "minimumDurationNs": (1, MAX_TIMING_WINDOW_NS),
     "minimumFrameCount": (1, MAX_TIMING_FRAMES),
@@ -75,6 +76,23 @@ class Evidence:
     def mixed_reality_capture(self, record: dict) -> bytes:
         with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
             return source.read(MAX_RECORD_BYTES + 1)
+
+    def physical_check_capture(self, record: dict, check: str) -> str:
+        """Verify the run-bound receipt and its redacted underlying artifact."""
+        digest = record["checks"][check]["evidenceSha256"]
+        with self.path(digest).open("rb") as source:
+            data = source.read(MAX_RECORD_BYTES + 1)
+        require(len(data) <= MAX_RECORD_BYTES, f"{check} capture exceeds the size limit")
+        require(hashlib.sha256(data).hexdigest() == digest, f"{check} capture digest does not match")
+        capture = fields(decode_record(data), {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"},
+                         f"{check} capture")
+        require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, f"Unsupported {check} capture schema")
+        require(capture["evidenceLevel"] == record["evidenceLevel"], f"{check} capture must identify physical evidence")
+        require(capture["check"] == check, f"{check} capture is for a different check")
+        require(capture["tuple"] == record["tuple"], f"{check} capture is from a different product tuple")
+        require(capture["provenance"] == record["provenance"], f"{check} capture is from a different smoke run")
+        self.verify(capture["artifactSha256"])
+        return digest
 
 
 def validate_preflight_declarations(row: dict) -> None:
@@ -188,6 +206,8 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     check_digests.difference_update({None, record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]})
     if mr_capture is not None:
         check_digests.discard(record["checks"]["optionalMR"]["evidenceSha256"])
+    for check in sorted((CORE_CHECKS | optional) - SPECIALIZED_PHYSICAL_CHECKS):
+        check_digests.discard(evidence.physical_check_capture(record, check))
     for digest in check_digests:
         evidence.verify(digest)
     return record["status"]

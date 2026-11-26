@@ -52,6 +52,14 @@ def store_timing_capture(root, record):
     record["checks"]["renderTiming"]["evidenceSha256"] = store(root, json.dumps(timing_capture(record)).encode())
 
 
+def store_physical_check_captures(root, record):
+    for name in ("setup", "input", "comfort", "haptics", "lifecycle", "recovery"):
+        artifact = store(root, f"redacted {record['provenance']['runId']} {name} observation".encode())
+        capture = {"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification", "tuple": record["tuple"],
+                   "provenance": record["provenance"], "check": name, "artifactSha256": artifact}
+        record["checks"][name]["evidenceSha256"] = store(root, json.dumps(capture).encode())
+
+
 def make_claim(root, mode, category="Reference"):
     identity = dict.fromkeys(IDENTITY_FIELDS, "synthetic")
     identity.update(buildSha256=store(root, f"{mode} executable".encode()),
@@ -72,6 +80,7 @@ def make_claim(root, mode, category="Reference"):
     }
     store_display_capture(root, record)
     store_timing_capture(root, record)
+    store_physical_check_captures(root, record)
     row = {
         "id": mode, "category": category, "owner": "xr-platform", "releaseClaim": True,
         "declaration": {"tuple": identity, "testPlan": plan}, "requiredOptionalChecks": ["haptics"],
@@ -219,6 +228,7 @@ def mr_claim(release):
     record["tuple"]["admittedExtensions"] = extensions.copy()
     store_display_capture(evidence, record)
     store_timing_capture(evidence, record)
+    store_physical_check_captures(evidence, record)
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
     checks = dict.fromkeys(("operation", "consentDenial", "revocation", "fallback", "shutdown"), True)
     capture = {"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification",
@@ -337,6 +347,49 @@ def test_stale_review_and_corrupt_receipt_are_both_reported(release):
     assert "Standalone (xr-platform): Artifact content does not match" in result.stderr
 
 
+def test_another_connection_cannot_supply_the_required_input_capture(release):
+    matrix, evidence = release
+    standalone, pcvr = matrix["tuples"]
+    first = json.loads((evidence / standalone["recordSha256"]).read_bytes())
+    second = json.loads((evidence / pcvr["recordSha256"]).read_bytes())
+    second["checks"]["input"]["evidenceSha256"] = first["checks"]["input"]["evidenceSha256"]
+    pcvr["recordSha256"] = store(evidence, json.dumps(second).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Tethered (xr-platform): input capture is from a different product tuple" in result.stderr
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ({"check": "recovery"}, "input capture is for a different check"),
+    ({"provenance": {"runId": "old-run"}}, "input capture is from a different smoke run"),
+    ({"evidenceLevel": "DeterministicFake"}, "input capture must identify physical evidence"),
+    ({"artifactSha256": "b" * 64}, "Missing regular artifact"),
+])
+def test_required_capture_identifies_its_physical_check_and_artifact(release, change, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    check = record["checks"]["input"]
+    capture = json.loads((evidence / check["evidenceSha256"]).read_bytes())
+    capture.update(change)
+    check["evidenceSha256"] = store(evidence, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Standalone (xr-platform): {reason}" in result.stderr
+
+
+def test_a_bare_log_cannot_supply_the_required_input_capture(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    record["checks"]["input"]["evidenceSha256"] = store(evidence, b"{}")
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Unexpected fields in input capture" in result.stderr
+
+
 def test_hashed_simulator_smoke_record_never_fulfills_physical_claim(release):
     matrix, evidence = release
     row = matrix["tuples"][0]
@@ -374,6 +427,7 @@ def update_claim_identity(row, evidence, **changes):
     record["tuple"] = identity
     store_display_capture(evidence, record)
     store_timing_capture(evidence, record)
+    store_physical_check_captures(evidence, record)
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
@@ -384,6 +438,7 @@ def capture_android_smoke(row, evidence, *, runtime_version="1.2.3", build=ANDRO
         record["provenance"]["androidDeviceBuildSha256"] = build
         store_display_capture(evidence, record)
         store_timing_capture(evidence, record)
+        store_physical_check_captures(evidence, record)
         row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
