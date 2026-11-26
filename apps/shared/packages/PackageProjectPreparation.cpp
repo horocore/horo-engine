@@ -1,3 +1,4 @@
+#include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageRequest.h"
@@ -505,29 +506,25 @@ namespace Horo::Application::Internal {
                 RecordRemovalFailure(blocking, std::move(coverage).ErrorValue());
 
             std::vector<Diagnostic> references;
-            auto importers = InspectPackageRemovalImporters(sources.assets, impact);
+            Assets::AssetRegistryCandidate inventory;
+            auto importers = InspectPackageRemovalImporters(sources.assets, impact, &inventory);
             if (importers.HasError())
                 RecordRemovalFailure(blocking, std::move(importers).ErrorValue());
             else
                 AppendPackageImporterDiagnostics(references, importers.Value());
 
-            auto sceneSources = InspectPackageScenePrefabReferences(sources, lock, impact);
-            if (sceneSources.HasError())
-                RecordRemovalFailure(blocking, std::move(sceneSources).ErrorValue());
-            else
-                std::ranges::move(sceneSources.Value(), std::back_inserter(references));
-
-            auto nativeReferences = InspectPackageNativeReferences(sources, lock, impact);
-            if (nativeReferences.HasError())
-                RecordRemovalFailure(blocking, std::move(nativeReferences).ErrorValue());
-            else
-                std::ranges::move(nativeReferences.Value(), std::back_inserter(references));
-
-            auto decisions = InspectPackageDecisionReferences(sources, lock, impact);
-            if (decisions.HasError())
-                RecordRemovalFailure(blocking, std::move(decisions).ErrorValue());
-            else
-                std::ranges::move(decisions.Value(), std::back_inserter(references));
+            const auto collect = [&](Result<std::vector<Diagnostic>> findings) {
+                if (findings.HasError())
+                    RecordRemovalFailure(blocking, std::move(findings).ErrorValue());
+                else
+                    std::ranges::move(std::move(findings).Value(), std::back_inserter(references));
+            };
+            const bool inventoryAdmitted = inventory.status != Assets::AssetRegistryBuildStatus::Failed;
+            if (inventoryAdmitted)
+                collect(InspectPackageScenePrefabReferences(sources, lock, impact, inventory));
+            collect(InspectPackageNativeReferences(sources, lock, impact));
+            if (inventoryAdmitted)
+                collect(InspectPackageDecisionReferences(sources, lock, impact, inventory));
 
             if (!blocking && references.empty())
                 return Result<void>::Success();

@@ -526,7 +526,8 @@ also blocks removal. The review reports its path alongside references from the
 other readable documents. A degraded asset inventory also blocks removal.
 Review still reports confirmed references from individually admitted sources
 and defers checks that require a complete inventory, such as resolving
-composition links. The removal dialog shows the source and target of
+composition links. Importer, Scene, Prefab and Decision checks share one
+admitted inventory within the removal transaction. The removal dialog shows the source and target of
 unresolved Scene, Prefab and Decision links, along with identified modules,
 contributions and archive paths that require a lifecycle owner. The application package project host borrows the
 inert EQS descriptor schema and authoring validator from AI Scene integration.

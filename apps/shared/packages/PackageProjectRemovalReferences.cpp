@@ -72,18 +72,23 @@ namespace Horo::Application::Internal {
 
     /** @copydoc InspectPackageRemovalImporters */
     Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(const Assets::IAssetRegistrySource &assets,
-                                                                                 const Packages::PackageRemovalGraphPreview &removal) {
+                                                                                 const Packages::PackageRemovalGraphPreview &removal,
+                                                                                 Assets::AssetRegistryCandidate *reviewed) {
         using Report = Result<std::vector<PackageImporterReference>>;
         if (removal.removed.empty())
             return Report::Success({});
         ImporterEvidenceSource capture{assets, removal.removed};
-        const auto candidate = Assets::PrepareAssetRegistryCandidate(capture);
+        auto candidate = Assets::PrepareAssetRegistryCandidate(capture);
         if (candidate.HasError())
             return Report::Failure(candidate.ErrorValue());
         auto references = std::move(capture).TakeReferences();
-        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
-            return Report::Failure(IncompleteImporterInventory(candidate.Value(), std::move(references)));
-        return Report::Success(std::move(references));
+        auto inventory = std::move(candidate).Value();
+        auto report = inventory.status == Assets::AssetRegistryBuildStatus::Complete
+                          ? Report::Success(std::move(references))
+                          : Report::Failure(IncompleteImporterInventory(inventory, std::move(references)));
+        if (reviewed)
+            *reviewed = std::move(inventory);
+        return report;
     }
 
     /** @copydoc AppendPackageImporterDiagnostics */

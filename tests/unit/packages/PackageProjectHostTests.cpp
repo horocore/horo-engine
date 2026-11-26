@@ -902,8 +902,13 @@ namespace {
         const auto invalidSidecar = policy.projectRoot / "Assets/Unrelated.horoasset.horo";
         std::ofstream{invalidSource} << "{}";
         std::ofstream{invalidSidecar} << "{";
-        const auto degraded = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        unsigned captures{};
+        const ObservedAssetSource observed{*assets, [&] { ++captures; }};
+        auto reviewed = fixture.RemovalSources(observed);
+        reviewed.registrations = owners;
+        const auto degraded = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, reviewed);
         REQUIRE(degraded.HasError());
+        CHECK(captures == 1);
         CHECK(degraded.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
         const auto hasBehavior = [&](std::string_view path) {
             return std::ranges::any_of(degraded.ErrorValue().diagnostics, [&](const auto &diagnostic) {

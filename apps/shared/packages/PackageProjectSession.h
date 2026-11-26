@@ -10,6 +10,7 @@ namespace Horo::AI {
 
 namespace Horo::Assets {
     class IAssetRegistrySource;
+    struct AssetRegistryCandidate;
 }
 
 namespace Horo::Packages {
@@ -146,9 +147,11 @@ namespace Horo::Application::Internal {
 
     /** @brief Lists all registered assets whose importer belongs to a removed package.
      * @param assets Fresh root-bound project asset source. @param removal Exact lock graph impact.
+     * @param reviewed Optional destination for the same validated inventory, including degraded results.
      * @return Complete importer evidence, or an inventory failure with diagnostics for admitted references. */
     [[nodiscard]] Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(
-        const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal);
+        const Assets::IAssetRegistrySource &assets, const Packages::PackageRemovalGraphPreview &removal,
+        Assets::AssetRegistryCandidate *reviewed = nullptr);
 
     /** @brief Adds one canonical removal diagnostic for every confirmed saved importer reference. */
     void AppendPackageImporterDiagnostics(std::vector<Diagnostic> &diagnostics, std::span<const PackageImporterReference> references);

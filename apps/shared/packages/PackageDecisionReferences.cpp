@@ -300,17 +300,13 @@ namespace Horo::Application::Internal {
     /** @copydoc InspectPackageDecisionReferences */
     Result<std::vector<Diagnostic>> InspectPackageDecisionReferences(const PackageRemovalSources &sources,
                                                                    const Packages::ValidatedPackageLockfileV1 &lock,
-                                                                   const Packages::PackageRemovalGraphPreview &removal) {
+                                                                   const Packages::PackageRemovalGraphPreview &removal,
+                                                                   const Assets::AssetRegistryCandidate &inventory) {
         const auto owners = IndexProviderOwners(sources, lock, removal);
         if (owners.HasError())
             return ReferenceScan::Failure(owners.ErrorValue());
         if (owners.Value().decisions.empty() && owners.Value().customSenses.empty())
             return ReferenceScan::Success({});
-        const auto candidate = Assets::PrepareAssetRegistryCandidate(sources.assets);
-        if (candidate.HasError())
-            return ReferenceScan::Failure(candidate.ErrorValue());
-        if (candidate.Value().status == Assets::AssetRegistryBuildStatus::Failed)
-            return ReferenceScan::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
-        return ScanProviderSources(sources, owners.Value(), candidate.Value());
+        return ScanProviderSources(sources, owners.Value(), inventory);
     }
 }  // namespace Horo::Application::Internal

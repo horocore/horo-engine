@@ -7,6 +7,7 @@
 
 namespace Horo::Assets {
     class IAssetRegistrySource;
+    struct AssetRegistryCandidate;
 }
 
 namespace Horo::Packages {
@@ -87,11 +88,13 @@ namespace Horo::Application::Internal {
      * @param sources Owned registration observations and root-bound saved source.
      * @param lock Exact current lock used to attribute registrations.
      * @param removal Validated withdrawal plan.
+     * @param inventory Exact admitted saved inventory shared with the importer review.
      * @return Bounded diagnostics, or a typed failure if registered graphs cannot be read completely.
      */
     [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageDecisionReferences(const PackageRemovalSources &sources,
                                                                                    const Packages::ValidatedPackageLockfileV1 &lock,
-                                                                                   const Packages::PackageRemovalGraphPreview &removal);
+                                                                                   const Packages::PackageRemovalGraphPreview &removal,
+                                                                                   const Assets::AssetRegistryCandidate &inventory);
 
     /** @brief One artifact-bound rename claim with names interpreted by Gameplay. */
     struct PackageBehaviorMigration final {
@@ -115,11 +118,13 @@ namespace Horo::Application::Internal {
     /** @brief Reads canonical saved Scene and Prefab sources for components, behaviors and potential custom sense dependencies.
      * @param sources Same-project registry, root-bound read authority, and registration evidence.
      * @param lock Current validated lock. @param removal Exact withdrawal effects from that lock.
+     * @param inventory Exact admitted saved inventory shared with the importer review.
      * @return Confirmed component and behavior matches, unresolved sense findings, or a typed failure.
      * @details Matches known registrations. It does not certify registration coverage for packages without supplied evidence,
      * inspect unsaved documents or grant removal approval. Call off the UI draw lane.
      */
     [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageScenePrefabReferences(
         const PackageRemovalSources &sources,
-        const Packages::ValidatedPackageLockfileV1 &lock, const Packages::PackageRemovalGraphPreview &removal);
+        const Packages::ValidatedPackageLockfileV1 &lock, const Packages::PackageRemovalGraphPreview &removal,
+        const Assets::AssetRegistryCandidate &inventory);
 }  // namespace Horo::Application::Internal
