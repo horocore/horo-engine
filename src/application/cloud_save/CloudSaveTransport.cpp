@@ -109,22 +109,24 @@ namespace Horo::Application {
             return Response::Success({.mutation = mutation, .bytes = std::move(owned).Value()});
         }
 
-        /** @brief Requires a terminal observation from the exact admitted read. */
-        Result<void> CheckReadObservation(const PlatformRequestHandle<CloudBlobReadResult> &handle,
-                                          const PlatformRequestSnapshot<CloudBlobReadResult> &completion) {
-            if (!handle.IsValid() || completion.id != handle.Id() || completion.generation != handle.Generation())
-                return Result<void>::Failure(MakeError(RequestErrors::Stale));
+        /** @brief Requires a terminal observation from the exact admitted request. */
+        template <typename T>
+        Result<void> CheckTerminalObservation(const PlatformServicesFrontend &frontend, const PlatformRequestHandle<T> &handle,
+                                              const PlatformRequestSnapshot<T> &completion) {
             if (!completion.terminal || !IsTerminal(completion.state))
                 return Result<void>::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+            if (!frontend.OwnsObservation(handle, completion))
+                return Result<void>::Failure(MakeError(RequestErrors::Stale));
             return Result<void>::Success();
         }
 
         /** @brief Checks a complete download against the exact revision and address selected by the owner. */
         Result<const CloudBlobReadResult *> CheckDownloadRead(
-            const CloudSaveRequest<CloudBlobReadResult> &admission, const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
+            const PlatformServicesFrontend &frontend, const CloudSaveRequest<CloudBlobReadResult> &admission,
+            const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
             const CloudBlobReadRequest &request, const ProviderObjectRevision &revision) {
             using Response = Result<const CloudBlobReadResult *>;
-            if (const auto observed = CheckReadObservation(admission.handle, completion); observed.HasError())
+            if (const auto observed = CheckTerminalObservation(frontend, admission.handle, completion); observed.HasError())
                 return Response::Failure(observed.ErrorValue());
             if (const auto *error = completion.terminal->ErrorValue())
                 return Response::Failure(*error);
@@ -324,7 +326,7 @@ namespace Horo::Application {
             return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
-        const auto read = CheckDownloadRead(download.Request(), completion, download.read_, download.revision_);
+        const auto read = CheckDownloadRead(*frontend_, download.Request(), completion, download.read_, download.revision_);
         if (read.HasError())
             return Response::Failure(read.ErrorValue());
         const auto current = lifecycle.ReadCloudRevision(access, scope_);
@@ -357,7 +359,7 @@ namespace Horo::Application {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
-        const auto read = CheckDownloadRead(download.Request(), completion, download.read_, download.revision_);
+        const auto read = CheckDownloadRead(*frontend_, download.Request(), completion, download.read_, download.revision_);
         if (read.HasError())
             return Response::Failure(read.ErrorValue());
         try {
@@ -456,6 +458,21 @@ namespace Horo::Application {
         return &*selected;
     }
 
+    /** @copydoc CloudSaveTransport::PublishUploadConfirmation */
+    Result<void> CloudSaveTransport::PublishUploadConfirmation(
+        Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
+        const CloudSaveDurableMutation &mutation, const CloudSaveRequest<CloudMutationResult> &request,
+        const PlatformRequestSnapshot<CloudMutationResult> &completion) const {
+        if (const auto observed = CheckTerminalObservation(*frontend_, request.handle, completion); observed.HasError())
+            return observed;
+        if (const auto *error = completion.terminal->ErrorValue())
+            return Result<void>::Failure(*error);
+        const auto *committed = completion.terminal->Value();
+        if (!committed || completion.state != PlatformRequestState::Succeeded)
+            return Result<void>::Failure(MakeError(CloudObjectErrors::InvalidProviderResponse));
+        return PublishUploadEvidence(lifecycle, access, mutation, *committed);
+    }
+
     /** @copydoc CloudSaveTransport::ProbeUpload */
     Result<CloudSaveUploadProbe> CloudSaveTransport::ProbeUpload(const OperationId operation,
                                                                 const CloudSaveDurableMutation &mutation) const {
@@ -478,7 +495,7 @@ namespace Horo::Application {
         using Response = Result<std::optional<CloudMutationResult>>;
         if (probe.subject_ != subject_)
             return Response::Failure(MakeError(RequestErrors::Stale));
-        if (const auto observed = CheckReadObservation(probe.Request().handle, completion); observed.HasError())
+        if (const auto observed = CheckTerminalObservation(*frontend_, probe.Request().handle, completion); observed.HasError())
             return Response::Failure(observed.ErrorValue());
 
         const auto &mutation = probe.mutation_;
@@ -528,7 +545,7 @@ namespace Horo::Application {
         if (observed.HasError())
             return Response::Failure(observed.ErrorValue());
         if (observed.Value()) {
-            const auto published = PublishUploadConfirmation(lifecycle, access, mutation, *observed.Value());
+            const auto published = PublishUploadEvidence(lifecycle, access, mutation, *observed.Value());
             if (published.HasError())
                 return Response::Failure(published.ErrorValue());
             return Response::Success({});

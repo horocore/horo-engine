@@ -116,6 +116,19 @@ namespace Horo::PlatformServices {
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() const;
 
+        /** @brief Checks that a terminal observation came from the current frontend's exact admitted request.
+         * @param request Handle captured at admission. @param observation Terminal snapshot received from the store.
+         * @return True only while the issuing frontend and store are live and all identity evidence matches.
+         */
+        template <typename T> [[nodiscard]] bool OwnsObservation(const PlatformRequestHandle<T> &request,
+                                                                 const PlatformRequestSnapshot<T> &observation) const noexcept {
+            if (!open_ || !request.IsValid() || !observation.terminal || !OwnsRequest(request.frontendAuthority_) || request.store_.expired())
+                return false;
+            const auto &store = observation.terminal->store_;
+            return !request.store_.owner_before(store) && !store.owner_before(request.store_) && observation.id == request.Id() &&
+                   observation.generation == request.Generation();
+        }
+
         /**
          * @brief Requests best-effort cancellation of one admitted typed request.
          * @tparam T Request result type.

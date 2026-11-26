@@ -194,14 +194,16 @@ namespace Horo::Application {
 
         /** @brief Confirms an upload through the durable local catalog transaction.
          * @param lifecycle Local catalog authority. @param access Exact bound namespace revision.
-         * @param mutation Original durable upload. @param completion Valid provider commit evidence.
+         * @param mutation Original durable upload. @param request Exact admitted mutation request.
+         * @param completion Terminal observation from that request's issuing store.
          * @return Durable success, stale selection or account, or typed I/O failure.
          * @details Runs on the serialized coordinator's storage lane, with the frontend binding retained until the call finishes.
          */
         [[nodiscard]] Result<void> PublishUploadConfirmation(Runtime::SaveSlotLifecycle &lifecycle,
                                                              const Runtime::SaveNamespaceAccessRequest &access,
                                                              const CloudSaveDurableMutation &mutation,
-                                                             const PlatformServices::CloudMutationResult &completion) const;
+                                                             const CloudSaveRequest<PlatformServices::CloudMutationResult> &request,
+                                                             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudMutationResult> &completion) const;
 
         /** @brief Reads the exact key of an upload whose provider commit may have begun.
          * @param operation Owning Save operation. @param mutation Original durable upload.
@@ -230,6 +232,10 @@ namespace Horo::Application {
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
         /** @brief Checks that a selected revision is still attributed to this exact account binding. */
         [[nodiscard]] bool OwnsDownload(const CloudSaveDownload &download) const noexcept;
+        /** @brief Publishes commit evidence after its originating request has been authenticated. */
+        [[nodiscard]] Result<void> PublishUploadEvidence(
+            Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
+            const CloudSaveDurableMutation &mutation, const PlatformServices::CloudMutationResult &completion) const;
 
         /** @brief Validates the exact selected local generation in the current binding. */
         [[nodiscard]] const Runtime::SaveCloudGenerationRecord *FindUploadSelection(

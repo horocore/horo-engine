@@ -101,6 +101,8 @@ namespace Horo::PlatformServices {
     private:
         template <typename> friend struct PlatformRequestSnapshot;
         friend class PlatformRequestStore;
+        friend class PlatformServicesFrontend;
+        std::weak_ptr<void> store_;
         std::shared_ptr<const T> value_;
         std::optional<Error> error_;
     };
@@ -126,6 +128,8 @@ namespace Horo::PlatformServices {
     private:
         template <typename> friend struct PlatformRequestSnapshot;
         friend class PlatformRequestStore;
+        friend class PlatformServicesFrontend;
+        std::weak_ptr<void> store_;
         std::optional<Error> error_;
     };
 
@@ -137,6 +141,7 @@ namespace Horo::PlatformServices {
         PlatformRequestTiming timing;
         bool cancellationRequested{};
         std::optional<PlatformTerminalResult<T>> terminal;
+
     };
 
     /**
@@ -495,7 +500,7 @@ namespace Horo::PlatformServices {
             auto queried = QueryErased(handle.Id(), handle.Generation(), typeid(T));
             if (queried.HasError())
                 return Result<PlatformRequestSnapshot<T>>::Failure(queried.ErrorValue());
-            return Result<PlatformRequestSnapshot<T>>::Success(ToTypedSnapshot<T>(queried.Value()));
+            return Result<PlatformRequestSnapshot<T>>::Success(ToTypedSnapshot<T>(queried.Value(), state_));
         }
 
         /**
@@ -587,12 +592,14 @@ namespace Horo::PlatformServices {
             const std::shared_ptr<State> &store, const PlatformRequestHandle<T> &handle,
             std::function<void(const PlatformRequestSnapshot<T> &)> observer) {
             return SubscribeErased(store, handle.Id(), handle.Generation(), typeid(T),
-                                   [observer = std::move(observer)](const ErasedSnapshot &snapshot) {
-                                       observer(ToTypedSnapshot<T>(snapshot));
+                                   [authority = std::weak_ptr<void>{store},
+                                    observer = std::move(observer)](const ErasedSnapshot &snapshot) {
+                                       observer(ToTypedSnapshot<T>(snapshot, authority));
                                    });
         }
 
-        template <typename T> [[nodiscard]] static PlatformRequestSnapshot<T> ToTypedSnapshot(const ErasedSnapshot &snapshot) {
+        template <typename T> [[nodiscard]] static PlatformRequestSnapshot<T> ToTypedSnapshot(
+            const ErasedSnapshot &snapshot, const std::weak_ptr<void> &authority) {
             PlatformRequestSnapshot<T> typed{.id = snapshot.id,
                                              .generation = snapshot.generation,
                                              .state = snapshot.state,
@@ -600,6 +607,7 @@ namespace Horo::PlatformServices {
                                              .cancellationRequested = snapshot.cancellationRequested};
             if (snapshot.terminal) {
                 PlatformTerminalResult<T> terminal;
+                terminal.store_ = authority;
                 if constexpr (!std::is_void_v<T>)
                     terminal.value_ = std::static_pointer_cast<const T>(snapshot.value);
                 terminal.error_ = snapshot.error;

@@ -39,8 +39,8 @@ namespace Horo::Application {
         return Response::Success({.mutation = std::move(durable).Value(), .bytes = std::move(bytes).Value()});
     }
 
-    /** @copydoc CloudSaveTransport::PublishUploadConfirmation */
-    Result<void> CloudSaveTransport::PublishUploadConfirmation(Runtime::SaveSlotLifecycle &lifecycle,
+    /** @copydoc CloudSaveTransport::PublishUploadEvidence */
+    Result<void> CloudSaveTransport::PublishUploadEvidence(Runtime::SaveSlotLifecycle &lifecycle,
                                                                const Runtime::SaveNamespaceAccessRequest &access,
                                                                const CloudSaveDurableMutation &mutation,
                                                                const PlatformServices::CloudMutationResult &completion) const {

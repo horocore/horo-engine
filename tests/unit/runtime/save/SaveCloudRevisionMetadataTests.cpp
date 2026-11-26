@@ -93,6 +93,17 @@ namespace Horo::Runtime {
                     .upload = Application::CloudSaveUploadEvidence{request.expectedDigest, request.bytes.Bytes().size()}};
         }
 
+        /** @brief Delivers a scripted receipt through the admitted mutation's owning request store. */
+        [[nodiscard]] Cloud::PlatformRequestSnapshot<Cloud::CloudMutationResult> ObserveWrite(
+            Cloud::RoutingBackend &backend, const Cloud::PlatformRequestHandle<Cloud::CloudMutationResult> &handle,
+            const Cloud::CloudMutationResult &completion) {
+            REQUIRE(backend.requests.MarkRunning(handle).HasValue());
+            REQUIRE(backend.requests.CompleteSuccess(handle.Id(), handle.Generation(), completion).HasValue());
+            auto snapshot = backend.requests.Query(handle);
+            REQUIRE(snapshot.HasValue());
+            return std::move(snapshot).Value();
+        }
+
         TEST_CASE("Save transport dispatches only typed opaque intents from the bound profile",
                   "[unit][save][cloud-transport][frontend]") {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
@@ -400,9 +411,22 @@ namespace Horo::Runtime {
                                 Cloud::CloudObjectErrors::QuotaExceeded);
             CHECK(fixture.Index().entries == originalIndex.entries);
             backend->cloudWriteFailure.reset();
-            REQUIRE(transport.DispatchMutation(3, staged.Value().mutation, staged.Value().bytes).HasValue());
+            const auto request = transport.DispatchMutation(3, staged.Value().mutation, staged.Value().bytes);
+            REQUIRE(request.HasValue());
             REQUIRE(backend->lastCloudWrite);
             const auto completion = Cloud::TestSupport::CloudCommit(*backend->lastCloudWrite);
+            const auto observed = ObserveWrite(*backend, request.Value().handle, completion);
+
+            auto foreignBackend = std::make_shared<Cloud::RoutingBackend>();
+            auto foreignFrontend = CloudFrontend(foreignBackend, session, payload.size());
+            const auto foreignTransport = BoundTransport(foreignFrontend, session, scope);
+            const auto other = foreignTransport.DispatchMutation(3, staged.Value().mutation, staged.Value().bytes);
+            REQUIRE(other.HasValue());
+            CHECK(other.Value().handle.Id() == observed.id);
+            CHECK(other.Value().handle.Generation() == observed.generation);
+            Cloud::RequireError(foreignTransport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation,
+                                                                           other.Value(), observed),
+                                Cloud::RequestErrors::Stale);
 
             const auto index = fixture.Index();
             const auto current = SaveCloudRevisionSnapshot::Create(index, scope, Metadata(index, scope));
@@ -415,12 +439,14 @@ namespace Horo::Runtime {
             const auto duplicate = transport.ConfirmUpload(staged.Value().mutation, completion, confirmed.Value());
             REQUIRE(duplicate.HasValue());
             CHECK(duplicate.Value().Metadata().revision == confirmed.Value().Metadata().revision);
-            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion).HasValue());
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, request.Value(), observed)
+                        .HasValue());
             fixture.Reopen();
             const auto durable = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
             REQUIRE(durable.HasValue());
             CHECK(durable.Value().Metadata() == confirmed.Value().Metadata());
-            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion).HasValue());
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, request.Value(), observed)
+                        .HasValue());
 
             auto superseding = confirmed.Value().Metadata();
             superseding.records.front().lastConfirmed = Id<SaveCloudMutationId>(45);
@@ -439,7 +465,8 @@ namespace Horo::Runtime {
             const auto fresh = SaveCloudRevisionSnapshot::Create(advanced, scope, Metadata(advanced, scope));
             REQUIRE(fresh.HasValue());
             Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, fresh.Value()), SaveErrors::CloudMetadataStale);
-            Cloud::RequireError(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion),
+            Cloud::RequireError(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, request.Value(),
+                                                                    observed),
                                 SaveErrors::CloudMetadataStale);
             CHECK(fixture.Index().entries == advanced.entries);
             REQUIRE(frontend.Close().HasValue());
@@ -578,10 +605,13 @@ namespace Horo::Runtime {
             const auto initial = Application::StageCloudSaveUpload(
                 *fixture.owner, journal, target, Id<SaveCloudMutationId>(44), {}, payload.size());
             REQUIRE(initial.HasValue());
-            REQUIRE(transport.DispatchMutation(2, initial.Value().mutation, initial.Value().bytes).HasValue());
+            const auto request = transport.DispatchMutation(2, initial.Value().mutation, initial.Value().bytes);
+            REQUIRE(request.HasValue());
             REQUIRE(backend->lastCloudWrite);
             const auto committed = Cloud::TestSupport::CloudCommit(*backend->lastCloudWrite);
-            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), initial.Value().mutation, committed).HasValue());
+            const auto observed = ObserveWrite(*backend, request.Value().handle, committed);
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), initial.Value().mutation, request.Value(), observed)
+                        .HasValue());
             auto replacementIntent = initial.Value().mutation.Intent();
             replacementIntent.mutation = Id<SaveCloudMutationId>(45);
             replacementIntent.revision = committed.committedObject->revision;
@@ -683,6 +713,20 @@ namespace Horo::Runtime {
                 const auto snapshot = complete(payload, other.Value());
                 Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target),
                                     Cloud::CloudObjectErrors::RevisionChanged);
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("A replacement frontend cannot consume a queued result from the former issuing store") {
+                const auto old = complete(payload, revision.Value());
+                REQUIRE(frontend.Close().HasValue());
+                auto replacementBackend = std::make_shared<Cloud::RoutingBackend>();
+                auto replacementFrontend = CloudFrontend(replacementBackend, session, payload.size() + 128);
+                const auto replacement = BoundTransport(replacementFrontend, session, scope);
+                const auto fresh = replacement.DownloadRevision(31, remoteSlot, revision.Value(), payload.size() + 128);
+                REQUIRE(fresh.HasValue());
+                CHECK(fresh.Value().Request().handle.Id() == old.id);
+                CHECK(fresh.Value().Request().handle.Generation() == old.generation);
+                Cloud::RequireError(replacement.ImportDownload(*fixture.owner, download.Value(), old, target), Cloud::RequestErrors::Stale);
+                Cloud::RequireError(replacement.ImportDownload(*fixture.owner, fresh.Value(), old, target), Cloud::RequestErrors::Stale);
                 CHECK(fixture.Index().entries == before.entries);
             }
             SECTION("A valid archive belonging to a different slot remains isolated") {

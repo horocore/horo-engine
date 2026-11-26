@@ -414,8 +414,10 @@ For opaque cloud list, read and mutation requests, the handle carries a weak
 reference to the exact issuing request store. The frontend verifies its own
 issuance before subscribing to that store. The owner retains the suppression
 token, and delivery occurs on the store's later dispatch turn. Frontend close
-revokes delivery before backend shutdown. Rebuild C++ handle consumers together
-when updating the SDK because the handle carries additional private state.
+revokes delivery before backend shutdown. Terminal snapshots also carry weak
+store identity. A worker applying a deferred result checks both the admitted
+handle and snapshot against the live frontend before committing. Rebuild C++
+handle and snapshot consumers together when updating the SDK.
 
 PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
 policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
