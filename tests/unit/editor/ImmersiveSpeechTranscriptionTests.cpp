@@ -453,6 +453,10 @@ namespace Horo::Editor {
             CHECK(assembled.envelope->Spatial().back().cutoff.tracking.Value() == 3);
             CHECK(assembled.envelope->Speech().Hypothesis().text == "Seçili nesne");
             CHECK(assembled.envelope->IsCurrent(cutoff));
+            CHECK_FALSE(assembled.envelope->IsCurrent(samples[2].cutoff));
+            auto inconsistentCutoff = cutoff;
+            inconsistentCutoff.sampledAt = samples[2].cutoff.sampledAt;
+            CHECK_FALSE(assembled.envelope->IsCurrent(inconsistentCutoff));
             auto rebound = cutoff;
             ++rebound.bindingRevision;
             CHECK_FALSE(assembled.envelope->IsCurrent(rebound));

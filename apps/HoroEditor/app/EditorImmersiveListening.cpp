@@ -57,8 +57,9 @@ namespace Horo::Editor {
         return state_;
     }
 
-    std::string_view EditorImmersiveListening::Transcript() const & noexcept {
-        if (!preview_)
+    /** @copydoc EditorImmersiveListening::Transcript */
+    std::string_view EditorImmersiveListening::Transcript() const & {
+        if (!preview_ || !Current())
             return {};
         return preview_->Speech().PreviewText(SpeechHypothesisKind::Final);
     }
@@ -79,10 +80,7 @@ namespace Horo::Editor {
     std::optional<EditorImmersiveListening::ReferenceReview> EditorImmersiveListening::ReviewReferences(
         const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
         const AgentSceneReferenceSource source) const {
-        if (!preview_ || !review)
-            return std::nullopt;
-        const auto current = Current();
-        if (!current || !preview_->IsCurrent(current->interaction.cutoff))
+        if (!preview_ || !review || !Current())
             return std::nullopt;
         const auto &context = preview_->Speech().Context();
         const auto &identity = context.Identity();
@@ -110,7 +108,7 @@ namespace Horo::Editor {
         if (!preview_ || preview_->Spatial().empty())
             return std::nullopt;
         const auto current = Current();
-        if (!current || !preview_->IsCurrent(current->interaction.cutoff))
+        if (!current)
             return std::nullopt;
         const auto planes = xr_.ReadPlaneObservations();
         if (planes.HasError())
@@ -262,6 +260,8 @@ namespace Horo::Editor {
             return std::nullopt;
         const auto current = xr_.ReadListeningScope(player_);
         if (!current || !scope_->SharesLineage(*current))
+            return std::nullopt;
+        if (preview_ && !preview_->IsCurrent(current->interaction.cutoff))
             return std::nullopt;
         return current;
     }
