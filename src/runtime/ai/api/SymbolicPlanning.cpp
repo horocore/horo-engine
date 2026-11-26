@@ -151,7 +151,7 @@ namespace Horo::AI {
             const auto before = result.Encode(source.preconditions);
             const auto after = result.Encode(source.effects);
             if (!source.action.IsValid() || source.cost == 0 || !task || (task->blackboard && task->blackboard != blackboard) || !before ||
-                !after || after->known == 0)
+                !after)
                 return Domain::Failure(MakeError(AIErrors::TaskContextInvalid));
             result.actions_[result.actionCount_++] = {{source.action, source.task}, source.cost, *before, *after};
         }

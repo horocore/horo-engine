@@ -240,6 +240,36 @@ namespace Horo::AI {
             CHECK(blocked.Steps().empty());
         }
 
+        TEST_CASE("HTN retains explicit tasks that leave symbolic facts unchanged", "[ai][planning][htn]") {
+            DomainFixture input;
+            auto &authoredOnly = input.actions.front();
+            authoredOnly.effects = {};
+            auto captured = SymbolicDomain::Capture(input.facts, input.actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto primitives = std::make_shared<const SymbolicDomain>(std::move(captured).Value());
+            const auto goalPlan = primitives->Search({}, input.goal, 1024);
+            REQUIRE(goalPlan.Status() == SymbolicPlanStatus::Solved);
+            CHECK(goalPlan.Steps().size() == 2);
+            CHECK(goalPlan.Cost() == 3);
+
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array<SymbolicSubtask, 3> ordered{authoredOnly.action, Id<SymbolicActionId>(10), Id<SymbolicActionId>(20)};
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, ordered}};
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto plan = hierarchy.Value().Search({}, root, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(plan.Steps().size() == ordered.size());
+            CHECK(plan.Steps()[0].task == authoredOnly.task);
+            CHECK(plan.Steps()[1].task == input.pickTask);
+            CHECK(plan.Steps()[2].task == input.openTask);
+            CHECK(plan.Cost() == authoredOnly.cost + goalPlan.Cost());
+
+            const auto blocked = hierarchy.Value().Search(input.goal, root, 1024);
+            CHECK(blocked.Status() == SymbolicPlanStatus::NoPlan);
+            CHECK(blocked.Steps().empty());
+        }
+
         TEST_CASE("HTN empty methods use only the work of admitting the compound and its method", "[ai][planning][htn]") {
             DomainFixture input;
             const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());

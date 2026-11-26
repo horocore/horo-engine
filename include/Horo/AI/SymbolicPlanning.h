@@ -23,7 +23,10 @@ namespace Horo::AI {
         bool value{};
     };
 
-    /** @brief Positive-cost transition. Spans are borrowed only by domain capture. */
+    /** @brief Positive-cost action. Spans are borrowed only by domain capture.
+     * @details Empty effects leave the symbolic state unchanged. HTN can order
+     * the action explicitly, and GOAP omits transitions that leave the state unchanged.
+     */
     struct SymbolicActionSource final {
         SymbolicActionId action;
         TaskId task;

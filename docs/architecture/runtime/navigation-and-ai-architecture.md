@@ -2913,7 +2913,10 @@ start, resume, cancellation and cleanup lifecycle.
 The HTN adapter composes the same registered primitives into guarded compound
 methods. It tries methods in stable ID order, preserves authored child order,
 and backtracks on copied facts. An admitted empty method adds no primitive
-steps and continues the existing pending tasks. The work allowance and hard bound on pending
+steps and continues the existing pending tasks. A registered primitive with
+empty effects still contributes its task and cost when an HTN method orders
+it explicitly. GOAP skips transitions that leave the symbolic state unchanged.
+The work allowance and hard bound on pending
 tasks and decomposition depth terminate recursive methods with a typed result.
 
 The local learned-policy reference provider evaluates bounded signed 16-bit
