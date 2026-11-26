@@ -416,6 +416,9 @@ namespace Horo::Runtime {
             REQUIRE(fresh.HasValue());
             Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, fresh.Value()), SaveErrors::CloudMetadataStale);
             CHECK(fixture.Index().entries == advanced.entries);
+            REQUIRE(frontend.Close().HasValue());
+            Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, current.Value()),
+                                SaveErrors::CloudMetadataStale);
         }
 
         /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */

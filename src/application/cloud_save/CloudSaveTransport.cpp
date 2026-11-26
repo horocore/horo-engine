@@ -172,7 +172,8 @@ namespace Horo::Application {
                                                                                  const CloudMutationResult &completion,
                                                                                  const Runtime::SaveCloudRevisionSnapshot &current) const {
         using Response = Result<Runtime::SaveCloudRevisionSnapshot>;
-        if (mutation.partition_ != journalPartition_ || current.Metadata().scope != scope_ || !mutation.intent_.upload)
+        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_ || current.Metadata().scope != scope_ ||
+            !mutation.intent_.upload)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         const auto &intent = mutation.intent_;
         if (auto checked = CheckUploadCompletion(completion, intent, subject_, mutation.key_); checked.HasError())
