@@ -95,11 +95,11 @@ pending queue and closing the world prevents subsequent movement callbacks.
 
 The Gameplay formation retirement case separately admits 64 moves with
 Character feedback pending. It retires the group, rejects late access, and
-checks that the Character, Navigation job, and topology owners drain. The
-The ADR-109 4 MiB envelope applies to the peak live footprint. The test
-enforces that ceiling for tracked payload, including Detour storage and
-worker-side C++ allocations. Allocator metadata and other direct C
-allocations still require accounting.
+checks that the Character, Navigation job, and topology owners drain. The test
+checks the 4 MiB ADR-109 limit against peak tracked payload, including Detour
+storage and worker-side C++ allocations. Each measured workload must also release
+all tracked storage after its owners and worker jobs retire. Allocator metadata
+and other direct C allocations still require accounting.
 
 ## Reference corpus and exact outcomes
 

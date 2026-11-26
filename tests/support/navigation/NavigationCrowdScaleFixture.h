@@ -162,6 +162,8 @@ namespace Horo::Navigation::CrowdQualification {
         const auto deadline = Clock::now() + std::chrono::seconds{10};
         do {
             auto result = batch.TryTake(capture, capture.CaptureTick(), &elapsed);
+            if (result.HasError())
+                UNSCOPED_INFO(result.ErrorValue().message);
             REQUIRE(result.HasValue());
             if (result.Value())
                 return *std::move(result).Value();

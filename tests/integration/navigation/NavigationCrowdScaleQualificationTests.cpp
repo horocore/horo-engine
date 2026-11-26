@@ -237,10 +237,48 @@ namespace Horo::Navigation {
             REQUIRE_FALSE(result.incomplete);
             CHECK(result.peakBytes > 0);
             CHECK(result.peakBytes <= CrowdSmallBudgetBytes);
+            CHECK(result.liveBytes == 0);
             std::cout << "NAV-006.12 profile=CrowdSmall layout=" << workload << " mode=" << mode << " agents=" << CrowdAgents
                       << " build=" << HORO_QUALIFICATION_BUILD_TYPE << " platform=" << HORO_QUALIFICATION_PLATFORM
                       << " compiler=" << HORO_QUALIFICATION_COMPILER << " tracked_live_payload_peak_bytes=" << result.peakBytes
                       << " detour_native_allocations=" << nativeAllocations << '\n';
+        }
+
+        /** @brief Retires overlapping captures and queued work before the caller samples live storage. */
+        void RetireOverloadedCrowd() {
+            const auto layout = Layout::Crossings;
+            CrowdScene scene;
+            scene.CommitOverlay(layout);
+            auto provider = std::shared_ptr<INavigationCrowdBackend>(CreateRecastDetourCrowdBackend().Value());
+            const std::array providers{provider};
+            JobSystem jobs({.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 2});
+            const auto original = Capture(scene, layout, 1, false);
+            const auto requests = Requests(original, layout);
+            auto submitted = NavigationCrowdBatch::Submit(jobs, original, requests, providers);
+            REQUIRE(submitted.HasValue());
+            auto oldWork = std::move(submitted).Value();
+            const auto rejected = NavigationCrowdBatch::Submit(jobs, original, requests, providers);
+            REQUIRE(rejected.HasError());
+            CHECK(jobs.AdmissionSnapshot().rejected[static_cast<std::size_t>(JobPriority::Normal)] == 1);
+
+            const auto &first = original.Agents().front();
+            const auto removed = original.Agents().back().handle;
+            scene.teleported = first.handle;
+            REQUIRE(scene.agents.UnregisterAtSafePoint(removed).HasValue());
+            const auto changed = Capture(scene, layout, 1, false);
+            REQUIRE(changed.Agents().size() == CrowdAgents - 1);
+            CHECK(changed.Agents().front().position.z > first.position.z + 20);
+            REQUIRE(scene.agents.Find(removed).HasError());
+            RequireError(oldWork->TryTake(changed, 1), NavigationErrors::StaleSnapshot);
+            RequireError(oldWork->TryTake(original, 1), NavigationErrors::AdmissionRejected);
+            oldWork.reset();
+            jobs.Shutdown(ShutdownPolicy::Cancel);
+            const auto journal = jobs.SnapshotIfChanged(0);
+            REQUIRE(journal);
+            REQUIRE(journal->jobs.size() == 1);
+            CHECK(journal->jobs.front().state == JobState::Cancelled);
+            CHECK(provider.use_count() == 2);
+            scene.Close();
         }
 
     }  // namespace
@@ -306,39 +344,7 @@ namespace Horo::Navigation {
         ScopedLiveMeasurement live(storage);
         const ScopedDetourAllocationTrace native;
         Tests::AllocationProbe::ScopedMeasurement owner;
-        const auto layout = Layout::Crossings;
-        CrowdScene scene;
-        scene.CommitOverlay(layout);
-        auto provider = std::shared_ptr<INavigationCrowdBackend>(CreateRecastDetourCrowdBackend().Value());
-        const std::array providers{provider};
-        JobSystem jobs({.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 2});
-        const auto original = Capture(scene, layout, 1, false);
-        const auto requests = Requests(original, layout);
-        auto submitted = NavigationCrowdBatch::Submit(jobs, original, requests, providers);
-        REQUIRE(submitted.HasValue());
-        auto oldWork = std::move(submitted).Value();
-        const auto rejected = NavigationCrowdBatch::Submit(jobs, original, requests, providers);
-        REQUIRE(rejected.HasError());
-        CHECK(jobs.AdmissionSnapshot().rejected[static_cast<std::size_t>(JobPriority::Normal)] == 1);
-
-        const auto &first = original.Agents().front();
-        const auto removed = original.Agents().back().handle;
-        scene.teleported = first.handle;
-        REQUIRE(scene.agents.UnregisterAtSafePoint(removed).HasValue());
-        const auto changed = Capture(scene, layout, 1, false);
-        REQUIRE(changed.Agents().size() == CrowdAgents - 1);
-        CHECK(changed.Agents().front().position.z > first.position.z + 20);
-        REQUIRE(scene.agents.Find(removed).HasError());
-        RequireError(oldWork->TryTake(changed, 1), NavigationErrors::StaleSnapshot);
-        RequireError(oldWork->TryTake(original, 1), NavigationErrors::AdmissionRejected);
-        oldWork.reset();
-        jobs.Shutdown(ShutdownPolicy::Cancel);
-        const auto journal = jobs.SnapshotIfChanged(0);
-        REQUIRE(journal);
-        REQUIRE(journal->jobs.size() == 1);
-        CHECK(journal->jobs.front().state == JobState::Cancelled);
-        CHECK(provider.use_count() == 2);
-        scene.Close();
+        RetireOverloadedCrowd();
         const auto allocation = owner.Snapshot();
         CHECK(allocation.requestedBytes > 0);
         const auto count = native.Allocations();
