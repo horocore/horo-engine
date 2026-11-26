@@ -916,7 +916,8 @@ cutoff and assigned local player. The existing Input pose sampling uses the same
 native World space for controller and hand evidence. Consumers select exact controller aim/grip or hand joint
 generations and provide the direction, distance, radius and confidence floor their own
 query needs. The read returns bounded World-space ray segments, points and proximity
-spheres in request order. Replaced or unfocused input and invalid probes reject the whole
+spheres in request order. A single read requires one exact World space identity.
+Replaced or unfocused input and invalid probes reject the whole
 query. These live coordinates stay on the owner lane. World-space canvas resolution,
 contact ordering and focus or capture use the consuming domain's existing contracts.
 Mounted World interaction reads recheck the retained Scene and origin before

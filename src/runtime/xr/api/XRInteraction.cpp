@@ -168,6 +168,8 @@ namespace Horo::XR {
                 return Outcome::Failure(sample.ErrorValue());
             if (sample.Value().Target().kind != XRSpaceKind::World)
                 return Reject<XRInteractionCandidates>(XRErrors::OperationUnsupported);
+            if (result.count_ != 0 && sample.Value().Target() != result.values_.front().space)
+                return Reject<XRInteractionCandidates>(XRErrors::CoordinateSpaceIncompatible);
             const auto shape = MakeGeometry(sample.Value(), probe);
             if (shape.HasError())
                 return Outcome::Failure(shape.ErrorValue());

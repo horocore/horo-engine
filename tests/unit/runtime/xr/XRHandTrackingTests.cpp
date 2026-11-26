@@ -262,4 +262,28 @@ namespace Horo::XR {
         stale.sampledAt = Value<XRRuntimeTime>(101);
         CHECK(ErrorIs(BuildXRInteractionCandidates(sample.Value(), stale, probes), XRErrors::TrackingSnapshotStale));
     }
+
+    TEST_CASE("One interaction batch cannot combine separate World spaces from the same cutoff", "[xr][interaction]") {
+        HandFixture fixture;
+        std::array joints{fixture.joints.front(), Joint(fixture.session, fixture.device.id, XRHandedness::Left, XRHandJoint::IndexTip)};
+        auto pose = Pose(fixture.session);
+        pose.target.kind = XRSpaceKind::World;
+        for (auto &joint : joints) {
+            const auto sample = XRPoseSample::Create(pose, fixture.session, Origin());
+            REQUIRE(sample.HasValue());
+            joint.sample = sample.Value();
+            ++pose.target.id.slot.index;
+        }
+        auto descriptor = fixture.Descriptor();
+        descriptor.handJoints = joints;
+        const auto snapshot = XRTrackingSnapshot::Create(descriptor, fixture.session, Origin());
+        REQUIRE(snapshot.HasValue());
+        const auto cutoff = DescribeXRInteractionCutoff(snapshot.Value());
+        const std::array probes{
+            XRInteractionProbe{fixture.device.id, XRHandJoint::Palm, XRInteractionDirectProbe{}, XRTrackingConfidence::High},
+            XRInteractionProbe{fixture.device.id, XRHandJoint::IndexTip, XRInteractionProximityProbe{0.25F}, XRTrackingConfidence::High}};
+        CHECK(BuildXRInteractionCandidates(snapshot.Value(), cutoff, std::span{probes}.first(1)).HasValue());
+        CHECK(BuildXRInteractionCandidates(snapshot.Value(), cutoff, std::span{probes}.last(1)).HasValue());
+        CHECK(ErrorIs(BuildXRInteractionCandidates(snapshot.Value(), cutoff, probes), XRErrors::CoordinateSpaceIncompatible));
+    }
 }  // namespace Horo::XR

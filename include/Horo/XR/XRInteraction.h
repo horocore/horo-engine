@@ -128,6 +128,7 @@ namespace Horo::XR {
      * @param cutoff Exact current host fence, with invalid session after retirement.
      * @param probes Exact live devices, semantic pose selectors and supplied query bounds.
      * @return One candidate per probe or a typed stale, unavailable, unsupported, invalid or capacity error.
+     * @details All candidates must use the same exact World space identity.
      * @post Success requires no allocation, blocking I/O or native calls. Failure publishes no partial batch.
      */
     [[nodiscard]] Result<XRInteractionCandidates> BuildXRInteractionCandidates(const XRTrackingSnapshot &snapshot,
