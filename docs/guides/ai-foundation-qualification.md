@@ -134,6 +134,12 @@ that supports hard links. The exporter stages the redacted manifest beside the
 destination, rechecks the approval before publishing, and preserves any existing
 file at that path. Omit `--output` to stream the redacted manifest to stdout.
 
+Pass `--qualification-artifacts <directory>` to also check the provider, model
+and workload files against the approved SHA-256 values. Store each file under
+its lowercase digest, without an extension. A null `model` needs no file. The
+checker rejects missing, empty, symlinked, mismatched or oversized files. The limit
+is 512 MiB per file. The manifest still records operator-declared versions.
+
 Before admitting a stored manifest for evaluation, check it against the
 original approval using the current UTC date.
 
@@ -148,6 +154,8 @@ When using a manifest as reproducible evidence, also pass `--source-replay evide
 This verifies the original replay bytes against the approved digest and
 reproduces the redacted counts and frame provenance for comparison. The
 verification emits neither raw replay values nor regenerated evidence.
+The artifact check is also available with `--verify-retained` and
+`--read-retained` when the original replay is supplied.
 
 Consumers that need the stored manifest as input can use `--read-retained`.
 This emits the redacted manifest only after checking the current UTC expiry,

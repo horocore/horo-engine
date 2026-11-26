@@ -64,6 +64,47 @@ def test_publishes_the_same_redacted_manifest_to_a_new_file(tmp_path, export):
     assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
 
 
+@pytest.mark.parametrize("scenario", ["match", "no-model", "wrong-model", "missing-workload", "over-budget"])
+@pytest.mark.parametrize("retained", [False, True])
+def test_evaluation_can_check_the_approved_artifact_bytes(tmp_path, export, monkeypatch, capsys, scenario, retained):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    artifacts = tmp_path / "qualification artifacts"
+    artifacts.mkdir()
+    for component in ("provider", "model", "workload"):
+        if scenario == "no-model" and component == "model":
+            approval["qualification"][component] = None
+            continue
+        contents = f"approved {component}".encode()
+        digest = hashlib.sha256(contents).hexdigest()
+        approval["qualification"][component]["sha256"] = digest
+        if scenario != "missing-workload" or component != "workload":
+            (artifacts / digest).write_bytes(PRIVATE.encode() if scenario == "wrong-model" and component == "model" else contents)
+    if scenario == "over-budget":
+        monkeypatch.setattr(evaluation, "MAX_QUALIFICATION_ARTIFACT_BYTES", 4, raising=False)
+
+    artifact_options = ["--qualification-artifacts", str(artifacts)]
+    if retained:
+        manifest = tmp_path / "manifest.json"
+        status, result = export(data, approval, "--output", str(manifest))
+        assert status == 0, result.err
+        monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(tmp_path / "approval.json"),
+                                          "--read-retained", "--source-replay", str(tmp_path / "evidence.json"), *artifact_options])
+        status = evaluation.main()
+        result = capsys.readouterr()
+    else:
+        status, result = export(data, approval, *artifact_options)
+
+    if scenario in ("match", "no-model"):
+        assert status == 0, result.err
+        assert json.loads(result.out)["qualification"] == approval["qualification"]
+    else:
+        component = {"wrong-model": "model", "missing-workload": "workload", "over-budget": "provider"}[scenario]
+        assert status == 1 and not result.out
+        assert f"Qualification {component} artifact" in result.err
+        assert PRIVATE not in result.err and str(artifacts) not in result.err
+
+
 @pytest.mark.parametrize("name", ["evidence.json", "approval.json", "existing.json"])
 def test_export_preserves_existing_files_at_the_destination(tmp_path, export, name):
     data = json.dumps(frame(3, 2)).encode()

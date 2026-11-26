@@ -19,6 +19,7 @@ MAX_FRAME_BYTES = 128 * 1024
 MAX_FRAMES = 32
 MAX_APPROVAL_BYTES = 4096
 MAX_MANIFEST_BYTES = 32 * 1024
+MAX_QUALIFICATION_ARTIFACT_BYTES = 512 * 1024 * 1024
 MANIFEST_FORMAT = "horo-ai-evaluation-manifest"
 APPROVAL_PURPOSE = "offline-evaluation"
 QUALIFICATION_SOURCE = "operator-declared"
@@ -232,6 +233,26 @@ def verify_source_evidence(record: dict, path: Path) -> None:
     require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
 
 
+def verify_qualification_artifacts(qualification: dict, root: Path) -> None:
+    """Check the approved provider, optional model and workload bytes without exporting them."""
+    for name in ("provider", "model", "workload"):
+        component = qualification[name]
+        if component is None:
+            continue
+        expected = component["sha256"]
+        path = root / expected
+        label = f"Qualification {name} artifact"
+        require(path.is_file() and not path.is_symlink(), f"{label} is missing or is not a regular file")
+        observed = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                require(size <= MAX_QUALIFICATION_ARTIFACT_BYTES, f"{label} exceeds the size limit")
+                observed.update(chunk)
+        require(size > 0 and observed.hexdigest() == expected, f"{label} does not match its approved digest")
+
+
 def json_line(value: dict) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
 
@@ -271,6 +292,7 @@ def main() -> int:
     retained.add_argument("--read-retained", action="store_true", help="Emit a current stored manifest after reproducing its approved evidence")
     retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
     parser.add_argument("--source-replay", type=Path, help="Reproduce the evidence from the original approved replay")
+    parser.add_argument("--qualification-artifacts", type=Path, help="Check approved provider, model and workload files named by SHA-256")
     parser.add_argument("--output", type=Path, help="Publish the export to a new manifest file")
     args = parser.parse_args()
     if args.read_retained and args.source_replay is None:
@@ -279,6 +301,11 @@ def main() -> int:
         parser.error("--source-replay requires --verify-retained or --read-retained")
     if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention):
         parser.error("--output is only available when exporting a replay")
+    if args.qualification_artifacts is not None:
+        if args.audit_retention:
+            parser.error("--qualification-artifacts cannot be used for a retention audit")
+        if args.verify_retained and args.source_replay is None:
+            parser.error("--qualification-artifacts requires --source-replay when verifying a retained manifest")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
@@ -290,6 +317,8 @@ def main() -> int:
             record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
             if args.source_replay is not None:
                 verify_source_evidence(record, args.source_replay)
+                if args.qualification_artifacts is not None:
+                    verify_qualification_artifacts(record["qualification"], args.qualification_artifacts)
                 require_current_expiry(record["expiresOnUtc"])
             if args.read_retained:
                 emit_json(record)
@@ -297,6 +326,8 @@ def main() -> int:
         data, replay_digest = read_replay(args.input)
         allowed = validate_approval(approval, replay_digest, today)
         evidence = summarize_source(data)
+        if args.qualification_artifacts is not None:
+            verify_qualification_artifacts(allowed["qualification"], args.qualification_artifacts)
         manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
                     "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
         if args.output is None:
