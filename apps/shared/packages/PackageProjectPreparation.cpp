@@ -358,9 +358,9 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(lease.ErrorValue());
         }
 
-        /** @brief Detects external file edits made during the inventory even if the writer bypassed the project lease. */
-        Result<void> RecheckRemovalBase(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
-                                        const MetadataDocuments &previous, const CancellationToken &cancellation) {
+        /** @brief Detects changes to the approved pair by a writer outside the project lease. */
+        Result<void> RecheckMetadataBase(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                         const MetadataDocuments &previous, const CancellationToken &cancellation) {
             const auto current = ReadDocuments(metadata, limits, cancellation);
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
@@ -413,12 +413,15 @@ namespace Horo::Application::Internal {
 
         /** @brief The durable request precedes the lock, whose native replacement is the commit point. */
         Result<PackageMetadataPublication> CommitDocuments(const std::filesystem::path &metadata, const MetadataDocuments &previous,
-                                                           const MetadataDocuments &next, DurableFileSystem &files,
+                                                           const MetadataDocuments &next, const Packages::PackageLockfileLimits &limits,
+                                                           DurableFileSystem &files,
                                                            const Platform::ProjectReadContext &context) {
             using Publication = Result<PackageMetadataPublication>;
             const auto journalPath = JournalPath(metadata);
             AtomicFileReplacementReceipt journalReceipt;
             const auto journal = EncodeJournal({Digest(previous.lock), Digest(next.lock), Digest(next.request), previous.request});
+            if (auto stable = RecheckMetadataBase(metadata, limits, previous, context.cancellation); stable.HasError())
+                return Publication::Failure(stable.ErrorValue());
             if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
                 return Publication::Failure(authority.ErrorValue());
             // Once the journal is admitted, finish it under the mutation lease even if the caller closes.
@@ -466,7 +469,7 @@ namespace Horo::Application::Internal {
                 checkpoint.HasError())
                 return Publication::Failure(checkpoint.ErrorValue());
 
-            auto result = CommitDocuments(metadata, previous, next, files, context);
+            auto result = CommitDocuments(metadata, previous, next, limits, files, context);
             if (result.HasValue()) {
                 if (result.Value().recoveryDiagnostic)
                     return result;
@@ -670,7 +673,7 @@ namespace Horo::Application::Internal {
             const auto valid = ValidateDocuments(point->oldRequest, point->oldLock, limits);
             if (valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            if (const auto stable = RecheckRemovalBase(metadata, limits, current.Value(), cancellation); stable.HasError())
+            if (const auto stable = RecheckMetadataBase(metadata, limits, current.Value(), cancellation); stable.HasError())
                 return Output::Failure(stable.ErrorValue());
             return Output::Success(
                 {std::string{point->oldRequest}, std::string{point->oldLock}, point->publishedRequest, point->publishedLock});
@@ -704,7 +707,7 @@ namespace Horo::Application::Internal {
         const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, root, package, sources);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
-        if (auto stable = RecheckRemovalBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
+        if (auto stable = RecheckMetadataBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
             return Publication::Failure(stable.ErrorValue());
         auto published = CommitWithRollbackPoint(metadata, previous.Value(), next.Value(), policy.limits.lockfile, files, sources.context);
         if (published.HasValue() && sources.live)

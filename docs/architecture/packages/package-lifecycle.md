@@ -420,7 +420,10 @@ confirm the new pair on the next preparation.
 The metadata update retains one rollback point containing the exact previous
 request and lock. It records the new pair's digests before committing. A retry
 recognizes the point only if the current request and lock still match those
-digests. Failed updates retain a previous completed rollback point. The point
+digests. After writing the pending rollback point, the host rechecks the
+approved base pair before admitting the journal. An external edit detected
+there remains in place and the uncommitted rollback point is discarded.
+Failed updates retain a previous completed rollback point. The point
 records package metadata and does not include project document migrations.
 
 `horo-engine package preview-rollback --project /path/to/project` reads the
