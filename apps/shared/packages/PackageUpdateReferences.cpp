@@ -13,9 +13,10 @@ namespace Horo::Application::Internal {
         return std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"});
     }
 
-    /** @brief Rejects changes to selected versions, source, policy, or exported contribution classes. */
+    /** @brief Admits asset-only version or archive changes for exact inventory review. */
     static bool CanPreserveAssetReferences(const Packages::LockedPackage &current, const Packages::LockedPackage &next) {
         auto compatible = current;
+        compatible.version = next.version;
         compatible.artifactDigest = next.artifactDigest;
         compatible.fileManifestDigest = next.fileManifestDigest;
         return compatible == next && IsAssetOnly(next);

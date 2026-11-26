@@ -367,7 +367,7 @@ namespace {
             REQUIRE(stale.Outcome().HasError());
             CHECK(stale.Outcome().ErrorValue().code.Value() == "packages.host.update_approval_mismatch");
         }
-        SECTION("a cache-backed review reports a version change even when archive bytes match") {
+        SECTION("an asset-only version change can be approved and rolled back with the same archive") {
             const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
             const auto &archive = fixture.graph.archive;
             WriteAssetCandidate(fixture, version, archive);
@@ -381,11 +381,44 @@ namespace {
             REQUIRE(cache.HasValue());
             auto verifiedCache = std::move(cache).Value();
             REQUIRE(verifiedCache.Publish(archive).HasValue());
+
+            const auto changed = Packages::ValidatedPackageArchive::Verify(Tests::Packages::ValidPackageArchiveBytes("changed bytes", {}));
+            REQUIRE(changed.HasValue());
+            REQUIRE(verifiedCache.Publish(changed.Value()).HasValue());
+            WriteAssetCandidate(fixture, version, changed.Value());
+            const auto unsafePreview = execute(true);
+            REQUIRE(unsafePreview.Outcome().HasError());
+            const auto &diagnostics = unsafePreview.Outcome().ErrorValue().diagnostics;
+            REQUIRE(diagnostics.size() == 1);
+            CHECK(diagnostics.front().code.Value() == "packages.host.update_asset_content_changed");
+            const auto metadataPreview = execute();
+            REQUIRE(metadataPreview.Outcome().HasValue());
+            const auto unsafeFingerprint = std::get<std::string>(metadataPreview.Outcome().Value().fields.back().value);
+            REQUIRE(apply(unsafeFingerprint).Outcome().HasError());
+            CHECK(read(metadata / "packages.json") == originalRequest);
+            CHECK(read(metadata / "packages.lock") == originalLock);
+
+            WriteAssetCandidate(fixture, version, archive);
             const auto reviewed = execute(true);
-            REQUIRE(reviewed.Outcome().HasError());
-            const auto &why = reviewed.Outcome().ErrorValue();
-            REQUIRE(why.diagnostics.size() == 1);
-            CHECK(why.diagnostics.front().code.Value() == "packages.host.update_version_migration_required");
+            REQUIRE(reviewed.Outcome().HasValue());
+            CHECK(read(metadata / "packages.lock") == originalLock);
+            const auto fingerprint = std::get<std::string>(reviewed.Outcome().Value().fields.back().value);
+            REQUIRE(apply(fingerprint).Outcome().HasValue());
+            CHECK(read(metadata / "packages.json") == read(metadata / "candidate.json"));
+            CHECK(read(metadata / "packages.lock") == read(metadata / "candidate.lock"));
+
+            CliCommandRequest rollback{.command = rollbackPreviewPath,
+                                       .options = {NativeProject::PathOption("project", root),
+                                                   NativeProject::PathOption("package-cache-root", cacheRoot)}};
+            const auto rollbackReview = admitted.Dispatch(rollback, {.invocation = {3}, .configuration = &configuration.Value()});
+            REQUIRE(rollbackReview.Outcome().HasValue());
+            const auto rollbackFingerprint = std::get<std::string>(rollbackReview.Outcome().Value().fields.back().value);
+            CHECK(rollbackFingerprint != fingerprint);
+            rollback.command = rollbackApplyPath;
+            rollback.options.push_back({"approve", {{rollbackFingerprint, CliValueSource::Invocation, {}}}});
+            const auto restored = admitted.Dispatch(rollback, {.invocation = {4}, .configuration = &configuration.Value()});
+            REQUIRE(restored.Outcome().HasValue());
+            CHECK(read(metadata / "packages.json") == originalRequest);
             CHECK(read(metadata / "packages.lock") == originalLock);
         }
         SECTION("an approved update can change a request while preserving the verified locked packages") {

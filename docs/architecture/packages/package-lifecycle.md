@@ -404,10 +404,10 @@ absolute path to an existing verified cache. This path stages offline and
 publishes updates that retain existing package references. Newly added packages
 must declare asset-only contributions and pass the same archive path and
 execution checks as replaced asset packages. An asset-only
-replacement can add files at the same version when the package manifest and
+replacement can change versions or add files when the package manifest and
 lock policy stay identical and verified archives prove that every existing
-path keeps its bytes and contribution owner. Withdrawals, version changes,
-and other replacements require migration and reference review.
+path keeps its bytes and contribution owner. Withdrawals and replacements
+outside those bounds require migration and reference review.
 
 The update host publishes a previously reviewed candidate only when the exact
 base and candidate documents still match the review and the candidate lock
