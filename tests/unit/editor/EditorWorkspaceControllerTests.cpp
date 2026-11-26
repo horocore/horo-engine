@@ -442,6 +442,7 @@ namespace {
     }
 
     TEST_CASE("Authored viewport shows a separate agent proposal ghost until local review is resolved", "[unit][editor][scene-review]") {
+        CaptureViewport viewport;
         Runtime::RuntimeSceneService scenes;
         CancellationSource process;
         EditorWorkspaceDependencies dependencies;
@@ -566,6 +567,38 @@ namespace {
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
             CHECK(withdrawn == 0);
+        }
+        SECTION("authored image capture excludes proposed geometry") {
+            const auto endpoint = controller.BindDebugCapture("scene-review-project", 1, &viewport).lock();
+            REQUIRE(endpoint);
+            CHECK_FALSE(endpoint->readImageSource());
+
+            REQUIRE(controller.CancelAgentSceneReview(preview.Value()));
+            const auto before = endpoint->readImageSource();
+            REQUIRE(before);
+            constexpr EditorViewportImageRegion region{2, 3, 24, 16};
+            const auto allowed = [] { return true; };
+            const auto capture = endpoint->startImage(*before, region, allowed);
+            REQUIRE(capture.HasValue());
+
+            const auto reopened = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token());
+            REQUIRE(reopened.HasValue());
+            CHECK(viewport.cancelledId == capture.Value());
+            CHECK_FALSE(viewport.current());
+            CHECK_FALSE(endpoint->readImageSource());
+            CHECK(endpoint->startImage(*before, region, allowed).HasError());
+            auto proposedSource = *before;
+            proposedSource.projectionRevision = controller.CurrentViewportSceneRevision();
+            CHECK(endpoint->startImage(proposedSource, region, allowed).HasError());
+            CHECK(viewport.requests == 1);
+
+            REQUIRE(controller.CancelAgentSceneReview(reopened.Value()));
+            const auto after = endpoint->readImageSource();
+            REQUIRE(after);
+            CHECK(*after != *before);
+            CHECK(endpoint->startImage(*after, region, allowed).HasValue());
+            CHECK(events.empty());
+            CHECK_FALSE(controller.ViewModel().canUndo);
         }
         SECTION("approval cannot consume a different proposal installed during the authority check") {
             replaceOnAuthorityCheck = preview.Value();

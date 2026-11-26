@@ -122,6 +122,9 @@ namespace Horo::Editor {
     std::optional<EditorDebugImageSource> EditorWorkspaceController::ReadDebugImageSource(const IEditorViewportRenderer &viewport) const {
         if (m_playSession.State() != EditorPlaySessionState::Idle || m_cameraPreview || m_activeTerrainDocument)
             return std::nullopt;
+        // A spatial review shares the rendered viewport with committed geometry.
+        if (m_viewModel.agentSceneReview && m_viewModel.agentSceneReview->hasSpatialPreview)
+            return std::nullopt;
         const auto scene = InspectSceneRevision();
         const auto active = m_runtimeScene.ActiveScene();
         const auto extent = viewport.RequestedExtent();
