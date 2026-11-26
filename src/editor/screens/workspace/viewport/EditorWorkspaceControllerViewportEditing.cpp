@@ -21,6 +21,25 @@ namespace Horo::Editor {
             return MakeError(SceneTransactionError(failure));
         }
 
+        /** @brief Keeps the callback alive during reentrant retirement and denies nested checks. */
+        struct AgentSceneAuthorityCheck final {
+            std::function<bool()> authorize;
+            bool checking{};
+
+            bool Run() noexcept {
+                if (std::exchange(checking, true))
+                    return false;
+                bool allowed = false;
+                try {
+                    allowed = authorize();
+                } catch (...) {
+                    // A failed authority check cannot approve a scene change.
+                }
+                checking = false;
+                return allowed;
+            }
+        };
+
         /** @brief Detached view data and position changes consumed by the existing viewport preview. */
         struct AgentSceneReviewProjection final {
             EditorWorkspaceViewModel::AgentSceneReviewView view;
@@ -151,6 +170,10 @@ namespace Horo::Editor {
             m_agentSceneReviewSerial == std::numeric_limits<std::uint64_t>::max() ||
             revision.epoch == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
+        if (authorized) {
+            auto check = std::make_shared<AgentSceneAuthorityCheck>(AgentSceneAuthorityCheck{std::move(authorized)});
+            authorized = [check = std::move(check)] { return check->Run(); };
+        }
         CancellationSource lifetime{cancellation};
         const SceneTransactionContext context{{m_workspaceSession, revision.epoch + 1},
                                               revision.revision,
@@ -210,8 +233,8 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ApproveAgentSceneReview(const std::uint64_t review) {
         if (!m_agentSceneReview || m_agentSceneReview->id != review)
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
-        if (!IsAgentSceneReviewCurrent(*m_agentSceneReview)) {
-            CancelObjectTransformPreview();
+        if (!IsAgentSceneReviewCurrent(review)) {
+            static_cast<void>(CancelAgentSceneReview(review));
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
         }
         auto proposal = std::move(*m_agentSceneReview);
@@ -222,7 +245,7 @@ namespace Horo::Editor {
         const SceneTransactionContext approval{proposal.context.session,
                                                m_document.Revision().value,
                                                m_document.State().value,
-                                               CanReviewAgentSceneEdits() && (!proposal.authorized || proposal.authorized()),
+                                               CanReviewAgentSceneEdits(),
                                                {}};
         const auto result = proposal.owner.ApplyReviewedReplacements(approval, std::move(proposal.preview));
         if (result.HasError())
@@ -247,16 +270,23 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ReconcileAgentSceneReview */
     void EditorWorkspaceController::ReconcileAgentSceneReview() {
-        if (!m_agentSceneReview || IsAgentSceneReviewCurrent(*m_agentSceneReview))
+        if (!m_agentSceneReview)
             return;
-        CancelObjectTransformPreview();
-        NotifyAgentSceneReviewWithdrawn();
+        const auto review = m_agentSceneReview->id;
+        if (!IsAgentSceneReviewCurrent(review) && CancelAgentSceneReview(review))
+            NotifyAgentSceneReviewWithdrawn();
     }
 
     /** @copydoc EditorWorkspaceController::IsAgentSceneReviewCurrent */
-    bool EditorWorkspaceController::IsAgentSceneReviewCurrent(const AgentSceneReview &review) const {
-        return (!review.authorized || review.authorized()) && !review.context.cancellation.IsCancellationRequested() &&
-               review.owner.CheckCurrent().HasValue() && review.context.revision == m_document.Revision().value &&
+    bool EditorWorkspaceController::IsAgentSceneReviewCurrent(const std::uint64_t review) const {
+        if (!m_agentSceneReview || m_agentSceneReview->id != review)
+            return false;
+        const auto authorized = m_agentSceneReview->authorized;
+        if ((authorized && !authorized()) || !m_agentSceneReview || m_agentSceneReview->id != review)
+            return false;
+        const auto &current = *m_agentSceneReview;
+        return !current.context.cancellation.IsCancellationRequested() && current.owner.CheckCurrent().HasValue() &&
+               current.context.revision == m_document.Revision().value &&
                CanReviewAgentSceneEdits();
     }
 

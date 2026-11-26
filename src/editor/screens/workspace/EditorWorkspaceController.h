@@ -1698,7 +1698,7 @@ namespace Horo::Editor {
         /** @brief Retires a displayed agent proposal once its authored viewport or authorization becomes stale. */
         void ReconcileAgentSceneReview();
         /** @brief Checks the pending review against the current document and workspace authority. */
-        [[nodiscard]] bool IsAgentSceneReviewCurrent(const AgentSceneReview &review) const;
+        [[nodiscard]] bool IsAgentSceneReviewCurrent(std::uint64_t review) const;
         /** @brief Publishes the localized status for a withdrawn or outdated review. */
         void NotifyAgentSceneReviewWithdrawn();
         /** @brief Checks whether the current authored viewport can safely display or approve a review. */

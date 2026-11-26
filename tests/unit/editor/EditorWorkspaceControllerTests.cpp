@@ -476,7 +476,18 @@ namespace {
         const std::array duplicate{renames.front(), renames.front()};
         CHECK(controller.PreviewAgentSceneEdits(revision, updates, duplicate, proposal.Token()).HasError());
         CHECK_FALSE(controller.ViewModel().agentSceneReview);
-        const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token());
+        std::optional<std::uint64_t> replaceOnAuthorityCheck;
+        std::optional<std::uint64_t> replacementReview;
+        const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token(), [&] {
+            if (const auto previous = std::exchange(replaceOnAuthorityCheck, std::nullopt)) {
+                REQUIRE(controller.CancelAgentSceneReview(*previous));
+                const std::array replacement{AgentSceneObjectRename{object.id.value, "Replacement review"}};
+                const auto shown = controller.PreviewAgentSceneEdits(revision, {}, replacement, proposal.Token());
+                REQUIRE(shown.HasValue());
+                replacementReview = shown.Value();
+            }
+            return true;
+        });
         REQUIRE(preview.HasValue());
         REQUIRE(controller.ViewModel().agentSceneReview);
         CHECK(controller.ViewModel().agentSceneReview->objectCount == 1);
@@ -518,6 +529,18 @@ namespace {
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
             CHECK(withdrawn == 0);
+        }
+        SECTION("approval cannot consume a different proposal installed during the authority check") {
+            replaceOnAuthorityCheck = preview.Value();
+            CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
+            REQUIRE(replacementReview);
+            REQUIRE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewModel().agentSceneReview->id == *replacementReview);
+            CHECK(controller.ViewModel().objects.front().name == object.name);
+            CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
+            CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            CHECK(events.empty());
         }
         SECTION("closing command authority retires the overlay on the owner tick") {
             controller.RevokeWorkspaceCommands();
