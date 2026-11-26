@@ -20,6 +20,7 @@ namespace {
     constexpr std::uint64_t AuthoredTrigger = 3;
     constexpr std::uint64_t OtherNpcTrigger = 4;
     constexpr std::uint64_t MissingTrigger = 5;
+    constexpr std::uint64_t DisclosedField = 2;
 
     /** @brief Waits only within the test budget for owner-lane caption publication. */
     bool PublishCaption(App::NpcDialogueScenePresentation &scene, const NpcDialogueGrant &grant,
@@ -156,7 +157,8 @@ namespace {
         static_cast<void>(timeline.Drain(*unrelated));
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return false;
-        const std::array duplicateFields{grant.fields.front(), grant.fields.front()};
+        const auto disclosedField = NpcDialogueFactId::Create(DisclosedField).Value();
+        const std::array duplicateFields{disclosedField, disclosedField};
         if (mode == "grant-after-drain")
             grant.fields = {};
         if (mode == "malformed-grant-after-drain")
@@ -180,7 +182,7 @@ namespace {
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return 14;
         auto liveGrant = grant;
-        const std::array invalidFields{NpcDialogueFactId{}, grant.fields.front()};
+        const std::array invalidFields{NpcDialogueFactId{}, NpcDialogueFactId::Create(DisclosedField).Value()};
         if (mode == "grant-before-drain")
             liveGrant.fields = {};
         if (mode == "malformed-grant-before-drain")
@@ -284,7 +286,7 @@ namespace {
         if (!fingerprint)
             return 12;
         App::NpcDialogueEndpointApproval approval{approvedRoot, *fingerprint, std::move(config),
-                                                  {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value(),
+                                                  {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(DisclosedField).Value(),
                                                    NpcDialogueFactId::Create(9).Value()}};
         if (mode == "stale-grant")
             approval.projectSource.bytes[0] ^= 1;
