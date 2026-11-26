@@ -28,6 +28,7 @@
 #include <windows.h>
 #include <io.h>
 #else
+#include <csignal>
 #include <unistd.h>
 #endif
 #include <fstream>
@@ -429,10 +430,17 @@ TEST_CASE("Save diagnostics across an interrupted host and restart", "[.][save-o
             return EXCEPTION_CONTINUE_SEARCH;
         });
     }
+#elif defined(__linux__) || defined(__APPLE__)
+    if (phase == "custom") {
+        struct sigaction handler{};
+        handler.sa_handler = +[](int) { std::_Exit(75); };
+        sigemptyset(&handler.sa_mask);
+        REQUIRE(sigaction(SIGBUS, &handler, nullptr) == 0);
+    }
 #endif
     const auto host = StartSaveHost(directory, true, true);
     REQUIRE(host);
-    if (phase == "interrupt" || phase == "fault") {
+    if (phase != "export") {
         REQUIRE(PublishLog("runtime.save.legacy", "private-interrupted-save-value"));
         REQUIRE(PublishLog("runtime.scene", "interrupted-control-log"));
         REQUIRE(Log::Logger::Flush());
@@ -441,10 +449,15 @@ TEST_CASE("Save diagnostics across an interrupted host and restart", "[.][save-o
             RaiseException(0xE0420145U, EXCEPTION_NONCONTINUABLE, 0, nullptr);
             FAIL("The native fault unexpectedly returned");
         }
+#elif defined(__linux__) || defined(__APPLE__)
+        if (phase == "fault" || phase == "custom") {
+            REQUIRE(raise(SIGBUS) == 0);
+            FAIL("The native signal unexpectedly returned");
+        }
 #endif
+        REQUIRE(phase == "interrupt");
         std::_Exit(73);
     }
-    REQUIRE(phase == "export");
     REQUIRE(host->GenerateDiagnosticBundle({.outputPath = directory / "bundle.zip"}).HasValue());
 }
 

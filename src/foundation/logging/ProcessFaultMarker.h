@@ -6,11 +6,15 @@
 #include <optional>
 
 namespace Horo::Log::Internal {
+    /** @brief Native origin of a bounded fault code. */
+    enum class ProcessFaultClass { WindowsException, PosixSignal };
+
     /** @brief Scalar fault evidence from an exact, completed process marker. */
     struct ProcessFault {
         std::array<std::uint32_t, 4> id;
+        ProcessFaultClass classification;
         std::uint32_t code;
-        std::uint32_t thread;
+        std::uint32_t thread{}; /**< Native thread ID when it can be recorded safely. */
     };
 
     /** @brief Reads only a complete platform marker from the supplied session's file. */

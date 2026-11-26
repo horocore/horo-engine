@@ -4,6 +4,7 @@ from functools import partial
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess  # nosec B404
 import sys
 from tempfile import TemporaryDirectory
@@ -26,8 +27,13 @@ def run_probe(binary: Path, directory: Path, phase: str, expected_exit: int) -> 
         raise RuntimeError(f"{phase}: expected exit {expected_exit}, got {completed.returncode}\n{output}")
 
 
-def check_restart(binary: Path, directory: Path, native_fault: bool = False) -> None:
-    run_probe(binary, directory, "fault" if native_fault else "interrupt", 74 if native_fault else 73)
+def check_restart(binary: Path, directory: Path, phase: str = "interrupt") -> None:
+    windows = sys.platform == "win32"
+    if phase == "fault":
+        expected_exit = 74 if windows else -signal.SIGBUS
+    else:
+        expected_exit = 75 if phase == "custom" else 73
+    run_probe(binary, directory, phase, expected_exit)
     previous = json.loads((directory / "save.session.json").read_bytes())
     if (directory / "save.shutdown.json").exists() or "interruptedSessionId" in previous:
         raise RuntimeError("The first process unexpectedly recorded a clean or prior session")
@@ -43,11 +49,12 @@ def check_restart(binary: Path, directory: Path, native_fault: bool = False) -> 
         if current["previousCleanShutdown"] is not False:
             raise RuntimeError("The bundle reports a clean shutdown after interruption")
         fault = current.get("interruptedFault")
-        if native_fault:
-            if not fault or fault["class"] != "windows-exception" or fault["code"] != 0xE0420145:
-                raise RuntimeError("The bundle lost the native exception classification")
-            if len(fault["id"]) != 32 or fault["thread"] <= 0:
-                raise RuntimeError("The native exception marker lacks its independent identity or thread")
+        if phase == "fault":
+            kind, code = ("windows-exception", 0xE0420145) if windows else ("posix-signal", signal.SIGBUS)
+            if not fault or fault["class"] != kind or fault["code"] != code:
+                raise RuntimeError("The bundle lost the native fault classification")
+            if len(fault["id"]) != 32 or (windows and fault.get("thread", 0) <= 0):
+                raise RuntimeError("The fault marker lacks its independent identity or available thread")
         elif fault is not None:
             raise RuntimeError("An interrupted process without a recorded fault was misclassified")
         if b"interrupted-control-log" not in bundle.read("logs/save.jsonl"):
@@ -86,8 +93,14 @@ def main() -> None:
         raise ValueError("Expected the Save telemetry test executable in its configured output directory")
     with TemporaryDirectory(prefix="horo-save-observability-") as root:
         checks = {"interrupt": check_restart, "invalid_marker": check_invalid_marker}
-        if sys.platform == "win32":
-            checks["native_fault"] = partial(check_restart, native_fault=True)
+        posix = sys.platform.startswith("linux") or sys.platform == "darwin"
+        if posix:
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            checks["custom_handler"] = partial(check_restart, phase="custom")
+        if posix or sys.platform == "win32":
+            checks["native_fault"] = partial(check_restart, phase="fault")
         for name, check in checks.items():
             directory = Path(root) / name
             directory.mkdir()

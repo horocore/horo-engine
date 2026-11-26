@@ -1200,11 +1200,17 @@ Host executables opt in through `LoggerConfiguration::captureProcessFaults`.
 On Windows this prepares one small local marker per session and adds a
 top-level exception filter while the logger is active. The filter writes the
 exception code and thread ID, then delegates to the preceding filter or normal
-Windows exception handling. The next startup associates a complete marker with
-the interrupted session and exposes its random ID, class, code and thread as
+Windows exception handling. Linux and macOS record fatal signals that still have
+their default disposition and then re-deliver the same signal. Existing custom
+handlers retain ownership. The signal path uses a pre-opened descriptor, writes
+one fixed-size record and excludes forked children from the parent's marker.
+Startup and cleanup acquire the marker only after its writer has released it.
+
+The next startup associates a complete marker with the interrupted session and
+exposes its random ID, class, code and available thread ID as
 `interruptedFault` in the current session metadata. A clean shutdown removes
-unused staging. The marker contains no exception parameters, memory dump or
-user data. Hosts without native capture still report unclean shutdowns.
+unused staging. The marker contains no exception parameters, memory dump or user
+data. Hosts without native capture still report unclean shutdowns.
 
 [ADR-048](../../adr/048-gpu-crash-and-device-loss-diagnostic-bundles.md) extends
 this two-phase model for renderer incidents without weakening it. A process fault

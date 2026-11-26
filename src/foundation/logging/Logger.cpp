@@ -259,9 +259,14 @@ namespace Horo::Log {
 
         /** @brief Writes only the scalar identity and classification recovered from a completed native marker. */
         void AppendInterruptedFault(std::string &content, const Internal::ProcessFault &fault) {
+            const auto classification =
+                fault.classification == Internal::ProcessFaultClass::WindowsException ? "windows-exception" : "posix-signal";
             content += std::format(
-                R"(,"interruptedFault":{{"id":"{:08x}{:08x}{:08x}{:08x}","class":"windows-exception","code":{},"thread":{}}})",
-                fault.id[0], fault.id[1], fault.id[2], fault.id[3], fault.code, fault.thread);
+                R"(,"interruptedFault":{{"id":"{:08x}{:08x}{:08x}{:08x}","class":"{}","code":{})",
+                fault.id[0], fault.id[1], fault.id[2], fault.id[3], classification, fault.code);
+            if (fault.thread != 0)
+                content += std::format(R"(,"thread":{})", fault.thread);
+            content += '}';
         }
 
         /** @brief Writes immutable current-session identity without private machine data. */
