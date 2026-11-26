@@ -1190,6 +1190,12 @@ The crash path is split into two phases:
    previous session directory, records whether shutdown was clean, and makes the
    crash available for diagnostic-bundle selection.
 
+The logger can also detect an interrupted session independently of a fault
+marker. If the prior session has a valid identifier and no matching clean
+shutdown marker, the current session metadata includes `interruptedSessionId`.
+Support bundles can correlate this identifier with retained startup records.
+The identifier alone classifies an interruption and leaves its cause unknown.
+
 [ADR-048](../../adr/048-gpu-crash-and-device-loss-diagnostic-bundles.md) extends
 this two-phase model for renderer incidents without weakening it. A process fault
 adds only preallocated scalar renderer/device/frame context to the marker. A live

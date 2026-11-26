@@ -5401,6 +5401,13 @@ add_executable(HoroRuntimeSaveTelemetryTests unit/runtime/save/SaveTelemetryTest
 target_include_directories(HoroRuntimeSaveTelemetryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(HoroRuntimeSaveTelemetryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveTelemetryTests PRIVATE HoroEngine::Runtime HoroEngine::Application HoroEngine::PlatformServices Threads::Threads)
+if (Python3_Interpreter_FOUND AND NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME HoroRuntimeSaveTelemetryTests::InterruptedHostBundle
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/save_observability_interruption_fixture.py"
+            "$<TARGET_FILE:HoroRuntimeSaveTelemetryTests>" "$<TARGET_FILE_DIR:HoroRuntimeSaveTelemetryTests>")
+    set_tests_properties(HoroRuntimeSaveTelemetryTests::InterruptedHostBundle PROPERTIES
+        LABELS "unit;save;telemetry;ci-windows" TIMEOUT 60)
+endif ()
 add_executable(HoroRuntimeSaveDiagnosticsTests
         unit/runtime/save/SaveDiagnosticsTests.cpp
 )

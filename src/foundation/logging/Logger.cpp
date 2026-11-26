@@ -192,15 +192,43 @@ namespace Horo::Log {
             return false;
         }
 
+        /** @brief Checks a bounded decimal component of an engine-generated session identifier. */
+        bool IsSessionIdComponent(const std::string_view component) {
+            if (component.empty() || component.size() > 20)
+                return false;
+            std::uint64_t parsed{};
+            const auto end = component.data() + component.size();
+            const auto [next, error] = std::from_chars(component.data(), end, parsed);
+            return error == std::errc{} && next == end;
+        }
+
+        /** @brief Validates the timestamp, process and sequence components written by CreateSessionId. */
+        bool IsMarkerSessionId(std::string_view value) {
+            if (value.starts_with('-'))
+                value.remove_prefix(1);
+            const auto first = value.find('-');
+            if (first == std::string_view::npos)
+                return false;
+            const auto remainder = value.substr(first + 1);
+            const auto second = remainder.find('-');
+            return second != std::string_view::npos && IsSessionIdComponent(value.substr(0, first)) &&
+                   IsSessionIdComponent(remainder.substr(0, second)) && IsSessionIdComponent(remainder.substr(second + 1));
+        }
+
         /** @brief Reads a bounded marker and extracts its restricted session identifier. */
         std::optional<std::string> ReadMarkerSessionId(const std::filesystem::path &path) {
+            constexpr std::size_t maxMarkerSize = 16U * 1024U;
             std::error_code error;
-            if (const std::uintmax_t size = std::filesystem::file_size(path, error); error || size == 0 || size > 16U * 1024U)
+            if (!std::filesystem::is_regular_file(path, error))
                 return std::nullopt;
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return std::nullopt;
-            const std::string content{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            std::array<char, maxMarkerSize + 1U> bytes;
+            input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (input.bad() || input.gcount() == static_cast<std::streamsize>(bytes.size()))
+                return std::nullopt;
+            const std::string_view content{bytes.data(), static_cast<std::size_t>(input.gcount())};
             constexpr std::string_view prefix{R"("sessionId":")"};
             const std::size_t start = content.find(prefix);
             if (start == std::string::npos)
@@ -209,12 +237,10 @@ namespace Horo::Log {
             const std::size_t end = content.find('"', valueStart);
             if (end == std::string::npos || end == valueStart)
                 return std::nullopt;
-            const std::string value = content.substr(valueStart, end - valueStart);
-            for (const unsigned char character : value) {
-                if (character != '-' && (character < '0' || character > '9'))
-                    return std::nullopt;
-            }
-            return value;
+            const std::string_view value = content.substr(valueStart, end - valueStart);
+            if (!IsMarkerSessionId(value))
+                return std::nullopt;
+            return std::string{value};
         }
 
         /** @brief Creates a collision-resistant process-local session identifier. */
@@ -226,7 +252,7 @@ namespace Horo::Log {
 
         /** @brief Writes immutable current-session identity without private machine data. */
         bool WriteSessionMarker(const LoggerConfiguration &configuration, const std::string_view sessionId,
-                                const bool previousCleanShutdown) {
+                                const std::optional<std::string> &previousSessionId, const bool previousCleanShutdown) {
             std::string content;
             content.reserve(configuration.hostName.size() + configuration.hostVersion.size() + sessionId.size() + 192U);
             content += R"({"schemaVersion":1,"sessionId":")";
@@ -240,6 +266,11 @@ namespace Horo::Log {
             content += std::format(R"(","processId":{})", ProcessId());
             content += R"(,"previousCleanShutdown":)";
             content += previousCleanShutdown ? "true" : "false";
+            if (previousSessionId && !previousCleanShutdown) {
+                content += R"(,"interruptedSessionId":")";
+                AppendJsonEscaped(content, *previousSessionId);
+                content += '"';
+            }
             content += "}\n";
             return WriteMarkerAtomically(configuration.logDirectory / (configuration.baseName + ".session.json"), content);
         }
@@ -658,7 +689,7 @@ namespace Horo::Log {
         const std::optional<std::string> cleanSessionId = ReadMarkerSessionId(shutdownMarkerPath);
         const bool previousCleanShutdown = previousSessionId.has_value() && cleanSessionId == previousSessionId;
         const std::string sessionId = CreateSessionId();
-        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousCleanShutdown)) {
+        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousSessionId, previousCleanShutdown)) {
             static_cast<void>(Telemetry::Runtime::Shutdown());
             std::fprintf(stderr, "[Logger] failed to persist session identity\n");
             return false;

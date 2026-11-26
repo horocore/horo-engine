@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <mutex>
 #include <stdexcept>
@@ -55,20 +56,24 @@ namespace {
         throw FixtureFailure("Save telemetry fixture could not claim a fresh directory");
     }
 
+    /** @brief Starts the host with the Save export policy used by the product entry points. */
+    std::unique_ptr<Application::HostObservabilitySession> StartSaveHost(const std::filesystem::path &directory,
+                                                                        const bool includeSave = true) {
+        return Application::HostObservabilitySession::Start(
+            {.logging = {.logDirectory = directory,
+                         .baseName = "save",
+                         .queueCapacity = 4096,
+                         .subsystemPrefixes = includeSave ? std::vector<std::string>{} : std::vector<std::string>{"other"},
+                         .metricCollectionLevel =
+                             includeSave ? Telemetry::MetricCollectionLevel::Core : Telemetry::MetricCollectionLevel::Off,
+                         .echoToStderr = false},
+             .summaries = {&SummarizeSaveTelemetry},
+             .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain}}});
+    }
+
     class Session final {
     public:
-        explicit Session(const bool includeSave = true) {
-            host = Application::HostObservabilitySession::Start(
-                {.logging = {.logDirectory = directory,
-                             .baseName = "save",
-                             .queueCapacity = 4096,
-                             .subsystemPrefixes = includeSave ? std::vector<std::string>{} : std::vector<std::string>{"other"},
-                             .metricCollectionLevel =
-                                 includeSave ? Telemetry::MetricCollectionLevel::Core : Telemetry::MetricCollectionLevel::Off,
-                             .echoToStderr = false},
-                 .summaries = {&SummarizeSaveTelemetry},
-                 .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain}}});
-        }
+        explicit Session(const bool includeSave = true) : host(StartSaveHost(directory, includeSave)) {}
 
         ~Session() {
             registration.reset();
@@ -93,6 +98,19 @@ namespace {
     std::string Read(const std::filesystem::path &path) {
         std::ifstream input{path, std::ios::binary};
         return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    }
+
+    /** @brief Retries a fixture record when the bounded telemetry queue is momentarily contended. */
+    bool PublishLog(const std::string_view category, const std::string_view message) {
+        for (std::size_t attempt = 0; attempt < 1000; ++attempt) {
+            if (Telemetry::Runtime::EmitRecord({.subsystem = std::string{category},
+                                               .payload = Telemetry::LogRecord{.severity = Log::Level::Error,
+                                                                               .category = std::string{category},
+                                                                               .message = std::string{message}}}))
+                return true;
+            std::this_thread::yield();
+        }
+        return false;
     }
 
 #if defined(_WIN32)
@@ -394,25 +412,30 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
         REQUIRE(archive.find(secret) == std::string::npos);
 }
 
+TEST_CASE("Save diagnostics across an interrupted host and restart", "[.][save-observability-process]") {
+    const auto *mode = std::getenv("HORO_SAVE_OBSERVABILITY_PHASE");
+    REQUIRE(mode);
+    const auto directory = std::filesystem::current_path();
+    REQUIRE(std::filesystem::is_regular_file(directory / "save-observability-fixture"));
+    const auto host = StartSaveHost(directory);
+    REQUIRE(host);
+    if (std::string_view{mode} == "interrupt") {
+        REQUIRE(PublishLog("runtime.save.legacy", "private-interrupted-save-value"));
+        REQUIRE(PublishLog("runtime.scene", "interrupted-control-log"));
+        REQUIRE(Log::Logger::Flush());
+        std::_Exit(73);
+    }
+    REQUIRE(std::string_view{mode} == "export");
+    REQUIRE(host->GenerateDiagnosticBundle({.outputPath = directory / "bundle.zip"}).HasValue());
+}
+
 TEST_CASE("Support bundles keep only summarized Save records across logs, history and crash breadcrumbs",
           "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);
     REQUIRE(session.Register());
-    const auto publish = [](std::string_view category, std::string_view message) {
-        // Queue contention is allowed to drop a single log. Seed this fixture only after admission succeeds.
-        for (std::size_t attempt = 0; attempt < 1000; ++attempt) {
-            if (Telemetry::Runtime::EmitRecord({.subsystem = std::string{category},
-                                                .payload = Telemetry::LogRecord{.severity = Log::Level::Error,
-                                                                                .category = std::string{category},
-                                                                                .message = std::string{message}}}))
-                return true;
-            std::this_thread::yield();
-        }
-        return false;
-    };
-    REQUIRE(publish("runtime.save.legacy", "private-current-row-payload"));
-    REQUIRE(publish("runtime.saver.control", "control-unrelated-log"));
+    REQUIRE(PublishLog("runtime.save.legacy", "private-current-row-payload"));
+    REQUIRE(PublishLog("runtime.saver.control", "control-unrelated-log"));
     REQUIRE(Log::Logger::Flush());
     REQUIRE(Read(session.directory / "save.jsonl").find("private-current-row-payload") != std::string::npos);
 
