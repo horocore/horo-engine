@@ -1882,6 +1882,8 @@ Independent structured sibling records remain available.
 Withheld records are removed with their enclosing map keys, including wrappers
 that contain no independent evidence after redaction. This keeps slot names
 used as diagnostic map keys out of support bundles.
+Entries indexed by absolute local paths are withheld with their keys, even when
+the values carry no Save diagnostic label.
 Raw diagnostic JSON and JSONL records with duplicate object members or
 excessive nesting fail bundle preparation before any archive is published.
 

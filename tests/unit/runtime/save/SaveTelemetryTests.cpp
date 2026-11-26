@@ -620,6 +620,8 @@ TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics"
                << R"("private-direct-slot-key":{"domain":"horo.save","message":"private-save-detail"},)"
                << R"("private-nested-player-key":{"latest":{"domain":"horo.save","message":"private-save-detail"}},)"
                << R"("private-array-slot-key":[{"domain":"horo.save","message":"private-save-detail"}],)"
+               << R"("/home/private-player/hidden-save-slot":{"message":"private-path-indexed-payload"},)"
+               << R"("C:\\Users\\private-profile\\pending-save-slot":{"message":"private-windows-indexed-payload"},)"
                << R"("private-mixed-slot-key":[{"domain":"horo.scene","message":"safe-first"},)"
                << R"({"domain":"horo.save","message":"private-save-detail"},)"
                << R"({"domain":"horo.scene","message":"safe-second"}],)"
@@ -636,6 +638,9 @@ TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics"
     for (const std::string_view withheld : {"private-direct-slot-key", "private-nested-player-key", "private-array-slot-key",
                                            "private-mixed-slot-key", "private-token-group", "private-credential-copy",
                                            "private-save-detail"})
+        CHECK(archive.find(withheld) == std::string::npos);
+    for (const std::string_view withheld : {"private-player", "hidden-save-slot", "private-path-indexed-payload",
+                                           "private-profile", "pending-save-slot", "private-windows-indexed-payload"})
         CHECK(archive.find(withheld) == std::string::npos);
     CHECK(archive.find("safe-first") < archive.find("safe-second"));
     CHECK(archive.find("safe-second") != std::string::npos);

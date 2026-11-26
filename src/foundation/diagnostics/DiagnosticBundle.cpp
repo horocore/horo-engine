@@ -106,14 +106,24 @@ namespace Horo::Diagnostics {
                    first == "packages";
         }
 
+        /** @brief Detects a Windows absolute drive path regardless of the exporting host. */
+        [[nodiscard]] bool StartsWithDrivePath(const std::string_view value) noexcept {
+            return value.size() > 2 && std::isalpha(static_cast<unsigned char>(value[0])) && value[1] == ':' &&
+                   (value[2] == '/' || value[2] == '\\');
+        }
+
+        /** @brief Detects an absolute path used directly as a diagnostic index. */
+        [[nodiscard]] bool IsAbsolutePathKey(const std::string_view key) noexcept {
+            return !key.empty() && (key.front() == '/' || key.front() == '\\' || StartsWithDrivePath(key));
+        }
+
         [[nodiscard]] bool ContainsAbsolutePath(const std::string_view value) noexcept {
             for (std::size_t index = 0; index < value.size(); ++index) {
                 if (const bool boundary = index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) ||
                                           value[index - 1] == '=' || value[index - 1] == '"' || value[index - 1] == '\'';
                     boundary && (value[index] == '/' || value[index] == '\\'))
                     return true;
-                if (index + 2 < value.size() && std::isalpha(static_cast<unsigned char>(value[index])) && value[index + 1] == ':' &&
-                    (value[index + 2] == '/' || value[index + 2] == '\\'))
+                if (StartsWithDrivePath(value.substr(index)))
                     return true;
             }
             return false;
@@ -129,8 +139,7 @@ namespace Horo::Diagnostics {
             output.reserve(value.size());
             for (std::size_t index = 0; index < value.size();) {
                 const bool posixPath = IsPathBoundary(value, index) && (value[index] == '/' || value[index] == '\\');
-                const bool windowsPath = index + 2 < value.size() && std::isalpha(static_cast<unsigned char>(value[index])) &&
-                                         value[index + 1] == ':' && (value[index + 2] == '/' || value[index + 2] == '\\');
+                const bool windowsPath = StartsWithDrivePath(value.substr(index));
                 if (!posixPath && !windowsPath) {
                     output += value[index++];
                     continue;
@@ -220,7 +229,7 @@ namespace Horo::Diagnostics {
             Json sanitizedEntries;
             bool privateDescendant = false;
             for (auto child = value.begin(); child != value.end();) {
-                const auto redaction = RedactJson(*child, namespaces);
+                const auto redaction = IsAbsolutePathKey(child.key()) ? Withheld : RedactJson(*child, namespaces);
                 const bool sensitiveKey = Detail::IsSensitiveKey(child.key());
                 if (redaction != Kept) {
                     if (hasInlineText || IsCausalField(child.key())) {
