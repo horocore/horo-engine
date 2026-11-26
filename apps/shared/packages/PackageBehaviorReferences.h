@@ -17,6 +17,9 @@ namespace Horo::Application::Internal {
     /** @brief Bounded saved-source failures retained alongside confirmed reference findings. */
     class PackageSourceReviewFailures final {
     public:
+        /** @brief Prevents a partial asset inventory from authorizing removal while retaining confirmed matches. */
+        void MarkInventoryIncomplete();
+
         /** @brief Records a canonical project-relative source failure while keeping the first typed cause.
          * @param path Path from the admitted asset registry. @param failure Exact failure for that source.
          * @return Success to continue the scan or a resource-limit error.

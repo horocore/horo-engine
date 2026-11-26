@@ -267,7 +267,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Uses one immutable schema for the scan and keeps the original command authority for all reads. */
         ReferenceScan ScanProviderSources(const PackageRemovalSources &sources, const ProviderOwners &owners,
-                                          std::span<const Assets::AssetRecord> records) {
+                                          const Assets::AssetRegistryCandidate &candidate) {
             std::optional<AI::QuerySchemaRegistry> pointSchema;
             if (!owners.customSenses.empty()) {
                 auto schema = AI::CaptureBuiltinQuerySchema();
@@ -279,7 +279,7 @@ namespace Horo::Application::Internal {
             std::vector<Diagnostic> diagnostics;
             PackageSourceReviewFailures failures;
             DecisionSubplanReview subplans;
-            for (const auto &record : records) {
+            for (const auto &record : candidate.records) {
                 if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                     return ReferenceScan::Failure(admitted.ErrorValue());
                 if (auto inspected = InspectProviderSource(sources, owners, record, schema, diagnostics, failures, subplans); inspected.HasError())
@@ -287,8 +287,12 @@ namespace Horo::Application::Internal {
             }
             if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                 return ReferenceScan::Failure(admitted.ErrorValue());
-            if (auto linked = subplans.AppendDiagnostics(diagnostics); linked.HasError())
-                return ReferenceScan::Failure(linked.ErrorValue());
+            if (candidate.status == Assets::AssetRegistryBuildStatus::Complete) {
+                if (auto linked = subplans.AppendDiagnostics(diagnostics); linked.HasError())
+                    return ReferenceScan::Failure(linked.ErrorValue());
+            } else {
+                failures.MarkInventoryIncomplete();
+            }
             return std::move(failures).Finish(std::move(diagnostics));
         }
     }  // namespace
@@ -305,8 +309,8 @@ namespace Horo::Application::Internal {
         const auto candidate = Assets::PrepareAssetRegistryCandidate(sources.assets);
         if (candidate.HasError())
             return ReferenceScan::Failure(candidate.ErrorValue());
-        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+        if (candidate.Value().status == Assets::AssetRegistryBuildStatus::Failed)
             return ReferenceScan::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
-        return ScanProviderSources(sources, owners.Value(), candidate.Value().records);
+        return ScanProviderSources(sources, owners.Value(), candidate.Value());
     }
 }  // namespace Horo::Application::Internal

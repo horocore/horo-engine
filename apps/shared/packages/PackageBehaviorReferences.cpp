@@ -621,6 +621,12 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc PackageSourceReviewFailures::MarkInventoryIncomplete */
+    void PackageSourceReviewFailures::MarkInventoryIncomplete() {
+        if (!first_)
+            first_.emplace(ReferenceError("packages.host.asset_inventory_incomplete"));
+    }
+
     /** @copydoc PackageSourceReviewFailures::Record */
     Result<void> PackageSourceReviewFailures::Record(const std::string_view path, Error failure) {
         constexpr std::size_t maximumFailures = 16'384;
@@ -708,10 +714,18 @@ namespace Horo::Application::Internal {
         const auto candidate = Assets::PrepareAssetRegistryCandidate(assets);
         if (candidate.HasError())
             return Inspection::Failure(candidate.ErrorValue());
-        if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+        const auto status = candidate.Value().status;
+        const bool complete = status == Assets::AssetRegistryBuildStatus::Complete;
+        if (status == Assets::AssetRegistryBuildStatus::Failed || (!complete && !inspectComposition))
             return Inspection::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
         const std::span<const Assets::AssetRecord> records = candidate.Value().records;
-        return InspectAssets(files, context, records, {owners, inspectComposition ? records : std::span<const Assets::AssetRecord>{}});
+        const auto catalog = inspectComposition && complete ? records : std::span<const Assets::AssetRecord>{};
+        auto scan = InspectAssets(files, context, records, {owners, catalog});
+        if (scan.HasError() || complete)
+            return scan;
+        auto partial = std::move(scan).Value();
+        partial.failures.MarkInventoryIncomplete();
+        return Inspection::Success(std::move(partial));
     }
 
     /** @copydoc InspectPackageScenePrefabReferences */

@@ -787,6 +787,22 @@ namespace {
         CHECK(failure.diagnostics[1].code.Value() == "packages.host.decision_node_in_use");
         CHECK(failure.diagnostics[1].location.source == relative);
         CHECK(fixture.Read("packages.lock") == oldLock);
+
+        const auto invalid = file.parent_path() / "Unrelated.horoasset";
+        auto invalidMetadata = invalid;
+        invalidMetadata += ".horo";
+        std::ofstream{invalid} << "{}";
+        std::ofstream{invalidMetadata} << "{";
+        const auto degraded = publish();
+        REQUIRE(degraded.HasError());
+        CHECK(degraded.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        CHECK(std::ranges::any_of(degraded.ErrorValue().diagnostics, [&relative](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.decision_node_in_use" && diagnostic.location.source == relative;
+        }));
+        CHECK(std::ranges::any_of(degraded.ErrorValue().diagnostics, [](const auto &diagnostic) {
+            return diagnostic.path == "Assets/Unrelated.horoasset.horo";
+        }));
+        CHECK(fixture.Read("packages.lock") == oldLock);
     }
 
     TEST_CASE("Package removal verifies saved Scene and Prefab dependencies", "[packages][application][host]") {
@@ -881,6 +897,26 @@ namespace {
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+
+        const auto invalidSource = policy.projectRoot / "Assets/Unrelated.horoasset";
+        const auto invalidSidecar = policy.projectRoot / "Assets/Unrelated.horoasset.horo";
+        std::ofstream{invalidSource} << "{}";
+        std::ofstream{invalidSidecar} << "{";
+        const auto degraded = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(degraded.HasError());
+        CHECK(degraded.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        const auto hasBehavior = [&](std::string_view path) {
+            return std::ranges::any_of(degraded.ErrorValue().diagnostics, [&](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.behavior_in_use" && diagnostic.location.source == path;
+            });
+        };
+        CHECK(hasBehavior("Assets/Scene.horoasset"));
+        CHECK(hasBehavior("Assets/Example.prefab"));
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+        REQUIRE(std::filesystem::remove(invalidSidecar));
+        REQUIRE(std::filesystem::remove(invalidSource));
 
         owners.front().artifact = {};
         const auto stale = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
