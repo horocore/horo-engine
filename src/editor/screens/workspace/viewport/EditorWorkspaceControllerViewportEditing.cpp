@@ -43,7 +43,7 @@ namespace Horo::Editor {
         /** @brief Detached view data and position changes consumed by the existing viewport preview. */
         struct AgentSceneReviewProjection final {
             EditorWorkspaceViewModel::AgentSceneReviewView view;
-            std::vector<SceneObjectTransformUpdate> transforms;
+            std::vector<SceneObjectTransformPreview> transforms;
         };
 
         /** @brief Projects only effective, validated changes to existing objects. */
@@ -219,10 +219,15 @@ namespace Horo::Editor {
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
         auto projection = ProjectAgentSceneReview(preview.Value(), m_document.Objects());
         auto &view = projection.view;
-        if (!projection.transforms.empty())
-            PreviewObjectTransforms(projection.transforms);
-        if (m_viewport.Current().transformPreviews.size() != projection.transforms.size())
-            return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
+        if (!projection.transforms.empty()) {
+            const auto scene = m_runtimeScene.ActiveScene();
+            if (!scene)
+                return Output::Failure(RejectReview(SceneTransactionFailure::Stale));
+            const auto ghosts = AppendEditorViewportSceneReviewGhosts(*scene, projection.transforms, m_viewportScene);
+            if (ghosts.HasError())
+                return Output::Failure(ghosts.ErrorValue());
+            view.hasSpatialPreview = ghosts.Value();
+        }
         auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
         if (!view.lights.empty())
             kind = DocumentChangeKind::ComponentChanged;
@@ -230,6 +235,8 @@ namespace Horo::Editor {
         m_agentSceneReview.emplace(view.id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
                                    std::move(authorized), kind);
         m_viewModel.agentSceneReview = std::move(view);
+        if (m_viewModel.agentSceneReview->hasSpatialPreview)
+            AdvanceViewportSceneRevision();
         return Output::Success(m_agentSceneReviewSerial);
     }
 
@@ -381,12 +388,13 @@ namespace Horo::Editor {
         const bool retiringReview = m_agentSceneReview.has_value();
         m_agentSceneReview.reset();
         m_viewModel.agentSceneReview.reset();
-        if (m_viewport.Current().transformPreviews.empty() && (!retiringReview || m_viewportScene.transformOverrides.empty())) {
+        const bool removedGhosts = retiringReview && ClearEditorViewportSceneReviewGhosts(m_viewportScene);
+        const bool hasTransformPreview = !m_viewport.Current().transformPreviews.empty();
+        if (!hasTransformPreview && !retiringReview)
             return;
-        }
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
-        bool restored = false;
-        if (active && m_viewportScene.runtimeSceneId == active->RuntimeId()) {
+        bool restored = active && m_viewportScene.runtimeSceneId == active->RuntimeId();
+        if (restored && hasTransformPreview) {
             const auto result = ApplyEditorViewportTransformPreview(*active, {}, m_viewportScene);
             restored = result.HasValue();
             if (!restored)
@@ -399,8 +407,9 @@ namespace Horo::Editor {
             m_viewportScene = {};
             m_viewportScene.camera = m_viewport.Current().camera;
             m_activeRuntimeRevision = {};
-            AdvanceViewportSceneRevision();
         }
+        if (removedGhosts || !restored)
+            AdvanceViewportSceneRevision();
         m_viewport.ClearTransformPreview();
         m_viewModel.primarySelectionPreviewWorldTransform.reset();
         RefreshViewportLightProjection();
@@ -410,6 +419,8 @@ namespace Horo::Editor {
         if (const std::optional<ResolvedSceneObjectEditorState> editorState = ResolveSceneObjectEditorState(m_document.Objects(), object);
             !editorState.has_value() || editorState->effectivelyLocked)
             return;
+        if (m_agentSceneReview)
+            CancelObjectTransformPreview();
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
         if (!active || m_viewportScene.runtimeSceneId != active->RuntimeId())
             return;

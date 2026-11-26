@@ -7,6 +7,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Scene/SceneSource.h"
 #include "OwnedTestDirectory.h"
 #include "ProjectReplicationTestSupport.h"
@@ -438,7 +439,7 @@ namespace {
         static_cast<void>(subscription);
     }
 
-    TEST_CASE("Authored viewport shows agent transforms until local review is resolved", "[unit][editor][scene-review]") {
+    TEST_CASE("Authored viewport shows a separate agent proposal ghost until local review is resolved", "[unit][editor][scene-review]") {
         Runtime::RuntimeSceneService scenes;
         CancellationSource process;
         EditorWorkspaceDependencies dependencies;
@@ -497,6 +498,7 @@ namespace {
         std::optional<std::uint64_t> replaceOnAuthorityCheck;
         std::optional<std::uint64_t> replacementReview;
         unsigned authorizationChecks{};
+        const auto sceneRevisionBeforeReview = controller.CurrentViewportSceneRevision();
         const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token(), [&] {
             ++authorizationChecks;
             if (const auto previous = std::exchange(replaceOnAuthorityCheck, std::nullopt)) {
@@ -519,7 +521,18 @@ namespace {
         REQUIRE(controller.ViewModel().agentSceneReview->renames.size() == 1);
         CHECK(controller.ViewModel().agentSceneReview->renames.front().before == object.name);
         CHECK(controller.ViewModel().agentSceneReview->renames.front().after == renames.front().name);
-        CHECK(origin() != baseline);
+        REQUIRE(controller.ViewModel().agentSceneReview->hasSpatialPreview);
+        const auto reviewSceneRevision = controller.CurrentViewportSceneRevision();
+        CHECK(reviewSceneRevision != sceneRevisionBeforeReview);
+        const auto &geometry = controller.ViewportScene();
+        REQUIRE(geometry.instances.size() == 2);
+        CHECK(origin() == baseline);
+        CHECK(Math::TransformPoint(geometry.instances.back().localToWorld, {}) == desired.translation);
+        CHECK(geometry.instances.back().presentation.tintStrength > 0.0F);
+        CHECK_FALSE(geometry.instanceObjects.back().IsValid());
+        CHECK(geometry.instancePickable.back() == 0);
+        CHECK(geometry.instanceMotionObjects.size() == 1);
+        CHECK(geometry.transformOverrides.front().present == false);
         CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
         CHECK(controller.ViewModel().objects.front().name == object.name);
         CHECK_FALSE(controller.ViewModel().isDirty);
@@ -546,6 +559,8 @@ namespace {
             CHECK_FALSE(controller.CancelAgentSceneReview(preview.Value() + 1));
             CHECK(controller.CancelAgentSceneReview(preview.Value()));
             CHECK(origin() == baseline);
+            CHECK(controller.ViewportScene().instances.size() == 1);
+            CHECK(controller.CurrentViewportSceneRevision() != reviewSceneRevision);
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
             CHECK(withdrawn == 0);
@@ -567,6 +582,7 @@ namespace {
             controller.UpdatePlayPresentation(0.0F);
             controller.UpdatePlayPresentation(0.0F);
             CHECK(origin() == baseline);
+            CHECK(controller.ViewportScene().instances.size() == 1);
             CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             CHECK(events.empty());
             CHECK(withdrawn == 1);
@@ -594,6 +610,39 @@ namespace {
             CHECK_FALSE(controller.ViewModel().isDirty);
             CHECK(withdrawn == 1);
         }
+    }
+
+    TEST_CASE("A full viewport draw budget preserves committed geometry for text-only review", "[unit][editor][scene-review]") {
+        Runtime::RuntimeSceneService scenes;
+        CancellationSource process;
+        EditorWorkspaceDependencies dependencies;
+        dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+        EditorWorkspaceController controller{"scene-review-capacity", scenes, {}, dependencies};
+        REQUIRE(scenes.Startup(process.Token()).HasValue());
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 1, .cancellation = process.Token()})
+                    .HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+        const auto scene = scenes.ActiveScene();
+        REQUIRE(scene);
+        auto snapshot = controller.ViewportScene();
+        REQUIRE(snapshot.instances.size() == 1);
+        const auto mesh = snapshot.instances.front();
+        const auto object = snapshot.instanceObjects.front();
+        const auto entity = snapshot.instanceEntities.front();
+        constexpr auto Capacity = Render::RenderGraphMaterialRaster::MaximumDraws;
+        snapshot.instances.resize(Capacity, mesh);
+        snapshot.instanceObjects.resize(Capacity, object);
+        snapshot.instanceEntities.resize(Capacity, entity);
+        snapshot.instancePickable.resize(Capacity, 1);
+        snapshot.stagedInstanceWorlds.resize(Capacity);
+        const std::array previews{SceneObjectTransformPreview{object, Math::Transform{.translation = {10, 0, 0}}}};
+        const auto result = AppendEditorViewportSceneReviewGhosts(*scene, previews, snapshot);
+        REQUIRE(result.HasValue());
+        CHECK_FALSE(result.Value());
+        CHECK(snapshot.instances.size() == Capacity);
+        CHECK(snapshot.instances.back().localToWorld == mesh.localToWorld);
+        CHECK(snapshot.instanceObjects.back() == object);
+        CHECK(snapshot.instancePickable.back() == 1);
     }
 
     TEST_CASE("Agent Scene review applies light and object edits in one undo entry", "[unit][editor][scene-review]") {

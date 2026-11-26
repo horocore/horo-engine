@@ -1211,6 +1211,7 @@ namespace Horo::Editor {
             std::vector<Light> lights;
             std::vector<Transform> transforms;
             bool requiresSpatialWarning{};
+            bool hasSpatialPreview{};
         };
 
         std::optional<AgentSceneReviewView> agentSceneReview;

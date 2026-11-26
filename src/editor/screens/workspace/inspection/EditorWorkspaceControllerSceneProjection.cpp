@@ -1254,6 +1254,8 @@ namespace Horo::Editor {
             LOG_ERROR("editor.viewport", "Runtime scene extraction failed: %s", extracted.ErrorValue().message.c_str());
             return Result<void>::Success();
         }
+        if (m_agentSceneReview && CancelAgentSceneReview(m_agentSceneReview->id))
+            NotifyAgentSceneReviewWithdrawn();
         m_viewportScene = std::move(extracted).Value();
         m_viewportScene.cameraCrossFade = camera.Value().crossFade;
         m_viewModel.viewportCamera = camera.Value().destination;

@@ -300,6 +300,10 @@ Ownership rules:
   A proposed mutation requires the exact authoring document opening and revision.
   The review rechecks authority after each live target inspection so an
   invalidated draft cannot inspect additional targets.
+  The desktop viewport keeps committed geometry in place and appends tinted,
+  non-pickable copies at proposed transforms. The copies carry no object or
+  motion-history identity. If the renderer's draw budget cannot hold the
+  complete preview, the same review displays the proposed values as text.
   A registry-backed request advertises only definitions derived from its
   host-selected, capability-granted catalog. Replacing the MCP registry blocks
   new inference and withdraws any draft from the old catalog. During planning,

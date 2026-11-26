@@ -91,6 +91,11 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s", summary.c_str());
             if (review.requiresSpatialWarning)
                 ImGui::TextWrapped("%s", localization.Get("editor", "workspace.viewport.agent_review.spatial_warning").c_str());
+            if (!review.transforms.empty()) {
+                const auto key = review.hasSpatialPreview ? "workspace.viewport.agent_review.preview_legend"
+                                                          : "workspace.viewport.agent_review.preview_unavailable";
+                ImGui::TextWrapped("%s", localization.Get("editor", key).c_str());
+            }
             DrawSceneReviewDetails(review, context);
             const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
             const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");

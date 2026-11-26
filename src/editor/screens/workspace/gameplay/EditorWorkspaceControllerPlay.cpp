@@ -556,6 +556,8 @@ namespace Horo::Editor {
             return;
         }
         for (std::size_t index = 0; index < m_viewportScene.instances.size(); ++index) {
+            if (!m_viewportScene.instanceObjects[index].IsValid())
+                continue;
             m_viewportScene.instances[index].presentation.tint = {0.12F, 0.72F, 1.0F};
             m_viewportScene.instances[index].presentation.tintStrength =
                 std::ranges::find(selection.objects, m_viewportScene.instanceObjects[index]) != selection.objects.end() ? 0.65F : 0.0F;

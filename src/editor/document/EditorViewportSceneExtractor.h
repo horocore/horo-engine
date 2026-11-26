@@ -212,6 +212,20 @@ namespace Horo::Editor {
                                                                    std::span<const SceneObjectTransformPreview> previews,
                                                                    EditorViewportSceneSnapshot &snapshot);
 
+    /** @brief Appends an identity-free, non-pickable copy of the geometry affected by a reviewed transform.
+     * @param scene Exact immutable authored preview scene.
+     * @param previews Validated local transforms for one Scene review.
+     * @param snapshot Canonical viewport snapshot with no active transient draws.
+     * @return True if the separate geometry fits and was published, false for text-only review, or a validation failure.
+     */
+    [[nodiscard]] Result<bool> AppendEditorViewportSceneReviewGhosts(const Runtime::RuntimeSceneView &scene,
+                                                                    std::span<const SceneObjectTransformPreview> previews,
+                                                                    EditorViewportSceneSnapshot &snapshot);
+
+    /** @brief Removes review ghosts while preserving canonical geometry and other transient draws.
+     * @return Whether any ghosts were removed. */
+    bool ClearEditorViewportSceneReviewGhosts(EditorViewportSceneSnapshot &snapshot) noexcept;
+
     /**
      * @brief Applies or clears one editor-owned transient Light-component overlay.
      * @param scene Active immutable view borrowed only during this synchronous query.

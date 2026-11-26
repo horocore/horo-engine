@@ -3651,6 +3651,8 @@
     "workspace.viewport.agent_review.rotation": {"text": "{} (object {}) local rotation XYZW {} → {}"},
     "workspace.viewport.agent_review.scale": {"text": "{} (object {}) local scale {} → {}"},
     "workspace.viewport.agent_review.spatial_warning": {"text": "Review object placement and camera effects before applying this proposal."},
+    "workspace.viewport.agent_review.preview_legend": {"text": "Orange copies show proposed positions."},
+    "workspace.viewport.agent_review.preview_unavailable": {"text": "Review the proposed transforms in the details below."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (object {})"},
     "workspace.viewport.agent_review.enable_light": {"text": "Enable light on {} (object {})"},
     "workspace.viewport.agent_review.disable_light": {"text": "Disable light on {} (object {})"},
