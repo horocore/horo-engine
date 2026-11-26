@@ -67,11 +67,14 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc ReviewAddedArchive */
-    void ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
-                            std::vector<Diagnostic> &diagnostics) {
+    Result<void> ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
+                                    std::vector<Diagnostic> &diagnostics) {
+        if (auto metadata = Packages::ValidatePackageAssetRenameDeclaration(candidate, archive); metadata.HasError())
+            return metadata;
         for (const auto &file : archive.Manifest().Entries())
             if (!Packages::IsPackageAssetRenameMetadata(file))
                 ReviewCandidateFile(candidate.package, file, diagnostics);
+        return Result<void>::Success();
     }
 
     /** @brief Checks the paths that could be visible to existing package consumers. */
@@ -181,10 +184,8 @@ namespace Horo::Application::Internal {
         const auto candidate = ReadUpdateArchive(cache, *change.candidate);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        if (!change.current) {
-            ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
-            return Result<void>::Success();
-        }
+        if (!change.current)
+            return ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
             return Result<void>::Failure(previous.ErrorValue());

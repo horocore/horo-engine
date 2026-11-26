@@ -15,6 +15,14 @@ namespace Horo::Packages {
      */
     [[nodiscard]] bool IsPackageAssetRenameMetadata(const PackageFileEntry &file);
 
+    /** @brief Validates historical asset rename metadata when there is no installed predecessor.
+     * @param candidate Proposed lock entry.
+     * @param archive Independently verified candidate archive.
+     * @return Success when absent or valid, otherwise a typed declaration error.
+     */
+    [[nodiscard]] Result<void> ValidatePackageAssetRenameDeclaration(const LockedPackage &candidate,
+                                                                     const ValidatedPackageArchive &archive);
+
     /** @brief One verified archive path transition inside the same portable package. */
     struct PackageAssetRename final {
         PackagePath previous;

@@ -456,7 +456,8 @@ namespace Horo::Application::Internal {
                 if (next == staged.packages.end() || !next->archive)
                     return Result<void>::Failure(UpdateNeedsMigration());
                 if (!change.current) {
-                    ReviewAddedArchive(next->lock, *next->archive, diagnostics);
+                    if (auto reviewed = ReviewAddedArchive(next->lock, *next->archive, diagnostics); reviewed.HasError())
+                        return reviewed;
                     continue;
                 }
                 const auto &old = *change.current;

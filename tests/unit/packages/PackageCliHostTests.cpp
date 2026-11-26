@@ -180,20 +180,55 @@ namespace {
     /** @brief Checks that offline review names the package owner blocker at the expected archive path. */
     void CheckOfflineAdditionBlocker(const Result<CliCommandResult> &result, std::string_view path) {
         REQUIRE(result.HasError());
-        REQUIRE_FALSE(result.ErrorValue().diagnostics.empty());
-        const auto &blocker = result.ErrorValue().diagnostics.front();
-        CHECK(blocker.code.Value() == "packages.host.update_archive_requires_owner");
-        CHECK(blocker.path == path);
+        const auto &diagnostics = result.ErrorValue().diagnostics;
+        const auto blocker = std::ranges::find(diagnostics, path, &Diagnostic::path);
+        REQUIRE(blocker != diagnostics.end());
+        CHECK(blocker->code.Value() == "packages.host.update_archive_requires_owner");
+    }
+
+    /** @brief Builds an asset addition with historical metadata for a predecessor that is not installed. */
+    Packages::ValidatedPackageArchive HistoricalAssetAddition(const NativeProject &fixture, bool malformed) {
+        const nlohmann::json transition{{"fromVersion", "0.9.0"},
+                                        {"fromArtifactSha256", FormatSha256(Sha256Digest{})},
+                                        {"renames", {{{"from", malformed ? "../old.bin" : "assets/old.bin"}, {"to", "assets/data.bin"}}}}};
+        const nlohmann::json declaration{{"schemaVersion", 1},
+                                         {"packageId", fixture.graph.package.Value()},
+                                         {"toVersion", fixture.graph.version.ToString()},
+                                         {"transitions", nlohmann::json::array({transition})}};
+        const std::vector<std::pair<std::string, std::string>> entries{{"horo-package.toml", "schemaVersion = 1\n"},
+                                                                       {"assets/data.bin", "verified bytes"},
+                                                                       {std::string{Packages::PackageAssetRenameDeclarationPath},
+                                                                        declaration.dump()}};
+        auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
+        REQUIRE(archive.HasValue());
+        return std::move(archive).Value();
     }
 
     TEST_CASE("Offline package update inspects contributions of newly added archives", "[packages][application][cli][update]") {
         using namespace Tests::PackageApplicationService;
-        enum class Addition { Assets, NativeDeclared, NativeDeclaredAsAssets };
-        const auto mode = GENERATE(Addition::Assets, Addition::NativeDeclared, Addition::NativeDeclaredAsAssets);
+        enum class Addition {
+            Assets,
+            HistoricalAssetMetadata,
+            InvalidAssetMetadata,
+            NativeDeclared,
+            NativeDeclaredAsAssets
+        };
+        using enum Addition;
+        const auto mode = GENERATE(Assets, HistoricalAssetMetadata, InvalidAssetMetadata, NativeDeclared, NativeDeclaredAsAssets);
         NativeProject fixture;
         WriteEmptyPackageGraph(fixture);
-        const auto archive = mode == Addition::Assets ? fixture.graph.archive : Verify(NativeAdmissionArchiveBytes());
-        WriteAssetCandidate(fixture, fixture.graph.version, archive, mode == Addition::NativeDeclared ? "native" : "assets");
+        const auto archive = [&] {
+            switch (mode) {
+                case Assets:
+                    return fixture.graph.archive;
+                case HistoricalAssetMetadata:
+                case InvalidAssetMetadata:
+                    return HistoricalAssetAddition(fixture, mode == InvalidAssetMetadata);
+                default:
+                    return Verify(NativeAdmissionArchiveBytes());
+            }
+        }();
+        WriteAssetCandidate(fixture, fixture.graph.version, archive, mode == NativeDeclared ? "native" : "assets");
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto metadata = root / ".horo";
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
@@ -221,7 +256,7 @@ namespace {
             const auto applied = apply.adapter->Execute(reviewed, context);
             const auto installed = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
             REQUIRE(installed.HasValue());
-            if (mode == Addition::Assets) {
+            if (mode == Assets || mode == HistoricalAssetMetadata) {
                 REQUIRE(previewed.HasValue());
                 REQUIRE(applied.HasValue());
                 const auto candidate = files.ReadFileBounded(metadata / "candidate.lock", 1U << 20U, {});
@@ -231,7 +266,14 @@ namespace {
             }
             CHECK(installed.Value() == oldLock.Value());
             CHECK_FALSE(std::filesystem::exists(metadata / "local/package-metadata.pending"));
-            const auto *path = mode == Addition::NativeDeclaredAsAssets ? "extensions/native/extension.json" : "";
+            if (mode == InvalidAssetMetadata) {
+                REQUIRE(previewed.HasError());
+                REQUIRE(applied.HasError());
+                CHECK(previewed.ErrorValue().code.Value() == "packages.migration.invalid_path");
+                CHECK(applied.ErrorValue().code.Value() == previewed.ErrorValue().code.Value());
+                return;
+            }
+            const auto *path = mode == NativeDeclaredAsAssets ? "extensions/native/extension.json" : "";
             CheckOfflineAdditionBlocker(previewed, path);
             CheckOfflineAdditionBlocker(applied, path);
         });

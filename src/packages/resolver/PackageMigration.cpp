@@ -87,7 +87,7 @@ namespace Horo::Packages {
         }
 
         /** @brief Checks every scoped path, retaining results only for the exact source artifact. */
-        Result<void> DecodeRenames(const Json &renames, const LockedPackage &package, const ValidatedPackageArchive &previous,
+        Result<void> DecodeRenames(const Json &renames, const LockedPackage &package, const ValidatedPackageArchive *previous,
                                   const ValidatedPackageArchive &candidate, std::vector<PackageAssetRename> *selected) {
             std::set<std::string, std::less<>> pathKeys;
             for (const auto &value : renames) {
@@ -97,7 +97,7 @@ namespace Horo::Packages {
                 if (!selected)
                     continue;
                 auto [from, to] = std::move(rename).Value();
-                const auto preservesBytes = VerifyAssetMove(from, to, previous, candidate);
+                const auto preservesBytes = previous ? VerifyAssetMove(from, to, *previous, candidate) : std::nullopt;
                 if (!preservesBytes)
                     return Result<void>::Failure(PlanError("packages.migration.archive_paths_mismatch", package));
                 selected->emplace_back(std::move(from), std::move(to), *preservesBytes);
@@ -135,7 +135,7 @@ namespace Horo::Packages {
 
         /** @brief Parses exact scoped transitions using the same strict bounds as package intent and lock files. */
         template <typename Rename, typename Decode>
-        Result<std::vector<Rename>> DecodePlan(const std::span<const std::byte> bytes, const LockedPackage &previous,
+        Result<std::vector<Rename>> DecodePlan(const std::span<const std::byte> bytes, const LockedPackage *previous,
                                                const LockedPackage &candidate, Decode decode) {
             using Renames = Result<std::vector<Rename>>;
             try {
@@ -153,9 +153,8 @@ namespace Horo::Packages {
                     const auto &identity = source.Value();
                     if (!selectors.emplace(identity.version.ToString(), FormatSha256(identity.artifact)).second)
                         return Renames::Failure(PlanError("packages.migration.duplicate_transition", candidate));
-                    const bool match = identity.version == previous.version && identity.artifact == previous.artifactDigest;
-                    if (auto decoded = decode(transition.at("renames"), candidate, match ? &renamed : nullptr);
-                        decoded.HasError())
+                    const bool match = previous && identity.version == previous->version && identity.artifact == previous->artifactDigest;
+                    if (auto decoded = decode(transition.at("renames"), candidate, match ? &renamed : nullptr); decoded.HasError())
                         return Renames::Failure(decoded.ErrorValue());
                 }
                 return Renames::Success(std::move(renamed));
@@ -164,14 +163,13 @@ namespace Horo::Packages {
             }
         }
 
-        /** @brief Admits a bounded inert declaration from the two exact locked archives. */
+        /** @brief Admits a bounded inert declaration from the exact candidate archive. */
         template <typename Rename, typename Decode>
-        Result<std::vector<Rename>> ReadDeclaration(const std::string_view path, const LockedPackage &previous,
-                                                     const ValidatedPackageArchive &previousArchive, const LockedPackage &candidate,
-                                                     const ValidatedPackageArchive &candidateArchive, Decode decode) {
+        Result<std::vector<Rename>> ReadDeclaration(const std::string_view path, const LockedPackage *previous,
+                                                    const LockedPackage &candidate, const ValidatedPackageArchive &candidateArchive,
+                                                    Decode decode) {
             using Renames = Result<std::vector<Rename>>;
-            if (previous.package != candidate.package || !MatchesArchive(previous, previousArchive) ||
-                !MatchesArchive(candidate, candidateArchive))
+            if (!MatchesArchive(candidate, candidateArchive))
                 return Renames::Failure(PlanError("packages.migration.archive_evidence_invalid", candidate));
             const auto *declared = FindFile(candidateArchive, path);
             if (!declared)
@@ -190,24 +188,38 @@ namespace Horo::Packages {
         return file.id.path.Value() == PackageAssetRenameDeclarationPath && !file.executable && !file.contributionRoot;
     }
 
+    /** @copydoc ValidatePackageAssetRenameDeclaration */
+    Result<void> ValidatePackageAssetRenameDeclaration(const LockedPackage &candidate, const ValidatedPackageArchive &archive) {
+        const auto reviewed = ReadDeclaration<PackageAssetRename>(PackageAssetRenameDeclarationPath, nullptr, candidate, archive,
+                                                                  [&](const Json &renames, const LockedPackage &package,
+                                                                      std::vector<PackageAssetRename> *selected) {
+            return DecodeRenames(renames, package, nullptr, archive, selected);
+        });
+        return reviewed.HasError() ? Result<void>::Failure(reviewed.ErrorValue()) : Result<void>::Success();
+    }
+
     /** @copydoc InspectPackageAssetRenames */
     Result<std::vector<PackageAssetRename>> InspectPackageAssetRenames(const LockedPackage &previous,
-                                                                      const ValidatedPackageArchive &previousArchive,
-                                                                      const LockedPackage &candidate,
-                                                                      const ValidatedPackageArchive &candidateArchive) {
-        return ReadDeclaration<PackageAssetRename>(
-            PackageAssetRenameDeclarationPath, previous, previousArchive, candidate, candidateArchive,
-            [&](const Json &renames, const LockedPackage &package, std::vector<PackageAssetRename> *selected) {
-                return DecodeRenames(renames, package, previousArchive, candidateArchive, selected);
-            });
+                                                                       const ValidatedPackageArchive &previousArchive,
+                                                                       const LockedPackage &candidate,
+                                                                       const ValidatedPackageArchive &candidateArchive) {
+        if (previous.package != candidate.package || !MatchesArchive(previous, previousArchive))
+            return Result<std::vector<PackageAssetRename>>::Failure(PlanError("packages.migration.archive_evidence_invalid", candidate));
+        return ReadDeclaration<PackageAssetRename>(PackageAssetRenameDeclarationPath, &previous, candidate, candidateArchive,
+                                                   [&](const Json &renames, const LockedPackage &package,
+                                                       std::vector<PackageAssetRename> *selected) {
+            return DecodeRenames(renames, package, &previousArchive, candidateArchive, selected);
+        });
     }
 
     /** @copydoc InspectPackageBehaviorRenames */
     Result<std::vector<PackageBehaviorRename>> InspectPackageBehaviorRenames(const LockedPackage &previous,
-                                                                            const ValidatedPackageArchive &previousArchive,
-                                                                            const LockedPackage &candidate,
-                                                                            const ValidatedPackageArchive &candidateArchive) {
-        return ReadDeclaration<PackageBehaviorRename>(PackageBehaviorRenameDeclarationPath, previous, previousArchive, candidate,
-                                                     candidateArchive, DecodeBehaviorRenames);
+                                                                             const ValidatedPackageArchive &previousArchive,
+                                                                             const LockedPackage &candidate,
+                                                                             const ValidatedPackageArchive &candidateArchive) {
+        if (previous.package != candidate.package || !MatchesArchive(previous, previousArchive))
+            return Result<std::vector<PackageBehaviorRename>>::Failure(PlanError("packages.migration.archive_evidence_invalid", candidate));
+        return ReadDeclaration<PackageBehaviorRename>(PackageBehaviorRenameDeclarationPath, &previous, candidate, candidateArchive,
+                                                      DecodeBehaviorRenames);
     }
 }  // namespace Horo::Packages

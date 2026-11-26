@@ -592,6 +592,8 @@ the candidate package ID and version and lists exact prior artifact selectors.
 Compatible asset replacements may carry or retire this archive metadata when
 no selector matches the installed artifact and all existing asset paths retain
 their bytes and owners. Preview and apply both validate a candidate declaration.
+An asset-only addition has no installed predecessor. The same declaration
+validation still checks its destination identity, selectors and path rules.
 
 ```json
 {

@@ -11,8 +11,8 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics = {});
 
     /** @brief Reports files in a new locked archive that require a live package owner. */
-    void ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
-                            std::vector<Diagnostic> &diagnostics);
+    [[nodiscard]] Result<void> ReviewAddedArchive(const Packages::LockedPackage &candidate,
+                                                  const Packages::ValidatedPackageArchive &archive, std::vector<Diagnostic> &diagnostics);
 
     /** @brief Reviews sealed archives for reference changes and applicable migration declarations. */
     [[nodiscard]] Result<void> ReviewAssetFiles(const Packages::LockedPackage &previous, const Packages::ValidatedPackageArchive &previousArchive,
