@@ -353,7 +353,7 @@ add_executable(HoroEditorAgentTurnTests
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ImmersiveSpeechWorker.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")
 target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")
-target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController
+target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroMcpEditorCommandsInternal HoroEngine::McpController
     HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal HoroEngine::PlatformProjectReadFiles
     HoroEngine::XRApi HoroEngine::SceneSourceModel HoroAudioCaptureBuffer HoroEngine::Security)
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")

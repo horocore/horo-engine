@@ -1,4 +1,6 @@
 #include "../../../apps/HoroEditor/app/ImmersiveCommandEnvelope.h"
+#include "AgentTurnMcp.h"
+#include "EditorInspectionMcpTools.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -93,6 +95,7 @@ namespace Horo::Editor {
             std::stop_source stop;
             SpeechFixtureProvider provider;
             std::unique_ptr<ImmersiveSpeechTranscription> stream;
+            ImmersiveAuthoringMode mode{ImmersiveAuthoringMode::Edit};
 
             /** @brief Publishes a real context whose live owner can revoke it while the worker holds a copy. */
             ImmersivePlanningContext Context() {
@@ -106,8 +109,8 @@ namespace Horo::Editor {
                                                         1,
                                                         1,
                                                         XR::XRCapabilityRevision::Create(1).Value(),
-                                                        ImmersiveAuthoringMode::Edit,
-                                                        0,
+                                                        mode,
+                                                        mode == ImmersiveAuthoringMode::Edit ? 0U : 7U,
                                                         true,
                                                         true};
                 const auto context = owner.Publish(identity, {});
@@ -166,6 +169,124 @@ namespace Horo::Editor {
             REQUIRE(result.status == Status::Finished);
             REQUIRE(result.evidence);
             return std::move(*result.evidence);
+        }
+
+        /** @brief Replays a single model intent with no transport, credentials or recorded voice. */
+        struct ReplayModel final : Agent::IModelProvider {
+            Agent::ModelToolIntent intent;
+            std::size_t calls{};
+            bool unavailable{};
+
+            Agent::ProviderDiscovery Discover(std::stop_token) override {
+                return {};
+            }
+
+            Agent::ModelOutcome Stream(const Agent::ModelRequest &, const Agent::ModelEventSink &sink, std::stop_token) override {
+                ++calls;
+                if (unavailable)
+                    return {Agent::ModelError{Agent::ModelErrorCode::Unavailable, "Replay provider unavailable", std::nullopt}};
+                if (!sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = intent}) ||
+                    !sink({.kind = Agent::ModelEventKind::Completed}))
+                    return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Replay stopped", std::nullopt}};
+                return {};
+            }
+        };
+
+        TEST_CASE("Immersive replay binds speech and pointing to an inert registered Scene draft", "[agent][immersive][replay]") {
+            using enum Agent::AgentTurnStatus;
+            SpeechFixture fixture;
+            fixture.mode = ImmersiveAuthoringMode::Simulate;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            const auto &identity = context.Identity();
+            auto ray = SpatialObservation(context, 1, 1'010'000, 1'012'000);
+            ray.candidate.shape = Math::Ray{{}, {0, 0, -1}, 0, 5};
+            ray.controllerPress = ImmersiveControllerPress{{5, 1'009'000}, {5, 1'012'000}};
+            ray.pointing = ImmersivePointingHits{.worldGeneration = identity.worldGeneration,
+                                                .structuralRevision = 9,
+                                                .hits = {{{{42}, 2, {0, 0, -2}}}},
+                                                .count = 1};
+            const auto aligned = ImmersiveCommandEnvelope::Assemble(
+                context, speech, ImmersiveSpatialHistoryView{context, ray.cutoff, std::span{&ray, 1}});
+            REQUIRE(aligned.status == ImmersiveCommandStatus::Aligned);
+            REQUIRE(aligned.envelope);
+            const auto pointing = CollectImmersivePointingHits(aligned.envelope->Spatial(), identity.worldGeneration,
+                                                               ImmersivePointingReviewKind::Objects);
+            REQUIRE(pointing);
+            REQUIRE(pointing->count == 1);
+            const auto object = pointing->hits.front().object.value;
+            REQUIRE(object == 42);
+
+            std::size_t staged{};
+            const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(EditorInspectionCommandEndpoint{
+                .project = "replay-project",
+                .authorizationRevision = 1,
+                .owner = std::this_thread::get_id(),
+                .proposeEdits = [&](auto, auto, auto, auto, auto) {
+                    ++staged;
+                    return Result<std::uint64_t>::Success(1);
+                }});
+            auto registrations = MakeEditorInspectionMcpTools(endpoint);
+            REQUIRE(registrations.HasValue());
+            const std::array grants{std::string{EditorSceneProposalGrant}};
+            const std::array tools{std::string{"scene.propose_edits"}};
+            auto registry = std::make_shared<Mcp::McpToolRegistry>();
+            REQUIRE(registry->Publish(std::move(registrations).Value(), grants).HasValue());
+            const auto catalog = Agent::McpPlanCatalog::Capture(registry, grants, tools);
+            REQUIRE(catalog);
+            Agent::ModelRequest prompt{.model = "replay",
+                                       .messages = {{.role = Agent::ModelRole::User,
+                                                     .text = std::string{speech.PreviewText(Kind::Final)}}}};
+            auto stagedRequest = fixture.owner.CaptureMcpPlan(context, std::move(prompt), catalog);
+            REQUIRE(stagedRequest);
+
+            ReplayModel model;
+            nlohmann::json arguments{{"scene", {{"epoch", identity.documentOpening}, {"revision", identity.documentRevision}}},
+                                     {"renames", {{{"object", object}, {"name", "Reviewed object"}}}}};
+            auto expected = Completed;
+            std::stop_source cancellation;
+            SECTION("valid simulated context reaches read-only review") {}
+            SECTION("stale proposal revision drops the model tool") {
+                arguments["scene"]["revision"] = identity.documentRevision + 1;
+                expected = ContextDenied;
+            }
+            SECTION("unclassified model arguments fail the registered schema") {
+                arguments["unexpected"] = true;
+                expected = InvalidModelResponse;
+            }
+            SECTION("XR context retirement stops provider dispatch") {
+                fixture.owner.Revoke();
+                expected = ContextDenied;
+            }
+            SECTION("a cancelled replay never dispatches the provider") {
+                cancellation.request_stop();
+                expected = Cancelled;
+            }
+            SECTION("a provider failure leaves the Scene draft empty") {
+                model.unavailable = true;
+                expected = ProviderFailed;
+            }
+            model.intent = {"replay-rename", tools.front(), arguments.dump()};
+            const auto review = stagedRequest->Plan(model, 1, {}, {}, cancellation.get_token());
+            REQUIRE(review.Status() == expected);
+            CHECK(staged == 0);
+            if (expected != Completed) {
+                CHECK_FALSE(review.Read(context));
+                CHECK(model.calls == (context.IsCurrent() && !cancellation.stop_requested() ? 1 : 0));
+                return;
+            }
+            std::size_t inspections{};
+            const auto inspect = [&](const Agent::AgentPlanObjectScope &scope) {
+                ++inspections;
+                return scope.opening == identity.documentOpening && scope.revision == identity.documentRevision &&
+                       scope.objects == std::vector{object};
+            };
+            REQUIRE(review.Read(context, inspect));
+            CHECK(inspections == 1);
+            REQUIRE(registry->Publish({}).HasValue());
+            CHECK_FALSE(review.Read(context, inspect));
+            CHECK(inspections == 1);
+            CHECK(staged == 0);
         }
 
         TEST_CASE("Immersive provider deadline requests stop while a provider call is blocked", "[agent][immersive][speech]") {

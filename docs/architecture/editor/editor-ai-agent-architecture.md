@@ -329,6 +329,13 @@ Mode, document, project or XR-session replacement invalidates outstanding
 approval. A retained proposal remains non-authoritative and must be reviewed
 against fresh context.
 
+The `[immersive][replay]` case in `HoroEditorAgentTurnTests` runs the Simulate
+path from synthetic speech and a measured controller press through the
+registered Scene proposal schema. It verifies that planning never stages an
+edit and exercises stale revisions, malformed arguments, provider failure,
+cancellation and context retirement. Physical tracking, presentation and
+explicit approval are qualified separately.
+
 Long-running transcription, planning, tool execution, and preview generation
 are cancellable and expose stable progressive feedback. They do not hide
 latency with speculative authoritative world mutation. Feedback supports
