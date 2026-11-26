@@ -755,6 +755,43 @@ namespace {
         CHECK(mutations.TryAcquire(save).HasValue());
     }
 
+    TEST_CASE("Package removal rechecks saved references after staging its rollback point", "[packages][application][host][removal]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, files, {});
+        REQUIRE(expected.HasValue());
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto assets = fixture.AssetSource();
+        bool checkpoint = false;
+        bool journal = false;
+        files.OnRollbackCheckpoint([&] {
+            checkpoint = true;
+            const auto directory = policy.projectRoot / "Assets";
+            std::ofstream{directory / "New.horoasset"} << "{}";
+            std::ofstream{directory / "New.horoasset.horo"}
+                << nlohmann::json{{"schemaVersion", 1},
+                                  {"assetId", "10213243-5465-7687-98a9-bacbdcedfe0e"},
+                                  {"assetType", "core.scene"},
+                                  {"importerPackageId", fixture.graph.package.Value()}};
+        });
+        files.OnMetadataJournal([&] { journal = true; });
+
+        const auto removal = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, files, fixture.RemovalSources(*assets));
+
+        REQUIRE(checkpoint);
+        REQUIRE(removal.HasError());
+        CHECK(removal.ErrorValue().code.Value() == "packages.host.importer_in_use");
+        REQUIRE(removal.ErrorValue().diagnostics.size() == 1);
+        CHECK(removal.ErrorValue().diagnostics.front().path == "Assets/New.horoasset");
+        CHECK_FALSE(journal);
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-update.rollback.pending"));
+    }
+
     TEST_CASE("Package removal cannot begin publication after project authority stops", "[packages][application][host]") {
         HostFixture fixture;
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),

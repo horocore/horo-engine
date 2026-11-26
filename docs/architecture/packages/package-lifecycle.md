@@ -604,6 +604,11 @@ metadata, cache indexes, enablement state, activation state, or document files.
 Rollback restores metadata and activation state when failure occurs before
 irreversible project document migrations commit.
 
+Uninstall and withdrawal rollback recheck saved references after staging the
+rollback point and before writing the metadata journal. The second review uses
+the same mutation lease, cancellation and deadline. A late reference blocks the
+operation and preserves the previous package metadata.
+
 Migrations that modify project-owned scenes or assets are previewed first and
 then committed through editor document transactions or explicit file migration
 transactions. After a migration commits, rollback requires restoring from the

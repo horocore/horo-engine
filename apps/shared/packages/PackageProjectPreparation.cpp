@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <functional>
 #include <iterator>
 
 namespace Horo::Application::Internal {
@@ -412,11 +413,16 @@ namespace Horo::Application::Internal {
         Result<PackageMetadataPublication> CommitDocuments(const std::filesystem::path &metadata, const MetadataDocuments &previous,
                                                            const MetadataDocuments &next, const Packages::PackageLockfileLimits &limits,
                                                            DurableFileSystem &files,
-                                                           const Platform::ProjectReadContext &context) {
+                                                           const Platform::ProjectReadContext &context,
+                                                           const std::function<Result<void>()> &recheck) {
             using Publication = Result<PackageMetadataPublication>;
             const auto journalPath = JournalPath(metadata);
             AtomicFileReplacementReceipt journalReceipt;
             const auto journal = EncodeJournal({Digest(previous.lock), Digest(next.lock), Digest(next.request), previous.request});
+            if (recheck) {
+                if (auto references = recheck(); references.HasError())
+                    return Publication::Failure(std::move(references).ErrorValue());
+            }
             if (auto stable = RecheckMetadataBase(metadata, limits, previous, context.cancellation); stable.HasError())
                 return Publication::Failure(stable.ErrorValue());
             if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
@@ -459,7 +465,8 @@ namespace Horo::Application::Internal {
         Result<PackageMetadataPublication> CommitWithRollbackPoint(const std::filesystem::path &metadata, const MetadataDocuments &previous,
                                                                    const MetadataDocuments &next,
                                                                    const Packages::PackageLockfileLimits &limits, DurableFileSystem &files,
-                                                                   const Platform::ProjectReadContext &context) {
+                                                                   const Platform::ProjectReadContext &context,
+                                                                   const std::function<Result<void>()> &recheck) {
             using Publication = Result<PackageMetadataPublication>;
             if (auto reconciled = ReconcileRollbackPoint(metadata, previous, limits, files); reconciled.HasError())
                 return Publication::Failure(reconciled.ErrorValue());
@@ -472,7 +479,7 @@ namespace Horo::Application::Internal {
                 checkpoint.HasError())
                 return Publication::Failure(checkpoint.ErrorValue());
 
-            auto result = CommitDocuments(metadata, previous, next, limits, files, context);
+            auto result = CommitDocuments(metadata, previous, next, limits, files, context, recheck);
             if (result.HasValue()) {
                 if (result.Value().recoveryDiagnostic)
                     return result;
@@ -537,25 +544,30 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(std::move(*blocking));
         }
 
-        /** @brief Constructs replacement documents after checking native authority and saved references. */
-        Result<MetadataDocuments> PrepareRemovalDocuments(const MetadataDocuments &previous, const Packages::PackageLockfileLimits &limits,
-                                                          const std::filesystem::path &root, const Packages::HoroPackageId &package,
-                                                          const PackageRemovalSources &sources) {
-            using Prepared = Result<MetadataDocuments>;
-            const auto validated = ValidateDocuments(previous.request, previous.lock, limits);
+        /** @brief Retains the exact graph and replacement documents for both reference reviews. */
+        struct PreparedRemoval final {
+            Packages::ValidatedPackageLockfileV1 lock;
+            Packages::PackageRemovalGraphPreview impact;
+            MetadataDocuments next;
+        };
+
+        /** @brief Constructs replacement documents after checking the exact native reservation. */
+        Result<PreparedRemoval> PrepareRemovalDocuments(const MetadataDocuments &previous, const Packages::PackageLockfileLimits &limits,
+                                                         const std::filesystem::path &root, const Packages::HoroPackageId &package,
+                                                         const PackageRemovalSources &sources) {
+            using Prepared = Result<PreparedRemoval>;
+            auto validated = ValidateDocuments(previous.request, previous.lock, limits);
             if (validated.HasError())
                 return Prepared::Failure(validated.ErrorValue());
-            const auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
+            auto plan = Packages::PackageRemovalPlan::Prepare(validated.Value().request, validated.Value().lock, package);
             if (plan.HasError())
                 return Prepared::Failure(plan.ErrorValue());
             if (!sources.offline && (!sources.live || !sources.live->Matches(root, plan.Value().graph.removed)))
                 return Prepared::Failure(Error{ErrorCode{"packages.host.removal_reservation_mismatch"}, ErrorDomainId{"packages.host"}});
-            if (auto references = CheckRemovalReferences(sources, validated.Value().lock, plan.Value().graph); references.HasError())
-                return Prepared::Failure(references.ErrorValue());
             MetadataDocuments next{plan.Value().request.SerializeCanonical(), plan.Value().lock.SerializeCanonical()};
             if (!next.Fits(limits))
                 return Prepared::Failure(MakeError(Packages::PackageRestoreErrors::ResourceLimit));
-            return Prepared::Success(std::move(next));
+            return Prepared::Success({std::move(validated).Value().lock, std::move(plan).Value().graph, std::move(next)});
         }
 
         /** @brief Keeps offline staging and live reservations exclusive and bound to the approved project. */
@@ -654,13 +666,15 @@ namespace Horo::Application::Internal {
         const auto previous = ReadApprovedDocuments(metadata, limits, update.base, files, context.cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
-        if (withdrawal) {
-            const auto reviewed = CheckRollbackWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal);
-            if (reviewed.HasError())
-                return Publication::Failure(reviewed.ErrorValue());
-        }
+        // Reuse the same withdrawal review at the journal boundary after staging the rollback point.
+        const auto review = [&]() {
+            return withdrawal ? CheckRollbackWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal)
+                              : Result<void>::Success();
+        };
+        if (auto reviewed = review(); reviewed.HasError())
+            return Publication::Failure(std::move(reviewed).ErrorValue());
         const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
-        return CommitWithRollbackPoint(metadata, previous.Value(), next, limits, files, context);
+        return CommitWithRollbackPoint(metadata, previous.Value(), next, limits, files, context, review);
     }
 
     /** @copydoc PublishPackageProjectUpdate */
@@ -748,12 +762,16 @@ namespace Horo::Application::Internal {
         const auto previous = ReadApprovedDocuments(metadata, policy.limits.lockfile, expected, files, cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
-        const auto next = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, root, package, sources);
-        if (next.HasError())
-            return Publication::Failure(next.ErrorValue());
+        const auto prepared = PrepareRemovalDocuments(previous.Value(), policy.limits.lockfile, root, package, sources);
+        if (prepared.HasError())
+            return Publication::Failure(prepared.ErrorValue());
+        const auto &plan = prepared.Value();
+        const auto review = [&] { return CheckRemovalReferences(sources, plan.lock, plan.impact); };
+        if (auto references = review(); references.HasError())
+            return Publication::Failure(std::move(references).ErrorValue());
         if (auto stable = RecheckMetadataBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
             return Publication::Failure(stable.ErrorValue());
-        auto published = CommitWithRollbackPoint(metadata, previous.Value(), next.Value(), policy.limits.lockfile, files, sources.context);
+        auto published = CommitWithRollbackPoint(metadata, previous.Value(), plan.next, policy.limits.lockfile, files, sources.context, review);
         if (published.HasValue() && sources.live)
             sources.live->MarkPublished();
         return published;
