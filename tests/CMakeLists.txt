@@ -7624,6 +7624,7 @@ foreach(_horo_cache_consumer IN ITEMS
     HoroAudioCookTests
     HoroCharacterSceneProductTests
     HoroEditorPlaySessionControllerTests
+    HoroEditorWorkspaceControllerTests
     HoroModularAssetImportIntegrationTests
     HoroNavigationAssetLoadingTests
     HoroNavigationBakeAdapterTests

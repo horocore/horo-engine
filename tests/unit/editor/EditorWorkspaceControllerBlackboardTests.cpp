@@ -12,8 +12,10 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameModule.h"
+#include "NativeCacheFiles.h"
 #include "NativePublicationFiles.h"
 #include "ProjectReplicationTestSupport.h"
+#include "assets/AssetCookPublicationFixture.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ai/AiAssetPresentation.h"
 #include "editor/screens/workspace/ai/blackboard/BlackboardScalarInput.h"
@@ -636,6 +638,129 @@ TEST_CASE("Blackboard New atomically creates and opens a schema with an authored
         CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
         CHECK(std::filesystem::is_regular_file(project.root / project.Path));
     }
+}
+
+TEST_CASE("Fresh workspace Decision authoring cooks the exact saved schema and graph", "[unit][editor][decision][workspace][cook]") {
+    BlackboardWorkspaceFixture project{false};
+    EditorWorkspaceController workspace(project.root, project.runtime, project.registry.Snapshot(),
+                                        {.assets = {.mutableAssetRegistry = &project.registry},
+                                         .mutations = &project.mutations,
+                                         .durableFiles = &project.files});
+    const auto directory = WorkspacePathText(project.root / "assets");
+    AssetBrowserInteractionSession browser;
+    browser.OpenCreateBlackboard(directory);
+    auto &board = browser.State().createBlackboard;
+    board.request.name = "GuardBoard";
+    board.request.keyName = "Target visible";
+    board.request.key.kind = AI::BlackboardValueKind::Boolean;
+    const auto createBoard = AssetBrowserInteractionSession::ConfirmCreateBlackboard(board);
+    REQUIRE(createBoard);
+    workspace.ProcessCommand(*createBoard);
+    REQUIRE(workspace.ViewModel().contentBrowserOperationError.empty());
+    const auto &openedBoard = project.Snapshot(workspace);
+    REQUIRE(openedBoard.source);
+    const auto schemaAsset = openedBoard.source->asset;
+    const auto schemaIdentity = openedBoard.source->schema;
+
+    browser.OpenCreateStateMachine(directory);
+    auto &machine = browser.State().createStateMachine;
+    machine.name = "GuardDecision";
+    machine.schema = schemaAsset;
+    machine.outcome = AI::DecisionStateTerminal::Succeeded;
+    const auto createGraph = AssetBrowserInteractionSession::ConfirmStateMachine(machine);
+    REQUIRE(createGraph);
+    workspace.ProcessCommand(*createGraph);
+    REQUIRE(workspace.ViewModel().contentBrowserOperationError.empty());
+    REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
+    const auto &openedGraph = workspace.ViewModel().decisionGraphDocuments.front();
+    REQUIRE(openedGraph.graph);
+    CHECK(openedGraph.graph->blackboard == schemaIdentity);
+    const auto graphIdentity = openedGraph.graph->asset;
+
+    const auto registry = project.registry.Snapshot();
+    const auto record = registry.FindByPath("assets/GuardDecision.horo_sm");
+    REQUIRE(record);
+    const auto graphPath = project.root / "assets/GuardDecision.horo_sm";
+    const auto savedGraph = Assets::CaptureAssetSource(project.root, graphPath, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(savedGraph.HasValue());
+    const auto target = Assets::AssetCookTargetId::Parse("headless-null");
+    const auto providers = AI::DecisionNodeGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
+    REQUIRE(target.HasValue());
+    REQUIRE(providers.HasValue());
+
+    Application::DecisionAssetCookRequest request{
+        .assets = {.sourceRoot = project.root,
+                   .cacheFiles = TestSupport::NativeCacheFiles(project.root / ".horo/decision-qualification-cache"),
+                   .cookedRoot = project.root / ".horo/decision-qualification-cooked",
+                   .registry = registry,
+                   .target = target.Value(),
+                   .validateHostInputs = [&] {
+                       return project.registry.Snapshot().Revision() == registry.Revision()
+                                  ? Result<void>::Success()
+                                  : Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
+                   }},
+        .environment = {.nodes = providers.Value()}};
+    Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request.assets);
+    const auto captureInputs = [&] {
+        auto captured = Assets::AssetCookInputSnapshot::Capture(request.assets.sourceRoot, registry, request.assets.limits, 1024U * 1024U);
+        REQUIRE(captured.HasValue());
+        request.assets.pinnedInputs = std::make_shared<const Assets::AssetCookInputSnapshot>(std::move(captured).Value());
+    };
+    captureInputs();
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+    const auto cooked = Application::DecisionAssetCookHost::Cook(jobs, request);
+    if (cooked.HasError())
+        UNSCOPED_INFO(cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message);
+    REQUIRE(cooked.HasValue());
+    const auto disk = Assets::ReadCookGenerationContents(project.files, cooked.Value().generation, 1024U * 1024U);
+    REQUIRE(disk.HasValue());
+    REQUIRE(disk.Value().artifacts.size() == 2);
+    Assets::AssetCookArtifact cookedSchema;
+    Assets::AssetCookArtifact cookedGraph;
+    for (const auto &entry : disk.Value().artifacts) {
+        auto artifact = Assets::DecodeCookedArtifact(entry);
+        REQUIRE(artifact.HasValue());
+        const auto identity = artifact.Value().id;
+        REQUIRE((identity == schemaAsset || identity == record->id));
+        (identity == schemaAsset ? cookedSchema : cookedGraph) = std::move(artifact).Value();
+    }
+    REQUIRE(cookedSchema.id == schemaAsset);
+    REQUIRE(cookedGraph.id == record->id);
+    auto semantic = AI::BlackboardSchemaCodec::Decode(cookedSchema.payload);
+    REQUIRE(semantic.HasValue());
+    CHECK(semantic.Value().Identity() == schemaIdentity);
+    const auto sourceView = AI::BlackboardSchemaSourceCodec::Decode(cookedSchema.payload);
+    REQUIRE(sourceView.HasValue());
+    REQUIRE(sourceView.Value().rows.size() == 1);
+    CHECK_FALSE(sourceView.Value().rows.front().displayName);
+    auto runtime = request.environment;
+    runtime.schemas.push_back(std::make_shared<const AI::BlackboardSchema>(std::move(semantic).Value()));
+    const auto plan = AI::DecisionPlanCodec::DecodeCooked(cookedGraph.payload, runtime);
+    REQUIRE(plan.HasValue());
+    REQUIRE(plan.Value().plan);
+    CHECK(plan.Value().plan->Root() == graphIdentity);
+
+    const auto afterCook = Assets::CaptureAssetSource(project.root, graphPath, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(afterCook.HasValue());
+    CHECK(afterCook.Value().bytes == savedGraph.Value().bytes);
+
+    {
+        // An external edit can make the new input unusable without invalidating the committed cook.
+        std::ofstream malformed{graphPath, std::ios::binary | std::ios::trunc};
+        malformed << "invalid graph";
+        malformed.close();
+        REQUIRE(malformed.good());
+    }
+    const auto rejectedInput = Assets::CaptureAssetSource(project.root, graphPath, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(rejectedInput.HasValue());
+    captureInputs();
+    CHECK(Application::DecisionAssetCookHost::Cook(jobs, request).HasError());
+    const auto current = Assets::ResolveCurrentCookGeneration(project.files, request.assets.cookedRoot);
+    REQUIRE(current.HasValue());
+    CHECK(current.Value().manifestDigest == cooked.Value().generation.manifestDigest);
+    const auto preserved = Assets::CaptureAssetSource(project.root, graphPath, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(preserved.HasValue());
+    CHECK(preserved.Value().bytes == rejectedInput.Value().bytes);
 }
 
 TEST_CASE("Recent AI assets resolve current registered identity after an ordinary paired rename and move",
