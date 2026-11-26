@@ -291,7 +291,9 @@ Ownership rules:
   tools inert, validates the complete batch against host policy and the selected
   registry generation, and discards it if admission is withdrawn. Registry
   inspection uses the same input schema and bounds as execution and consumes no
-  approvals.
+  approvals. The host passes the lifetime of the exact approved tool and
+  capability set when capturing the catalog. Withdrawing that lifetime stops
+  inference and retires existing drafts even when the registry is unchanged.
   The draft retains the registered read, presentation, or mutation effect for
   each proposed call and any provider-reported token usage. The Editor can read
   it only under the original authoring generation while the request is current.

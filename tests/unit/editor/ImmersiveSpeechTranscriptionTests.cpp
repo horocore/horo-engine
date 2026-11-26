@@ -240,7 +240,8 @@ namespace Horo::Editor {
             const std::array tools{std::string{"scene.propose_edits"}};
             auto registry = std::make_shared<Mcp::McpToolRegistry>();
             REQUIRE(registry->Publish(std::move(registrations).Value(), grants).HasValue());
-            const auto catalog = Agent::McpPlanCatalog::Capture(registry, grants, tools);
+            CancellationSource toolApproval;
+            const auto catalog = Agent::McpPlanCatalog::Capture(registry, grants, tools, toolApproval.Token());
             REQUIRE(catalog);
             Agent::ModelRequest prompt{.model = "replay",
                                        .messages = {{.role = Agent::ModelRole::User,

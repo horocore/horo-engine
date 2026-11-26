@@ -86,9 +86,12 @@ namespace Horo::Agent {
     /** @copydoc McpPlanCatalog::Capture */
     std::shared_ptr<const McpPlanCatalog> McpPlanCatalog::Capture(std::shared_ptr<const Mcp::McpToolRegistry> registry,
                                                                   const std::span<const std::string> capabilities,
-                                                                  const std::span<const std::string> approvedTools) {
+                                                                  const std::span<const std::string> approvedTools,
+                                                                  CancellationToken approvalLifetime) {
         constexpr auto MaximumApprovedTools = AgentTurnLimits{}.maximumToolCalls;
         if (!registry || approvedTools.empty() || approvedTools.size() > MaximumApprovedTools)
+            return {};
+        if (approvalLifetime == CancellationToken{} || approvalLifetime.IsCancellationRequested())
             return {};
         const auto snapshot = registry->Read();
         if (!snapshot)
@@ -104,6 +107,7 @@ namespace Horo::Agent {
         }
         catalog->registry_ = std::move(registry);
         catalog->snapshot_ = snapshot;
+        catalog->approvalLifetime_ = std::move(approvalLifetime);
         catalog->capabilities_.assign(capabilities.begin(), capabilities.end());
         return catalog->IsCurrent() ? catalog : nullptr;
     }
@@ -111,7 +115,9 @@ namespace Horo::Agent {
     /** @copydoc McpPlanCatalog::IsCurrent */
     bool McpPlanCatalog::IsCurrent() const noexcept {
         try {
-            return registry_->Read() == snapshot_;
+            if (approvalLifetime_.IsCancellationRequested() || registry_->Read() != snapshot_)
+                return false;
+            return !approvalLifetime_.IsCancellationRequested();
         } catch (...) {
             return false;
         }
@@ -123,7 +129,10 @@ namespace Horo::Agent {
             return {ContextDenied};
         if (std::ranges::find(tools_, intent.name, &ModelTool::name) == tools_.end())
             return {ToolDenied};
-        return InspectMcpPlanTool(*snapshot_, capabilities_, intent);
+        auto inspected = InspectMcpPlanTool(*snapshot_, capabilities_, intent);
+        if (!IsCurrent())
+            return {ContextDenied};
+        return inspected;
     }
 
     /** @copydoc InspectMcpPlanTool */

@@ -451,11 +451,13 @@ namespace Horo::Editor {
             const std::vector<std::string> capabilities{"editor.scene.inspect"};
             Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
             const std::array approved{std::string{"scene.inspect"}};
-            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, {}, approved));
-            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved);
+            CancellationSource approval;
+            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, {}));
+            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, {}, approved, approval.Token()));
+            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token());
             REQUIRE(catalog);
             const std::array unregistered{std::string{"scene.unregistered"}};
-            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, unregistered));
+            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, unregistered, approval.Token()));
             ImmersiveAuthoringContext owner;
             const auto context = owner.Publish(Opening(), {});
             REQUIRE(context);
@@ -470,7 +472,16 @@ namespace Horo::Editor {
             REQUIRE(model.advertised.size() == 1);
             CHECK(model.advertised.front().name == approved.front());
             CHECK(model.advertised.front().parametersJson == R"({"additionalProperties":false,"type":"object"})");
-            REQUIRE(tools.registry->Publish({}).HasValue());
+            SECTION("replacing the registry withdraws both requests") {
+                REQUIRE(tools.registry->Publish({}).HasValue());
+            }
+            SECTION("withdrawing only the tool approval also retires both requests") {
+                const auto original = tools.registry->Read();
+                approval.RequestCancellation();
+                CHECK(tools.registry->Read() == original);
+                CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token()));
+                CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), catalog));
+            }
             CHECK_FALSE(review.Read(*context));
             CHECK(pending->Plan(model, 2, {}).Status() == ContextDenied);
             CHECK(model.calls == 1);
@@ -482,7 +493,8 @@ namespace Horo::Editor {
             const std::vector<std::string> capabilities{"editor.scene.inspect"};
             Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
             const std::array approved{std::string{"scene.inspect"}};
-            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved);
+            CancellationSource approval;
+            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token());
             REQUIRE(catalog);
             ImmersiveAuthoringContext owner;
             CancellationSource document;
@@ -500,6 +512,9 @@ namespace Horo::Editor {
             }
             SECTION("MCP registry is replaced") {
                 model.duringInference = [&] { REQUIRE(tools.registry->Publish({}).HasValue()); };
+            }
+            SECTION("MCP tool approval is withdrawn without replacing the registry") {
+                model.duringInference = [&] { approval.RequestCancellation(); };
             }
             bool observedStop{};
             model.quietInference = [&](const std::stop_token stop) {

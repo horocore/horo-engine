@@ -17,12 +17,15 @@ namespace Horo::Agent {
     public:
         /** @brief Captures only explicitly approved, granted registrations.
          * @param registry Host-owned registry. @param capabilities Already admitted capability names.
-         * @param approvedTools Host-selected tool names. @return Catalog or empty when any approval is invalid.
+         * @param approvedTools Host-selected tool names.
+         * @param approvalLifetime Issuer-owned lifetime for this exact approval and capability set.
+         * @return Catalog or empty when the approval is missing, withdrawn or invalid.
          */
         [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> Capture(std::shared_ptr<const Mcp::McpToolRegistry> registry,
                                                                            std::span<const std::string> capabilities,
-                                                                           std::span<const std::string> approvedTools);
-        /** @brief Checks whether the exact published registry snapshot remains current. */
+                                                                           std::span<const std::string> approvedTools,
+                                                                           CancellationToken approvalLifetime);
+        /** @brief Checks whether the exact approval and published registry snapshot remain current. */
         [[nodiscard]] bool IsCurrent() const noexcept;
 
         /** @brief Borrows the exact model schema list projected from the approved registrations. */
@@ -37,6 +40,7 @@ namespace Horo::Agent {
         McpPlanCatalog() = default;
         std::shared_ptr<const Mcp::McpToolRegistry> registry_;
         std::shared_ptr<const Mcp::McpToolSnapshot> snapshot_;
+        CancellationToken approvalLifetime_;
         std::vector<std::string> capabilities_;
         std::vector<ModelTool> tools_;
     };
