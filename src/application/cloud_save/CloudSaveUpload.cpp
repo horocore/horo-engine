@@ -17,7 +17,10 @@ namespace Horo::Application {
         if (!mutation.IsValid() || (expectedRevision && !expectedRevision->IsValid()))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataInvalid));
 
-        const auto limit = std::min(maximumBytes, static_cast<std::size_t>(PlatformServices::MaximumCloudObjectPayloadBytes));
+        const auto providerLimit = journal.UploadByteLimit();
+        if (providerLimit.HasError())
+            return Response::Failure(providerLimit.ErrorValue());
+        const auto limit = std::min(maximumBytes, static_cast<std::size_t>(providerLimit.Value()));
         const auto exported = lifecycle.ExportVerified(target, limit, cancellation);
         if (exported.HasError())
             return Response::Failure(exported.ErrorValue());

@@ -162,6 +162,11 @@ namespace Horo::Application {
         return transport_->OwnsAccess(access);
     }
 
+    /** @copydoc CloudSaveMutationJournal::UploadByteLimit */
+    Result<std::uint64_t> CloudSaveMutationJournal::UploadByteLimit() const {
+        return transport_->frontend_->CloudWriteByteLimit(transport_->subject_);
+    }
+
     /** @copydoc CloudSaveMutationJournal::EntryName */
     std::string CloudSaveMutationJournal::EntryName(const SaveCloudMutationId mutation) const {
         const auto formatted = FormatSha256(transport_->journalPartition_);
@@ -174,6 +179,11 @@ namespace Horo::Application {
         using Response = Result<CloudSaveDurableMutation>;
         if (!ValidIntent(intent))
             return Response::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
+        const auto limit = UploadByteLimit();
+        if (limit.HasError())
+            return Response::Failure(limit.ErrorValue());
+        if (intent.upload && intent.upload->size > limit.Value())
+            return Response::Failure(MakeError(CloudObjectErrors::PayloadTooLarge));
         auto key = transport_->Key(intent.slot);
         if (key.HasError())
             return Response::Failure(key.ErrorValue());

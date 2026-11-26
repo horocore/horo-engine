@@ -56,11 +56,12 @@ namespace Horo::Runtime {
         /** @brief Composes the real frontend with finite in-memory cloud mutation capabilities. */
         [[nodiscard]] Cloud::PlatformServicesFrontend CloudFrontend(const std::shared_ptr<Cloud::RoutingBackend> &backend,
                                                                      const Cloud::PlatformSessionSnapshot &session,
-                                                                     const std::uint64_t maximumPayload = 4) {
+                                                                     const std::uint64_t maximumPayload = 4,
+                                                                     Cloud::CloudMutationCapability mutation = Cloud::MutationFacts()) {
             backend->snapshot = Cloud::Capabilities(session.ProviderGeneration());
             auto &cloud = backend->snapshot.services[static_cast<std::size_t>(Cloud::PlatformServiceKind::Cloud)];
             cloud.limits.maxPayloadBytes = maximumPayload;
-            cloud.cloudMutation = Cloud::MutationFacts();
+            cloud.cloudMutation = mutation;
             cloud.cloudMutation->maxNamespaceBytes = std::max(cloud.cloudMutation->maxNamespaceBytes, maximumPayload);
             auto frontend = Cloud::PlatformServicesFrontend::Create(backend, backend->snapshot, session);
             REQUIRE(frontend.HasValue());
@@ -313,6 +314,42 @@ namespace Horo::Runtime {
             const auto transport = BoundTransport(frontend, session);
             Cloud::RequireError(transport.List(1, 1), Cloud::FrontendErrors::NullProvider);
             Cloud::RequireError(transport.Read(1, Id<SaveGameSlotId>(1), 1), Cloud::FrontendErrors::NullProvider);
+        }
+
+        TEST_CASE("Read-only cloud providers cannot prepare automatic Save mutations", "[unit][save][cloud-transport][frontend]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            const auto target = fixture.Target(10);
+            const auto before = fixture.Index();
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            const Cloud::CloudMutationCapability readOnly{.maxNamespaceBytes = 1024, .maxObjectCount = 16, .maxConcurrentMutations = 1};
+            auto frontend = CloudFrontend(backend, session, 1024, readOnly);
+            auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
+            const Tests::OwnedTestDirectory directory{"save-cloud-read-only"};
+            const auto journal = NativeJournal(directory, transport);
+            const auto mutation = Id<SaveCloudMutationId>(44);
+            std::size_t archiveAccesses{};
+            fixture.host.onBinding = [&] {
+                ++archiveAccesses;
+                return Result<void>::Success();
+            };
+            Cloud::RequireError(Application::StageCloudSaveUpload(*fixture.owner, journal, target, mutation, {}, 1024),
+                                Cloud::CloudObjectErrors::UnsupportedCapability);
+            CHECK(archiveAccesses == 0);
+            auto deletion = UploadIntent(Cloud::TestSupport::CloudWrite());
+            deletion.upload.reset();
+            deletion.revision = Cloud::TestSupport::CloudCommit(Cloud::TestSupport::CloudWrite()).committedObject->revision;
+            Cloud::RequireError(journal.Store(deletion), Cloud::CloudObjectErrors::UnsupportedCapability);
+            const auto absent = journal.Load(mutation);
+            REQUIRE(absent.HasValue());
+            CHECK_FALSE(absent.Value());
+            CHECK_FALSE(backend->lastCloudWrite);
+            CHECK_FALSE(backend->lastCloudDelete);
+            CHECK(transport.Read(1, target.address.slot, 1024).HasValue());
+            CHECK(fixture.Index().entries == before.entries);
         }
 
         TEST_CASE("The durable Save journal replays the same mutation after rebinding",

@@ -287,11 +287,9 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformServicesFrontend::WriteCloudObject */
     Result<PlatformRequestHandle<CloudMutationResult>> PlatformServicesFrontend::WriteCloudObject(CloudBlobWriteRequest request) const {
-        const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
+        const auto valid = ValidateCloudMutationService(request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
-        if (!valid.Value()->cloudMutation)
-            return Failure<PlatformRequestHandle<CloudMutationResult>>(CloudObjectErrors::UnsupportedCapability);
         const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
                                                .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
         if (const auto requestValid = ValidateCloudBlobWriteRequest(request, *valid.Value()->cloudMutation, limits);
@@ -302,11 +300,9 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformServicesFrontend::DeleteCloudObject */
     Result<PlatformRequestHandle<CloudMutationResult>> PlatformServicesFrontend::DeleteCloudObject(CloudBlobDeleteRequest request) const {
-        const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
+        const auto valid = ValidateCloudMutationService(request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
-        if (!valid.Value()->cloudMutation)
-            return Failure<PlatformRequestHandle<CloudMutationResult>>(CloudObjectErrors::UnsupportedCapability);
         const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
                                                .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
         if (const auto requestValid = ValidateCloudBlobDeleteRequest(request, *valid.Value()->cloudMutation, limits);
@@ -368,6 +364,27 @@ namespace Horo::PlatformServices {
         if (valid.HasError())
             return Result<PlatformServiceLimits>::Failure(valid.ErrorValue());
         return Result<PlatformServiceLimits>::Success(valid.Value()->limits);
+    }
+
+    /** @copydoc PlatformServicesFrontend::CloudWriteByteLimit */
+    Result<std::uint64_t> PlatformServicesFrontend::CloudWriteByteLimit(const PlatformSubjectHandle &subject) const {
+        const auto valid = ValidateCloudMutationService(subject);
+        if (valid.HasError())
+            return Result<std::uint64_t>::Failure(valid.ErrorValue());
+        const auto &capability = *valid.Value();
+        return Result<std::uint64_t>::Success(std::min(capability.limits.maxPayloadBytes, capability.cloudMutation->maxNamespaceBytes));
+    }
+
+    /** @copydoc PlatformServicesFrontend::ValidateCloudMutationService */
+    Result<const PlatformServiceCapability *> PlatformServicesFrontend::ValidateCloudMutationService(
+        const PlatformSubjectHandle &subject) const {
+        const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, subject);
+        if (valid.HasError())
+            return valid;
+        const auto &mutation = valid.Value()->cloudMutation;
+        if (!mutation || mutation->atomicity != CloudMutationAtomicity::ConditionalAtomicObject)
+            return Failure<const PlatformServiceCapability *>(CloudObjectErrors::UnsupportedCapability);
+        return valid;
     }
 
     /** @copydoc PlatformServicesFrontend::Close */

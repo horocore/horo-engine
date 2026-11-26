@@ -187,6 +187,13 @@ namespace Horo::PlatformServices {
          */
         [[nodiscard]] Result<PlatformServiceLimits> ServiceLimits(PlatformServiceKind service) const;
 
+        /** @brief Returns the byte ceiling for an authorized conditional cloud write.
+         * @param subject Exact authenticated account binding.
+         * @return Finite write bound or a typed stale, unavailable, or unsupported capability failure.
+         * @details Reads cached capability evidence. The result reserves no quota and contacts no provider.
+         */
+        [[nodiscard]] Result<std::uint64_t> CloudWriteByteLimit(const PlatformSubjectHandle &subject) const;
+
         /**
          * @brief Idempotently closes admission before invoking backend shutdown exactly once.
          * @return The first shutdown result; repeated calls preserve an earlier failure without reinvocation.
@@ -201,6 +208,8 @@ namespace Horo::PlatformServices {
         /** @brief Checks cancellation provenance without retaining the request or provider.
          * @param authority Weak issuance capability captured by a returned handle. @return True for this exact frontend lifetime. */
         [[nodiscard]] bool OwnsRequest(const std::weak_ptr<const void> &authority) const noexcept;
+        /** @brief Validates the session and the provider guarantees required for an automatic mutation. */
+        [[nodiscard]] Result<const PlatformServiceCapability *> ValidateCloudMutationService(const PlatformSubjectHandle &subject) const;
 
         /** @brief Binds a successful backend handle to this frontend's cancellation lifetime without duplicating request state. */
         template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> BindDispatch(Result<PlatformRequestHandle<T>> result) const {

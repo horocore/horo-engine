@@ -69,6 +69,9 @@ namespace Horo::Application {
          */
         [[nodiscard]] bool MatchesAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept;
 
+        /** @brief Reads the live authenticated binding's write ceiling before preparing a local archive. */
+        [[nodiscard]] Result<std::uint64_t> UploadByteLimit() const;
+
         /** @brief Durably publishes a complete immutable intent or verifies an identical replay.
          * @param intent Exact local generation, mutation identity, payload evidence and remote revision condition.
          * @param cancellation Cooperative storage stop token.
