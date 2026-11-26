@@ -30,22 +30,25 @@ namespace Horo::Editor {
 
         /** @brief Invokes start only within both quotas, and charges only if it accepts the operation.
          * @param project Stable identity of the attached project.
-         * @param start Synchronous dispatch that returns true once it owns the operation. Must not reenter this budget.
-         * @return The exhausted scope, a rejected start, or a charged start.
+         * @param start Synchronous dispatch that returns true once it owns the operation.
+         * @return The exhausted scope, a rejected start (including nested attempts), or a charged start.
          */
         template <typename Start> EditorProviderAdmission TryStart(const std::string &project, Start &&start) {
             using enum EditorProviderAdmission;
+            if (startInProgress_)
+                return NotStarted;
             if (limits_.session && sessionOperations_ >= *limits_.session)
                 return SessionExhausted;
             if (limits_.project && ProjectOperations(project) >= *limits_.project)
                 return ProjectExhausted;
-            auto *projectOperations = limits_.project ? &projectOperations_[project] : nullptr;
+            const auto projectOperations = limits_.project ? projectOperations_.try_emplace(project, 0).first : projectOperations_.end();
+            const StartGuard guard{*this, projectOperations};
             if (!std::forward<Start>(start)())
                 return NotStarted;
             if (limits_.session)
                 ++sessionOperations_;
-            if (projectOperations)
-                ++*projectOperations;
+            if (projectOperations != projectOperations_.end())
+                ++projectOperations->second;
             return Started;
         }
 
@@ -64,8 +67,27 @@ namespace Horo::Editor {
         }
 
     private:
+        using ProjectLedger = std::map<std::string, std::uint32_t>;
+
+        /** @brief Holds the sole admission slot until accounting is complete and discards unused project entries. */
+        struct StartGuard final {
+            StartGuard(EditorProviderOperationBudget &budget, ProjectLedger::iterator entry) noexcept : budget_{budget}, entry_{entry} {
+                budget_.startInProgress_ = true;
+            }
+
+            ~StartGuard() {
+                if (entry_ != budget_.projectOperations_.end() && entry_->second == 0)
+                    budget_.projectOperations_.erase(entry_);
+                budget_.startInProgress_ = false;
+            }
+
+            EditorProviderOperationBudget &budget_;
+            ProjectLedger::iterator entry_;
+        };
+
         EditorProviderOperationLimits limits_;
-        std::map<std::string, std::uint32_t> projectOperations_;
+        ProjectLedger projectOperations_;
         std::uint32_t sessionOperations_{};
+        bool startInProgress_{};
     };
 }  // namespace Horo::Editor

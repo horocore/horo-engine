@@ -31,6 +31,7 @@
 #include <functional>
 #include <imgui_internal.h>
 #include <span>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -830,6 +831,37 @@ namespace {
         CHECK(budget.SessionOperations() == 2);
         CHECK(modelStarts == 1);
         CHECK(microphoneStarts == 1);
+    }
+
+    TEST_CASE("A provider start cannot spend the same quota through a nested dispatch", "[editor][agent][provider-budget]") {
+        using enum EditorProviderAdmission;
+        EditorProviderOperationBudget budget{{.session = 1, .project = 1}};
+        const auto nestedStart = [] {
+            FAIL_CHECK("A second provider must not start while the first is being admitted");
+            return true;
+        };
+        CHECK(budget.TryStart("project-a", [&] {
+            CHECK(budget.TryStart("project-a", nestedStart) == NotStarted);
+            CHECK(budget.TryStart("project-b", nestedStart) == NotStarted);
+            return true;
+        }) == Started);
+        CHECK(budget.SessionOperations() == 1);
+        CHECK(budget.ProjectOperations("project-a") == 1);
+        CHECK(budget.ProjectOperations("project-b") == 0);
+        CHECK(budget.TryStart("project-b", nestedStart) == SessionExhausted);
+    }
+
+    TEST_CASE("A failed provider start releases the admission slot without consuming quota", "[editor][agent][provider-budget]") {
+        using enum EditorProviderAdmission;
+        EditorProviderOperationBudget budget{{.session = 1, .project = 1}};
+        CHECK_THROWS_AS(budget.TryStart("project-a", []() -> bool { throw std::runtime_error("fixture start failed"); }),
+                        std::runtime_error);
+        CHECK(budget.TryStart("project-a", [] { return false; }) == NotStarted);
+        CHECK(budget.SessionOperations() == 0);
+        CHECK(budget.ProjectOperations("project-a") == 0);
+        CHECK(budget.TryStart("project-a", [] { return true; }) == Started);
+        CHECK(budget.SessionOperations() == 1);
+        CHECK(budget.ProjectOperations("project-a") == 1);
     }
 
     TEST_CASE("AI provider operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {
