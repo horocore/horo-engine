@@ -39,16 +39,82 @@ def approval_for(data):
 
 @pytest.fixture
 def export(tmp_path, monkeypatch, capsys):
-    def run(data, approval):
+    def run(data, approval, *options):
         replay = tmp_path / "evidence.json"
         grant = tmp_path / "approval.json"
         replay.write_bytes(data)
         grant.write_text(json.dumps(approval), encoding="utf-8")
-        monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(replay), "--approval", str(grant)])
+        monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(replay), "--approval", str(grant), *options])
         status = evaluation.main()
         return status, capsys.readouterr()
 
     return run
+
+
+def test_publishes_the_same_redacted_manifest_to_a_new_file(tmp_path, export):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    status, streamed = export(data, approval)
+    assert status == 0
+    destination = tmp_path / "evaluation ç report.json"
+    status, written = export(data, approval, "--output", str(destination))
+    assert status == 0
+    assert not written.out and not written.err
+    assert destination.read_bytes() == streamed.out.encode("utf-8")
+    assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
+
+
+@pytest.mark.parametrize("name", ["evidence.json", "approval.json", "existing.json"])
+def test_export_preserves_existing_files_at_the_destination(tmp_path, export, name):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    destination = tmp_path / name
+    if name == "existing.json":
+        destination.write_bytes(b"existing manifest")
+    expected = {"evidence.json": data, "approval.json": json.dumps(approval).encode(), "existing.json": b"existing manifest"}[name]
+    status, result = export(data, approval, "--output", str(destination))
+    assert status == 1
+    assert not result.out and "output already exists" in result.err
+    assert destination.read_bytes() == expected
+    assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
+
+
+def test_publishing_never_replaces_a_concurrent_destination(tmp_path, export, monkeypatch):
+    data = json.dumps(frame(3, 2)).encode()
+    destination = tmp_path / "evaluation.json"
+    link = evaluation.os.link
+
+    def race(staged, path):
+        path.write_bytes(b"concurrent publisher")
+        link(staged, path)
+
+    monkeypatch.setattr(evaluation.os, "link", race)
+    status, result = export(data, approval_for(data), "--output", str(destination))
+    assert status == 1
+    assert not result.out and "output already exists" in result.err
+    assert destination.read_bytes() == b"concurrent publisher"
+    assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
+
+
+def test_expiry_during_staging_leaves_no_published_manifest(tmp_path, export, monkeypatch):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    expiry = datetime.fromisoformat(approval["expiresOnUtc"]).replace(tzinfo=UTC)
+    destination = tmp_path / "evaluation.json"
+
+    class Clock:
+        now = staticmethod(lambda _zone: expiry - timedelta(seconds=1))
+
+    def cross_expiry(_descriptor):
+        Clock.now = staticmethod(lambda _zone: expiry)
+
+    monkeypatch.setattr(evaluation, "datetime", Clock)
+    monkeypatch.setattr(evaluation.os, "fsync", cross_expiry)
+    status, result = export(data, approval, "--output", str(destination))
+    assert status == 1
+    assert not result.out and "approval has expired" in result.err
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
 
 
 @pytest.mark.parametrize("window", [False, True])

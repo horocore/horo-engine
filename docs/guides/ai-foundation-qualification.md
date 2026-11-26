@@ -126,8 +126,13 @@ date. The exporter rejects expired approvals and has no authority over files
 already retained elsewhere.
 
 ```bash
-python scripts/qualify_ai_evaluation.py evidence.json --approval approval.json > evaluation-manifest.json
+python scripts/qualify_ai_evaluation.py evidence.json --approval approval.json --output evaluation-manifest.json
 ```
+
+The destination must be new and its parent directory must exist on a filesystem
+that supports hard links. The exporter stages the redacted manifest beside the
+destination, rechecks the approval before publishing, and preserves any existing
+file at that path. Omit `--output` to stream the redacted manifest to stdout.
 
 Before admitting a stored manifest for evaluation, check it against the
 original approval using the current UTC date.

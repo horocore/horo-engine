@@ -7,9 +7,11 @@ from collections import Counter
 from datetime import UTC, date, datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
 
 REPLAY_FORMAT = "horo-ai-replay-evidence"
@@ -230,12 +232,34 @@ def verify_source_evidence(record: dict, path: Path) -> None:
     require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
 
 
+def json_line(value: dict) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+
+
 def emit_json(value: dict) -> None:
-    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    sys.stdout.write(json_line(value))
 
 
 def require_current_expiry(expiry: str) -> None:
     require(datetime.now(UTC).date() < date.fromisoformat(expiry), "Export approval has expired")
+
+
+def publish_manifest(path: Path, manifest: dict) -> None:
+    """Publish a complete new manifest while its approval is current."""
+    data = json_line(manifest).encode("utf-8")
+    try:
+        with tempfile.TemporaryDirectory(prefix=".horo-ai-evaluation-", dir=path.parent) as scratch:
+            staged = Path(scratch) / "manifest.json"
+            with staged.open("xb") as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+            require_current_expiry(manifest["expiresOnUtc"])
+            os.link(staged, path)
+    except FileExistsError:
+        raise _EvidenceError("Evaluation output already exists") from None
+    except OSError:
+        raise _EvidenceError("Evaluation output could not be published") from None
 
 
 def main() -> int:
@@ -247,11 +271,14 @@ def main() -> int:
     retained.add_argument("--read-retained", action="store_true", help="Emit a current stored manifest after reproducing its approved evidence")
     retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
     parser.add_argument("--source-replay", type=Path, help="Reproduce the evidence from the original approved replay")
+    parser.add_argument("--output", type=Path, help="Publish the export to a new manifest file")
     args = parser.parse_args()
     if args.read_retained and args.source_replay is None:
         parser.error("--read-retained requires --source-replay")
     if args.source_replay is not None and not (args.verify_retained or args.read_retained):
         parser.error("--source-replay requires --verify-retained or --read-retained")
+    if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention):
+        parser.error("--output is only available when exporting a replay")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
@@ -270,16 +297,19 @@ def main() -> int:
         data, replay_digest = read_replay(args.input)
         allowed = validate_approval(approval, replay_digest, today)
         evidence = summarize_source(data)
-        require_current_expiry(allowed["expiresOnUtc"])
+        manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
+                    "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
+        if args.output is None:
+            require_current_expiry(manifest["expiresOnUtc"])
+            emit_json(manifest)
+        else:
+            publish_manifest(args.output, manifest)
     except _EvidenceError as error:
         print(error, file=sys.stderr)
         return 1
     except (OSError, ValueError, RecursionError):
         print("AI evaluation input could not be read as bounded JSON", file=sys.stderr)
         return 1
-    manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
-                "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
-    emit_json(manifest)
     return 0
 
 
