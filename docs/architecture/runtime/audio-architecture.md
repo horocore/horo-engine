@@ -2397,8 +2397,9 @@ without a bound SDL stream queue. SDL supplies no hardware timestamp here.
 The callback estimates the start on the SDL monotonic clock from the first
 buffer arrival, then timestamps later blocks by source sample position.
 Audio control checks permission and endpoint health before delivering blocks
-and requires a current purpose-scoped host grant on each read. Withdrawal
-retires the generation before copying any queued PCM. Audio control detaches
+and requires a current purpose-scoped host grant on each read. It checks native
+permission again after copying and before publishing the block. Withdrawal
+scrubs any samples copied by that read and retires the generation. Audio control detaches
 the callback on cancellation. A virtual system default is
 available for discovery but capture requires an explicit endpoint to prevent
 silent hardware changes.

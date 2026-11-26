@@ -265,6 +265,17 @@ namespace Horo::Audio::Backend {
             return grant.device == descriptor.device && grant.discoveryRevision == capture.snapshot.revision &&
                    grant.generation == descriptor.generation && grant.generation > capture.lastGeneration;
         }
+
+        /** @brief Rechecks native authorization before releasing the copied block to its consumer. */
+        bool KeepCopiedCapture(Sdl3Detail::CaptureControl &capture, const AudioCaptureBufferDescriptor &descriptor,
+                               const AudioCapturedBlock &candidate, const std::span<AudioSample> pcm) noexcept {
+            if (Sdl3Detail::CaptureAuthorized(Sdl3Detail::CapturePermission()))
+                return true;
+            const auto sampleCount = candidate.frames * descriptor.format.layout.orderedChannels.size();
+            Security::SecureZero(std::as_writable_bytes(pcm.first(sampleCount)));
+            capture.Stop();
+            return false;
+        }
     }  // namespace
 
     /** @copydoc Sdl3AudioBackend::RequestCapturePermission */
@@ -367,7 +378,13 @@ namespace Horo::Audio::Backend {
         if (const auto reconciled = ReconcileCapture(generation, grant); reconciled.HasError())
             return Output::Failure(reconciled.ErrorValue());
         auto &buffer = capture.stream->Buffer();
-        const auto status = buffer.TryRead(block, pcm);
+        AudioCapturedBlock candidate;
+        const auto status = buffer.TryRead(candidate, pcm);
+        if (status == AudioCaptureRead::Copied) {
+            if (!KeepCopiedCapture(capture, *buffer.Descriptor(), candidate, pcm))
+                return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+            block = candidate;
+        }
         const auto latestDrop = buffer.LatestDroppedBlock();
         return Output::Success({status, buffer.DroppedFrames(), latestDrop});
     }
@@ -392,7 +409,15 @@ namespace Horo::Audio::Backend {
         if (const auto reconciled = ReconcileCapture(generation, grant); reconciled.HasError())
             return Output::Failure(reconciled.ErrorValue());
         const AudioMonotonicTimestamp now{impl_->config.clockDomain, SDL_GetTicksNS()};
-        return Output::Success(ReadAudioMonitorBlock(capture.stream->Buffer(), *capture.activeGrant.intent.monitor, now, block, pcm));
+        auto &buffer = capture.stream->Buffer();
+        AudioCapturedBlock candidate;
+        const auto status = ReadAudioMonitorBlock(buffer, *capture.activeGrant.intent.monitor, now, candidate, pcm);
+        if (status == AudioMonitorRead::Copied) {
+            if (!KeepCopiedCapture(capture, *buffer.Descriptor(), candidate, pcm))
+                return Output::Failure(MakeError(AudioErrors::CapturePermissionDenied));
+            block = candidate;
+        }
+        return Output::Success(status);
     }
 
     namespace {
