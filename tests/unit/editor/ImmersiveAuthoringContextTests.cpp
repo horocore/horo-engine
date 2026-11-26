@@ -10,7 +10,7 @@ namespace Horo::Editor {
         struct PlanningModel final : Agent::IModelProvider {
             std::function<void()> duringInference;
             std::size_t calls{};
-            std::optional<Agent::ModelToolIntent> tool;
+            std::vector<Agent::ModelToolIntent> tools;
             std::optional<Agent::ModelErrorCode> failure;
             std::vector<Agent::ModelTool> advertised;
 
@@ -23,8 +23,9 @@ namespace Horo::Editor {
                 advertised = request.tools;
                 if (duringInference)
                     duringInference();
-                if (tool && !sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = *tool}))
-                    return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
+                for (const auto &tool : tools)
+                    if (!sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = tool}))
+                        return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 if (failure)
@@ -368,7 +369,7 @@ namespace Horo::Editor {
             }
         }
 
-        TEST_CASE("Immersive planning rejects object targets from a different scene revision", "[agent][immersive][turn][plan]") {
+        TEST_CASE("Immersive planning requires the exact scene scope for proposed writes", "[agent][immersive][turn][plan]") {
             using enum Agent::AgentTurnStatus;
             ImmersiveAuthoringContext owner;
             const auto context = owner.Publish(Opening(), {});
@@ -379,8 +380,9 @@ namespace Horo::Editor {
             auto pending = owner.CapturePlan(*context, std::move(prompt));
             REQUIRE(pending);
             PlanningModel model;
-            model.tool = Agent::ModelToolIntent{"change", "scene.change", "{}"};
+            model.tools = {{"change", "scene.change", "{}"}};
             auto scope = Agent::AgentPlanObjectScope{context->Identity().documentOpening, context->Identity().documentRevision, {42}};
+            bool hasScope = true;
             auto expected = Completed;
             SECTION("the exact scope remains available") {}
             SECTION("a different document opening is denied") {
@@ -391,8 +393,13 @@ namespace Horo::Editor {
                 ++scope.revision;
                 expected = ContextDenied;
             }
+            SECTION("an unscoped write is denied") {
+                hasScope = false;
+                expected = ContextDenied;
+            }
             const auto result = pending->Plan(model, 1, {}, [&](const Agent::ModelToolIntent &) {
-                return Agent::AgentPlanToolInspection{Completed, Agent::AgentPlannedTool{Agent::AgentPlannedEffect::Presentation, scope}};
+                return Agent::AgentPlanToolInspection{
+                    Completed, Agent::AgentPlannedTool{Agent::AgentPlannedEffect::Mutation, hasScope ? std::optional{scope} : std::nullopt}};
             });
             CHECK(result.Status() == expected);
             CHECK_FALSE(result.Read(*context));
@@ -403,6 +410,35 @@ namespace Horo::Editor {
                 CHECK(targets.objects == scope.objects);
                 return true;
             }) != nullptr) == (expected == Completed));
+        }
+
+        TEST_CASE("Immersive review stops inspecting targets when the first inspection revokes authority", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto prompt = Prompt();
+            prompt.tools.emplace_back("scene.change", "Propose a scene change", R"({"type":"object"})");
+            prompt.requiredFeatures.bits |= static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
+            auto pending = owner.CapturePlan(*context, std::move(prompt));
+            REQUIRE(pending);
+            PlanningModel model;
+            model.tools = {{"first", "scene.change", "{}"}, {"second", "scene.change", "{}"}};
+            const auto &identity = context->Identity();
+            const auto review = pending->Plan(model, 1, {}, [&](const Agent::ModelToolIntent &intent) {
+                const Agent::AgentPlanObjectScope scope{identity.documentOpening, identity.documentRevision,
+                                                       {intent.callId == "first" ? 42U : 43U}};
+                return Agent::AgentPlanToolInspection{Completed, Agent::AgentPlannedTool{Agent::AgentPlannedEffect::Presentation, scope}};
+            });
+            REQUIRE(review.Status() == Completed);
+            std::size_t inspected{};
+            CHECK_FALSE(review.Read(*context, [&](const auto &) {
+                ++inspected;
+                owner.Revoke();
+                return true;
+            }));
+            CHECK(inspected == 1);
+            CHECK(review.Status() == ContextDenied);
         }
 
         TEST_CASE("Immersive plan schemas and review share one revocable MCP catalog", "[agent][immersive][turn][plan]") {
@@ -423,7 +459,7 @@ namespace Horo::Editor {
             REQUIRE(request);
             REQUIRE(pending);
             PlanningModel model;
-            model.tool = Agent::ModelToolIntent{"inspect", approved.front(), "{}"};
+            model.tools = {{"inspect", approved.front(), "{}"}};
             const auto review = request->Plan(model, 1, {});
             REQUIRE(review.Read(*context));
             REQUIRE(model.advertised.size() == 1);

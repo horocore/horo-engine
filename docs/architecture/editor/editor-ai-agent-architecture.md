@@ -284,6 +284,9 @@ Ownership rules:
   The draft retains the registered read, presentation, or mutation effect for
   each proposed call and any provider-reported token usage. The Editor can read
   it only under the original authoring generation while the request is current.
+  A proposed mutation requires the exact authoring document opening and revision.
+  The review rechecks authority after each live target inspection so an
+  invalidated draft cannot inspect additional targets.
   A registry-backed request advertises only definitions derived from its
   host-selected, capability-granted catalog. Replacing the MCP registry blocks
   new inference and withdraws any draft from the old catalog.

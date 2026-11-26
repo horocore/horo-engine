@@ -13,10 +13,12 @@ namespace Horo::Editor {
     };
 
     namespace {
-        /** @brief An explicit proposal scope must name the document used to start planning. */
+        /** @brief Proposed writes require a scope, and every scoped step must name the current planning document. */
         bool MatchesPlanScene(const Agent::AgentPlanToolInspection &inspection, const ImmersiveContextIdentity &scene) noexcept {
-            if (!inspection.tool || !inspection.tool->scope)
+            if (!inspection.tool)
                 return true;
+            if (!inspection.tool->scope)
+                return inspection.tool->effect != Agent::AgentPlannedEffect::Mutation;
             const auto &scope = *inspection.tool->scope;
             return scope.opening == scene.documentOpening && scope.revision == scene.documentRevision;
         }
@@ -138,7 +140,7 @@ namespace Horo::Editor {
             return nullptr;
         try {
             for (const auto &tool : plan_.tools)
-                if (tool.scope && (!inspectTargets || !inspectTargets(*tool.scope)))
+                if (tool.scope && (!inspectTargets || !inspectTargets(*tool.scope) || Status() != Completed))
                     return nullptr;
             return Status() == Completed ? &plan_ : nullptr;
         } catch (...) {
