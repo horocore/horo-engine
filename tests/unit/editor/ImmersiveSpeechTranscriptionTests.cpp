@@ -891,6 +891,34 @@ namespace Horo::Editor {
             CHECK(spatial.front().controllerPress->latest.nanoseconds == sample.controllerPress->latest.nanoseconds);
         }
 
+        TEST_CASE("Immersive commands require a binding for controller presses but can align pose-only evidence", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            sample.cutoff.bindingRevision = 0;
+            const ImmersiveSpatialHistoryView history{context, sample.cutoff, {&sample, 1}};
+            const auto pose = ImmersiveCommandEnvelope::Assemble(context, speech, history);
+            REQUIRE(pose.status == Aligned);
+            REQUIRE(pose.envelope);
+            CHECK(pose.envelope->Spatial().size() == 1);
+
+            sample.controllerPress = ImmersiveControllerPress{sample.earliest, sample.latest};
+            const auto pressed = ImmersiveCommandEnvelope::Assemble(context, speech, history);
+            CHECK(pressed.status == InvalidSpatialEvidence);
+            CHECK_FALSE(pressed.envelope);
+
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            REQUIRE(capture.RecordPointing(sample) == ImmersiveSpatialCaptureStatus::Recorded);
+            capture.Seal();
+            const auto preview = capture.AssemblePreview(speech, sample.cutoff);
+            REQUIRE(preview.status == SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Spatial().empty());
+        }
+
         TEST_CASE("Immersive listening freezes one context's spatial history at seal", "[agent][immersive][speech]") {
             using RecordStatus = ImmersiveSpatialCaptureStatus;
             using CommandStatus = ImmersiveCommandStatus;

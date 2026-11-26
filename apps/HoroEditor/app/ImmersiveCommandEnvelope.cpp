@@ -75,7 +75,8 @@ namespace Horo::Editor {
                                                 const XR::XRInteractionCutoff &cutoff, const std::uint64_t clockDomain) noexcept {
             if (!BelongsToHistory(sample.cutoff, cutoff))
                 return StaleEvidence;
-            if (!ValidObservation(sample, clockDomain) || (sample.controllerPress && !ValidPress(*sample.controllerPress, clockDomain)))
+            if (!ValidObservation(sample, clockDomain) ||
+                (sample.controllerPress && (sample.cutoff.bindingRevision == 0 || !ValidPress(*sample.controllerPress, clockDomain))))
                 return InvalidSpatialEvidence;
             if (previous && sample.candidate.space != previous->candidate.space)
                 return InvalidSpatialEvidence;
@@ -253,17 +254,18 @@ namespace Horo::Editor {
     ImmersiveCommandAssembly ImmersiveCommandEnvelope::Assemble(const ImmersivePlanningContext &current,
                                                                 const ImmersiveSpeechEvidence &speech,
                                                                 const std::optional<ImmersiveSpatialHistoryView> history) noexcept {
+        const auto phrase = speech.Hypothesis();
         if (!speech.IsCurrent() || !current.SharesGeneration(speech.Context()))
             return {StaleEvidence, {}};
-        if (speech.Hypothesis().kind != SpeechHypothesisKind::Final)
+        if (phrase.kind != SpeechHypothesisKind::Final)
             return {PartialSpeech, {}};
 
         ImmersiveCommandEnvelope result{speech};
-        const auto status = history ? result.AppendSpatial(*history, speech.Hypothesis()) : SpeechOnly;
-        if (status != Aligned && status != SpeechOnly)
-            return {status, {}};
+        const auto status = history ? result.AppendSpatial(*history, phrase) : SpeechOnly;
         if (!speech.IsCurrent())
             return {StaleEvidence, {}};
+        if (status != Aligned && status != SpeechOnly)
+            return {status, {}};
         return {status, std::move(result)};
     }
 
