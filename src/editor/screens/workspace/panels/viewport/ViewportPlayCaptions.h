@@ -26,7 +26,7 @@ namespace Horo::Editor {
         const LocalizationService &localization;
     };
 
-    /** @brief Draws current dialogue in the desktop preview using canonical caption placement.
+    /** @brief Draws current captions in the desktop preview using canonical caption placement.
      * @param draw Active editor viewport draw list.
      * @param origin Screen position of the viewport in GUI logical pixels.
      * @param extent Current visible viewport width and height in GUI logical pixels.

@@ -48,14 +48,23 @@ TEST_CASE("Desktop Play caption preview draws localized dialogue inside the view
     ConfigurationService disabled{schema};
     ConfigurationResolutionRequest settings;
     settings.user.emplace(SettingKey{"accessibility.captions.enabled"}, ConfigurationInputValue{true, {}});
+    const SettingKey speakerSetting{"accessibility.captions.show_speaker"};
+    const SettingKey soundSetting{"accessibility.captions.show_sound_descriptions"};
+    settings.user.emplace(speakerSetting, ConfigurationInputValue{false, {}});
+    settings.user.emplace(soundSetting, ConfigurationInputValue{false, {}});
     ConfigurationService enabled{std::move(schema), nullptr, settings};
     LocalizationService localization{Horo::Editor::LocaleTag{"en-US"}};
     const auto message = LocalizedMessageRef::Create(UiMessageKey::Create("game.dialogue", "hi").Value(), "Hi").Value();
-    auto queue = std::move(CaptionCueQueue::Create(1, {message})).Value();
+    const auto speaker = LocalizedMessageRef::Create(UiMessageKey::Create("game.dialogue", "guide").Value(), "Guide").Value();
+    const auto sound = LocalizedMessageRef::Create(UiMessageKey::Create("game.dialogue", "bell").Value(), "Bell rings").Value();
+    auto queue = std::move(CaptionCueQueue::Create(1, {message, speaker})).Value();
+    auto audio = std::move(CaptionCueQueue::Create(1, {sound}, CaptionProducerKind::AudioOnly)).Value();
     CaptionTimeline timeline;
     REQUIRE(timeline.Reset(1).HasValue());
-    REQUIRE(queue->TryEnqueue({{1, 1}, CaptionCueKind::Dialogue, 0, 0, 10, 20}) == CaptionAdmission::Accepted);
+    REQUIRE(queue->TryEnqueue({{1, 1}, CaptionCueKind::Dialogue, 0, 2, 10, 20}) == CaptionAdmission::Accepted);
+    REQUIRE(audio->TryEnqueue({{1, 2}, CaptionCueKind::Sound, 0, 0, 10, 20}) == CaptionAdmission::Accepted);
     REQUIRE(timeline.Drain(*queue) == 0);
+    REQUIRE(timeline.Drain(*audio) == 0);
 
     const Horo::Editor::Tests::HeadlessEditorGuiFixture gui{{900, 600}};
     gui.BeginFrame();
@@ -63,7 +72,9 @@ TEST_CASE("Desktop Play caption preview draws localized dialogue inside the view
     const auto &fonts = gui.Fonts();
     const ImVec2 origin{30, 20};
     const ImVec2 extent{800, 500};
-    const auto vertices = [&] { return draw.VtxBuffer.Size; };
+    const auto vertices = [&] {
+        return draw.VtxBuffer.Size;
+    };
     const int initial = vertices();
     DrawViewportPlayCaptions(draw, origin, extent, fonts, {timeline, enabled, localization});
     CHECK(vertices() == initial);
@@ -81,9 +92,25 @@ TEST_CASE("Desktop Play caption preview draws localized dialogue inside the view
     CHECK(vertices() - fallback > fallback - initial);
 
     const int translated = vertices();
+    const int dialogueVertices = translated - fallback;
+    settings.user.at(speakerSetting).value = true;
+    REQUIRE(enabled.ResolveAndCommit(settings).HasValue());
+    DrawViewportPlayCaptions(draw, origin, extent, fonts, {timeline, enabled, localization});
+    const int named = vertices();
+    CHECK(named - translated > dialogueVertices);
+    CheckCaptionPlacement(draw, translated, origin, extent);
+
+    settings.user.at(speakerSetting).value = false;
+    settings.user.at(soundSetting).value = true;
+    REQUIRE(enabled.ResolveAndCommit(settings).HasValue());
+    DrawViewportPlayCaptions(draw, origin, extent, fonts, {timeline, enabled, localization});
+    const int withSound = vertices();
+    CHECK(withSound - named > dialogueVertices);
+    CheckCaptionPlacement(draw, named, origin, extent);
+
     timeline.BeginFrame(30);
     DrawViewportPlayCaptions(draw, origin, extent, fonts, {timeline, enabled, localization});
-    CHECK(vertices() == translated);
+    CHECK(vertices() == withSound);
     REQUIRE(timeline.Reset(0).HasValue());
     CHECK(timeline.NextSessionId() == 2);
     gui.EndFrame();
