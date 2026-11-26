@@ -184,12 +184,32 @@ def mr_claim(release):
     record = json.loads((evidence / row["recordSha256"]).read_bytes())
     row["requiredOptionalChecks"].append("optionalMR")
     row["declaration"]["mixedRealityCapabilities"] = ["passthrough", "spatialAnchorPersistence"]
+    extensions = ["XR_FB_passthrough", "XR_MSFT_spatial_anchor", "XR_MSFT_spatial_anchor_persistence"]
+    row["declaration"]["tuple"]["admittedExtensions"] = extensions.copy()
+    record["tuple"]["admittedExtensions"] = extensions.copy()
+    store_display_capture(evidence, record)
+    store_timing_capture(evidence, record)
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
     checks = dict.fromkeys(("operation", "consentDenial", "revocation", "fallback", "shutdown"), True)
     capture = {"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification",
                "tuple": record["tuple"].copy(), "provenance": record["provenance"].copy(),
                "capabilities": {"passthrough": checks.copy(),
                                 "spatialAnchorPersistence": dict(checks, restore=True, staleLocalization=True)}}
     return row, record, capture
+
+
+def test_release_rejects_a_mixed_reality_claim_without_its_required_extensions(release, mr_claim):
+    _, evidence = release
+    row, record, capture = mr_claim
+    for identity in (row["declaration"]["tuple"], record["tuple"]):
+        identity["admittedExtensions"].remove("XR_MSFT_spatial_anchor")
+    store_display_capture(evidence, record)
+    store_timing_capture(evidence, record)
+    record["checks"]["optionalMR"]["evidenceSha256"] = store(evidence, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "spatialAnchorPersistence capability is missing admitted OpenXR extensions XR_MSFT_spatial_anchor" in result.stderr
 
 
 def test_claimed_mixed_reality_requires_named_capabilities_and_typed_evidence(release, mr_claim):

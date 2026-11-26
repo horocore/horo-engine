@@ -65,6 +65,13 @@ Each claimed row has a complete smoke `declaration` with `tuple` and
 `testPlan`. Use `requiredOptionalChecks` to require `haptics` and
 `optionalMR` when the product claims them. When requiring `optionalMR`,
 add the exact `mixedRealityCapabilities` list to the declaration.
+Each claimed capability must have its OpenXR route in the tuple's admitted
+extensions. Passthrough requires `XR_FB_passthrough`. Native anchors require
+`XR_MSFT_spatial_anchor`, and persistence also requires
+`XR_MSFT_spatial_anchor_persistence`. Plane tracking and plane-backed hit
+testing require `XR_EXT_future`, `XR_EXT_spatial_entity` and
+`XR_EXT_spatial_plane_tracking`. Light estimation requires
+`XR_ANDROID_light_estimation`.
 An unrun claim has a null
 `recordSha256` and blocks the gate. A Conditional or Future planning row
 uses `releaseClaim: false`. Its declaration and record may be null while

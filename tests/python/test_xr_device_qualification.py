@@ -156,6 +156,7 @@ def test_a_limited_record_requires_a_passing_observation(smoke):
 
 
 def test_device_cli_requires_the_declared_mixed_reality_capture(tmp_path, smoke):
+    smoke["tuple"]["admittedExtensions"].insert(0, "XR_ANDROID_light_estimation")
     record_path = tmp_path / "device.json"
     declaration_path = tmp_path / "declaration.json"
     capture_path = tmp_path / "mixed-reality.json"
@@ -177,6 +178,25 @@ def test_device_cli_requires_the_declared_mixed_reality_capture(tmp_path, smoke)
     assert "must be used together" in missing.stderr
     valid = subprocess.run([*command, "--mr-capture", str(capture_path)], capture_output=True, text=True, check=False)
     assert valid.returncode == 0, valid.stderr
+
+
+@pytest.mark.parametrize(("capability", "extensions"), [
+    ("passthrough", {"XR_FB_passthrough"}),
+    ("spatialAnchors", {"XR_MSFT_spatial_anchor"}),
+    ("spatialAnchorPersistence", {"XR_MSFT_spatial_anchor", "XR_MSFT_spatial_anchor_persistence"}),
+    ("scenePlanes", {"XR_EXT_future", "XR_EXT_spatial_entity", "XR_EXT_spatial_plane_tracking"}),
+    ("environmentHitTesting", {"XR_EXT_future", "XR_EXT_spatial_entity", "XR_EXT_spatial_plane_tracking"}),
+    ("lightEstimation", {"XR_ANDROID_light_estimation"}),
+])
+def test_declared_mixed_reality_capabilities_require_their_admitted_routes(smoke, capability, extensions):
+    declaration = dict(declared(smoke), mixedRealityCapabilities=[capability])
+    identity = declaration["tuple"]
+    identity["admittedExtensions"] = sorted(extensions)
+    assert xr.validate_declaration(declaration, {"optionalMR"}) == declaration
+    for missing in extensions:
+        identity["admittedExtensions"] = sorted(extensions - {missing})
+        with pytest.raises(ValueError, match=missing):
+            xr.validate_declaration(declaration, {"optionalMR"})
 
 
 def test_cli_rejects_duplicate_record_members(tmp_path, smoke):

@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from typing import NamedTuple
 
 
 MAX_RECORD_BYTES = 64 * 1024
@@ -36,13 +37,22 @@ CORE_CHECKS = {"setup", "input", "displayEnumeration", "renderTiming",
 OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
-MR_CAPABILITY_CHECKS = {
-    "passthrough": set(),
-    "spatialAnchors": {"relocalization"},
-    "spatialAnchorPersistence": {"restore", "staleLocalization"},
-    "scenePlanes": set(),
-    "environmentHitTesting": set(),
-    "lightEstimation": set(),
+
+
+class MixedRealityRoute(NamedTuple):
+    extensions: frozenset[str]
+    extra_checks: frozenset[str] = frozenset()
+
+
+PLANE_TRACKING_EXTENSIONS = frozenset({"XR_EXT_future", "XR_EXT_spatial_entity", "XR_EXT_spatial_plane_tracking"})
+MR_CAPABILITIES = {
+    "passthrough": MixedRealityRoute(frozenset({"XR_FB_passthrough"})),
+    "spatialAnchors": MixedRealityRoute(frozenset({"XR_MSFT_spatial_anchor"}), frozenset({"relocalization"})),
+    "spatialAnchorPersistence": MixedRealityRoute(
+        frozenset({"XR_MSFT_spatial_anchor", "XR_MSFT_spatial_anchor_persistence"}), frozenset({"restore", "staleLocalization"})),
+    "scenePlanes": MixedRealityRoute(PLANE_TRACKING_EXTENSIONS),
+    "environmentHitTesting": MixedRealityRoute(PLANE_TRACKING_EXTENSIONS),
+    "lightEstimation": MixedRealityRoute(frozenset({"XR_ANDROID_light_estimation"})),
 }
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SOURCE_REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -256,11 +266,15 @@ def validate_declaration(value: object, optional: set[str]) -> dict:
     validate_identity(expected["tuple"], complete=True)
     if claims_mr:
         capabilities = expected["mixedRealityCapabilities"]
-        require(isinstance(capabilities, list) and 0 < len(capabilities) <= len(MR_CAPABILITY_CHECKS),
+        require(isinstance(capabilities, list) and 0 < len(capabilities) <= len(MR_CAPABILITIES),
                 "An optionalMR claim requires declared MR capabilities")
-        require(all(isinstance(name, str) and name in MR_CAPABILITY_CHECKS for name in capabilities),
+        require(all(isinstance(name, str) and name in MR_CAPABILITIES for name in capabilities),
                 "Invalid declared MR capability")
         require(len(set(capabilities)) == len(capabilities), "Duplicate declared MR capability")
+        admitted = set(expected["tuple"]["admittedExtensions"])
+        for capability in capabilities:
+            missing = MR_CAPABILITIES[capability].extensions - admitted
+            require(not missing, f"Declared {capability} capability is missing admitted OpenXR extensions {', '.join(sorted(missing))}")
     return expected
 
 
@@ -281,7 +295,7 @@ def check_mixed_reality_capture(data: bytes, record: dict, capabilities: list[st
     require(capture["provenance"] == record["provenance"], "Mixed reality capture is from a different smoke run")
     results = fields(capture["capabilities"], set(capabilities), "mixed reality capabilities")
     for name, observed in results.items():
-        checks = fields(observed, MR_COMMON_CHECKS | MR_CAPABILITY_CHECKS[name], f"{name} evidence")
+        checks = fields(observed, MR_COMMON_CHECKS | MR_CAPABILITIES[name].extra_checks, f"{name} evidence")
         require(all(value is True for value in checks.values()), f"Required {name} scenario did not pass")
 
 
