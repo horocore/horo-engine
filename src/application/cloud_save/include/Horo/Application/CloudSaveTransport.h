@@ -13,6 +13,9 @@
 #include <optional>
 
 namespace Horo::Application {
+    class CloudSaveDurableMutation;
+    class CloudSaveMutationJournal;
+
     /** @brief The exact platform request admitted for one owning Save operation. */
     template <typename T> struct CloudSaveRequest final {
         OperationId operation;                              /**< Save owner's correlation identity. */
@@ -51,34 +54,27 @@ namespace Horo::Application {
         [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudBlobReadResult>> Read(
             OperationId operation, Runtime::SaveGameSlotId slot, std::uint64_t maximumBytes) const;
 
-        /** @brief Submits a previously journaled write intent.
-         * @param operation Owning Save operation ID. @param slot Logical slot. @param bytes Exact finalized archive bytes.
-         * @param digest Whole-object digest recorded by the coordinator. @param mutation Durable journal identity.
-         * @param expectedRevision Exact provider revision for replacement, or empty for conditional creation.
+        /** @brief Dispatches an exact durable mutation after checking its binding and payload.
+         * @param operation Owning Save operation ID.
+         * @param mutation Validated proof from the current binding's durable journal.
+         * @param bytes Finalized archive bytes for upload. Deletion requires no payload.
          * @return An admitted mutation correlated to the Save owner, or a typed failure.
          */
-        [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudMutationResult>> Write(
-            OperationId operation, Runtime::SaveGameSlotId slot, PlatformServices::CloudBlobOwnedBytes bytes,
-            PlatformServices::CloudBlobDigest digest, Runtime::SaveCloudMutationId mutation,
-            std::optional<PlatformServices::ProviderObjectRevision> expectedRevision) const;
-
-        /** @brief Submits a previously journaled conditional remote deletion.
-         * @param operation Owning Save operation ID. @param slot Logical slot. @param expectedRevision Exact provider revision.
-         * @param mutation Durable journal identity. @return An admitted mutation correlated to the Save owner, or a typed failure.
-         */
-        [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudMutationResult>> Delete(
-            OperationId operation, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision expectedRevision,
-            Runtime::SaveCloudMutationId mutation) const;
+        [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudMutationResult>> DispatchMutation(
+            OperationId operation, const CloudSaveDurableMutation &mutation,
+            std::optional<PlatformServices::CloudBlobOwnedBytes> bytes = {}) const;
 
     private:
+        friend class CloudSaveMutationJournal;
         /** @brief Derives the versioned opaque key for one typed slot inside this authenticated partition. */
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
 
         CloudSaveTransport(const PlatformServices::PlatformServicesFrontend &frontend, PlatformServices::PlatformSubjectHandle subject,
-                           PlatformServices::CloudSaveObjectPrefix prefix) noexcept;
+                           PlatformServices::CloudSaveObjectPrefix prefix, Sha256Digest journalPartition) noexcept;
 
         const PlatformServices::PlatformServicesFrontend *frontend_;
         PlatformServices::PlatformSubjectHandle subject_;
         PlatformServices::CloudSaveObjectPrefix prefix_;
+        Sha256Digest journalPartition_;
     };
 }

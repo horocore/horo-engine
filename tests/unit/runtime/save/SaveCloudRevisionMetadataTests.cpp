@@ -1,15 +1,20 @@
+#include "Horo/Application/CloudSaveMutationJournal.h"
 #include "Horo/Application/CloudSaveTransport.h"
+#include "Horo/Platform/NativeImmutableFileStorage.h"
 #include "Horo/PlatformServices/PlatformOfflineQueue.h"
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "OwnedTestDirectory.h"
 #include "PlatformCloudTestSupport.h"
 #include "PlatformServicesFrontendTestSupport.h"
 #include "SaveTestUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -56,13 +61,40 @@ namespace Horo::Runtime {
             return std::move(frontend).Value();
         }
 
+        [[nodiscard]] Application::CloudSaveTransport BoundTransport(Cloud::PlatformServicesFrontend &frontend,
+                                                                      const Cloud::PlatformSessionSnapshot &session,
+                                                                      const SaveCloudMetadataScope &scope = Scope()) {
+            auto transport = Application::CloudSaveTransport::Create(frontend, scope, *session.Subject());
+            REQUIRE(transport.HasValue());
+            return std::move(transport).Value();
+        }
+
+        [[nodiscard]] Application::CloudSaveMutationJournal NativeJournal(const Tests::OwnedTestDirectory &directory,
+                                                                          Application::CloudSaveTransport &transport) {
+            auto storage = Platform::CreateNativeImmutableFileStorage(directory.Path(), "save-cloud");
+            REQUIRE(storage.HasValue());
+            auto journal = Application::CloudSaveMutationJournal::Bind(std::move(storage).Value(), transport);
+            REQUIRE(journal.HasValue());
+            return std::move(journal).Value();
+        }
+
+        [[nodiscard]] Application::CloudSaveMutationIntent UploadIntent(const Cloud::CloudBlobWriteRequest &request) {
+            return {.mutation = Id<SaveCloudMutationId>(9),
+                    .slot = Id<SaveGameSlotId>(1),
+                    .generation = Id<SlotGenerationId>(2),
+                    .parent = Id<SlotGenerationId>(1),
+                    .archive = ArchiveContentHash{Digest(19)},
+                    .upload = Application::CloudSaveUploadEvidence{request.expectedDigest, request.bytes.Bytes().size()}};
+        }
+
         TEST_CASE("Save transport dispatches only typed opaque intents from the bound profile",
                   "[unit][save][cloud-transport][frontend]") {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session);
-            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
-            REQUIRE(transport.HasValue());
+            auto transport = BoundTransport(frontend, session);
+            const Tests::OwnedTestDirectory directory{"save-cloud-transport"};
+            const auto journal = NativeJournal(directory, transport);
 
             const auto slot = Id<SaveGameSlotId>(1);
             const auto mutation = Id<SaveCloudMutationId>(9);
@@ -70,10 +102,19 @@ namespace Horo::Runtime {
             const auto commit = Cloud::TestSupport::CloudCommit(intent);
             REQUIRE(commit.committedObject);
             const auto revision = commit.committedObject->revision;
-            const auto listed = transport.Value().List(20, 2);
-            const auto read = transport.Value().Read(21, slot, 3);
-            const auto write = transport.Value().Write(22, slot, intent.bytes, intent.expectedDigest, mutation, revision);
-            const auto deleted = transport.Value().Delete(23, slot, revision, Id<SaveCloudMutationId>(10));
+            const auto listed = transport.List(20, 2);
+            const auto read = transport.Read(21, slot, 3);
+            auto upload = UploadIntent(intent);
+            upload.revision = revision;
+            const auto durableUpload = journal.Store(upload);
+            REQUIRE(durableUpload.HasValue());
+            auto deletion = upload;
+            deletion.mutation = Id<SaveCloudMutationId>(10);
+            deletion.upload.reset();
+            const auto durableDelete = journal.Store(deletion);
+            REQUIRE(durableDelete.HasValue());
+            const auto write = transport.DispatchMutation(22, durableUpload.Value(), intent.bytes);
+            const auto deleted = transport.DispatchMutation(23, durableDelete.Value());
             REQUIRE(listed.HasValue());
             REQUIRE(read.HasValue());
             REQUIRE(write.HasValue());
@@ -130,8 +171,11 @@ namespace Horo::Runtime {
             CHECK(backend->requests.DispatchCompletions() == 1);
             CHECK(reported == 21);
 
-            const auto create = transport.Value().Write(24, slot, intent.bytes, intent.expectedDigest, Id<SaveCloudMutationId>(11),
-                                                        std::nullopt);
+            upload.mutation = Id<SaveCloudMutationId>(11);
+            upload.revision.reset();
+            const auto durableCreate = journal.Store(upload);
+            REQUIRE(durableCreate.HasValue());
+            const auto create = transport.DispatchMutation(24, durableCreate.Value(), intent.bytes);
             REQUIRE(create.HasValue());
             CHECK(std::holds_alternative<Cloud::CloudCreateIfAbsent>(backend->lastCloudWrite->precondition));
         }
@@ -169,7 +213,6 @@ namespace Horo::Runtime {
             auto frontend = CloudFrontend(backend, session);
             const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
             REQUIRE(transport.HasValue());
-            const auto intent = Cloud::TestSupport::CloudWrite();
             const auto slot = Id<SaveGameSlotId>(1);
             const auto oldSession = Cloud::Session({7}, {4});
             const auto stale = Application::CloudSaveTransport::Create(frontend, Scope(), *oldSession.Subject());
@@ -179,7 +222,6 @@ namespace Horo::Runtime {
             CHECK(transport.Value().List(1, 5).HasError());
             CHECK(transport.Value().Read(1, {}, 1).HasError());
             CHECK(transport.Value().Read(1, slot, 5).HasError());
-            CHECK(transport.Value().Write(1, slot, intent.bytes, intent.expectedDigest, {}, {}).HasError());
             CHECK(Application::CloudSaveTransport::Create(frontend, {}, *session.Subject()).HasError());
             CHECK(Application::CloudSaveTransport::Create(frontend, Scope(), {}).HasError());
             CHECK(backend->TotalCalls() == 0);
@@ -198,6 +240,107 @@ namespace Horo::Runtime {
             REQUIRE(transport.HasValue());
             Cloud::RequireError(transport.Value().List(1, 1), Cloud::FrontendErrors::NullProvider);
             Cloud::RequireError(transport.Value().Read(1, Id<SaveGameSlotId>(1), 1), Cloud::FrontendErrors::NullProvider);
+        }
+
+        TEST_CASE("The durable Save journal replays the same mutation after rebinding",
+                  "[unit][save][cloud-transport][journal]") {
+            const Tests::OwnedTestDirectory directory{"save-cloud-replay"};
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session);
+            auto transport = BoundTransport(frontend, session);
+            const auto request = Cloud::TestSupport::CloudWrite();
+            auto intent = UploadIntent(request);
+            intent.revision = Cloud::TestSupport::CloudCommit(request).committedObject->revision;
+            {
+                const auto journal = NativeJournal(directory, transport);
+                const auto stored = journal.Store(intent);
+                REQUIRE(stored.HasValue());
+                REQUIRE(journal.Store(intent).HasValue());
+                auto changed = intent;
+                changed.generation = Id<SlotGenerationId>(9);
+                Cloud::RequireError(journal.Store(changed), FileStorageErrors::Conflict);
+                const auto sent = transport.DispatchMutation(20, stored.Value(), request.bytes);
+                REQUIRE(sent.HasValue());
+            }
+            REQUIRE(backend->lastCloudWrite);
+            auto original = *backend->lastCloudWrite;
+
+            const auto resumedSession = Cloud::Session({7}, {6});
+            auto resumedBackend = std::make_shared<Cloud::RoutingBackend>();
+            auto resumedFrontend = CloudFrontend(resumedBackend, resumedSession);
+            auto resumed = BoundTransport(resumedFrontend, resumedSession);
+            const auto reopened = NativeJournal(directory, resumed);
+            const auto recovered = reopened.Load(intent.mutation);
+            REQUIRE(recovered.HasValue());
+            REQUIRE(recovered.Value());
+            const auto &restored = recovered.Value()->Intent();
+            CHECK(restored.generation == intent.generation);
+            CHECK(restored.parent == intent.parent);
+            CHECK(restored.archive == intent.archive);
+            const auto retried = resumed.DispatchMutation(21, *recovered.Value(), request.bytes);
+            REQUIRE(retried.HasValue());
+            REQUIRE(resumedBackend->lastCloudWrite);
+            const auto &retry = *resumedBackend->lastCloudWrite;
+            CHECK(retried.Value().operation == 21);
+            CHECK(retry.subject == *resumedSession.Subject());
+            original.subject = *resumedSession.Subject();
+            CHECK(Cloud::SameCloudWriteIntent(retry, original));
+        }
+
+        TEST_CASE("Save mutation dispatch rejects mismatched scope, body and damaged journal evidence",
+                  "[unit][save][cloud-transport][journal]") {
+            const Tests::OwnedTestDirectory directory{"save-cloud-evidence"};
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session);
+            auto transport = BoundTransport(frontend, session);
+            const auto journal = NativeJournal(directory, transport);
+            const auto request = Cloud::TestSupport::CloudWrite();
+            auto intent = UploadIntent(request);
+            const auto stored = journal.Store(intent);
+            REQUIRE(stored.HasValue());
+
+            SECTION("A different account cannot resume or dispatch this mutation") {
+                auto other = BoundTransport(frontend, session, Scope(4, 5, 8));
+                const auto otherJournal = NativeJournal(directory, other);
+                const auto foreign = otherJournal.Load(intent.mutation);
+                REQUIRE(foreign.HasValue());
+                CHECK_FALSE(foreign.Value());
+                Cloud::RequireError(other.DispatchMutation(1, stored.Value(), request.bytes), SaveErrors::CloudMetadataStale);
+            }
+            SECTION("An archive with changed contents or size never reaches the provider") {
+                const auto changed = Cloud::CloudBlobOwnedBytes::Copy(std::array{std::byte{43}});
+                REQUIRE(changed.HasValue());
+                Cloud::RequireError(transport.DispatchMutation(1, stored.Value(), changed.Value()),
+                                    Cloud::CloudObjectErrors::IntegrityMismatch);
+                Cloud::RequireError(transport.DispatchMutation(1, stored.Value(), Cloud::CloudBlobOwnedBytes{}),
+                                    Cloud::CloudObjectErrors::IntegrityMismatch);
+                Cloud::RequireError(transport.DispatchMutation(1, stored.Value()), Cloud::CloudObjectErrors::InvalidRequest);
+            }
+            SECTION("Truncated records do not issue a dispatch proof") {
+                std::filesystem::path record;
+                for (const auto &entry : std::filesystem::recursive_directory_iterator(directory.Path() / "save-cloud")) {
+                    if (entry.path().extension() == ".intent")
+                        record = entry.path();
+                }
+                REQUIRE_FALSE(record.empty());
+                std::filesystem::resize_file(record, 1);
+                Cloud::RequireError(journal.Load(intent.mutation), SaveErrors::CloudMetadataInvalid);
+            }
+            SECTION("Malformed or cancelled writes leave their mutation unrecorded") {
+                intent.mutation = Id<SaveCloudMutationId>(20);
+                intent.upload.reset();
+                Cloud::RequireError(journal.Store(intent), SaveErrors::CloudMetadataInvalid);
+                intent.upload = Application::CloudSaveUploadEvidence{request.expectedDigest, request.bytes.Bytes().size()};
+                CancellationSource cancelled;
+                cancelled.RequestCancellation();
+                CHECK(journal.Store(intent, cancelled.Token()).HasError());
+                const auto absent = journal.Load(intent.mutation);
+                REQUIRE(absent.HasValue());
+                CHECK_FALSE(absent.Value());
+            }
+            CHECK(backend->TotalCalls() == 0);
         }
 
         /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */

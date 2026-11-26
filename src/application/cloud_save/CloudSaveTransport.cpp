@@ -1,4 +1,5 @@
 #include "Horo/Application/CloudSaveTransport.h"
+#include "Horo/Application/CloudSaveMutationJournal.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@ namespace Horo::Application {
         /** @brief Tags the durable partition encoding independently from the slot suffix. */
         constexpr std::string_view partitionDomain = "horo.cloud-save.partition.v1";
         constexpr std::string_view slotDomain = "horo.cloud-save.slot.v1";
+        constexpr std::string_view journalDomain = "horo.cloud-save.journal.v1";
 
         /** @brief Hashes portable partition identities while excluding the installation-local user ID. */
         Sha256Digest HashPartition(const Runtime::SaveCloudMetadataScope &scope, const Runtime::GameProfileId &profile) {
@@ -20,6 +22,13 @@ namespace Horo::Application {
                 std::as_bytes(std::span{partitionDomain}), std::as_bytes(std::span{scope.localNamespace.product.Bytes()}),
                 std::as_bytes(std::span{scope.localNamespace.environment.Bytes()}), std::as_bytes(std::span{profile.Bytes()}),
                 std::as_bytes(std::span{scope.provider.Bytes()}), std::as_bytes(std::span{scope.account.Bytes()})};
+            return ComputeSha256Fragments(parts);
+        }
+
+        /** @brief Separates durable local ownership from portable remote addressing. */
+        Sha256Digest HashJournalPartition(const Runtime::CanonicalSaveNamespaceKey &local, const Sha256Digest &remote) {
+            const std::array<std::span<const std::byte>, 3> parts{
+                std::as_bytes(std::span{journalDomain}), local.Bytes(), std::as_bytes(std::span{remote.bytes})};
             return ComputeSha256Fragments(parts);
         }
 
@@ -44,8 +53,8 @@ namespace Horo::Application {
     }
 
     CloudSaveTransport::CloudSaveTransport(const PlatformServicesFrontend &frontend, const PlatformSubjectHandle subject,
-                                           CloudSaveObjectPrefix prefix) noexcept
-        : frontend_(&frontend), subject_(subject), prefix_(std::move(prefix)) {}
+                                           CloudSaveObjectPrefix prefix, const Sha256Digest journalPartition) noexcept
+        : frontend_(&frontend), subject_(subject), prefix_(std::move(prefix)), journalPartition_(journalPartition) {}
 
     /** @copydoc CloudSaveTransport::Create */
     Result<CloudSaveTransport> CloudSaveTransport::Create(PlatformServicesFrontend &frontend,
@@ -54,11 +63,15 @@ namespace Horo::Application {
         const auto *owner = std::get_if<Runtime::UserProfileOwner>(&scope.localNamespace.owner);
         if (!owner || !scope.IsValid() || !subject.IsValid())
             return Result<CloudSaveTransport>::Failure(MakeError(Runtime::SaveErrors::CloudMetadataInvalid));
+        auto local = Runtime::EncodeSaveNamespaceKey(scope.localNamespace);
+        if (local.HasError())
+            return Result<CloudSaveTransport>::Failure(local.ErrorValue());
         const auto digest = HashPartition(scope, owner->profile);
         auto prefix = CloudSaveObjectPrefix::Copy(std::as_bytes(std::span{digest.bytes}));
         if (prefix.HasError())
             return Result<CloudSaveTransport>::Failure(prefix.ErrorValue());
-        return Result<CloudSaveTransport>::Success(CloudSaveTransport{frontend, subject, std::move(prefix).Value()});
+        return Result<CloudSaveTransport>::Success(
+            CloudSaveTransport{frontend, subject, std::move(prefix).Value(), HashJournalPartition(local.Value(), digest)});
     }
 
     /** @copydoc CloudSaveTransport::Key */
@@ -96,38 +109,33 @@ namespace Horo::Application {
         });
     }
 
-    /** @copydoc CloudSaveTransport::Write */
-    Result<CloudSaveRequest<CloudMutationResult>> CloudSaveTransport::Write(
-        const OperationId operation, const Runtime::SaveGameSlotId slot, CloudBlobOwnedBytes bytes, const CloudBlobDigest digest,
-        const Runtime::SaveCloudMutationId mutation, std::optional<ProviderObjectRevision> expectedRevision) const {
+    /** @copydoc CloudSaveTransport::DispatchMutation */
+    Result<CloudSaveRequest<CloudMutationResult>> CloudSaveTransport::DispatchMutation(
+        const OperationId operation, const CloudSaveDurableMutation &mutation, std::optional<CloudBlobOwnedBytes> bytes) const {
         return Admit<CloudMutationResult>(operation, [&]() -> Result<PlatformRequestHandle<CloudMutationResult>> {
-            auto key = Key(slot);
-            if (key.HasError())
-                return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(key.ErrorValue());
-            CloudWritePrecondition condition = CloudCreateIfAbsent{};
-            if (expectedRevision)
-                condition = CloudMatchProviderRevision{std::move(*expectedRevision)};
-            return frontend_->WriteCloudObject({.subject = subject_,
-                                                .key = std::move(key).Value(),
-                                                .bytes = std::move(bytes),
-                                                .expectedDigest = digest,
-                                                .precondition = std::move(condition),
-                                                .mutation = MutationId(mutation)});
-        });
-    }
+            using Response = Result<PlatformRequestHandle<CloudMutationResult>>;
+            if (mutation.partition_ != journalPartition_)
+                return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+            const auto &intent = mutation.intent_;
+            if (intent.upload.has_value() != bytes.has_value())
+                return Response::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+            if (!intent.upload)
+                return frontend_->DeleteCloudObject({.subject = subject_,
+                                                     .key = mutation.key_,
+                                                     .expectedRevision = *intent.revision,
+                                                     .mutation = MutationId(intent.mutation)});
+            if (bytes->Bytes().size() != intent.upload->size)
+                return Response::Failure(MakeError(CloudObjectErrors::IntegrityMismatch));
 
-    /** @copydoc CloudSaveTransport::Delete */
-    Result<CloudSaveRequest<CloudMutationResult>> CloudSaveTransport::Delete(
-        const OperationId operation, const Runtime::SaveGameSlotId slot, ProviderObjectRevision expectedRevision,
-        const Runtime::SaveCloudMutationId mutation) const {
-        return Admit<CloudMutationResult>(operation, [&]() -> Result<PlatformRequestHandle<CloudMutationResult>> {
-            auto key = Key(slot);
-            if (key.HasError())
-                return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(key.ErrorValue());
-            return frontend_->DeleteCloudObject({.subject = subject_,
-                                                 .key = std::move(key).Value(),
-                                                 .expectedRevision = std::move(expectedRevision),
-                                                 .mutation = MutationId(mutation)});
+            CloudWritePrecondition condition = CloudCreateIfAbsent{};
+            if (intent.revision)
+                condition = CloudMatchProviderRevision{*intent.revision};
+            return frontend_->WriteCloudObject({.subject = subject_,
+                                                .key = mutation.key_,
+                                                .bytes = std::move(*bytes),
+                                                .expectedDigest = intent.upload->digest,
+                                                .precondition = std::move(condition),
+                                                .mutation = MutationId(intent.mutation)});
         });
     }
 }

@@ -1675,6 +1675,16 @@ on another device. Reads carry a finite byte budget. Writes and deletes carry
 the journal's mutation ID and exact conditional revision, and each admitted
 platform request retains its owning Save operation correlation.
 
+The application mutation journal durably stores versioned intent entries in
+host-granted Save storage before cloud dispatch. Its private partition binds
+the complete local namespace to the authenticated remote scope. Each entry
+retains the exact key, local generation and parent, archive identity, payload
+size and digest where applicable, and conditional revision. Reopening checks
+entry integrity and recomputes the binding before issuing dispatch proof.
+An identical mutation can be reused after rebinding to the same scope.
+Changed facts under the same mutation ID fail without replacing the record.
+The coordinator owns pending-work discovery, payload leases and reconciliation.
+
 The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
 complete local `SaveNamespaceId` plus distinct provider and account identities. Each
 record names one current slot generation and exact `ArchiveContentHash`, with bounded
