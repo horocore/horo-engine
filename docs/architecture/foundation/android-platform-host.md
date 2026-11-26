@@ -317,6 +317,9 @@ and its uncaught Java crash receipt in a bounded qualification-tag log read.
 The two receipts must match the private nonce, package UID, PID, and process
 start ticks. A confirmed crash remains a failed launch. The command reports
 that the original process exited without attempting to stop a replacement.
+OpenXR receipt and discovery reads request logs from the captured launch
+timestamp under the same output byte limit and deadline. A newer burst of logs
+cannot hide a conflicting receipt merely by filling a fixed-size tail.
 The Java observer forwards the original exception to Android's crash handler.
 
 The signed `qualification-openxr-development` APK compiles the same Android

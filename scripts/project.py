@@ -1415,6 +1415,11 @@ class AndroidLogClock:
         sampled = device.run("shell", "toybox", "date", "+%s.%N")
         return cls(log_epoch_nanoseconds(sampled), before, time.monotonic_ns())
 
+    def logcat_since(self) -> str:
+        """Format the verified device time as an epoch-valued logcat cutoff."""
+        seconds, nanos = divmod(self.nanoseconds, 1_000_000_000)
+        return f"{seconds}.{nanos:09d}"
+
     def require_continuity(self, initial: AndroidLogClock) -> None:
         elapsed = self.nanoseconds - initial.nanoseconds
         lower = max(0, self.host_before - initial.host_after)
@@ -1656,9 +1661,11 @@ def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> D
     return DeployedProcess(pid, uid, started)
 
 
-def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProcess, start: AndroidLogClock) -> tuple[str, int]:
+def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProcess, start: AndroidLogClock,
+                              *, cold_openxr: bool = False) -> tuple[str, int]:
     """Read bounded logcat output and validate the device clock interval."""
-    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", str(DEPLOY_LOG_TAIL_LINES), "-s",
+    cutoff = start.logcat_since() if cold_openxr else str(DEPLOY_LOG_TAIL_LINES)
+    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", cutoff, "-s",
                      "HoroPackageQualification:I", "AndroidRuntime:E")
     end = AndroidLogClock.read(device)
     end.require_continuity(start)
@@ -1668,7 +1675,7 @@ def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProces
 def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, window: AndroidDiagnosticWindow,
                        categories: tuple[str, ...], timeline: AndroidPressureTimeline | None = None) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
-    raw, through = read_deployed_process_log(device, process, window.start)
+    raw, through = read_deployed_process_log(device, process, window.start, cold_openxr="openxr" in categories)
     facts = package_log_evidence(raw, process, window.evidence_after, through, categories, timeline)
     device.require_identity()
     if facts["crashObserved"] and device.process_id(application) is None:
@@ -1800,7 +1807,7 @@ class AndroidPackageLaunch:
         if recovery is None or recovery.uid != uid:
             raise AndroidDeployError("launch_process_unattributed")
         process = deployed_process(device, self.application, uid)
-        log, through = read_deployed_process_log(device, process, recovery.started)
+        log, through = read_deployed_process_log(device, process, recovery.started, cold_openxr=self.openxr_diagnostic)
         marker = f"{DEPLOY_LAUNCH_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
         deadline_marker = (f"{DEPLOY_DEADLINE_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
                            f" milliseconds={recovery.deadline_ms}")
@@ -1826,7 +1833,8 @@ class AndroidPackageLaunch:
         recovery = self.recovery
         if recovery is None:
             return False
-        raw = self.device.run("logcat", "-v", "time,epoch,nsec,uid", "-t", "200", "-s", "HoroPackageQualification:I")
+        raw = self.device.run("logcat", "-v", "time,epoch,nsec,uid", "-t", recovery.started.logcat_since(), "-s",
+                              "HoroPackageQualification:I")
         through = AndroidLogClock.read(self.device)
         through.require_continuity(recovery.started)
         markers = {

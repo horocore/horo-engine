@@ -75,7 +75,8 @@ def launch_command(application, *, openxr=False):
 
 
 class AndroidDeployTests(unittest.TestCase):
-    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False, launch_receipt=None, serial=SERIAL):
+    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False, launch_receipt=None, serial=SERIAL,
+                emulate_log_tail=False):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(profile_name, ["arm64-v8a"])
         application = profile["applicationId"]
@@ -123,6 +124,15 @@ class AndroidDeployTests(unittest.TestCase):
             else:
                 self.assertEqual(command[1:3], ["-t", TRANSPORT])
                 args = tuple(command[3:])
+            count_tail = False
+            if args[0] == "logcat":
+                tail_index = args.index("-t") + 1
+                tail = args[tail_index]
+                count_tail = tail.isdecimal()
+                if not count_tail:
+                    self.assertTrue(openxr)
+                    self.assertEqual(tail, START)
+                    args = (*args[:tail_index], str(project.DEPLOY_LOG_TAIL_LINES), *args[tail_index + 1:])
             self.assertGreater(deadline, time.monotonic())
             commands.append(args)
             if args[:4] == ("install", "-r", "--user", "10"):
@@ -148,6 +158,8 @@ class AndroidDeployTests(unittest.TestCase):
                 raise response
             if args == stop and not isinstance(response, tuple):
                 running = False
+            if emulate_log_tail and count_tail and isinstance(response, str):
+                response = "".join(response.splitlines(keepends=True)[-project.DEPLOY_LOG_TAIL_LINES:])
             return response if isinstance(response, tuple) else (0, response)
 
         stdout = io.StringIO()
@@ -410,6 +422,20 @@ class AndroidDeployTests(unittest.TestCase):
                 self.assertEqual((status, report["error"]), (1, reason))
                 self.assertEqual(report["cleanup"], {"status": "stopped"})
                 self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+
+    def test_openxr_diagnostics_admit_the_launch_time_window_even_after_more_than_one_tail(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        noise = log_line("unclassified private tracking text", stamp="1795000000.104800000") * project.DEPLOY_LOG_TAIL_LINES
+        earlier = log_line(OPENXR.replace("runtimePatch=63", "runtimePatch=62"), stamp="1795000000.104700000")
+        status, report, _ = self.execute({LOGCAT: earlier + noise + log_line(OPENXR)}, OPENXR_OPTIONS, name, emulate_log_tail=True)
+        self.assertEqual((status, report.get("error"), report["status"]), (1, "openxr_diagnostic_ambiguous", "partial"))
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertNotIn("observed", report)
+        self.assertNotIn("private tracking text", json.dumps(report))
+
+        status, report, _ = self.execute({LOGCAT: noise + log_line(OPENXR)}, OPENXR_OPTIONS, name, emulate_log_tail=True)
+        self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
+        self.assertNotIn("private tracking text", json.dumps(report))
 
     def test_openxr_checks_selected_apk_before_any_device_command(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
