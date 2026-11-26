@@ -237,6 +237,23 @@ namespace Horo::Tests::OpenXR {
             CHECK(fixture.script.sampleCalls == 2);
             RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
         }
+        SECTION("a failed native query still observes withdrawal before permission can be restored") {
+            REQUIRE(fixture.Start(fixture.scope).HasValue());
+            REQUIRE(fixture.Advance(100).Value());
+            fixture.script.onSample = [&fixture] { fixture.lightPermitted = false; };
+            fixture.script.sampleResult = XR_ERROR_RUNTIME_FAILURE;
+            RequireFailureIdentity(fixture.Advance(110), XRErrors::PermissionDenied);
+            CHECK(owner.NeedsLightRetirement(fixture.scope));
+
+            fixture.lightPermitted = true;
+            fixture.script.onSample = {};
+            fixture.script.sampleResult = XR_SUCCESS;
+            RequireFailureIdentity(fixture.Read(120), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.Advance(120), XRErrors::OperationUnavailable);
+            CHECK(fixture.script.sampleCalls == 2);
+            REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
+            RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::IdentityStale);
+        }
         REQUIRE(owner.Close().HasValue());
         CHECK_FALSE(fixture.script.live);
     }

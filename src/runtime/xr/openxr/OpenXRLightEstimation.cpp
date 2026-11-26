@@ -236,6 +236,8 @@ namespace Horo::XR::OpenXRInternal {
         light_.world = world;
         light_.lastRequest = now;
         const auto result = light_.get(light_.handle, &info, &native);
+        if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         if (result != XR_SUCCESS) {
             light_.current.reset();
             const auto &failure = LightFailure(result);
@@ -244,8 +246,6 @@ namespace Horo::XR::OpenXRInternal {
                 light_.active = false;
             return Outcome::Failure(MakeError(failure, "xrGetLightEstimateANDROID"));
         }
-        if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
-            return Outcome::Failure(admitted.ErrorValue());
         const auto sample = DecodeLightEstimate(scope, native, ambient, directional);
         if (sample.HasError()) {
             light_.current.reset();
