@@ -387,7 +387,7 @@ namespace Horo::Application {
         Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
         const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const Runtime::SaveSlotLifecycleTarget &target,
         const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation,
-        const CloudSaveQuarantinePolicy *quarantine) const {
+        const CloudSaveQuarantinePolicy *quarantine, const std::span<const Runtime::ImmutableSaveArchive> ancestors) const {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         if (!OwnsDownloadTarget(download, target, expected))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
@@ -403,7 +403,8 @@ namespace Horo::Application {
             const auto revision = download.revision_->Bytes();
             Runtime::SaveCloudObjectRef object{.key = {key.begin(), key.end()},
                                                .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
-            auto applied = lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation);
+            auto applied = lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation,
+                                                           ancestors);
             const auto &rejection = Runtime::SaveErrors::CloudArchiveRejected;
             if (applied.HasError() && applied.ErrorValue().code.Value() == rejection.code.Value() &&
                 applied.ErrorValue().domain.Value() == rejection.domain.Value())
@@ -418,7 +419,8 @@ namespace Horo::Application {
     Result<Runtime::SaveCloudConflictSnapshot> CloudSaveTransport::InspectDownload(
         Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
         const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const Runtime::SaveSlotLifecycleTarget &target,
-        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation) const {
+        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation,
+        const std::span<const Runtime::ImmutableSaveArchive> ancestors) const {
         using Response = Result<Runtime::SaveCloudConflictSnapshot>;
         if (!OwnsDownloadTarget(download, target, expected))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
@@ -428,7 +430,7 @@ namespace Horo::Application {
         if (read.HasError())
             return Response::Failure(read.ErrorValue());
         try {
-            return lifecycle.InspectCloudDownload(target, expected, StageDownload(*read.Value()), cancellation);
+            return lifecycle.InspectCloudDownload(target, expected, StageDownload(*read.Value()), cancellation, ancestors);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }

@@ -1078,6 +1078,58 @@ namespace Horo::Runtime {
                 CHECK(applied.Value().entry->publication.generation == header.slotGeneration);
                 checkPublished();
             }
+            SECTION("A multi-hop remote advance requires every verified parent in order") {
+                auto older = header;
+                older.slotGeneration = Id<SlotGenerationId>(91);
+                auto newer = header;
+                newer.slotGeneration = Id<SlotGenerationId>(92);
+                newer.parentGeneration = older.slotGeneration;
+                auto tip = header;
+                tip.parentGeneration = newer.slotGeneration;
+                const auto tipBytes = SaveSlotLifecycleTest::RewriteHeader(archive, tip);
+                const auto own = [&](const SaveArchiveHeader &value) {
+                    return ImmutableSaveArchive{
+                        std::make_shared<const std::vector<std::byte>>(SaveSlotLifecycleTest::RewriteHeader(archive, value))};
+                };
+                const std::array parents{own(newer), own(older)};
+                const auto snapshot = observe(tipBytes);
+                const auto localBefore = fixture.Index();
+
+                SECTION("Complete ancestry admits the exact tip and preserves its bytes") {
+                    const auto compared = transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                    parents);
+                    REQUIRE(compared.HasValue());
+                    CHECK(compared.Value().relation == SaveCloudHeadRelation::RemoteAhead);
+                    CHECK(fixture.Index().entries == localBefore.entries);
+                    const auto applied = transport.ApplyDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                 nullptr, parents);
+                    REQUIRE(applied.HasValue());
+                    fixture.Reopen();
+                    CHECK(fixture.ExportBytes(10) == tipBytes);
+                }
+                SECTION("Missing, out-of-order and excessive ancestry cannot change the slot") {
+                    Cloud::RequireError(transport.ApplyDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                    nullptr, std::span{parents}.first(1)),
+                                        SaveErrors::SlotCommitGenerationStale);
+                    auto swapped = parents;
+                    std::swap(swapped[0], swapped[1]);
+                    Cloud::RequireError(transport.ApplyDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                    nullptr, swapped),
+                                        SaveErrors::SlotCommitGenerationStale);
+                    auto cyclic = newer;
+                    cyclic.parentGeneration = tip.slotGeneration;
+                    const std::array cycle{own(cyclic), parents[1]};
+                    Cloud::RequireError(transport.ApplyDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                    nullptr, cycle),
+                                        SaveErrors::SlotCommitGenerationStale);
+                    const std::vector tooMany(MaximumCloudAncestorArchives + 1, parents.front());
+                    Cloud::RequireError(transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value(), {},
+                                                                      tooMany),
+                                        SaveErrors::CloudMetadataLimitExceeded);
+                    CHECK(fixture.Index().entries == localBefore.entries);
+                    CHECK(fixture.ExportBytes(10) == original);
+                }
+            }
             SECTION("Inspection sees the local parent without changing either publication") {
                 const auto snapshot = observe(predecessor);
                 const auto compared = transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value());

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <utility>
 
@@ -151,32 +152,35 @@ namespace Horo::Application {
             const CloudSaveImportTarget &target, const CancellationToken &cancellation = {},
             const CloudSaveQuarantinePolicy *quarantine = nullptr) const;
 
-        /** @brief Applies a direct descendant to the same logical slot without rewriting its verified archive.
+        /** @brief Applies a verified descendant to the same logical slot without rewriting its archive.
          * @param lifecycle Local publication authority. @param download Admitted remote selection.
          * @param completion Terminal observation of that exact read. @param target Existing local slot consent.
          * @param expected Exact catalog and cloud evidence captured before transfer.
          * @param cancellation Observed until local manifest publication.
          * @param quarantine Optional host grant for retaining rejected archive evidence.
+         * @param ancestors Complete intermediate archives, nearest the remote head first.
          * @return Durable local result or typed rejection. Runs on the serialized storage lane.
          */
         [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> ApplyDownload(
             Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
             const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
-            const CancellationToken &cancellation = {}, const CloudSaveQuarantinePolicy *quarantine = nullptr) const;
+            const CancellationToken &cancellation = {}, const CloudSaveQuarantinePolicy *quarantine = nullptr,
+            std::span<const Runtime::ImmutableSaveArchive> ancestors = {}) const;
 
         /** @brief Produces a display-safe comparison from an exact authenticated download.
          * @param lifecycle Local catalog authority. @param download Admitted remote selection.
          * @param completion Terminal observation of that read. @param target Existing local slot consent.
          * @param expected Exact catalog and cloud evidence captured before transfer.
          * @param cancellation Observed before and after archive verification.
+         * @param ancestors Complete intermediate archives, nearest the remote head first.
          * @return A bounded read-only comparison or a typed rejection.
          */
         [[nodiscard]] Result<Runtime::SaveCloudConflictSnapshot> InspectDownload(
             Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
             const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
-            const CancellationToken &cancellation = {}) const;
+            const CancellationToken &cancellation = {}, std::span<const Runtime::ImmutableSaveArchive> ancestors = {}) const;
 
         /** @brief Dispatches an exact durable mutation after checking its binding and payload.
          * @param operation Owning Save operation ID.

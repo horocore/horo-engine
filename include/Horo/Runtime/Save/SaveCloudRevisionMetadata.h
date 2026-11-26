@@ -17,6 +17,9 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    /** @brief Hard ceiling for intermediate verified cloud archives in one comparison. */
+    inline constexpr std::size_t MaximumCloudAncestorArchives = 16;
+
     /** @brief Verified publication identity and direct lineage, without payload or presentation fields. */
     struct SaveCloudPublicationHead final {
         SaveGameSlotId slot;

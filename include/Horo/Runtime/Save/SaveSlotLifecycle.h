@@ -240,7 +240,7 @@ namespace Horo::Runtime {
                                                         const SaveCloudRevisionSnapshot &expected,
                                                         const SaveCloudRevisionSnapshot &candidate);
 
-        /** @brief Applies a verified direct cloud descendant with its original generation and bytes.
+        /** @brief Applies a verified cloud descendant with its original generation and bytes.
          * @param target Exact existing slot, binding and catalog revision.
          * @param expected Catalog and provider evidence selected before the transfer.
          * @param object Opaque key and exact observed provider revision.
@@ -251,6 +251,16 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
             const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
             SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {});
+        /** @brief Applies a descendant through complete intermediate archives, nearest the remote head first.
+         * @param target Existing slot and binding. @param expected Pair selected before transfer.
+         * @param object Exact cloud key and revision. @param archive Selected remote archive.
+         * @param cancellation Observed before publication. @param ancestors Intermediate archives excluding both selected heads.
+         * @return Durable result or a typed conflict, validation or storage failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, SaveCloudObjectRef object,
+            const ImmutableSaveArchive &archive, const CancellationToken &cancellation,
+            std::span<const ImmutableSaveArchive> ancestors);
 
         /** @brief Inspects exact local and remote archives without publishing or retiring either one.
          * @param target Existing selected local slot and binding. @param expected Pair selected before transfer.
@@ -261,6 +271,15 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownload(
             const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
             const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {}) const;
+        /** @brief Inspects a download with a bounded sequence of intermediate ancestors.
+         * @param target Existing slot and binding. @param expected Pair selected before transfer.
+         * @param archive Selected remote archive. @param cancellation Observed during validation.
+         * @param ancestors Intermediate archives, nearest the remote head first, within the archive byte budget.
+         * @return A display-safe comparison or typed rejection.
+         */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownload(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, const ImmutableSaveArchive &archive,
+            const CancellationToken &cancellation, std::span<const ImmutableSaveArchive> ancestors) const;
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.
@@ -366,11 +385,14 @@ namespace Horo::Runtime {
         /** @brief Applies a cloud descendant while holding the exact local publication authority. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendantLocked(
             Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
-            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation);
+            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation,
+            std::span<const ImmutableSaveArchive> ancestors);
         /** @brief Reads and compares two exact archives while the local catalog lease remains held. */
         [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownloadLocked(
             const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &current, const ImmutableSaveArchive &archive,
-            const CancellationToken &cancellation) const;
+            const CancellationToken &cancellation, std::span<const ImmutableSaveArchive> ancestors) const;
+        /** @brief Reads the selected archive and matches it to its trusted local catalog entry. */
+        [[nodiscard]] Result<SaveCloudPublicationHead> ReadCloudPublication(const SaveSlotCatalogEntry &entry) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */
         [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
                                                         bool retained) const;

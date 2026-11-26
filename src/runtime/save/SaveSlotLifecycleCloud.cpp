@@ -2,6 +2,7 @@
 #include "SaveCloudRevisionMetadataInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <new>
 #include <utility>
@@ -66,16 +67,77 @@ namespace Horo::Runtime {
             return !local.object || (local.object->key == remote.key && local.object->revision != remote.revision);
         }
 
+        /** @brief Bounds the supplied lineage before decoding any intermediate archive. */
+        Result<void> BoundAncestors(const std::span<const ImmutableSaveArchive> ancestors, std::size_t remaining) {
+            if (ancestors.size() > MaximumCloudAncestorArchives)
+                return Result<void>::Failure(MakeError(SaveErrors::CloudMetadataLimitExceeded));
+            for (const auto &archive : ancestors) {
+                if (!archive.bytes || archive.bytes->empty())
+                    return Result<void>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+                if (archive.bytes->size() > remaining)
+                    return Result<void>::Failure(MakeError(SaveErrors::CloudMetadataLimitExceeded));
+                remaining -= archive.bytes->size();
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks every authenticated edge from the downloaded tip to the selected local generation. */
+        Result<void> VerifyCloudAncestors(const SaveCloudPublicationHead &local, const SaveCloudPublicationHead &remote,
+                                          const std::span<const ImmutableSaveArchive> ancestors, const SaveSlotLifecyclePolicy &policy,
+                                          ISaveSlotLifecycleHost &host, const CancellationToken &cancellation) {
+            std::array<SlotGenerationId, MaximumCloudAncestorArchives + 1> visited{};
+            visited.front() = remote.generation;
+            std::size_t count = 1;
+            auto next = remote.parent;
+            for (const auto &archive : ancestors) {
+                const auto seen = std::span{visited}.first(count);
+                if (!next || *next == local.generation || next == local.parent || std::ranges::find(seen, *next) != seen.end())
+                    return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+                if (const auto pending = CheckCancellation(cancellation); pending.HasError())
+                    return pending;
+                const auto verified = Admit(*archive.bytes, policy.destination, policy, host);
+                if (verified.HasError())
+                    return Result<void>::Failure(verified.ErrorValue());
+                const auto &header = verified.Value().Header();
+                if (header.slot != local.slot || header.slotGeneration != *next)
+                    return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+                visited[count++] = header.slotGeneration;
+                next = header.parentGeneration;
+            }
+            return next == local.generation ? Result<void>::Success()
+                                            : Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+        }
+
+        /** @brief Extends the direct comparison only with a complete verified path. */
+        Result<SaveCloudHeadRelation> ClassifyCloudDownload(const SaveCloudPublicationHead &local, const SaveCloudPublicationHead &remote,
+                                                            const std::span<const ImmutableSaveArchive> ancestors,
+                                                            const SaveSlotLifecyclePolicy &policy, ISaveSlotLifecycleHost &host,
+                                                            const CancellationToken &cancellation) {
+            using Response = Result<SaveCloudHeadRelation>;
+            const auto relation = CompareSaveCloudHeads(local, remote);
+            if (ancestors.empty() || relation == SaveCloudHeadRelation::IntegrityMismatch)
+                return Response::Success(relation);
+            if (relation == SaveCloudHeadRelation::SamePublication || relation == SaveCloudHeadRelation::LocalAhead)
+                return Response::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+            const auto verified = VerifyCloudAncestors(local, remote, ancestors, policy, host, cancellation);
+            if (verified.HasError())
+                return Response::Failure(verified.ErrorValue());
+            return Response::Success(SaveCloudHeadRelation::RemoteAhead);
+        }
+
         /** @brief Admits only a verified descendant of the selected publication to the replacement transaction. */
-        Result<void> CheckCloudDescendant(const SaveSlotPublicationMetadata &local, const ValidatedSaveArchive &incoming) {
+        Result<void> CheckCloudDescendant(const SaveCloudPublicationHead &local, const ValidatedSaveArchive &incoming,
+                                          const std::span<const ImmutableSaveArchive> ancestors, const SaveSlotLifecyclePolicy &policy,
+                                          ISaveSlotLifecycleHost &host, const CancellationToken &cancellation) {
             const auto &header = incoming.Header();
             if (header.slot != local.slot)
                 return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveHeaderInvalid)));
-            const SaveCloudPublicationHead localHead{local.slot, local.generation, {}, local.archiveContent, local.canonicalState};
-            const auto relation = CompareSaveCloudHeads(localHead, CloudHead(incoming));
-            if (relation == SaveCloudHeadRelation::IntegrityMismatch)
+            const auto relation = ClassifyCloudDownload(local, CloudHead(incoming), ancestors, policy, host, cancellation);
+            if (relation.HasError())
+                return Result<void>::Failure(relation.ErrorValue());
+            if (relation.Value() == SaveCloudHeadRelation::IntegrityMismatch)
                 return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveContentHashMismatch)));
-            if (relation != SaveCloudHeadRelation::RemoteAhead)
+            if (relation.Value() != SaveCloudHeadRelation::RemoteAhead)
                 return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
             return Result<void>::Success();
         }
@@ -153,6 +215,13 @@ namespace Horo::Runtime {
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ApplyCloudDescendant(
         const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, SaveCloudObjectRef object,
         const ImmutableSaveArchive &archive, const CancellationToken &cancellation) {
+        return ApplyCloudDescendant(target, expected, std::move(object), archive, cancellation, {});
+    }
+
+    /** @copydoc SaveSlotLifecycle::ApplyCloudDescendant */
+    Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ApplyCloudDescendant(
+        const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, SaveCloudObjectRef object,
+        const ImmutableSaveArchive &archive, const CancellationToken &cancellation, const std::span<const ImmutableSaveArchive> ancestors) {
         using Response = Result<SaveSlotLifecycleResult>;
         if (!state_ || !CloudAllowed(state_->policy))
             return Response::Failure(MakeError(SaveErrors::StoragePermissionDenied));
@@ -161,6 +230,9 @@ namespace Horo::Runtime {
             return Response::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
         if (!archive.bytes || archive.bytes->empty() || archive.bytes->size() > state_->policy.archiveLimits.maximumArchiveBytes)
             return Response::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        const auto bound = BoundAncestors(ancestors, state_->policy.archiveLimits.maximumArchiveBytes - archive.bytes->size());
+        if (bound.HasError())
+            return Response::Failure(bound.ErrorValue());
         const SaveCloudRevisionMetadataLimits limits;
         if (object.key.empty() || object.key.size() > limits.maximumObjectKeyBytes || !object.revision ||
             object.revision->empty() || object.revision->size() > limits.maximumRevisionBytes)
@@ -171,7 +243,7 @@ namespace Horo::Runtime {
             Operation operation{*state_};
             if (const auto leased = BeginRetention(operation, target.address.namespaceAccess); leased.HasError())
                 return Response::Failure(leased.ErrorValue());
-            return ApplyCloudDescendantLocked(operation, target, expected, std::move(object), archive, cancellation);
+            return ApplyCloudDescendantLocked(operation, target, expected, std::move(object), archive, cancellation, ancestors);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
         }
@@ -181,6 +253,13 @@ namespace Horo::Runtime {
     Result<SaveCloudConflictSnapshot> SaveSlotLifecycle::InspectCloudDownload(
         const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, const ImmutableSaveArchive &archive,
         const CancellationToken &cancellation) const {
+        return InspectCloudDownload(target, expected, archive, cancellation, {});
+    }
+
+    /** @copydoc SaveSlotLifecycle::InspectCloudDownload */
+    Result<SaveCloudConflictSnapshot> SaveSlotLifecycle::InspectCloudDownload(
+        const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, const ImmutableSaveArchive &archive,
+        const CancellationToken &cancellation, const std::span<const ImmutableSaveArchive> ancestors) const {
         using Response = Result<SaveCloudConflictSnapshot>;
         if (!state_ || !CloudAllowed(state_->policy))
             return Response::Failure(MakeError(SaveErrors::StoragePermissionDenied));
@@ -190,6 +269,9 @@ namespace Horo::Runtime {
         const auto limit = state_->policy.archiveLimits.maximumArchiveBytes;
         if (!archive.bytes || archive.bytes->empty() || archive.bytes->size() > limit)
             return Response::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        const auto bound = BoundAncestors(ancestors, limit - archive.bytes->size());
+        if (bound.HasError())
+            return Response::Failure(bound.ErrorValue());
         if (const auto pending = CheckCancellation(cancellation); pending.HasError())
             return Response::Failure(pending.ErrorValue());
         try {
@@ -203,7 +285,7 @@ namespace Horo::Runtime {
                 return Response::Failure(MakeError(SaveErrors::CloudMetadataStale));
             if (const auto checked = CheckRetentionTarget(operation, target, false); checked.HasError())
                 return Response::Failure(checked.ErrorValue());
-            return InspectCloudDownloadLocked(target, pair.Value(), archive, cancellation);
+            return InspectCloudDownloadLocked(target, pair.Value(), archive, cancellation, ancestors);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
         }
@@ -212,7 +294,7 @@ namespace Horo::Runtime {
     /** @copydoc SaveSlotLifecycle::InspectCloudDownloadLocked */
     Result<SaveCloudConflictSnapshot> SaveSlotLifecycle::InspectCloudDownloadLocked(
         const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &current, const ImmutableSaveArchive &archive,
-        const CancellationToken &cancellation) const {
+        const CancellationToken &cancellation, const std::span<const ImmutableSaveArchive> ancestors) const {
         using Response = Result<SaveCloudConflictSnapshot>;
         const auto &policy = state_->policy;
         const auto entry = std::ranges::find_if(current.Index().entries, [&target](const SaveSlotCatalogEntry &value) {
@@ -220,21 +302,19 @@ namespace Horo::Runtime {
         });
         if (entry == current.Index().entries.end())
             return Response::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
-        auto bytes = state_->storage.ReadLifecycleGeneration(*target.generation, policy.archiveLimits.maximumArchiveBytes);
-        if (bytes.HasError())
-            return Response::Failure(bytes.ErrorValue());
-        const auto local = Admit(std::move(bytes).Value(), policy.destination, policy, *state_->host);
+        const auto local = ReadCloudPublication(*entry);
         if (local.HasError())
             return Response::Failure(local.ErrorValue());
-        if (const auto matched = Matches(*entry, local.Value()); matched.HasError())
-            return Response::Failure(matched.ErrorValue());
         const auto remote = Admit(*archive.bytes, policy.destination, policy, *state_->host);
         if (remote.HasError())
             return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, remote.ErrorValue()));
-        const auto localHead = CloudHead(local.Value());
+        const auto &localHead = local.Value();
         const auto remoteHead = CloudHead(remote.Value());
         if (localHead.slot != remoteHead.slot)
             return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveHeaderInvalid)));
+        const auto relation = ClassifyCloudDownload(localHead, remoteHead, ancestors, policy, *state_->host, cancellation);
+        if (relation.HasError())
+            return Response::Failure(relation.ErrorValue());
         if (const auto pending = CheckCancellation(cancellation); pending.HasError())
             return Response::Failure(pending.ErrorValue());
         return Response::Success({.slot = localHead.slot,
@@ -242,14 +322,30 @@ namespace Horo::Runtime {
                                   .remoteGeneration = remoteHead.generation,
                                   .catalogRevision = current.Index().revision,
                                   .cloudRevision = current.Metadata().revision,
-                                  .relation = CompareSaveCloudHeads(localHead, remoteHead),
+                                  .relation = relation.Value(),
                                   .equivalentGameplay = localHead.state == remoteHead.state});
+    }
+
+    /** @copydoc SaveSlotLifecycle::ReadCloudPublication */
+    Result<SaveCloudPublicationHead> SaveSlotLifecycle::ReadCloudPublication(const SaveSlotCatalogEntry &entry) const {
+        using Response = Result<SaveCloudPublicationHead>;
+        const auto &policy = state_->policy;
+        auto bytes = state_->storage.ReadLifecycleGeneration(entry.publication.generation, policy.archiveLimits.maximumArchiveBytes);
+        if (bytes.HasError())
+            return Response::Failure(bytes.ErrorValue());
+        const auto archive = Admit(std::move(bytes).Value(), policy.destination, policy, *state_->host);
+        if (archive.HasError())
+            return Response::Failure(archive.ErrorValue());
+        if (const auto matched = Matches(entry, archive.Value()); matched.HasError())
+            return Response::Failure(matched.ErrorValue());
+        return Response::Success(CloudHead(archive.Value()));
     }
 
     /** @copydoc SaveSlotLifecycle::ApplyCloudDescendantLocked */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ApplyCloudDescendantLocked(
         Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
-        SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation) {
+        SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation,
+        const std::span<const ImmutableSaveArchive> ancestors) {
         using Response = Result<SaveSlotLifecycleResult>;
         auto &catalog = operation.catalog;
         const auto current = ReadPair(catalog, expected.Metadata().scope);
@@ -271,7 +367,12 @@ namespace Horo::Runtime {
             return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, verified.ErrorValue()));
         if (const auto checked = CheckRetentionTarget(operation, target, false); checked.HasError())
             return Response::Failure(checked.ErrorValue());
-        if (auto compared = CheckCloudDescendant(selected->entry.publication, verified.Value()); compared.HasError())
+        const auto localHead = ReadCloudPublication(selected->entry);
+        if (localHead.HasError())
+            return Response::Failure(localHead.ErrorValue());
+        if (auto compared = CheckCloudDescendant(localHead.Value(), verified.Value(), ancestors, state_->policy, *state_->host,
+                                                 cancellation);
+            compared.HasError())
             return Response::Failure(compared.ErrorValue());
         if (auto prepared = PrepareRetentionUpdate(operation, target, false); prepared.HasError())
             return Response::Failure(prepared.ErrorValue());
