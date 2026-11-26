@@ -4,6 +4,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Packages/NativePackageModuleHost.h"
+#include "Horo/Packages/PackageRestoreErrors.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
@@ -86,7 +87,13 @@ namespace {
             observeJournal_ = std::move(observe);
         }
 
+        void OnInspect(std::function<void(const std::filesystem::path &)> observe) {
+            observeInspection_ = std::move(observe);
+        }
+
         Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
+            if (observeInspection_)
+                observeInspection_(path);
             return native_.InspectEntry(path);
         }
 
@@ -154,6 +161,7 @@ namespace {
         NativeDurableFileSystem native_;
         std::function<void()> observeCheckpoint_;
         std::function<void()> observeJournal_;
+        std::function<void(const std::filesystem::path &)> observeInspection_;
         LockWrite write_{LockWrite::Normal};
         bool blockRecoveryRequest_{};
         bool failedLockWrite_{};
@@ -364,6 +372,29 @@ namespace {
         REQUIRE(rollback.HasValue());
         CHECK(rollback.Value().request == oldRequest);
         CHECK(rollback.Value().lock == oldLock);
+    }
+
+    TEST_CASE("Package project reads reject a replaced lock even if the request is unchanged", "[packages][application][host][update]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto request = fixture.Read("packages.json");
+        const auto replacement = nlohmann::json::parse(fixture.Read("packages.lock")).dump(2) + '\n';
+        const auto journal = policy.projectRoot / ".horo/local/package-metadata.pending";
+        const auto mode = GENERATE(PackageProjectReadMode::ReadOnly, PackageProjectReadMode::Recover);
+        unsigned journalInspections{};
+        files.OnInspect([&](const std::filesystem::path &path) {
+            if (path == journal && ++journalInspections == 2)
+                fixture.Write("packages.lock", replacement);
+        });
+        const auto stale = PreparePackageProject(policy, files, {}, mode);
+        REQUIRE(journalInspections >= 2);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == "packages.host.metadata_conflict");
+        CHECK(fixture.Read("packages.json") == request);
+        CHECK(fixture.Read("packages.lock") == replacement);
+        REQUIRE(PreparePackageProject(policy, files, {}, mode).HasValue());
     }
 
     TEST_CASE("Live removal requires the right project's reservation and revokes activation after commit", "[packages][application][host]") {
@@ -606,6 +637,20 @@ namespace {
             fixture.Write("packages.json", requestJson + '\n');
             CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
             CHECK(fixture.Read("packages.json") == requestJson + '\n');
+            return;
+        }
+        SECTION("rollback preview detects a journal that appeared while opening the checkpoint") {
+            REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasValue());
+            files.OnInspect([&](const std::filesystem::path &path) {
+                if (path.filename() == "package-update.rollback")
+                    std::ofstream{journal, std::ios::binary} << "unrelated pending publication";
+            });
+            const auto preview = ReadPackageProjectRollback(policy, files, {});
+            REQUIRE(preview.HasError());
+            CHECK(preview.ErrorValue().code.Value() == Packages::PackageRestoreErrors::Busy.code.Value());
+            CHECK(std::filesystem::exists(journal));
+            CHECK(fixture.Read("packages.json") == requestJson);
+            CHECK(fixture.Read("packages.lock") == lockJson);
             return;
         }
         SECTION("a different candidate lock is rejected even with a matching approval digest") {

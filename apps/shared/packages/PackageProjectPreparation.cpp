@@ -396,20 +396,16 @@ namespace Horo::Application::Internal {
                                                              policy.limits.supportedPackageFormatVersion);
         }
 
-        /** @brief Rechecks the request after the lock read and detects an in-flight paired publication. */
-        Result<void> ConfirmReadablePair(const std::filesystem::path &metadata, const std::string_view request,
-                                         const DurableFileSystem &files, const CancellationToken &cancellation) {
-            const auto recheck = ReadMetadata(metadata / "packages.json", RequestLimit, cancellation);
-            if (recheck.HasError())
-                return Result<void>::Failure(recheck.ErrorValue());
-            if (recheck.Value() != request)
-                return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::InvalidInput));
+        /** @brief Rejects an in-flight publication and rechecks both exact metadata documents. */
+        Result<void> ConfirmReadablePair(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                         const MetadataDocuments &expected, const DurableFileSystem &files,
+                                         const CancellationToken &cancellation) {
             const auto pending = HasJournal(JournalPath(metadata), files);
             if (pending.HasError())
                 return Result<void>::Failure(pending.ErrorValue());
             if (pending.Value())
                 return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::Busy));
-            return Result<void>::Success();
+            return RecheckMetadataBase(metadata, limits, expected, cancellation);
         }
 
         /** @brief The durable request precedes the lock, whose native replacement is the commit point. */
@@ -619,7 +615,7 @@ namespace Horo::Application::Internal {
         if (const auto valid = lock.ValidateForRestore(request.Digest(), policy.platform, policy.limits.supportedPackageFormatVersion);
             valid.HasError())
             return Result<PreparedPackageProject>::Failure(valid.ErrorValue());
-        if (auto stable = ConfirmReadablePair(metadata, documents.Value().request, files, cancellation); stable.HasError())
+        if (auto stable = ConfirmReadablePair(metadata, policy.limits.lockfile, documents.Value(), files, cancellation); stable.HasError())
             return Result<PreparedPackageProject>::Failure(stable.ErrorValue());
         auto bytes = std::move(documents).Value();
         PreparedPackageProject prepared;
@@ -695,7 +691,7 @@ namespace Horo::Application::Internal {
         const auto current = ReadDocuments(metadata, limits, cancellation);
         if (current.HasError())
             return Output::Failure(current.ErrorValue());
-        if (const auto stable = ConfirmReadablePair(metadata, current.Value().request, files, cancellation); stable.HasError())
+        if (const auto stable = ConfirmReadablePair(metadata, limits, current.Value(), files, cancellation); stable.HasError())
             return Output::Failure(stable.ErrorValue());
         for (const bool pending : {true, false}) {
             const auto path = RollbackPath(metadata, pending);
@@ -718,7 +714,7 @@ namespace Horo::Application::Internal {
             const auto valid = ValidateDocuments(point->oldRequest, point->oldLock, limits);
             if (valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            if (const auto stable = RecheckMetadataBase(metadata, limits, current.Value(), cancellation); stable.HasError())
+            if (const auto stable = ConfirmReadablePair(metadata, limits, current.Value(), files, cancellation); stable.HasError())
                 return Output::Failure(stable.ErrorValue());
             return Output::Success(
                 {std::string{point->oldRequest}, std::string{point->oldLock}, point->publishedRequest, point->publishedLock});
