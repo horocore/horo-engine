@@ -9,6 +9,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <system_error>
 #include <thread>
 
 namespace Horo::Editor {
@@ -159,8 +160,16 @@ namespace Horo::Editor {
         if (const auto status = CheckLive(); status != Pending)
             return status == Accepted ? InvalidRequest : status;
         deadline_ = Clock::now() + providerBudget_;
-        providerWindow_ = std::make_unique<ProviderWindow>(deadline_, evidence_.stop_);
+        try {
+            providerWindow_ = std::make_unique<ProviderWindow>(deadline_, evidence_.stop_);
+        } catch (const std::bad_alloc &) {
+            return CloseWith(ResourceUnavailable);
+        } catch (const std::system_error &) {
+            return CloseWith(ResourceUnavailable);
+        }
         status_ = Accepted;
+        if (const auto status = CheckLive(); status != Accepted)
+            return status;
         stream_ = provider.Open(evidence_.Locale(), source_.format, providerWindow_->providerStop.get_token());
         return CheckProvider(static_cast<bool>(stream_));
     }

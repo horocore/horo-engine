@@ -17,22 +17,28 @@ namespace Horo::Editor {
         using Kind = SpeechHypothesisKind;
         namespace Capture = Audio::Backend;
 
+        enum class SpeechOperation { Open, Append, FinishInput, Poll };
+
         /** @brief Records only operation counts and supplies controlled provider updates to the test session. */
         struct SpeechFixtureProvider final : ISpeechProvider {
             struct Stream final : ISpeechProviderStream {
                 explicit Stream(SpeechFixtureProvider &state) : fixture(state) {}
 
-                bool Append(const Capture::AudioCapturedBlock &, std::span<const Audio::AudioSample>, std::stop_token) noexcept override {
+                bool Append(const Capture::AudioCapturedBlock &, std::span<const Audio::AudioSample>, std::stop_token stop) noexcept override {
                     ++fixture.blocks;
+                    fixture.WaitForStop(SpeechOperation::Append, stop);
                     return fixture.available;
                 }
 
-                bool FinishInput(std::stop_token) noexcept override {
+                bool FinishInput(std::stop_token stop) noexcept override {
                     ++fixture.finished;
+                    fixture.WaitForStop(SpeechOperation::FinishInput, stop);
                     return fixture.available;
                 }
 
-                SpeechProviderPoll Poll(std::stop_token) noexcept override {
+                SpeechProviderPoll Poll(std::stop_token stop) noexcept override {
+                    ++fixture.polls;
+                    fixture.WaitForStop(SpeechOperation::Poll, stop);
                     if (fixture.stopDuringPoll)
                         fixture.stopDuringPoll->request_stop();
                     return fixture.next;
@@ -46,8 +52,9 @@ namespace Horo::Editor {
             };
 
             std::unique_ptr<ISpeechProviderStream> Open(std::string_view locale, const Audio::AudioProcessingFormat &format,
-                                                        std::stop_token) noexcept override {
+                                                        std::stop_token stop) noexcept override {
                 ++opens;
+                WaitForStop(SpeechOperation::Open, stop);
                 CHECK(locale == "tr-TR");
                 CHECK(format.sampleRate == 48'000);
                 if (!available)
@@ -55,29 +62,29 @@ namespace Horo::Editor {
                 return std::make_unique<Stream>(*this);
             }
 
+            /** @brief Waits for the selected call to receive the session's cooperative stop signal. */
+            void WaitForStop(SpeechOperation operation, std::stop_token stop) noexcept {
+                if (operation != waitDuring)
+                    return;
+                if (cancelWhileWaiting)
+                    cancelWhileWaiting->request_stop();
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds(2), [] { return false; });
+                observedStop = stop.stop_requested();
+            }
+
             std::stop_source *stopDuringPoll{};
+            std::stop_source *cancelWhileWaiting{};
+            std::optional<SpeechOperation> waitDuring;
             SpeechProviderPoll next;
             unsigned opens{};
             unsigned blocks{};
             unsigned finished{};
+            unsigned polls{};
             unsigned cancelled{};
             bool available{true};
-        };
-
-        /** @brief Models a cooperative provider blocked while opening its recognizer. */
-        struct WaitingSpeechProvider final : ISpeechProvider {
-            std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
-                                                        const std::stop_token stop) noexcept override {
-                std::mutex mutex;
-                std::condition_variable_any wake;
-                std::unique_lock lock{mutex};
-                wake.wait_for(lock, stop, std::chrono::seconds(1), [] {
-                    return false;
-                });
-                observedStop = stop.stop_requested();
-                return {};
-            }
-
             bool observedStop{};
         };
 
@@ -292,16 +299,55 @@ namespace Horo::Editor {
         TEST_CASE("Immersive provider deadline requests stop while a provider call is blocked", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             const auto context = fixture.Context();
-            WaitingSpeechProvider provider;
+            auto &provider = fixture.provider;
             auto prepared = ImmersiveSpeechTranscription::Prepare(fixture.owner, context, fixture.source, "tr-TR", 0.5F,
-                                                                  fixture.stop.get_token(), std::chrono::milliseconds(20));
+                                                                  fixture.stop.get_token(), std::chrono::milliseconds(150));
             REQUIRE(prepared.stream);
-            CHECK(prepared.stream->Start(provider) == Status::ProviderTimedOut);
+            auto &stream = *prepared.stream;
+            auto expected = Status::ProviderTimedOut;
+
+            SECTION("Open") {
+                provider.waitDuring = SpeechOperation::Open;
+                CHECK(stream.Start(provider) == expected);
+            }
+            SECTION("Append") {
+                REQUIRE(stream.Start(provider) == Status::Accepted);
+                provider.waitDuring = SpeechOperation::Append;
+                CHECK(stream.Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == expected);
+            }
+            SECTION("Finish input") {
+                REQUIRE(stream.Start(provider) == Status::Accepted);
+                REQUIRE(stream.Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == Status::Accepted);
+                provider.waitDuring = SpeechOperation::FinishInput;
+                CHECK(stream.FinishInput() == expected);
+            }
+            SECTION("Poll discards a late final transcript") {
+                REQUIRE(stream.Start(provider) == Status::Accepted);
+                REQUIRE(stream.Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == Status::Accepted);
+                REQUIRE(stream.FinishInput() == Status::Accepted);
+                provider.waitDuring = SpeechOperation::Poll;
+                provider.next = Transcript(Kind::Final);
+                SECTION("Deadline") {}
+                SECTION("Host cancellation") {
+                    provider.cancelWhileWaiting = &fixture.stop;
+                    expected = Status::Cancelled;
+                }
+                const auto update = stream.Poll();
+                CHECK(update.status == expected);
+                CHECK_FALSE(update.evidence);
+            }
             CHECK(provider.observedStop);
-            CHECK_FALSE(fixture.stop.stop_requested());
-            const auto expired = prepared.stream->Poll();
-            CHECK(expired.status == Status::ProviderTimedOut);
+            CHECK(fixture.stop.stop_requested() == (expected == Status::Cancelled));
+            CHECK(provider.cancelled == 1);
+            const auto operationCounts = std::array{provider.opens, provider.blocks, provider.finished, provider.polls};
+            CHECK(stream.Start(provider) == expected);
+            CHECK(stream.Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == expected);
+            CHECK(stream.FinishInput() == expected);
+            const auto expired = stream.Poll();
+            CHECK(expired.status == expected);
             CHECK_FALSE(expired.evidence);
+            CHECK((std::array{provider.opens, provider.blocks, provider.finished, provider.polls}) == operationCounts);
+            CHECK(provider.cancelled == 1);
         }
 
         TEST_CASE("Immersive evidence clears the transcript bytes it owns on release", "[agent][immersive][speech]") {
