@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformRequest.h"
 
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
+#include "PlatformCloudFailurePrivacy.h"
 #include "PlatformRequestState.h"
 #include "PlatformServicesMetrics.h"
 
@@ -179,6 +180,19 @@ namespace Horo::PlatformServices {
                                                                          const std::type_index type,
                                                                          const PlatformRequestState terminalState,
                                                                          std::shared_ptr<const void> value, std::optional<Error> error) {
+        try {
+            if (error && Detail::IsCloudResult(type))
+                error = Detail::RedactCloudProviderFailure(*error);
+        } catch (const std::bad_alloc &) {
+            return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::CapacityExceeded));
+        }
+        return PublishCompletion(id, generation, type, terminalState, std::move(value), std::move(error));
+    }
+
+    /** @copydoc PlatformRequestStore::PublishCompletion */
+    Result<PlatformRequestMutation> PlatformRequestStore::PublishCompletion(
+        const PlatformRequestId id, const PlatformRequestGeneration generation, const std::type_index type,
+        const PlatformRequestState terminalState, std::shared_ptr<const void> value, std::optional<Error> error) {
         auto &state = MutableState();
         auto completed = state.MutateRecord(id, generation, type,
                                             [&state, id, terminalState, value = std::move(value),

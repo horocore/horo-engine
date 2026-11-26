@@ -1,4 +1,5 @@
 #include "Horo/PlatformServices/PlatformCloudObjects.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 #include "PlatformServicesTestSupport.h"
 
 #include <algorithm>
@@ -45,6 +46,52 @@ namespace Horo::PlatformServices {
         auto moved = std::move(empty).Value();
         RequireError(std::move(empty).Value().Finish(), CloudObjectErrors::InvalidRequest);
         REQUIRE(moved.Finish().HasValue());
+    }
+
+    TEST_CASE("Cloud request observers receive a typed failure without provider context", "[platform-services][cloud][privacy]") {
+        PlatformRequestStore store;
+        auto admitted = store.Admit<CloudMutationResult>();
+        REQUIRE(admitted.HasValue());
+        const auto handle = std::move(admitted).Value();
+        REQUIRE(store.MarkRunning(handle).HasValue());
+        std::optional<Error> observed;
+        auto subscription = store.OnComplete<CloudMutationResult>(handle, [&observed](const PlatformRequestSnapshot<CloudMutationResult> &snapshot) {
+            if (snapshot.terminal && snapshot.terminal->ErrorValue())
+                observed = *snapshot.terminal->ErrorValue();
+        });
+        REQUIRE(subscription.HasValue());
+
+        const auto *expected = &CloudObjectErrors::PreconditionFailed;
+        const auto cause = MakeError(CloudObjectErrors::QuotaExceeded, "private provider account and slot");
+        SECTION("queued provider evidence preserves a known conflict code") {
+            const auto sink = store.CompletionSink(handle);
+            REQUIRE(sink.HasValue());
+            auto error = WithCause(MakeError(*expected, "private cloud object key"), cause);
+            REQUIRE(sink.Value().Complete(Result<CloudMutationResult>::Failure(std::move(error))).HasValue());
+            CHECK(store.DrainProviderCompletions().Value().applied == 1);
+        }
+        SECTION("direct provider completion cannot publish an unknown private error identity") {
+            expected = &PlatformServiceErrors::InvalidResponse;
+            auto error = WithCause(Error{.code = ErrorCode{"private.slot.name"},
+                                         .domain = ErrorDomainId{"private.provider.account"},
+                                         .message = "private provider payload"},
+                                   cause);
+            REQUIRE(store.CompleteFailure(handle, std::move(error)).HasValue());
+        }
+        const auto snapshot = store.Query(handle);
+        REQUIRE(snapshot.HasValue());
+        REQUIRE(snapshot.Value().terminal);
+        const auto *failure = snapshot.Value().terminal->ErrorValue();
+        REQUIRE(failure);
+        CHECK(failure->code.Value() == expected->code.Value());
+        CHECK(failure->domain.Value() == expected->domain.Value());
+        CHECK(failure->message == expected->summary);
+        CHECK(failure->diagnostics.empty());
+        CHECK_FALSE(failure->cause);
+        REQUIRE(store.DispatchCompletions() == 1);
+        REQUIRE(observed);
+        CHECK(observed->message == expected->summary);
+        CHECK_FALSE(observed->cause);
     }
 
 }  // namespace Horo::PlatformServices

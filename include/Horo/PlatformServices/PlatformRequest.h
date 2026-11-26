@@ -559,6 +559,10 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestMutation> CompleteErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                                      std::type_index type, PlatformRequestState terminalState,
                                                                      std::shared_ptr<const void> value, std::optional<Error> error);
+        /** @brief Publishes terminal evidence after applying the result contract's privacy projection. */
+        [[nodiscard]] Result<PlatformRequestMutation> PublishCompletion(PlatformRequestId id, PlatformRequestGeneration generation,
+                                                                        std::type_index type, PlatformRequestState terminalState,
+                                                                        std::shared_ptr<const void> value, std::optional<Error> error);
         [[nodiscard]] Result<ErasedSnapshot> QueryErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                          std::type_index type) const;
         [[nodiscard]] Result<PlatformRequestSubscription> SubscribeErased(PlatformRequestId id, PlatformRequestGeneration generation,

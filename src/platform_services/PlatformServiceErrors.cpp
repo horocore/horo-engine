@@ -7,7 +7,9 @@
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "Horo/PlatformServices/PlatformUserSession.h"
+#include "PlatformCloudFailurePrivacy.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 
@@ -117,6 +119,50 @@ namespace Horo::PlatformServices {
             return error.domain.Value() == descriptor.domain.Value() && error.code.Value() == descriptor.code.Value();
         }
     }  // namespace
+
+    /** @copydoc Detail::IsCloudResult */
+    bool Detail::IsCloudResult(const std::type_index type) noexcept {
+        return type == typeid(CloudReadResult) || type == typeid(CloudObjectPage) || type == typeid(CloudBlobReadResult) ||
+               type == typeid(CloudMutationResult) || type == typeid(CloudQuotaObservation);
+    }
+
+    /** @copydoc Detail::RedactCloudProviderFailure */
+    Error Detail::RedactCloudProviderFailure(const Error &error) {
+        if (Matches(error, PlatformServiceErrors::ProviderFailed)) {
+            const auto *cause = error.cause.Get();
+            const auto category = std::ranges::find_if(Descriptors, [cause](const auto *descriptor) {
+                return cause && Matches(*cause, *descriptor);
+            });
+            return WithCause(MakeError(PlatformServiceErrors::ProviderFailed),
+                             MakeError(category == Descriptors.end() ? PlatformServiceErrors::Unknown : **category));
+        }
+
+        constexpr std::array publicFailures{
+            &CloudObjectErrors::InvalidRequest,           &CloudObjectErrors::InvalidOpaqueValue,
+            &CloudObjectErrors::InvalidLimits,            &CloudObjectErrors::InvalidPage,
+            &CloudObjectErrors::PayloadTooLarge,          &CloudObjectErrors::StaleSession,
+            &CloudObjectErrors::IntegrityMismatch,        &CloudObjectErrors::UnsupportedCapability,
+            &CloudObjectErrors::AlreadyExists,            &CloudObjectErrors::PreconditionFailed,
+            &CloudObjectErrors::QuotaExceeded,            &CloudObjectErrors::IdempotencyConflict,
+            &CloudObjectErrors::InvalidProviderResponse,  &CloudObjectErrors::NotFound,
+            &CloudObjectErrors::RevisionChanged,          &CloudObjectErrors::PartialTransfer,
+            &CloudObjectErrors::CleanupPending,           &BackendErrors::NullProvider,
+            &BackendErrors::ServiceUnavailable,           &BackendErrors::UnsupportedOperation,
+            &RequestErrors::CapacityExceeded,             &RequestErrors::FrontendUnavailable,
+            &RequestErrors::Cancelled,                    &RequestErrors::TimedOut,
+            &PlatformSessionErrors::NoSubject,            &PlatformSessionErrors::Authenticating,
+            &PlatformSessionErrors::Closing,              &PlatformSessionErrors::Failed,
+            &PlatformSessionErrors::StaleSession,         &PlatformSessionErrors::StaleAccessPolicy,
+            &PlatformSessionErrors::ConsentRequired,      &PlatformSessionErrors::AccessDenied,
+            &PlatformSessionErrors::AccessRestricted,     &PlatformSessionErrors::AccessRevoked,
+            &PlatformSessionErrors::AccessUnavailable};
+        const auto known = [&error](const auto *descriptor) { return Matches(error, *descriptor); };
+        if (const auto found = std::ranges::find_if(publicFailures, known); found != publicFailures.end())
+            return MakeError(**found);
+        if (const auto found = std::ranges::find_if(Descriptors, known); found != Descriptors.end())
+            return MakeError(**found);
+        return MakeError(PlatformServiceErrors::InvalidResponse);
+    }
 
     /** @copydoc MakePlatformProviderError */
     Error MakePlatformProviderError(const PlatformProviderFailureCategory category, const std::uint64_t requestId,

@@ -43,6 +43,7 @@ namespace Horo::PlatformServices {
             bool shutdownThrows{};
             bool shutdownThrowsNonStandard{};
             bool malformedHandle{};
+            std::optional<Error> cloudWriteFailure;
             std::optional<LeaderboardRankedQuery> lastRankedQuery;
             std::optional<LeaderboardAroundSubjectQuery> lastAroundSubjectQuery;
             std::optional<LeaderboardFriendsQuery> lastFriendsLeaderboardQuery;
@@ -115,6 +116,8 @@ namespace Horo::PlatformServices {
             }
 
             Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&) override {
+                if (cloudWriteFailure)
+                    return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(*cloudWriteFailure);
                 return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
             }
 

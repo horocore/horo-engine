@@ -1,4 +1,5 @@
 #include "PlatformServicesFrontendTestSupport.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 
 namespace Horo::PlatformServices {
     namespace {
@@ -70,6 +71,31 @@ namespace Horo::PlatformServices {
         REQUIRE(backend->lastFriendsLeaderboardQuery);
         CHECK(backend->lastFriendsLeaderboardQuery->startIndex == 8);
         CHECK(backend->lastFriendsLeaderboardQuery->pageSize == 3);
+    }
+
+    TEST_CASE("Cloud dispatch preserves provider category without exposing private diagnostics", "[platform-services][cloud][frontend]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        backend->snapshot = Capabilities();
+        backend->snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)].cloudMutation = MutationFacts();
+        auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+
+        auto cause = MakeError(PlatformServiceErrors::QuotaExceeded, "private cloud account limit");
+        cause.diagnostics.push_back({.code = DiagnosticCode{"private.object.key"}, .message = "private payload"});
+        backend->cloudWriteFailure = WithCause(MakeError(PlatformServiceErrors::ProviderFailed, "private provider object key"),
+                                              std::move(cause));
+        const auto result = frontend.WriteCloudObject(MutationWrite(*session.Subject()));
+        RequireError(result, PlatformServiceErrors::ProviderFailed);
+        const auto &error = result.ErrorValue();
+        CHECK(PlatformProviderCategory(error) == PlatformProviderFailureCategory::QuotaExceeded);
+        CHECK(error.message == PlatformServiceErrors::ProviderFailed.summary);
+        CHECK(error.diagnostics.empty());
+        REQUIRE(error.cause);
+        CHECK(error.cause.Get()->message == PlatformServiceErrors::QuotaExceeded.summary);
+        CHECK(error.cause.Get()->diagnostics.empty());
+        CHECK_FALSE(error.cause.Get()->cause);
     }
 
     TEST_CASE("Platform Services frontend rejects malformed identities and bounds before dispatch",
