@@ -4666,6 +4666,33 @@
     "workspace.packages.reference_registration": {
       "text": "Çalışma zamanı modülünün sahipliği doğrulanmalı"
     },
+    "workspace.packages.reference_composition_missing": {
+      "text": "Başvurulan Scene veya Prefab bulunamadı (kaynak / varlık kimliği)"
+    },
+    "workspace.packages.reference_composition_type": {
+      "text": "Başvurulan varlık beklenen Scene veya Prefab türünde değil (kaynak / varlık kimliği)"
+    },
+    "workspace.packages.reference_subplan_missing": {
+      "text": "Decision alt planı bulunamadı (kaynak / düğüm / hedef kimliği)"
+    },
+    "workspace.packages.reference_subplan_ambiguous": {
+      "text": "Birden fazla Decision grafiği aynı alt plan kimliğini kullanıyor (kaynak / düğüm / hedef kimliği)"
+    },
+    "workspace.packages.reference_subplan_incompatible": {
+      "text": "Decision alt planının grafik türü veya şema sürümü uyumsuz (kaynak / düğüm / hedef kimliği)"
+    },
+    "workspace.packages.reference_coverage": {
+      "text": "Çalışma zamanı modülünün referans kontrolleri eksik (tanımlayıcı / modül / paket)"
+    },
+    "workspace.packages.reference_module_owner": {
+      "text": "Modülü kaldırmak için yaşam döngüsü sahibi gerekli (tanımlayıcı / modül)"
+    },
+    "workspace.packages.reference_contribution_owner": {
+      "text": "Katkıyı kaldırmak için yaşam döngüsü sahibi gerekli (tanımlayıcı veya kilit dosyası / kimlik)"
+    },
+    "workspace.packages.reference_file_owner": {
+      "text": "Arşiv dosyasını kaldırmak için yaşam döngüsü sahibi gerekli (dosya / katkı kökü)"
+    },
     "workspace.packages.removal_save_and_stop": {
       "text": "Paket kaldırmadan önce açık belgeleri kaydedin ve Play oturumunu durdurun."
     },

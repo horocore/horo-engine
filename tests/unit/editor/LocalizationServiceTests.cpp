@@ -412,7 +412,16 @@ namespace {
                                   "workspace.packages.reference_perception",
                                   "workspace.packages.reference_unreadable",
                                   "workspace.packages.reference_saved_source_unreadable",
-                                  "workspace.packages.reference_registration"};
+                                  "workspace.packages.reference_registration",
+                                  "workspace.packages.reference_composition_missing",
+                                  "workspace.packages.reference_composition_type",
+                                  "workspace.packages.reference_subplan_missing",
+                                  "workspace.packages.reference_subplan_ambiguous",
+                                  "workspace.packages.reference_subplan_incompatible",
+                                  "workspace.packages.reference_coverage",
+                                  "workspace.packages.reference_module_owner",
+                                  "workspace.packages.reference_contribution_owner",
+                                  "workspace.packages.reference_file_owner"};
         RequireCatalogKeys(service, keys);
     }
 

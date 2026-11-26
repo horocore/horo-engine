@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <imgui_internal.h>
 #include <imgui_test_engine/imgui_te_context.h>
 #include <imgui_test_engine/imgui_te_engine.h>
 #include <thread>
@@ -81,10 +82,12 @@ namespace {
                     if (!held)
                         return Result<void>::Failure(Error{ErrorCode{"fixture.package.no_reservation"}, ErrorDomainId{"fixture.package"}});
                     std::vector<Diagnostic> references;
-                    for (unsigned attachment = 1; attachment <= 33; ++attachment)
+                    for (unsigned attachment = 1; attachment <= 32; ++attachment)
                         references.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
                                                  "com.horo.application-fixture", SourceLocation{"Assets/Scene.horoasset"},
                                                  "7/" + std::to_string(attachment));
+                    references.emplace_back(DiagnosticCode{"packages.host.decision_subplan_missing"}, DiagnosticSeverity::Error,
+                                             "770001", SourceLocation{"Assets/Guard.decision.json"}, "920003");
                     return Result<void>::Failure(Error{ErrorCode{"packages.host.behavior_in_use"}, ErrorDomainId{"packages.host"},
                                                        ErrorSeverity::Error, "", std::move(references)});
                 });
@@ -371,9 +374,13 @@ namespace {
 
     TEST_CASE("Package removal can navigate every page of saved references", "[ui][imgui][editor][packages]") {
         PackageUi fixture{false, "en-US", false, true};
-        const auto result = fixture.harness.Run("horo_packages", "removal_reference_pages", [&fixture](ImGuiTestContext *) {
+        std::string visibleText;
+        const auto result = fixture.harness.Run("horo_packages", "removal_reference_pages", [&](ImGuiTestContext *) {
+            ImGui::LogToBuffer();
             fixture.Frame();
-        }, [&fixture](ImGuiTestContext *ctx) {
+            visibleText = ImGui::GetCurrentContext()->LogBuffer.c_str();
+            ImGui::LogFinish();
+        }, [&](ImGuiTestContext *ctx) {
             ctx->Yield(2);
             Click(*ctx, "Install verified packages");
             IM_CHECK(AwaitTerminal(*ctx, fixture, PackageOperationKind::Install));
@@ -387,9 +394,14 @@ namespace {
             IM_CHECK_EQ(fixture.operation->diagnostic->diagnostics.size(), 33U);
             ctx->Yield();
             IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            IM_CHECK(visibleText.find("Assets/Guard.decision.json") == std::string::npos);
             Click(*ctx, "Next references");
             ctx->Yield();
             IM_CHECK((ctx->ItemInfo("//**/Next references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            IM_CHECK(visibleText.find("Decision subplan could not be found") != std::string::npos);
+            IM_CHECK(visibleText.find("Assets/Guard.decision.json") != std::string::npos);
+            IM_CHECK(visibleText.find("920003") != std::string::npos);
+            IM_CHECK(visibleText.find("770001") != std::string::npos);
             Click(*ctx, "Previous references");
             ctx->Yield();
             IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);

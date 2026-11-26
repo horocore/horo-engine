@@ -19,19 +19,29 @@ namespace Horo::Editor {
             const char *label;
             bool showSource;
             bool showPath;
+            bool showIdentity{};
         };
 
         constexpr auto RemovalReferences = std::to_array<RemovalReferenceView>({
-            {"packages.host.importer_in_use", "reference_importer", false, true},
+            {"packages.host.importer_in_use", "reference_importer", false, true, true},
             {"packages.host.behavior_in_use", "reference_behavior", true, true},
             {"packages.host.component_in_use", "reference_component", true, true},
             {"packages.host.component_access_in_use", "reference_component_access", true, true},
             {"packages.host.service_in_use", "reference_service", true, true},
             {"packages.host.decision_node_in_use", "reference_decision", true, true},
+            {"packages.host.composition_reference_missing", "reference_composition_missing", true, true},
+            {"packages.host.composition_reference_type_mismatch", "reference_composition_type", true, true},
+            {"packages.host.decision_subplan_missing", "reference_subplan_missing", true, true, true},
+            {"packages.host.decision_subplan_ambiguous", "reference_subplan_ambiguous", true, true, true},
+            {"packages.host.decision_subplan_incompatible", "reference_subplan_incompatible", true, true, true},
             {"packages.host.perception_reference_review", "reference_perception", true, false},
             {"packages.host.perception_reference_unreadable", "reference_unreadable", true, false},
             {"packages.host.saved_reference_source_unreadable", "reference_saved_source_unreadable", true, false},
-            {"packages.host.runtime_registration_unobserved", "reference_registration", true, true},
+            {"packages.host.runtime_registration_unobserved", "reference_registration", true, true, true},
+            {"packages.host.removal_reference_coverage_unavailable", "reference_coverage", true, true, true},
+            {"packages.lifecycle.removal_module_owner_required", "reference_module_owner", true, true},
+            {"packages.lifecycle.removal_contribution_owner_required", "reference_contribution_owner", true, true},
+            {"packages.lifecycle.removal_file_owner_required", "reference_file_owner", true, true},
         });
     }  // namespace
 
@@ -357,10 +367,12 @@ namespace Horo::Editor {
             return;
         }
         Ui::FieldLabel(Text(view->label).c_str(), context_.theme.fonts);
-        if (view->showSource)
+        if (view->showSource && !diagnostic.location.source.empty())
             Ui::Hint(diagnostic.location.source.c_str(), context_.theme.fonts);
         if (view->showPath && !diagnostic.path.empty())
             Ui::Hint(diagnostic.path.c_str(), context_.theme.fonts);
+        if (view->showIdentity && !diagnostic.message.empty())
+            Ui::Hint(diagnostic.message.c_str(), context_.theme.fonts);
     }
 
     ModalFrameResult PackageModal::Draw() {

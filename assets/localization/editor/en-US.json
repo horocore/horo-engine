@@ -4666,6 +4666,33 @@
     "workspace.packages.reference_registration": {
       "text": "Runtime module ownership needs verification"
     },
+    "workspace.packages.reference_composition_missing": {
+      "text": "Referenced Scene or Prefab could not be found (source / asset ID)"
+    },
+    "workspace.packages.reference_composition_type": {
+      "text": "Referenced asset has the wrong Scene or Prefab type (source / asset ID)"
+    },
+    "workspace.packages.reference_subplan_missing": {
+      "text": "Decision subplan could not be found (source / node / target ID)"
+    },
+    "workspace.packages.reference_subplan_ambiguous": {
+      "text": "Multiple Decision graphs have this subplan ID (source / node / target ID)"
+    },
+    "workspace.packages.reference_subplan_incompatible": {
+      "text": "Decision subplan has an incompatible graph type or schema version (source / node / target ID)"
+    },
+    "workspace.packages.reference_coverage": {
+      "text": "Runtime module reference checks are incomplete (descriptor / module / package)"
+    },
+    "workspace.packages.reference_module_owner": {
+      "text": "Module requires a lifecycle owner to remove it (descriptor / module)"
+    },
+    "workspace.packages.reference_contribution_owner": {
+      "text": "Contribution requires a lifecycle owner to remove it (descriptor or lockfile / ID)"
+    },
+    "workspace.packages.reference_file_owner": {
+      "text": "Archive file requires a lifecycle owner to remove it (file / contribution root)"
+    },
     "workspace.packages.removal_save_and_stop": {
       "text": "Save open documents and stop Play before removing packages."
     },
