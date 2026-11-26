@@ -699,9 +699,9 @@ namespace {
         NativeProject fixture;
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
-        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, Duplicate };
+        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, Duplicate, InvalidBehavior };
         const auto mode = GENERATE(Source::Verified, Source::ChangedBytes, Source::Stale, Source::OutsideAssets, Source::MissingTarget,
-                                   Source::Duplicate);
+                                   Source::Duplicate, Source::InvalidBehavior);
         const auto id = fixture.graph.package.Value();
         const auto previousDigest = FormatSha256(fixture.graph.archive.Digest());
         const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
@@ -714,10 +714,12 @@ namespace {
             transitions.push_back(transition);
         const nlohmann::json declaration{{"schemaVersion", 1}, {"packageId", id}, {"toVersion", version.ToString()},
                                          {"transitions", std::move(transitions)}};
-        const std::vector<std::pair<std::string, std::string>> entries{
+        std::vector<std::pair<std::string, std::string>> entries{
             {"horo-package.toml", "schemaVersion = 1\n"},
             {"assets/moved.bin", mode == Source::ChangedBytes ? "replaced bytes" : "verified bytes"},
             {std::string{Packages::PackageAssetRenameDeclarationPath}, declaration.dump()}};
+        if (mode == Source::InvalidBehavior)
+            entries.emplace_back(Packages::PackageBehaviorRenameDeclarationPath, "{}");
         const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
         REQUIRE(archive.HasValue());
         WriteAssetCandidate(fixture, version, archive.Value());
@@ -747,7 +749,14 @@ namespace {
             } else if (mode == Source::Duplicate) {
                 CHECK(error.code.Value() == "packages.migration.duplicate_transition");
             } else {
-                CHECK(error.code.Value() == "packages.host.update_requires_migration_review");
+                const auto expected = mode == Source::InvalidBehavior ? "packages.migration.invalid_declaration"
+                                                                       : "packages.host.update_requires_migration_review";
+                CHECK(error.code.Value() == expected);
+                if (mode == Source::InvalidBehavior)
+                    CHECK(std::ranges::any_of(error.diagnostics, [&](const auto &diagnostic) {
+                        return diagnostic.code.Value() == expected && diagnostic.message == id &&
+                               diagnostic.path == Packages::PackageBehaviorRenameDeclarationPath;
+                    }));
                 const auto proposed = std::ranges::find_if(error.diagnostics, [](const auto &diagnostic) {
                     return diagnostic.code.Value().starts_with("packages.host.update_declared_asset_rename");
                 });

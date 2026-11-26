@@ -45,14 +45,24 @@ namespace Horo::Application::Internal {
 
     /** @brief Records which side of a change lacks archive evidence without ending the review. */
     static void ReportMissingUpdateArchive(std::vector<Diagnostic> &diagnostics, const Packages::LockedPackage &locked,
-                                           std::string_view side, const Error &failure, std::optional<Error> &firstArchiveFailure) {
-        if (!firstArchiveFailure)
-            firstArchiveFailure.emplace(failure);
+                                           std::string_view side, const Error &failure, std::optional<Error> &firstFailure) {
+        if (!firstFailure)
+            firstFailure.emplace(failure);
         if (diagnostics.size() >= MaximumUpdateDiagnostics)
             return;
         diagnostics.emplace_back(DiagnosticCode{"packages.host.update_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
                                  std::string{side} + " archive: " + failure.code.Value(), SourceLocation{"packages.lock"},
                                  locked.package.Value());
+    }
+
+    /** @brief Records the rejected declaration without suppressing independent evidence. */
+    static void ReportMigrationFailure(std::vector<Diagnostic> &diagnostics, const Packages::LockedPackage &candidate,
+                                       std::string_view declaration, Error failure, std::optional<Error> &firstFailure) {
+        if (diagnostics.size() < MaximumUpdateDiagnostics)
+            diagnostics.emplace_back(DiagnosticCode{failure.code.Value()}, DiagnosticSeverity::Error, candidate.package.Value(),
+                                     SourceLocation{"packages.host"}, std::string{declaration});
+        if (!firstFailure)
+            firstFailure.emplace(std::move(failure));
     }
 
     /** @brief Computes the first reference-safety difference for one previous archive path. */
@@ -178,38 +188,50 @@ namespace Horo::Application::Internal {
         constexpr std::size_t maximumClaims = 128;
         if (names.size() > maximumClaims - claims.size())
             return Result<void>::Failure(Error{ErrorCode{"packages.migration.behavior_rename_limit"}, ErrorDomainId{"packages.migration"}});
+        const auto originalCount = std::ranges::ssize(claims);
         for (const auto &name : names) {
             auto from = Gameplay::BehaviorTypeId::Parse(name.previous);
             auto to = Gameplay::BehaviorTypeId::Parse(name.candidate);
-            if (from.HasError() || to.HasError())
+            if (from.HasError() || to.HasError()) {
+                claims.erase(claims.begin() + originalCount, claims.end());
                 return Result<void>::Failure(Error{ErrorCode{"packages.migration.invalid_behavior_rename"},
                                                    ErrorDomainId{"packages.migration"}, ErrorSeverity::Error, previous.package.Value()});
+            }
             claims.emplace_back(previous.package, std::move(from).Value(), std::move(to).Value());
         }
         return Result<void>::Success();
     }
 
     /** @copydoc ReviewCachedChange */
-    Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                    std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
-                                    std::optional<Error> &firstArchiveFailure) {
+    void ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
+                            std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
+                            std::optional<Error> &firstFailure) {
         if (!change.candidate)
-            return Result<void>::Success();
+            return;
         const auto candidate = ReadUpdateArchive(cache, *change.candidate);
         if (candidate.HasError())
-            ReportMissingUpdateArchive(diagnostics, *change.candidate, "Candidate", candidate.ErrorValue(), firstArchiveFailure);
-        if (!change.current)
-            return candidate.HasError() ? Result<void>::Success() : ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
+            ReportMissingUpdateArchive(diagnostics, *change.candidate, "Candidate", candidate.ErrorValue(), firstFailure);
+        const auto reportAssets = [&](Result<void> reviewed) {
+            if (reviewed.HasError())
+                ReportMigrationFailure(diagnostics, *change.candidate, Packages::PackageAssetRenameDeclarationPath,
+                                       std::move(reviewed).ErrorValue(), firstFailure);
+        };
+        if (!change.current) {
+            if (candidate.HasValue())
+                reportAssets(ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics));
+            return;
+        }
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
-            ReportMissingUpdateArchive(diagnostics, *change.current, "Current", previous.ErrorValue(), firstArchiveFailure);
+            ReportMissingUpdateArchive(diagnostics, *change.current, "Current", previous.ErrorValue(), firstFailure);
         if (previous.HasError() || candidate.HasError())
-            return Result<void>::Success();
+            return;
         const auto behavior = Packages::InspectPackageBehaviorRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
-        if (behavior.HasError())
-            return Result<void>::Failure(behavior.ErrorValue());
-        if (auto typed = AppendBehaviorClaims(*change.current, behavior.Value(), claims); typed.HasError())
-            return typed;
-        return ReviewAssetFiles(*change.current, previous.Value(), *change.candidate, candidate.Value(), diagnostics);
+        auto reviewed = behavior.HasError() ? Result<void>::Failure(behavior.ErrorValue())
+                                            : AppendBehaviorClaims(*change.current, behavior.Value(), claims);
+        if (reviewed.HasError())
+            ReportMigrationFailure(diagnostics, *change.candidate, Packages::PackageBehaviorRenameDeclarationPath,
+                                   std::move(reviewed).ErrorValue(), firstFailure);
+        reportAssets(ReviewAssetFiles(*change.current, previous.Value(), *change.candidate, candidate.Value(), diagnostics));
     }
 }  // namespace Horo::Application::Internal

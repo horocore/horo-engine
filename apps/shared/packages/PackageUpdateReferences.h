@@ -26,8 +26,8 @@ namespace Horo::Application::Internal {
     /** @brief Reports lock-level changes that need migration before publication. */
     [[nodiscard]] std::vector<Diagnostic> ReviewUpdateLock(const Packages::PackageUpdatePreview &preview);
 
-    /** @brief Appends exact archive compatibility findings for one changed entry. */
-    [[nodiscard]] Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                                  std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
-                                                  std::optional<Error> &firstArchiveFailure);
+    /** @brief Appends independent findings for one changed entry and retains the first review error. */
+    void ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
+                            std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
+                            std::optional<Error> &firstFailure);
 }  // namespace Horo::Application::Internal

@@ -665,7 +665,9 @@ destination and exact source selectors, with stable Gameplay type IDs in
 saved Scene and Prefab attachments, including disabled attachments, and reports
 the relative path, object and attachment identity. A degraded asset inventory
 reports the failing metadata path and retains matches from admitted records.
-Matches show possible impact.
+Matches show possible impact. Invalid migration declarations block approval,
+with the declaration and its error reported alongside independently verified
+asset and behavior findings.
 They require live provider ownership and field compatibility verification before
 the host can approve a migration. The preview does not activate package code or
 edit project sources.
