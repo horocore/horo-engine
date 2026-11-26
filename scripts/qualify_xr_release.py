@@ -10,23 +10,15 @@ from qualify_xr_android import check_android_preflight_file, validate_android_pr
 from qualify_xr_device import (
     CATEGORIES, CORE_CHECKS, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
-    is_source_revision, load_record, require, validate_declaration, validate_record, verify_artifact,
+    check_render_timing_file, is_source_revision, load_record, require, validate_declaration, validate_record,
+    validate_timing_limits, verify_artifact,
 )
 
 
 REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
-MAX_TIMING_WINDOW_NS = 86_400_000_000_000
-MAX_TIMING_FRAMES = 10_000_000
 PRIMARY_STEREO_VIEW_COUNT = 2
 SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
-TIMING_LIMITS = {
-    "minimumDurationNs": (1, MAX_TIMING_WINDOW_NS),
-    "minimumFrameCount": (1, MAX_TIMING_FRAMES),
-    "maximumPeakFrameIntervalNs": (1, MAX_TIMING_WINDOW_NS),
-    "maximumMissedDeadlines": (0, MAX_TIMING_FRAMES),
-    "maximumSwapchainFailures": (0, MAX_TIMING_FRAMES),
-}
 
 
 class Evidence:
@@ -71,8 +63,7 @@ class Evidence:
 
     def render_timing(self, record: dict, limits: dict) -> None:
         digest = record["checks"]["renderTiming"]["evidenceSha256"]
-        with self.path(digest).open("rb") as source:
-            check_render_timing(source.read(MAX_RECORD_BYTES + 1), digest, record, limits)
+        check_render_timing_file(self.path(digest), record, limits)
 
     def mixed_reality_capture(self, record: dict) -> bytes:
         with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
@@ -104,37 +95,6 @@ def validate_preflight_declarations(row: dict) -> None:
     require(component is None or is_digest(component), "Invalid Desktop component digest")
     if "androidPreflight" in row:
         validate_android_preflight(row["androidPreflight"])
-
-
-def validate_timing_limits(value: object) -> None:
-    limits = fields(value, set(TIMING_LIMITS), "render timing limits")
-    require(all(type(limits[name]) is int and lower <= limits[name] <= upper
-                for name, (lower, upper) in TIMING_LIMITS.items()), "Invalid render timing limits")
-
-
-def check_render_timing(data: bytes, digest: str, record: dict, limits: dict) -> None:
-    """Verify a bounded timing observation from the exact physical run against its release limits."""
-    require(len(data) <= MAX_RECORD_BYTES, "Render timing capture exceeds the size limit")
-    require(hashlib.sha256(data).hexdigest() == digest, "Render timing capture digest does not match")
-    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "targetRefreshMilliHertz",
-                                           "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines",
-                                           "swapchainFailures"}, "render timing capture")
-    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported render timing capture schema")
-    require(capture["tuple"] == record["tuple"], "Render timing capture is from a different product tuple")
-    require(capture["provenance"] == record["provenance"], "Render timing capture is from a different smoke run")
-    refresh = capture["targetRefreshMilliHertz"]
-    require(type(refresh) is int and refresh in record["display"]["refreshMilliHertz"], "Render timing target was not enumerated")
-    duration, frames, peak, missed, failures = (capture[name] for name in (
-        "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines", "swapchainFailures"))
-    require(all(type(value) is int for value in (duration, frames, peak, missed, failures)) and
-            0 < peak <= duration <= MAX_TIMING_WINDOW_NS and
-            0 < frames <= MAX_TIMING_FRAMES and 0 <= missed <= frames and 0 <= failures <= frames,
-            "Invalid render timing measurements")
-    require(peak + frames - 1 <= duration <= frames * peak, "Render timing interval totals are inconsistent")
-    require(duration >= limits["minimumDurationNs"] and frames >= limits["minimumFrameCount"],
-            "Render timing observation did not meet the required duration and frame count")
-    require(peak <= limits["maximumPeakFrameIntervalNs"] and missed <= limits["maximumMissedDeadlines"] and
-            failures <= limits["maximumSwapchainFailures"], "Render timing observation exceeded the declared limits")
 
 
 def validate_row(value: object) -> dict:

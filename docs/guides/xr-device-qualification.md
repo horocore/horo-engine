@@ -149,6 +149,17 @@ Pass `--display-capture` to verify the actual display capture locally. The
 checker matches its digest, exact tuple and run identity, enumerated refresh
 rates, and ordered view extents to the smoke record. The release matrix
 performs this capture check for every claimed tuple.
+To verify frame timing before assembling the release matrix, pass both the
+timing capture and a JSON file containing the release plan's `renderTimingLimits`
+object. Include the display capture so the checker can verify the timing target
+against the refresh rates enumerated by the same physical run.
+
+```sh
+python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json \
+  --display-capture display.json --render-timing-capture timing.json \
+  --render-timing-limits timing-limits.json
+```
+
 Add `--require haptics` when the release claims haptics. For MR, add
 `mixedRealityCapabilities` to the declaration and pass `--require optionalMR`
 with `--mr-capture <capture.json>`. The

@@ -14,6 +14,15 @@ MAX_RECORD_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_DESKTOP_PREFLIGHT_BYTES = 1024
 MAX_DISPLAY_RATES = 32
+MAX_TIMING_WINDOW_NS = 86_400_000_000_000
+MAX_TIMING_FRAMES = 10_000_000
+TIMING_LIMITS = {
+    "minimumDurationNs": (1, MAX_TIMING_WINDOW_NS),
+    "minimumFrameCount": (1, MAX_TIMING_FRAMES),
+    "maximumPeakFrameIntervalNs": (1, MAX_TIMING_WINDOW_NS),
+    "maximumMissedDeadlines": (0, MAX_TIMING_FRAMES),
+    "maximumSwapchainFailures": (0, MAX_TIMING_FRAMES),
+}
 DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v2"
 DESKTOP_DISPLAY_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v3"
 DESKTOP_CONNECTIONS = {"Tethered": "tethered", "WirelessStreaming": "wireless-streaming"}
@@ -187,6 +196,44 @@ def check_display_capture(data: bytes, record: dict) -> None:
     validate_display_values(capture)
     require(capture["refreshMilliHertz"] == display["refreshMilliHertz"] and capture["viewExtents"] == display["viewExtents"],
             "Display report does not match the captured runtime values")
+
+
+def validate_timing_limits(value: object) -> None:
+    limits = fields(value, set(TIMING_LIMITS), "render timing limits")
+    require(all(type(limits[name]) is int and lower <= limits[name] <= upper
+                for name, (lower, upper) in TIMING_LIMITS.items()), "Invalid render timing limits")
+
+
+def check_render_timing(data: bytes, record: dict, limits: dict) -> None:
+    """Verify a bounded timing observation from the exact physical run against its release limits."""
+    require(len(data) <= MAX_RECORD_BYTES, "Render timing capture exceeds the size limit")
+    digest = record["checks"]["renderTiming"]["evidenceSha256"]
+    require(hashlib.sha256(data).hexdigest() == digest, "Render timing capture digest does not match")
+    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "targetRefreshMilliHertz",
+                                           "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines",
+                                           "swapchainFailures"}, "render timing capture")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported render timing capture schema")
+    require(capture["tuple"] == record["tuple"], "Render timing capture is from a different product tuple")
+    require(capture["provenance"] == record["provenance"], "Render timing capture is from a different smoke run")
+    refresh = capture["targetRefreshMilliHertz"]
+    require(type(refresh) is int and refresh in record["display"]["refreshMilliHertz"], "Render timing target was not enumerated")
+    duration, frames, peak, missed, failures = (capture[name] for name in (
+        "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines", "swapchainFailures"))
+    require(all(type(value) is int for value in (duration, frames, peak, missed, failures)) and
+            0 < peak <= duration <= MAX_TIMING_WINDOW_NS and
+            0 < frames <= MAX_TIMING_FRAMES and 0 <= missed <= frames and 0 <= failures <= frames,
+            "Invalid render timing measurements")
+    require(peak + frames - 1 <= duration <= frames * peak, "Render timing interval totals are inconsistent")
+    require(duration >= limits["minimumDurationNs"] and frames >= limits["minimumFrameCount"],
+            "Render timing observation did not meet the required duration and frame count")
+    require(peak <= limits["maximumPeakFrameIntervalNs"] and missed <= limits["maximumMissedDeadlines"] and
+            failures <= limits["maximumSwapchainFailures"], "Render timing observation exceeded the declared limits")
+
+
+def check_render_timing_file(path: Path, record: dict, limits: dict) -> None:
+    """Read a bounded timing capture against the smoke record and validated limits."""
+    with path.open("rb") as source:
+        check_render_timing(source.read(MAX_RECORD_BYTES + 1), record, limits)
 
 
 def validate_summary(status: str, checks: dict) -> None:
@@ -394,6 +441,8 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     parser.add_argument("record", type=Path)
     parser.add_argument("--expect", type=Path, help="Exact release tuple and test-plan declaration")
     parser.add_argument("--display-capture", type=Path, help="Runtime display capture for the exact physical smoke run")
+    parser.add_argument("--render-timing-capture", type=Path, help="Timing capture for the exact physical smoke run")
+    parser.add_argument("--render-timing-limits", type=Path, help="Independent render timing limits from the release plan")
     parser.add_argument("--desktop-preflight", type=Path, help="Exact packaged Desktop preflight receipt for the declared tuple")
     parser.add_argument("--desktop-preflight-sha256", help="Expected SHA-256 for a separate Desktop preflight receipt")
     parser.add_argument("--desktop-component-sha256", help="Installed OpenXR component SHA-256 from package provenance")
@@ -407,6 +456,9 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
         parser.error("--require needs --expect")
     if options.display_capture is not None and options.expect is None:
         parser.error("--display-capture needs --expect")
+    timing = (options.render_timing_capture, options.render_timing_limits)
+    if any(timing) and (not all(timing) or options.display_capture is None):
+        parser.error("Render timing requires --render-timing-capture, --render-timing-limits and --display-capture")
     if (options.mr_capture is not None) != ("optionalMR" in options.require):
         parser.error("--mr-capture and --require optionalMR must be used together")
     if options.desktop_preflight is not None and options.expect is None:
@@ -442,6 +494,10 @@ def main() -> int:
         if options.display_capture is not None:
             with options.display_capture.open("rb") as source:
                 check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
+        if options.render_timing_capture is not None:
+            limits = load_record(options.render_timing_limits)
+            validate_timing_limits(limits)
+            check_render_timing_file(options.render_timing_capture, record, limits)
         if options.desktop_preflight is not None:
             check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
                                          options.desktop_component_sha256)
@@ -452,6 +508,8 @@ def main() -> int:
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")
     if options.display_capture is not None:
         print("Runtime display capture matches the physical smoke run")
+    if options.render_timing_capture is not None:
+        print("Runtime timing capture meets the declared limits")
     if options.android_preflight is not None:
         print("Android OpenXR preflight matches the physical smoke run")
     return 0

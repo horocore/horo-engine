@@ -225,6 +225,36 @@ def test_release_claim_requires_explicit_timing_limits(release):
     assert "Claimed tuple requires render timing limits" in result.stderr
 
 
+@pytest.mark.parametrize(("changes", "error"), [
+    ({}, None),
+    ({"targetRefreshMilliHertz": 120000}, "target was not enumerated"),
+    ({"durationNs": 1_080_000_001}, "Render timing interval totals are inconsistent"),
+])
+def test_single_device_timing_check_uses_the_release_contract(release, changes, error):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    timing_digest = store(evidence, json.dumps(timing_capture(record) | changes).encode())
+    record["checks"]["renderTiming"]["evidenceSha256"] = timing_digest
+    record_path = evidence / store(evidence, json.dumps(record).encode())
+    declaration = evidence / store(evidence, json.dumps(row["declaration"]).encode())
+    limits = evidence / store(evidence, json.dumps(row["renderTimingLimits"]).encode())
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "qualify_xr_device.py"), str(record_path), "--expect", str(declaration),
+         "--display-capture", str(evidence / record["display"]["evidenceSha256"]),
+         "--render-timing-capture", str(evidence / timing_digest), "--render-timing-limits", str(limits)],
+        capture_output=True, text=True, check=False,
+    )
+
+    if error is None:
+        assert result.returncode == 0, result.stderr
+        assert "Runtime timing capture meets the declared limits" in result.stdout
+    else:
+        assert result.returncode == 1
+        assert error in result.stderr
+
+
 @pytest.mark.parametrize(("duration", "accepted"), [(100, False), (101, True), (200, True), (201, False)])
 def test_timing_window_is_the_sum_of_its_measured_frame_intervals(release, duration, accepted):
     matrix, evidence = release
