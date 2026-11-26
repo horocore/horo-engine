@@ -64,17 +64,29 @@ namespace Horo::Application {
             OperationId operation, const CloudSaveDurableMutation &mutation,
             std::optional<PlatformServices::CloudBlobOwnedBytes> bytes = {}) const;
 
+        /** @brief Prepares a sidecar candidate from exact provider commit evidence.
+         * @param mutation Original durable upload. @param completion Provider's complete commit result.
+         * @param current Current validated catalog pair under the owner's binding lease.
+         * @return Candidate for conditional publication, the unchanged pair for an identical confirmation, or a typed rejection.
+         * @details The coordinator still owns durable publication against this exact current pair.
+         */
+        [[nodiscard]] Result<Runtime::SaveCloudRevisionSnapshot> ConfirmUpload(
+            const CloudSaveDurableMutation &mutation, const PlatformServices::CloudMutationResult &completion,
+            const Runtime::SaveCloudRevisionSnapshot &current) const;
+
     private:
         friend class CloudSaveMutationJournal;
         /** @brief Derives the versioned opaque key for one typed slot inside this authenticated partition. */
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
 
         CloudSaveTransport(const PlatformServices::PlatformServicesFrontend &frontend, PlatformServices::PlatformSubjectHandle subject,
-                           PlatformServices::CloudSaveObjectPrefix prefix, Sha256Digest journalPartition) noexcept;
+                           PlatformServices::CloudSaveObjectPrefix prefix, Sha256Digest journalPartition,
+                           Runtime::SaveCloudMetadataScope scope) noexcept;
 
         const PlatformServices::PlatformServicesFrontend *frontend_;
         PlatformServices::PlatformSubjectHandle subject_;
         PlatformServices::CloudSaveObjectPrefix prefix_;
         Sha256Digest journalPartition_;
+        Runtime::SaveCloudMetadataScope scope_;
     };
 }

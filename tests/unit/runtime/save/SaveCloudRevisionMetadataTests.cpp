@@ -1,5 +1,6 @@
 #include "Horo/Application/CloudSaveMutationJournal.h"
 #include "Horo/Application/CloudSaveTransport.h"
+#include "Horo/Application/CloudSaveUpload.h"
 #include "Horo/Platform/NativeImmutableFileStorage.h"
 #include "Horo/PlatformServices/PlatformOfflineQueue.h"
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
@@ -7,6 +8,7 @@
 #include "OwnedTestDirectory.h"
 #include "PlatformCloudTestSupport.h"
 #include "PlatformServicesFrontendTestSupport.h"
+#include "SaveSlotLifecycleTestSupport.h"
 #include "SaveTestUtils.h"
 
 #include <algorithm>
@@ -53,9 +55,13 @@ namespace Horo::Runtime {
 
         /** @brief Composes the real frontend with finite in-memory cloud mutation capabilities. */
         [[nodiscard]] Cloud::PlatformServicesFrontend CloudFrontend(const std::shared_ptr<Cloud::RoutingBackend> &backend,
-                                                                     const Cloud::PlatformSessionSnapshot &session) {
+                                                                     const Cloud::PlatformSessionSnapshot &session,
+                                                                     const std::uint64_t maximumPayload = 4) {
             backend->snapshot = Cloud::Capabilities(session.ProviderGeneration());
-            backend->snapshot.services[static_cast<std::size_t>(Cloud::PlatformServiceKind::Cloud)].cloudMutation = Cloud::MutationFacts();
+            auto &cloud = backend->snapshot.services[static_cast<std::size_t>(Cloud::PlatformServiceKind::Cloud)];
+            cloud.limits.maxPayloadBytes = maximumPayload;
+            cloud.cloudMutation = Cloud::MutationFacts();
+            cloud.cloudMutation->maxNamespaceBytes = std::max(cloud.cloudMutation->maxNamespaceBytes, maximumPayload);
             auto frontend = Cloud::PlatformServicesFrontend::Create(backend, backend->snapshot, session);
             REQUIRE(frontend.HasValue());
             return std::move(frontend).Value();
@@ -341,6 +347,75 @@ namespace Horo::Runtime {
                 CHECK_FALSE(absent.Value());
             }
             CHECK(backend->TotalCalls() == 0);
+        }
+
+        TEST_CASE("Verified cloud upload can only confirm its exact selected local generation",
+                  "[unit][save][cloud-transport][staging]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            const auto replaced = fixture.Import(10);
+            fixture.Import(11);
+            REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
+            const auto target = fixture.Target(10);
+            const auto payload = fixture.ExportBytes(10);
+            auto scope = Scope();
+            scope.localNamespace = target.address.namespaceAccess.expected;
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session, payload.size());
+            auto transport = BoundTransport(frontend, session, scope);
+            const Tests::OwnedTestDirectory directory{"save-cloud-stage"};
+            const auto journal = NativeJournal(directory, transport);
+            const auto mutation = Id<SaveCloudMutationId>(44);
+            CHECK(Application::StageCloudSaveUpload(*fixture.owner, journal, target, mutation, {}, payload.size() - 1).HasError());
+            const auto absent = journal.Load(mutation);
+            REQUIRE(absent.HasValue());
+            CHECK_FALSE(absent.Value());
+            auto staged = Application::StageCloudSaveUpload(*fixture.owner, journal, target, mutation, {}, payload.size());
+            REQUIRE(staged.HasValue());
+            CHECK(std::ranges::equal(staged.Value().bytes.Bytes(), payload));
+            CHECK(staged.Value().mutation.Intent().generation == target.generation);
+            CHECK(staged.Value().mutation.Intent().parent == replaced.entry->publication.generation);
+            CHECK(backend->TotalCalls() == 0);
+            const auto originalIndex = fixture.Index();
+            backend->cloudWriteFailure = MakeError(Cloud::CloudObjectErrors::QuotaExceeded);
+            Cloud::RequireError(transport.DispatchMutation(2, staged.Value().mutation, staged.Value().bytes),
+                                Cloud::CloudObjectErrors::QuotaExceeded);
+            CHECK(fixture.Index().entries == originalIndex.entries);
+            backend->cloudWriteFailure.reset();
+            REQUIRE(transport.DispatchMutation(3, staged.Value().mutation, staged.Value().bytes).HasValue());
+            REQUIRE(backend->lastCloudWrite);
+            const auto completion = Cloud::TestSupport::CloudCommit(*backend->lastCloudWrite);
+
+            const auto index = fixture.Index();
+            const auto current = SaveCloudRevisionSnapshot::Create(index, scope, Metadata(index, scope));
+            REQUIRE(current.HasValue());
+            const auto confirmed = transport.ConfirmUpload(staged.Value().mutation, completion, current.Value());
+            REQUIRE(confirmed.HasValue());
+            CHECK(confirmed.Value().Metadata().records.front().state == SaveCloudGenerationState::Clean);
+            CHECK(confirmed.Value().Metadata().records.front().lastConfirmed == mutation);
+            CHECK(confirmed.Value().Metadata().records.back() == current.Value().Metadata().records.back());
+            const auto duplicate = transport.ConfirmUpload(staged.Value().mutation, completion, confirmed.Value());
+            REQUIRE(duplicate.HasValue());
+            CHECK(duplicate.Value().Metadata().revision == confirmed.Value().Metadata().revision);
+
+            auto superseding = confirmed.Value().Metadata();
+            superseding.records.front().lastConfirmed = Id<SaveCloudMutationId>(45);
+            superseding.records.front().object->revision = std::vector{std::byte{8}};
+            const auto superseded = SaveCloudRevisionSnapshot::Create(index, scope, std::move(superseding));
+            REQUIRE(superseded.HasValue());
+            Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, superseded.Value()),
+                                SaveErrors::CloudMetadataStale);
+
+            auto altered = completion;
+            altered.committedObject->sizeBytes += 1;
+            Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, altered, current.Value()),
+                                Cloud::CloudObjectErrors::InvalidProviderResponse);
+            REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
+            const auto advanced = fixture.Index();
+            const auto fresh = SaveCloudRevisionSnapshot::Create(advanced, scope, Metadata(advanced, scope));
+            REQUIRE(fresh.HasValue());
+            Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, fresh.Value()), SaveErrors::CloudMetadataStale);
+            CHECK(fixture.Index().entries == advanced.entries);
         }
 
         /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */

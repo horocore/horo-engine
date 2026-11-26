@@ -157,6 +157,11 @@ namespace Horo::Application {
         return Result<CloudSaveMutationJournal>::Success(CloudSaveMutationJournal{std::move(storage), transport});
     }
 
+    /** @copydoc CloudSaveMutationJournal::MatchesNamespace */
+    bool CloudSaveMutationJournal::MatchesNamespace(const SaveNamespaceId &name) const noexcept {
+        return transport_->scope_.localNamespace == name;
+    }
+
     /** @copydoc CloudSaveMutationJournal::EntryName */
     std::string CloudSaveMutationJournal::EntryName(const SaveCloudMutationId mutation) const {
         const auto formatted = FormatSha256(transport_->journalPartition_);

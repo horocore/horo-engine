@@ -63,6 +63,11 @@ namespace Horo::Application {
         [[nodiscard]] static Result<CloudSaveMutationJournal> Bind(std::shared_ptr<const ImmutableFileStorage> storage,
                                                                    CloudSaveTransport &transport);
 
+        /** @brief Checks the local namespace before a coordinator obtains archive bytes.
+         * @param name Exact selected local namespace. @return True for this journal's bound namespace.
+         */
+        [[nodiscard]] bool MatchesNamespace(const Runtime::SaveNamespaceId &name) const noexcept;
+
         /** @brief Durably publishes a complete immutable intent or verifies an identical replay.
          * @param intent Exact local generation, mutation identity, payload evidence and remote revision condition.
          * @param cancellation Cooperative storage stop token.

@@ -156,6 +156,13 @@ namespace Horo::Runtime {
         bool cleanupDeferred{}; /**< Publication succeeded; exact retired generation/journal cleanup remains recoverable. */
     };
 
+    /** @brief Independently owned verified archive and lineage from one exact slot selection. */
+    struct SaveSlotVerifiedExport final {
+        SaveSlotCatalogEntry entry;             /**< Exact source publication selected by the catalog. */
+        ImmutableSaveArchive archive;          /**< Immutable complete bytes verified against the selection. */
+        std::optional<SlotGenerationId> parent; /**< Parent generation from the verified archive header. */
+    };
+
     /**
      * @brief Contained filesystem lifecycle authority using hidden immutable generations and one atomic selection manifest.
      *
@@ -197,6 +204,15 @@ namespace Horo::Runtime {
          * permanent deletion retires the generation after publication, with durable pending cleanup evidence.
          * Platform recycle is explicit and unavailable capability fails before mutation. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> Execute(SaveSlotLifecycleRequest request, const CancellationToken &cancellation = {});
+        /** @brief Exports a verified snapshot with its exact archive lineage and an additional read bound.
+         * @param target Exact selected generation, namespace binding and catalog revision.
+         * @param maximumBytes Positive caller budget, intersected with the owner's archive limit before reading.
+         * @param cancellation Cooperative cancellation.
+         * @return Detached immutable archive or typed stale, budget, permission or validation failure.
+         * @details Uses the existing Export capability and host verification policy. Does not change local storage.
+         */
+        [[nodiscard]] Result<SaveSlotVerifiedExport> ExportVerified(const SaveSlotLifecycleTarget &target, std::size_t maximumBytes,
+                                                                   const CancellationToken &cancellation = {});
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.
@@ -274,7 +290,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<bool> PreserveRetired(Operation &operation) const;
         /** @brief Acquires and admits exact source bytes without mutating the detached selection. */
         [[nodiscard]] Result<ValidatedSaveArchive> AcquireArchive(const Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                  std::vector<std::byte> &bytes) const;
+                                                                  std::vector<std::byte> &bytes, std::size_t maximumBytes) const;
         /** @brief Prepares the detached catalog mutation and all result metadata before staging. */
         [[nodiscard]] Result<std::optional<SaveStorageWrite>> PrepareMutation(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                               const ValidatedSaveArchive &archive,
@@ -285,9 +301,17 @@ namespace Horo::Runtime {
         /** @brief Creates journal-owned candidate bytes and crosses the non-cancellable selection gate. */
         [[nodiscard]] Result<void> PublishPrepared(const std::optional<SaveStorageWrite> &prepared, std::span<const std::byte> catalog,
                                                    const CancellationToken &cancellation) const;
+        /** @brief Caller-owned capture state used only by the bounded export path. */
+        struct ExportCapture final {
+            std::size_t maximumBytes;
+            std::optional<SlotGenerationId> parent;
+        };
+        /** @brief Executes a command with optional bounded export capture under the existing lifecycle authority. */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteWithCapture(const SaveSlotLifecycleRequest &request,
+                                                                         const CancellationToken &cancellation, ExportCapture *capture);
         /** @brief Executes a validated command while holding namespace and operation leases. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                    const CancellationToken &cancellation);
+                                                                    const CancellationToken &cancellation, ExportCapture *capture);
         /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
         [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */

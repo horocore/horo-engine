@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
+#include <new>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -50,11 +52,36 @@ namespace Horo::Application {
                 return Response::Failure(request.ErrorValue());
             return Response::Success({.operation = operation, .handle = std::move(request).Value()});
         }
+
+        /** @brief Checks exact session, object and bytes before accepting a commit for Save. */
+        Result<void> CheckUploadCompletion(const CloudMutationResult &result, const CloudSaveMutationIntent &intent,
+                                           const PlatformSubjectHandle &subject, const CloudSaveObjectKey &key) {
+            if (result.subject != subject || result.sessionGeneration != subject.SessionGeneration() || result.key != key ||
+                result.mutation != MutationId(intent.mutation))
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            const auto &head = result.committedObject;
+            if (!head || head->key != key || !head->revision.IsValid() || head->sizeBytes != intent.upload->size ||
+                head->transportDigest != intent.upload->digest || head->revision == intent.revision)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::InvalidProviderResponse));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the sidecar to retain the exact revision precondition used on the wire. */
+        bool MatchesPrecondition(const std::optional<Runtime::SaveCloudObjectRef> &previous, const CloudSaveObjectKey &key,
+                                 const std::optional<ProviderObjectRevision> &expected) {
+            if (!previous)
+                return !expected;
+            if (!std::ranges::equal(previous->key, key.Bytes()) || previous->revision.has_value() != expected.has_value())
+                return false;
+            return !expected || std::ranges::equal(*previous->revision, expected->Bytes());
+        }
     }
 
     CloudSaveTransport::CloudSaveTransport(const PlatformServicesFrontend &frontend, const PlatformSubjectHandle subject,
-                                           CloudSaveObjectPrefix prefix, const Sha256Digest journalPartition) noexcept
-        : frontend_(&frontend), subject_(subject), prefix_(std::move(prefix)), journalPartition_(journalPartition) {}
+                                           CloudSaveObjectPrefix prefix, const Sha256Digest journalPartition,
+                                           const Runtime::SaveCloudMetadataScope scope) noexcept
+        : frontend_(&frontend), subject_(subject), prefix_(std::move(prefix)), journalPartition_(journalPartition),
+          scope_(scope) {}
 
     /** @copydoc CloudSaveTransport::Create */
     Result<CloudSaveTransport> CloudSaveTransport::Create(PlatformServicesFrontend &frontend,
@@ -71,7 +98,8 @@ namespace Horo::Application {
         if (prefix.HasError())
             return Result<CloudSaveTransport>::Failure(prefix.ErrorValue());
         return Result<CloudSaveTransport>::Success(
-            CloudSaveTransport{frontend, subject, std::move(prefix).Value(), HashJournalPartition(local.Value(), digest)});
+            CloudSaveTransport{frontend, subject, std::move(prefix).Value(), HashJournalPartition(local.Value(), digest),
+                               scope});
     }
 
     /** @copydoc CloudSaveTransport::Key */
@@ -137,5 +165,46 @@ namespace Horo::Application {
                                                 .precondition = std::move(condition),
                                                 .mutation = MutationId(intent.mutation)});
         });
+    }
+
+    /** @copydoc CloudSaveTransport::ConfirmUpload */
+    Result<Runtime::SaveCloudRevisionSnapshot> CloudSaveTransport::ConfirmUpload(const CloudSaveDurableMutation &mutation,
+                                                                                 const CloudMutationResult &completion,
+                                                                                 const Runtime::SaveCloudRevisionSnapshot &current) const {
+        using Response = Result<Runtime::SaveCloudRevisionSnapshot>;
+        if (mutation.partition_ != journalPartition_ || current.Metadata().scope != scope_ || !mutation.intent_.upload)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        const auto &intent = mutation.intent_;
+        if (auto checked = CheckUploadCompletion(completion, intent, subject_, mutation.key_); checked.HasError())
+            return Response::Failure(checked.ErrorValue());
+
+        const auto &currentMetadata = current.Metadata();
+        const auto selected = std::ranges::lower_bound(currentMetadata.records, intent.slot, {}, &Runtime::SaveCloudGenerationRecord::slot);
+        if (selected == currentMetadata.records.end() || selected->slot != intent.slot || selected->generation != intent.generation ||
+            selected->archive != intent.archive)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        const auto &head = *completion.committedObject;
+        if (selected->lastConfirmed == intent.mutation && selected->state == Runtime::SaveCloudGenerationState::Clean &&
+            MatchesPrecondition(selected->object, mutation.key_, head.revision))
+            return Response::Success(current);
+        if (selected->state == Runtime::SaveCloudGenerationState::Deleted || selected->state == Runtime::SaveCloudGenerationState::Conflicted ||
+            selected->state == Runtime::SaveCloudGenerationState::Downloading ||
+            !MatchesPrecondition(selected->object, mutation.key_, intent.revision) ||
+            currentMetadata.revision == std::numeric_limits<std::uint64_t>::max())
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+
+        try {
+            auto candidate = currentMetadata;
+            ++candidate.revision;
+            auto &record = candidate.records[static_cast<std::size_t>(selected - currentMetadata.records.begin())];
+            const auto key = mutation.key_.Bytes();
+            const auto revision = head.revision.Bytes();
+            record.object = {.key = {key.begin(), key.end()}, .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
+            record.state = Runtime::SaveCloudGenerationState::Clean;
+            record.lastConfirmed = intent.mutation;
+            return Runtime::SaveCloudRevisionSnapshot::Create(current.Index(), scope_, std::move(candidate));
+        } catch (const std::bad_alloc &) {
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
+        }
     }
 }

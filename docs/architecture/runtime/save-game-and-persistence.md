@@ -1685,6 +1685,13 @@ An identical mutation can be reused after rebinding to the same scope.
 Changed facts under the same mutation ID fail without replacing the record.
 The coordinator owns pending-work discovery, payload leases and reconciliation.
 
+The application upload path uses `SaveSlotLifecycle::ExportVerified` to capture
+the selected generation and its verified lineage. It intersects the local archive
+limit with the provider's byte budget before reading and leaves the local catalog
+untouched. Commit evidence produces a candidate sidecar only while the selected
+generation, archive digest, remote key and previous revision still match. Its
+owner publishes that candidate through the conditional catalog gate.
+
 The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
 complete local `SaveNamespaceId` plus distinct provider and account identities. Each
 record names one current slot generation and exact `ArchiveContentHash`, with bounded

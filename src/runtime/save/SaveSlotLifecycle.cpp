@@ -176,6 +176,26 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotLifecycle::Execute */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::Execute(SaveSlotLifecycleRequest request, const CancellationToken &cancellation) {
+        return ExecuteWithCapture(request, cancellation, nullptr);
+    }
+
+    /** @copydoc SaveSlotLifecycle::ExportVerified */
+    Result<SaveSlotVerifiedExport> SaveSlotLifecycle::ExportVerified(const SaveSlotLifecycleTarget &target, const std::size_t maximumBytes,
+                                                                    const CancellationToken &cancellation) {
+        if (maximumBytes == 0 || !target.generation)
+            return Result<SaveSlotVerifiedExport>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        ExportCapture capture{.maximumBytes = maximumBytes};
+        auto snapshot = ExecuteWithCapture({.kind = SaveSlotLifecycleKind::Export, .source = target}, cancellation, &capture);
+        if (snapshot.HasError())
+            return Result<SaveSlotVerifiedExport>::Failure(snapshot.ErrorValue());
+        auto exported = std::move(snapshot).Value();
+        return Result<SaveSlotVerifiedExport>::Success(
+            {.entry = std::move(*exported.entry), .archive = std::move(exported.exported), .parent = capture.parent});
+    }
+
+    /** @copydoc SaveSlotLifecycle::ExecuteWithCapture */
+    Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteWithCapture(const SaveSlotLifecycleRequest &request,
+                                                                         const CancellationToken &cancellation, ExportCapture *capture) {
         if (!state_)
             return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         try {
@@ -212,7 +232,7 @@ namespace Horo::Runtime {
                 if (cleaned.Value())
                     return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::OperationInProgress));
             }
-            return ExecuteLocked(operation, request, cancellation);
+            return ExecuteLocked(operation, request, cancellation, capture);
         } catch (const std::bad_alloc &) {
             return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
         }
