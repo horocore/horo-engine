@@ -134,6 +134,26 @@ def desktop_preflight_receipt(identity):
             f"linux system-default vulkan sha256:{target} tethered preflight 9 8 7 1 3 0 2 2 3\n").encode()
 
 
+@pytest.mark.parametrize(("measurements", "error"), [
+    ("2,72000,90000,2,1024,800,1032,808", None),
+    ("0,4,1024,1024,896,1024,768,1024,640,1024", None),
+    ("2,90000,72000,2,1024,800,1032,808", "Refresh values must be unique and sorted"),
+    ("33,90000,2,1024,800,1032,808", "Invalid Desktop display rate count"),
+    ("0,2,1024,800,1032", "Invalid Desktop display view count"),
+    ("0,2,1024,800,1032,65537", "Invalid runtime view extent"),
+    ("0,2,1024,800,1032,private", "Invalid Desktop display measurements"),
+])
+def test_desktop_v3_preflight_checks_measurements(desktop_identity, measurements, error):
+    data = desktop_preflight_receipt(desktop_identity).replace(b"qualification-v2", b"qualification-v3").removesuffix(b"\n")
+    data += f" display={measurements}\n".encode()
+    digest = hashlib.sha256(data).hexdigest()
+    if error is None:
+        xr.check_desktop_preflight(data, desktop_identity, digest)
+    else:
+        with pytest.raises(ValueError, match=error):
+            xr.check_desktop_preflight(data, desktop_identity, digest)
+
+
 @pytest.fixture
 def desktop_identity(smoke):
     identity = smoke["tuple"]

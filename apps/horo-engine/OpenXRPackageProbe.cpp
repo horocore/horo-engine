@@ -36,7 +36,7 @@ namespace Horo::Application::Internal {
             Count
         };
 
-        constexpr std::size_t MaximumReceiptBytes = 512;
+        constexpr std::size_t MaximumReceiptBytes = 1024;
         constexpr std::size_t ReceiptIdentityColumns = 6;
         constexpr std::size_t ReceiptCompatibilityColumns = 9;
         constexpr std::array DesktopConnections{OpenXRProbeWire::LocalConnection, std::string_view{"tethered"},
@@ -82,8 +82,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Reports the exact package and target without disclosing child output or device labels. */
         void WriteQualifiedReport(std::ostream &destination, const ProbeIdentity &identity, std::string_view outcome,
-                                  std::string_view facts = {}) {
+                                  std::string_view facts = {}, const bool hasDisplay = false) {
             const auto record = identity.connection == OpenXRProbeWire::LocalConnection ? "horo-xr-desktop-qualification-v1"
+                                : hasDisplay                                            ? "horo-xr-desktop-qualification-v3"
                                                                                         : "horo-xr-desktop-qualification-v2";
             destination << record << ' ' << identity.install << ' ' << identity.executable << ' ' << identity.host << ' '
                         << OpenXRProbeWire::Route << ' ' << OpenXRProbeWire::Renderer << ' ' << identity.target << ' '
@@ -152,10 +153,51 @@ namespace Horo::Application::Internal {
             return runtimeMajor != 0 && graphicsMajor != 0 && spaces >= 2 && formats != 0 && (routes & required) == required;
         }
 
+        /** @brief Consumes one unsigned decimal from the closed, comma-delimited measurement field. */
+        std::optional<unsigned> ReadDisplayValue(std::string_view &remaining) noexcept {
+            const auto separator = remaining.find(',');
+            const auto token = remaining.substr(0, separator);
+            unsigned value{};
+            if (token.empty() || token.size() > 7 || (token.size() > 1 && token.front() == '0'))
+                return std::nullopt;
+            const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+            if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
+                return std::nullopt;
+            remaining = separator == std::string_view::npos ? std::string_view{} : remaining.substr(separator + 1);
+            return value;
+        }
+
+        /** @brief Admits only bounded rates and ordered dimensions before relaying the private child record. */
+        bool ValidDisplayFacts(std::string_view field) noexcept {
+            if (!field.starts_with(OpenXRProbeWire::DisplayField) || field.ends_with(','))
+                return false;
+            field.remove_prefix(OpenXRProbeWire::DisplayField.size());
+            const auto rates = ReadDisplayValue(field);
+            if (!rates || *rates > OpenXRProbeWire::MaximumDisplayRates)
+                return false;
+            unsigned previous{};
+            for (unsigned index = 0; index < *rates; ++index) {
+                const auto rate = ReadDisplayValue(field);
+                if (!rate || *rate <= previous || *rate > OpenXRProbeWire::MaximumRefreshMilliHertz)
+                    return false;
+                previous = *rate;
+            }
+            const auto views = ReadDisplayValue(field);
+            if (!views || (*views != 2 && *views != 4))
+                return false;
+            for (unsigned index = 0; index < 2 * *views; ++index) {
+                const auto size = ReadDisplayValue(field);
+                if (!size || *size == 0 || *size > OpenXRProbeWire::MaximumViewExtent)
+                    return false;
+            }
+            return field.empty();
+        }
+
         /** @brief Validates one process-owned record and rejects any extra strings or keys. */
         ReceiptKind ReadReceipt(const std::string_view line, const std::string_view digest, const std::string_view host,
                                 const std::string_view target) {
-            std::array<std::string_view, ReceiptIdentityColumns + ReceiptCompatibilityColumns> columns{};
+            constexpr auto baseColumns = ReceiptIdentityColumns + ReceiptCompatibilityColumns;
+            std::array<std::string_view, baseColumns + 1> columns{};
             std::size_t count{};
             for (auto word : std::views::split(line, ' ')) {
                 if (count == columns.size() || word.empty())
@@ -172,10 +214,13 @@ namespace Horo::Application::Internal {
                            ? ReceiptKind::Failure
                            : ReceiptKind::Invalid;
             }
-            if (count != columns.size() || columns[0] != OpenXRProbeWire::Record)
+            const bool hasDisplay = columns[0] == OpenXRProbeWire::DisplayRecord;
+            if (count != baseColumns + hasDisplay || (!hasDisplay && columns[0] != OpenXRProbeWire::Record) ||
+                (hasDisplay && !ValidDisplayFacts(columns[baseColumns])))
                 return ReceiptKind::Invalid;
-            return ValidCompatibilityFacts(std::span{columns}.last<ReceiptCompatibilityColumns>()) ? ReceiptKind::Success
-                                                                                                   : ReceiptKind::Invalid;
+            return ValidCompatibilityFacts(std::span{columns}.subspan<ReceiptIdentityColumns, ReceiptCompatibilityColumns>())
+                       ? ReceiptKind::Success
+                       : ReceiptKind::Invalid;
         }
 
         /** @brief Retains at most one well-formed receipt from the supervised child's standard output. */
@@ -183,7 +228,8 @@ namespace Horo::Application::Internal {
             /** @brief Ignores ordinary output and records malformed or repeated receipts as a permanent failure. */
             void Observe(const ProcessOutputLine &line, std::string_view digest, std::string_view host, std::string_view target) noexcept {
                 if (line.stream != ProcessOutputStream::StandardOutput ||
-                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
+                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::DisplayRecord) &&
+                     !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
                     return;
                 if (size || line.truncated || line.text.size() > bytes.size()) {
                     rejected = true;
@@ -204,13 +250,19 @@ namespace Horo::Application::Internal {
             }
 
             /** @brief Projects only the validated fields after the child's fixed identity columns. */
-            [[nodiscard]] std::string_view Facts() const noexcept {
+            [[nodiscard]] std::string_view Facts(const bool includeDisplay = true) const noexcept {
                 auto facts = Text();
                 for (unsigned index = 0; index < ReceiptIdentityColumns; ++index)
                     facts.remove_prefix(facts.find(' ') + 1);
                 if (kind == ReceiptKind::Failure)
                     facts.remove_prefix(OpenXRProbeWire::LocalConnection.size() + 1);
+                else if (!includeDisplay && HasDisplay())
+                    facts = facts.substr(0, facts.rfind(' '));
                 return facts;
+            }
+
+            [[nodiscard]] bool HasDisplay() const noexcept {
+                return Text().starts_with(OpenXRProbeWire::DisplayRecord);
             }
 
             std::array<char, MaximumReceiptBytes> bytes{};
@@ -300,15 +352,22 @@ namespace Horo::Application::Internal {
                                  "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD "
                                  "and package.");
             if (!identity.connection.empty()) {
+                const bool includeDisplay = finishedSuccess && receipt.HasDisplay() && identity.connection != OpenXRProbeWire::LocalConnection;
                 WriteQualifiedReport(finishedSuccess ? output : errors, identity, finishedSuccess ? "preflight" : receipt.Facts(),
-                                     finishedSuccess ? receipt.Facts() : std::string_view{});
+                                     finishedSuccess ? receipt.Facts(includeDisplay) : std::string_view{}, includeDisplay);
                 return finishedSuccess && output ? 0 : 1;
             }
             if (finishedFailure) {
                 errors << receipt.Text() << '\n';
                 return 1;
             }
-            output << receipt.Text() << '\n';
+            const auto text = receipt.Text();
+            if (receipt.HasDisplay()) {
+                const auto identityOffset = OpenXRProbeWire::DisplayRecord.size();
+                output << OpenXRProbeWire::Record << text.substr(identityOffset, text.rfind(' ') - identityOffset) << '\n';
+            } else {
+                output << text << '\n';
+            }
             return output ? 0 : 1;
         }
 

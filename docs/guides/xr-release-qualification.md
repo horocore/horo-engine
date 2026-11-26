@@ -98,9 +98,13 @@ be omitted. Set
 `desktopPreflightSha256` to null to record an unrun preflight. The gate
 reports such claims under their assigned owner. The receipt must match the
 same executable, runtime and HMD, runtime version, host, renderer, and declared
-connection mode as the physical evidence. Generate a new version 2 receipt for
-each connection mode. The release claim still requires the underlying
-physical qualification checks for the declared connection mode.
+connection mode as the physical evidence. Generate a separate receipt for each
+connection mode. Version 3 appends a bounded `display=` field containing a
+refresh rate count, ascending rates in millihertz, a view count, and ordered
+width and height pairs. A zero rate count means enumeration was unavailable.
+The checker continues to accept version 2 receipts. The release claim still
+requires its own physical display capture and the other checks for the
+declared connection mode.
 
 For a standalone Android claim, an optional `androidPreflight` object can
 attach the exact JSON stdout from a successful `project.py android-deploy

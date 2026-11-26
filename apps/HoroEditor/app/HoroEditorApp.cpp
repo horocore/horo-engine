@@ -5753,6 +5753,18 @@ namespace Horo::Editor {
         std::fflush(stdout);
     }
 
+    /** @brief Encodes only the sealed numeric display observation for the supervised Desktop probe. */
+    static std::string DesktopProbeDisplayFacts(const Editor::EditorXrDisplayObservation &display) {
+        namespace Wire = Application::Internal::OpenXRProbeWire;
+        std::string facts = std::format("{}{}", Wire::DisplayField, display.refreshRateCount);
+        for (const auto rate : std::span{display.refreshMilliHertz}.first(display.refreshRateCount))
+            facts += std::format(",{}", rate);
+        facts += std::format(",{}", display.viewCount);
+        for (const auto &view : std::span{display.viewExtents}.first(display.viewCount))
+            facts += std::format(",{},{}", view.width, view.height);
+        return facts;
+    }
+
     /** @brief Emits a finite process-scoped receipt after the real selected graphics/runtime owners drain. */
     [[nodiscard]] static int CompleteDesktopXrProbe(PreparedEditorStartup &startup, EditorPresentation &presentation,
                                                     const Application::Internal::OpenXRDesktopProbeTarget &target) {
@@ -5790,13 +5802,15 @@ namespace Horo::Editor {
                     admittedRoutes |= 1U << index;
             }
             // Closed vocabulary on the pipe. Native labels, paths and tracking data stay in the child.
-            terminal.healthy = std::fprintf(stdout, "%s %s %s %s %s %s %u %u %u %u %u %u %u %u %u\n", OpenXRProbeWire::Record.data(),
+            const auto displayFacts = DesktopProbeDisplayFacts(observed.display);
+            terminal.healthy = std::fprintf(stdout, "%s %s %s %s %s %s %u %u %u %u %u %u %u %u %u %s\n",
+                                            OpenXRProbeWire::DisplayRecord.data(),
                                             digest.c_str(), observed.platform.operatingSystem.c_str(), OpenXRProbeWire::Route.data(),
                                             OpenXRProbeWire::Renderer.data(), targetIdentity.c_str(), static_cast<unsigned>(runtime.major),
                                             static_cast<unsigned>(runtime.minor), static_cast<unsigned>(runtime.patch),
                                             static_cast<unsigned>(graphics.major), static_cast<unsigned>(graphics.minor),
                                             static_cast<unsigned>(graphics.patch), static_cast<unsigned>(observed.referenceSpaceCount),
-                                            static_cast<unsigned>(observed.runtimeSwapchainFormatCount), admittedRoutes) > 0 &&
+                                            static_cast<unsigned>(observed.runtimeSwapchainFormatCount), admittedRoutes, displayFacts.c_str()) > 0 &&
                                std::fflush(stdout) == 0;
         } else {
             EmitDesktopProbeFailure(target, failure);

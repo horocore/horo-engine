@@ -8,6 +8,8 @@
 namespace Horo::Application::Internal::OpenXRProbeWire {
     inline constexpr std::string_view Command = "--xr-package-probe";
     inline constexpr std::string_view Record = "horo-xr-package-probe-v1";
+    inline constexpr std::string_view DisplayRecord = "horo-xr-package-probe-v2";
+    inline constexpr std::string_view DisplayField = "display=";
     inline constexpr std::string_view FailureRecord = "horo-xr-package-probe-failure-v1";
     inline constexpr std::string_view LocalConnection = "desktop-local";
     inline constexpr std::string_view Route = "system-default";
@@ -16,6 +18,9 @@ namespace Horo::Application::Internal::OpenXRProbeWire {
     inline constexpr unsigned GraphicsRouteBit = 1U << 0;
     inline constexpr unsigned PlatformTimeRouteBit = 1U << 1;
     inline constexpr unsigned RequiredRouteMask = GraphicsRouteBit | PlatformTimeRouteBit;
+    inline constexpr unsigned MaximumDisplayRates = 32;
+    inline constexpr unsigned MaximumRefreshMilliHertz = 1'000'000;
+    inline constexpr unsigned MaximumViewExtent = 65'536;
 
     /** @brief Closed redacted reasons allowed through the Desktop process pipe. */
     enum class FailureReason : std::uint8_t {

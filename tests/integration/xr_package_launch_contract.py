@@ -17,6 +17,7 @@ runtime = "Selected Runtime"
 headset = "Selected HMD"
 target = digest(b"Horo Desktop OpenXR probe v1\0" + runtime.encode() + b"\0" + headset.encode())
 record = f"horo-xr-package-probe-v1 {install} linux system-default vulkan {target} 9 8 7 1 3 0 2 2 11"
+display = "display=2,72000,90000,2,1024,800,1032,808"
 failure = f"horo-xr-package-probe-failure-v1 {install} linux system-default vulkan {target} desktop-local permission-denied"
 launch = Path(sys.argv[1]).resolve(strict=True)
 
@@ -27,7 +28,8 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
     trust = [root / name for name in ("roots", "catalog", "signature")]
     for path in trust:
         path.touch()
-    success_variants = ("accepted", "foreign", "malformed", "duplicate", "failed", "stale-executable", "surviving-child", "interrupted")
+    success_variants = ("accepted", "display", "foreign", "malformed", "duplicate", "failed", "stale-executable", "surviving-child",
+                        "interrupted")
     failure_variants = ("failure-receipt", "foreign-failure", "malformed-failure", "failure-exit-mismatch", "mixed-receipts",
                         "stale-after-failure", "wrong-connection", "failure-on-stderr")
     incompatible_facts = {
@@ -41,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
     }
     qualified_variants = ("accepted", "tethered", "wireless-streaming", "required-routes-only", "failure-receipt", "foreign", "duplicate", "stale-executable",
                           "stale-after-failure", "surviving-child", "interrupted", "timed-out", *incompatible_facts,
-                          "invalid-connection", "invalid-timeout")
+                          "invalid-connection", "invalid-timeout", "display", "local-display", "malformed-display")
     cases = [(variant, False) for variant in (*success_variants, *failure_variants)]
     cases.extend((variant, True) for variant in qualified_variants)
     for variant, qualified in cases:
@@ -57,6 +59,9 @@ Path('ran').write_text('1')
 variant = {variant!r}
 record = {record!r}
 failure = {failure!r}
+if variant in ("display", "local-display", "malformed-display"):
+    record = record.replace("horo-xr-package-probe-v1", "horo-xr-package-probe-v2")
+    record += " " + ({display!r} if variant != "malformed-display" else "display=0,2,1024,800,/root/private,808")
 if variant == "foreign":
     record = record.replace({target!r}, {digest(b"different target")!r})
 elif variant == "malformed":
@@ -97,7 +102,8 @@ sys.exit(7 if variant == "failed" else 0)
         args = [str(launch), "--probe-xr-package", "linux", "system-default", runtime, headset, install, str(executable),
                 executable_digest, str(root), str(project), *(str(path) for path in trust)]
         if qualified:
-            connection = {"accepted": "desktop-local", "tethered": "tethered", "invalid-connection": "remote-device"}.get(
+            connection = {"accepted": "desktop-local", "local-display": "desktop-local", "tethered": "tethered",
+                          "invalid-connection": "remote-device"}.get(
                 variant, "wireless-streaming")
             args += ["--connection", connection]
             if variant == "timed-out":
@@ -121,26 +127,28 @@ sys.exit(7 if variant == "failed" else 0)
         else:
             run = subprocess.run(args, env=env, timeout=8, capture_output=True, text=True, check=False)
         invalid_options = variant in ("invalid-connection", "invalid-timeout")
-        accepted = variant in ("accepted", "tethered", "wireless-streaming", "required-routes-only")
+        accepted = variant in ("accepted", "tethered", "wireless-streaming", "required-routes-only", "display", "local-display")
         assert run.returncode == (0 if accepted else 2 if invalid_options else 1), (variant, run)
         assert "private" not in run.stderr and "/root/" not in run.stderr, (variant, run)
         assert (root / "ran").exists() == (not invalid_options and variant != "stale-executable"), (variant, run)
         if qualified and not invalid_options:
-            version = 1 if connection == "desktop-local" else 2
+            version = 1 if connection == "desktop-local" else 3 if variant == "display" else 2
             identity = (f"horo-xr-desktop-qualification-v{version} {install} {executable_digest} linux system-default "
                         f"vulkan {target} {connection}")
             if accepted:
                 admitted_routes = 3 if variant == "required-routes-only" else 11
-                assert run.stdout == f"{identity} preflight 9 8 7 1 3 0 2 2 {admitted_routes}\n" and not run.stderr, (variant, run)
+                measurements = f" {display}" if variant == "display" else ""
+                assert run.stdout == f"{identity} preflight 9 8 7 1 3 0 2 2 {admitted_routes}{measurements}\n" and not run.stderr, (variant, run)
             else:
                 outcomes = {"failure-receipt": "permission-denied", "foreign": "unattributed-receipt", "duplicate": "unattributed-receipt",
+                            "malformed-display": "unattributed-receipt",
                             "stale-executable": "stale-or-busy-package", "stale-after-failure": "stale-package", "timed-out": "timed-out",
                             "surviving-child": "interrupted-or-retired", "interrupted": "interrupted-or-retired",
                             **dict.fromkeys(incompatible_facts, "unattributed-receipt")}
                 assert run.stderr == f"{identity} {outcomes[variant]}\n" and not run.stdout, (variant, run)
             assert runtime not in run.stderr + run.stdout and headset not in run.stderr + run.stdout
         else:
-            assert run.stdout == (record + "\n" if variant == "accepted" else ""), (variant, run)
+            assert run.stdout == (record + "\n" if variant in ("accepted", "display") else ""), (variant, run)
             if variant == "failure-receipt":
                 assert run.stderr == failure + "\n", (variant, run)
             else:

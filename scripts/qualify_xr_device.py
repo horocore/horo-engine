@@ -10,8 +10,10 @@ import re
 
 
 MAX_RECORD_BYTES = 64 * 1024
-MAX_DESKTOP_PREFLIGHT_BYTES = 512
+MAX_DESKTOP_PREFLIGHT_BYTES = 1024
+MAX_DISPLAY_RATES = 32
 DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v2"
+DESKTOP_DISPLAY_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v3"
 DESKTOP_CONNECTIONS = {"Tethered": "tethered", "WirelessStreaming": "wireless-streaming"}
 DESKTOP_PREFLIGHT_MAXIMA = (65535, 65535, 4294967295, 4294967295, 4294967295, 4294967295, 16, 128, 15)
 DESKTOP_REQUIRED_ROUTES = 0b0011
@@ -125,7 +127,7 @@ def validate_display(value: object) -> dict:
 def validate_display_values(display: dict) -> None:
     """Validate the bounded display values shared by the capture and smoke record."""
     refresh = display["refreshMilliHertz"]
-    require(isinstance(refresh, list) and len(refresh) <= 32, "Invalid refresh inventory")
+    require(isinstance(refresh, list) and len(refresh) <= MAX_DISPLAY_RATES, "Invalid refresh inventory")
     require(all(type(rate) is int and 0 < rate <= 1_000_000 for rate in refresh),
             "Refresh values must be positive integer millihertz")
     require(refresh == sorted(set(refresh)), "Refresh values must be unique and sorted")
@@ -255,6 +257,20 @@ def desktop_receipt_digest(package_receipt: str, preflight: str | None, componen
     return digest
 
 
+def check_desktop_display_field(field: str) -> None:
+    """Validate the complete bounded measurement suffix from a v3 packaged probe."""
+    require(field.startswith("display="), "Missing Desktop display measurements")
+    tokens = field.removeprefix("display=").split(",")
+    require(all(re.fullmatch(r"0|[1-9][0-9]{0,6}", token) for token in tokens), "Invalid Desktop display measurements")
+    rate_count, *values = map(int, tokens)
+    require(rate_count <= MAX_DISPLAY_RATES and len(values) > rate_count, "Invalid Desktop display rate count")
+    view_count = values[rate_count]
+    extents = values[rate_count + 1:]
+    require(view_count in {2, 4} and len(extents) == 2 * view_count, "Invalid Desktop display view count")
+    validate_display_values({"refreshMilliHertz": values[:rate_count],
+                             "viewExtents": [{"width": width, "height": height} for width, height in zip(extents[::2], extents[1::2])]})
+
+
 def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
                             component_digest: str | None = None) -> None:
     """Match a retired Desktop package probe to the physical tuple it can inform."""
@@ -263,9 +279,10 @@ def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
             "Desktop preflight does not match the declared receipt digest")
     require(data.endswith(b"\n"), "Invalid Desktop preflight line ending")
     columns = data[:-1].removesuffix(b"\r").decode("ascii").split(" ")
-    require(len(columns) == 18, "Invalid Desktop preflight receipt")
+    has_display = columns[0] == DESKTOP_DISPLAY_PREFLIGHT_RECORD
+    require(len(columns) == (19 if has_display else 18), "Invalid Desktop preflight receipt")
     record, install, executable, host, route, renderer, target, connection, outcome, *facts = columns
-    require(record == DESKTOP_PREFLIGHT_RECORD and outcome == "preflight", "Expected a successful Desktop preflight")
+    require((record == DESKTOP_PREFLIGHT_RECORD or has_display) and outcome == "preflight", "Expected a successful Desktop preflight")
     require(install.startswith("sha256:") and is_digest(install[7:]), "Invalid Desktop preflight installation digest")
     if component_digest is not None:
         require(install == f"sha256:{component_digest}", "Desktop preflight uses a different installed component")
@@ -279,6 +296,8 @@ def check_desktop_preflight(data: bytes, identity: dict, receipt_digest: str,
     labels = f"{identity['runtime']}\0{identity['headsetModel']}".encode()
     target_digest = hashlib.sha256(b"Horo Desktop OpenXR probe v1\0" + labels).hexdigest()
     require(target == f"sha256:{target_digest}", "Desktop preflight uses a different runtime or system")
+    if has_display:
+        check_desktop_display_field(facts.pop())
     runtime_version = ".".join(map(str, desktop_preflight_facts(facts)[:3]))
     require(runtime_version == identity["runtimeVersion"], "Desktop preflight uses a different runtime version")
 
