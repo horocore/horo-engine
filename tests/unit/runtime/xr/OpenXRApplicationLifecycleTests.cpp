@@ -1442,6 +1442,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool revokeDuringStartup = false;
         bool revokeOperatorInFlight = false;
         bool revokeInFlight = false;
+        bool revokeOnStatusRead = false;
         bool revokeBeforeSubmit = false;
         bool revokeAtLastCheck = false;
         bool revokeDuringBind = false;
@@ -1480,6 +1481,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
             revokeInFlight = true;
+        }
+        SECTION("Setup permanently withdraws the live grant when its status read observes platform denial") {
+            revokeOnStatusRead = true;
         }
         SECTION("render submission retires denied permission without waiting for the next event poll") {
             revokeBeforeSubmit = true;
@@ -1581,6 +1585,14 @@ namespace Horo::Tests::OpenXRApplication {
         RequireValue(fixture.play->FinishGui(true));
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.frames.ends == 0);
+        if (revokeOnStatusRead) {
+            permission->permitted = false;
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Denied);
+            CHECK_FALSE(native.running);
+            permission->permitted = true;
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Denied);
+        }
         if (revokeInFlight) {
             permission->permitted = false;
             RequireValue(fixture.play->PollEvents());
@@ -1603,8 +1615,8 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK_FALSE(native.running);
             CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
         }
-        const bool composed =
-            active && !revokeInFlight && !revokeDuringBind && !revokeOperatorInFlight && !revokeBeforeSubmit && !revokeAtLastCheck;
+        const bool composed = active && !revokeInFlight && !revokeOnStatusRead && !revokeDuringBind && !revokeOperatorInFlight &&
+                              !revokeBeforeSubmit && !revokeAtLastCheck;
         if (composed || revokeBeforeSubmit || revokeAtLastCheck)
             CHECK(permission->reads == readsBeforeSubmit + (revokeBeforeSubmit ? 1U : 2U));
         const auto expectedLayers = revokeAtLastCheck ? 0U : (composed ? 2U : 1U);

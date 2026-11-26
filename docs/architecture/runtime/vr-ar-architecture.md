@@ -1217,6 +1217,8 @@ withdraws permission at that point, Editor Play ends the frame without layers.
 
 The signed Editor Play composition accepts this permission from an explicit
 installed platform authority. Its next-Play operator grant is consumed once.
+If XR Setup observes platform denial, it withdraws the live grant immediately.
+Restoring platform permission requires a new operator grant before passthrough resumes.
 The app validates the grant against the current session and the same prediction
 that maps the native reference space into calibrated World. The compositor
 uses the exact renderer alpha receipt only after the acquired image and GUI

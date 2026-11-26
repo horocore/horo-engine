@@ -342,8 +342,9 @@ namespace Horo::Editor {
     class IEditorXrPassthroughPreview {
     public:
         virtual ~IEditorXrPassthroughPreview() = default;
-        /** @return Current redacted state without camera inputs or native handles. */
-        [[nodiscard]] virtual EditorXrPassthroughState ReadPassthroughPreviewState() const noexcept = 0;
+        /** @brief Reads redacted owner-lane state and withdraws a grant when platform permission is lost.
+         * @return Current state without camera inputs or native handles. */
+        [[nodiscard]] virtual EditorXrPassthroughState ReadPassthroughPreviewState() noexcept = 0;
         /** @return Success if one future Play grant was armed, or the original typed refusal. */
         [[nodiscard]] virtual Result<void> ArmPassthrough() = 0;
         /** @brief Stops queued or live consent immediately while the Play owner retires native work. */

@@ -605,7 +605,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc Editor::IEditorXrPassthroughPreview::ReadPassthroughPreviewState */
-    Editor::EditorXrPassthroughState OpenXRPlayHost::ReadPassthroughPreviewState() const noexcept {
+    Editor::EditorXrPassthroughState OpenXRPlayHost::ReadPassthroughPreviewState() noexcept {
         using enum Editor::EditorXrPassthroughState;
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
             return Unavailable;
@@ -613,9 +613,10 @@ namespace Horo::Application::Internal {
             return Armed;
         if (!passthroughScope_ && SetupIdle() && composition_.session.MayArmPassthrough())
             return Ready;
-        if (passthroughState_ == XR::XRCapabilityState::Denied)
+        const auto state = ReadPassthroughState();
+        if (state == XR::XRCapabilityState::Denied)
             return Denied;
-        if (ReadPassthroughState() == XR::XRCapabilityState::Available)
+        if (state == XR::XRCapabilityState::Available)
             return Active;
         return scene_ && scene_->passthroughGrant ? Pending : Unavailable;
     }
@@ -659,14 +660,9 @@ namespace Horo::Application::Internal {
                input_.origin == scope.world.worldOriginRevision && state.session == scope.session && state.admitsActions;
     }
 
-    /** @copydoc OpenXRPlayHost::HasPassthrough */
-    bool OpenXRPlayHost::HasPassthrough(XR::XRPassthroughScope scope) const noexcept {
-        return MatchesPassthroughGrant(scope) && native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active &&
-               composition_.session.AllowsPassthrough(scope) && MatchesPassthroughGrant(scope);
-    }
-
-    /** @copydoc OpenXRPlayHost::AuthorizePassthroughFrame */
-    bool OpenXRPlayHost::AuthorizePassthroughFrame(XR::XRPassthroughScope scope) noexcept {
+    /** @copydoc OpenXRPlayHost::AuthorizeActivePassthrough */
+    bool OpenXRPlayHost::AuthorizeActivePassthrough(XR::XRPassthroughScope scope) noexcept {
+        using XR::OpenXRInternal::NativePassthroughState;
         if (passthroughScope_ != scope || !MatchesPassthroughGrant(scope))
             return false;
         const bool permitted = composition_.session.AllowsPassthrough(scope);
@@ -677,16 +673,19 @@ namespace Horo::Application::Internal {
             passthroughState_ = XR::XRCapabilityState::Denied;
             return false;
         }
-        return native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active;
+        return native_.ReadPassthrough(scope) == NativePassthroughState::Active;
     }
 
     /** @copydoc OpenXRPlayHost::ReadPassthroughState */
-    XR::XRCapabilityState OpenXRPlayHost::ReadPassthroughState() const noexcept {
+    XR::XRCapabilityState OpenXRPlayHost::ReadPassthroughState() noexcept {
+        using enum XR::XRCapabilityState;
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
-            return XR::XRCapabilityState::Unavailable;
-        if (passthroughState_ == XR::XRCapabilityState::Available && (!passthroughScope_ || !HasPassthrough(*passthroughScope_)))
-            return XR::XRCapabilityState::Unavailable;
-        return passthroughState_;
+            return Unavailable;
+        if (passthroughState_ != Available)
+            return passthroughState_;
+        if (passthroughScope_ && AuthorizeActivePassthrough(*passthroughScope_))
+            return Available;
+        return passthroughState_ == Denied ? Denied : Unavailable;
     }
 
     /** @copydoc OpenXRPlayHost::ProgressPassthrough */
@@ -694,14 +693,10 @@ namespace Horo::Application::Internal {
         const bool idle = frames_.Snapshot().phase == XR::XRFramePhase::Idle;
         if (passthroughScope_) {
             const auto scope = *passthroughScope_;
-            if (HasPassthrough(scope))
+            if (AuthorizeActivePassthrough(scope) || passthroughScope_ != scope)
                 return;
-            if (scene_ && scene_->passthroughGrant) {
-                const bool permitted = composition_.session.AllowsPassthrough(scope);
+            if (scene_ && scene_->passthroughGrant == scope.grant)
                 RevokePassthrough();
-                if (!permitted)
-                    passthroughState_ = XR::XRCapabilityState::Denied;
-            }
             if (idle && (native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Absent ||
                          native_.StopPassthrough(scope).HasValue()))
                 passthroughScope_.reset();
@@ -744,8 +739,9 @@ namespace Horo::Application::Internal {
                 passthroughState_ = PassthroughStartFailure(started.ErrorValue());
             return;
         }
-        if (!HasPassthrough(scope)) {
-            RevokePassthrough();
+        if (!AuthorizeActivePassthrough(scope)) {
+            if (scene_ == scene && scene->passthroughGrant == grant)
+                RevokePassthrough();
             return;
         }
         passthroughState_ = XR::XRCapabilityState::Available;

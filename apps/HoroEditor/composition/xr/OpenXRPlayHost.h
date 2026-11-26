@@ -348,11 +348,11 @@ namespace Horo::Application::Internal {
             return this;
         }
 
-        [[nodiscard]] Editor::EditorXrPassthroughState ReadPassthroughPreviewState() const noexcept override;
+        [[nodiscard]] Editor::EditorXrPassthroughState ReadPassthroughPreviewState() noexcept override;
         [[nodiscard]] Result<void> ArmPassthrough() override;
         void RevokePassthrough() noexcept override;
-        /** @brief Reads redacted current owner-lane availability; exposes no native handle or camera data. */
-        [[nodiscard]] XR::XRCapabilityState ReadPassthroughState() const noexcept;
+        /** @brief Reads redacted owner-lane availability and retires denied authority. */
+        [[nodiscard]] XR::XRCapabilityState ReadPassthroughState() noexcept;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -595,13 +595,10 @@ namespace Horo::Application::Internal {
          * @param scope Frozen session, World and operator grant. @return Whether all three are still current.
          */
         [[nodiscard]] bool MatchesPassthroughGrant(const XR::XRPassthroughScope &scope) const noexcept;
-        /** @brief Checks current consent, platform authority, focus, calibration and native activation.
+        /** @brief Checks the exact active passthrough scope and immediately retires a denied grant.
          * @param scope Owned scope copy that remains valid across the external permission check.
-         * @return Whether the exact native and Play scope is still authorized.
-         */
-        [[nodiscard]] bool HasPassthrough(XR::XRPassthroughScope scope) const noexcept;
-        /** @brief Checks the exact presentation scope and immediately retires a denied grant. */
-        [[nodiscard]] bool AuthorizePassthroughFrame(XR::XRPassthroughScope scope) noexcept;
+         * @return Whether the exact native and Play scope is still authorized. */
+        [[nodiscard]] bool AuthorizeActivePassthrough(XR::XRPassthroughScope scope) noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
         [[nodiscard]] bool FrameLightingAuthorized() const noexcept;

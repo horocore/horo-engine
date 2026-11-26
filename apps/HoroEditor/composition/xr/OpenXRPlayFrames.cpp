@@ -927,7 +927,7 @@ namespace Horo::Application::Internal {
                                                                        scene_->geometry->MotionObjects()};
         render_->passthrough.reset();
         if (const auto scope = passthroughScope_;
-            scope && nativeReference.Value().Target() == scope->world && AuthorizePassthroughFrame(*scope))
+            scope && nativeReference.Value().Target() == scope->world && AuthorizeActivePassthrough(*scope))
             render_->passthrough.emplace(*scope, publication, nativeReference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         using Viewport = Editor::EditorVulkanXrViewportAccess;
@@ -1285,7 +1285,7 @@ namespace Horo::Application::Internal {
                 return aborted;
             return compositor.EndEmpty(frame);
         }
-        if (passthrough && host.AuthorizePassthroughFrame(passthrough->scope)) {
+        if (passthrough && host.AuthorizeActivePassthrough(passthrough->scope)) {
             const auto receipt =
                 Editor::EditorVulkanXrViewportAccess::TakePremultipliedProjection(host.composition_.viewport, passthrough->publication,
                                                                                   acquisition->texture);
@@ -1297,7 +1297,7 @@ namespace Horo::Application::Internal {
                 const NativePassthroughAuthorization authorization{&consent, [](void *context, const XRPassthroughScope &scope) {
                     auto &current = *static_cast<FrameConsent *>(context);
                     auto &host = current.frame.host;
-                    current.withdrawn = !host.AuthorizePassthroughFrame(scope) || !host.FrameLightingAuthorized() ||
+                    current.withdrawn = !host.AuthorizeActivePassthrough(scope) || !host.FrameLightingAuthorized() ||
                                         !current.frame.GazeProfileCurrent();
                     return !current.withdrawn;
                 }};
