@@ -1048,6 +1048,8 @@ The native light estimator rechecks the exact platform grant at its creation
 and sample boundaries. If the runtime returns after the grant is withdrawn,
 the owner discards the candidate and withdraws cached observations before
 returning control to the renderer.
+Reads and sampling requests check the exact grant before validating the
+observation time, so an out-of-order request still processes revocation.
 When physical retirement fails, Editor Play keeps the exact withdrawn grant
 and retries outside an admitted frame. Neither the retained handle nor a
 permission restoration republishes old lighting.

@@ -281,6 +281,29 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.native.owner.Close().HasValue());
     }
 
+    TEST_CASE("An out-of-order light request still withdraws a revoked grant", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        REQUIRE(fixture.Start(fixture.scope).HasValue());
+        REQUIRE(fixture.Advance(100).Value());
+        fixture.lightPermitted = false;
+
+        SECTION("Cached read") {
+            RequireFailureIdentity(fixture.Read(99), XRErrors::PermissionDenied);
+        }
+        SECTION("Native sample") {
+            RequireFailureIdentity(fixture.Advance(99), XRErrors::PermissionDenied);
+        }
+
+        CHECK(fixture.native.owner.NeedsLightRetirement(fixture.scope));
+        fixture.lightPermitted = true;
+        RequireFailureIdentity(fixture.Read(100), XRErrors::OperationUnavailable);
+        RequireFailureIdentity(fixture.Advance(110), XRErrors::OperationUnavailable);
+        CHECK(fixture.script.sampleCalls == 1);
+        REQUIRE(fixture.native.owner.Close().HasValue());
+    }
+
     TEST_CASE("A withdrawn light estimator retains its exact scope until native cleanup succeeds", "[unit][xr][native][lighting]") {
         LightFixture fixture;
         fixture.native.census.lightEstimationSupport = XR_TRUE;

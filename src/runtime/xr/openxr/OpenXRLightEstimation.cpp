@@ -213,6 +213,9 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<bool>;
         if (const auto access = CheckLightAccess(scope); access.HasError())
             return Outcome::Failure(access.ErrorValue());
+        const LightOperation operation{lightCall_};
+        if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         if (world == XR_NULL_HANDLE || (light_.world != XR_NULL_HANDLE && light_.world != world)) {
             light_.current.reset();
             light_.active = false;
@@ -221,9 +224,6 @@ namespace Horo::XR::OpenXRInternal {
         if (!now.IsValid() || now < light_.lastClock)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
 
-        const LightOperation operation{lightCall_};
-        if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
-            return Outcome::Failure(admitted.ErrorValue());
         light_.lastClock = now;
         if (light_.lastRequest.IsValid() &&
             now.Nanoseconds() - light_.lastRequest.Nanoseconds() < light_.limits.minimumUpdateInterval.ToNanoseconds())
@@ -285,11 +285,11 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<XRLightEstimate>;
         if (const auto access = CheckLightAccess(scope); access.HasError())
             return Outcome::Failure(access.ErrorValue());
-        if (!now.IsValid() || now < light_.lastClock)
-            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const LightOperation operation{lightCall_};
         if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
+        if (!now.IsValid() || now < light_.lastClock)
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         light_.lastClock = now;
         if (!light_.current)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
