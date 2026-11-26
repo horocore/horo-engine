@@ -348,6 +348,7 @@ namespace {
         NativeDurableFileSystem files;
         auto cache = PackageCacheStore::Create(files, cacheRoot / "complete").Value();
         auto partial = PackageCacheStore::Create(files, cacheRoot / "added-only").Value();
+        REQUIRE(PackageCacheStore::Create(files, cacheRoot / "empty").HasValue());
         REQUIRE(partial.Publish(archive).HasValue());
         REQUIRE(cache.Publish(archive).HasValue());
         REQUIRE(cache.Publish(base.archive).HasValue());
@@ -369,6 +370,13 @@ namespace {
                                                   NativeProject::PathOption("candidate-lock", root / ".horo/candidate.lock"),
                                                   NativeProject::PathOption("package-cache-root", cacheRoot / "added-only")}};
             deniesMissing(preview.adapter->Execute(command, context));
+            command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "empty");
+            const auto incomplete = preview.adapter->Execute(command, context);
+            deniesMissing(incomplete);
+            CHECK(std::ranges::any_of(incomplete.ErrorValue().diagnostics, [&](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_archive_evidence_unavailable" &&
+                       diagnostic.path == added.Value();
+            }));
             command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "complete");
             const auto reviewed = preview.adapter->Execute(command, context);
             REQUIRE(reviewed.HasValue());

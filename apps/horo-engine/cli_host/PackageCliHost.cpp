@@ -353,10 +353,13 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(cache.ErrorValue());
             auto diagnostics = ReviewUpdateLock(update.preview);
             std::vector<PackageBehaviorMigration> claims;
+            std::optional<Error> firstArchiveFailure;
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics, claims); reviewed.HasError())
+                if (diagnostics.size() >= MaximumUpdateDiagnostics)
+                    break;
+                if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics, claims, firstArchiveFailure); reviewed.HasError())
                     return reviewed;
             }
             if (auto retained = ReviewCachedRetainedEntries(update, cache.Value(), context, diagnostics, MaximumUpdateDiagnostics);
@@ -366,6 +369,10 @@ namespace Horo::Application::Internal {
                 return reviewed;
             if (context.IsStopRequested())
                 return Result<void>::Failure(UpdateStopped(context));
+            if (firstArchiveFailure) {
+                std::ranges::move(diagnostics, std::back_inserter(firstArchiveFailure->diagnostics));
+                return Result<void>::Failure(std::move(*firstArchiveFailure));
+            }
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
 

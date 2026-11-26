@@ -28,5 +28,6 @@ namespace Horo::Application::Internal {
 
     /** @brief Appends exact archive compatibility findings for one changed entry. */
     [[nodiscard]] Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                                  std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims);
+                                                  std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
+                                                  std::optional<Error> &firstArchiveFailure);
 }  // namespace Horo::Application::Internal

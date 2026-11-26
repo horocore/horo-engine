@@ -394,6 +394,8 @@ approval fingerprint only when this review succeeds. JSON output includes the
 bounded list of diagnosed package paths. This preview does not claim cache
 locks, quarantine artifacts, or write package metadata. Apply verifies the
 archives again before publication.
+Missing current or candidate archives are reported with their package and role.
+The review continues across independent entries up to the diagnostic limit.
 
 Behavior rename previews identify each matching attachment with the SHA-256
 of its saved Scene or Prefab bytes. Unreadable sources block the review and

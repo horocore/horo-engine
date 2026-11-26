@@ -43,6 +43,18 @@ namespace Horo::Application::Internal {
                                  std::string{path});
     }
 
+    /** @brief Records which side of a change lacks archive evidence without ending the review. */
+    static void ReportMissingUpdateArchive(std::vector<Diagnostic> &diagnostics, const Packages::LockedPackage &locked,
+                                           std::string_view side, const Error &failure, std::optional<Error> &firstArchiveFailure) {
+        if (!firstArchiveFailure)
+            firstArchiveFailure.emplace(failure);
+        if (diagnostics.size() >= MaximumUpdateDiagnostics)
+            return;
+        diagnostics.emplace_back(DiagnosticCode{"packages.host.update_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                                 std::string{side} + " archive: " + failure.code.Value(), SourceLocation{"packages.lock"},
+                                 locked.package.Value());
+    }
+
     /** @brief Computes the first reference-safety difference for one previous archive path. */
     static const char *AssetFileBlocker(const Packages::PackageFileEntry &oldFile, const Packages::PackageFileEntry *candidate) {
         if (!candidate)
@@ -179,17 +191,20 @@ namespace Horo::Application::Internal {
 
     /** @copydoc ReviewCachedChange */
     Result<void> ReviewCachedChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
-                                    std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims) {
+                                    std::vector<Diagnostic> &diagnostics, std::vector<PackageBehaviorMigration> &claims,
+                                    std::optional<Error> &firstArchiveFailure) {
         if (!change.candidate)
             return Result<void>::Success();
         const auto candidate = ReadUpdateArchive(cache, *change.candidate);
         if (candidate.HasError())
-            return Result<void>::Failure(candidate.ErrorValue());
+            ReportMissingUpdateArchive(diagnostics, *change.candidate, "Candidate", candidate.ErrorValue(), firstArchiveFailure);
         if (!change.current)
-            return ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
+            return candidate.HasError() ? Result<void>::Success() : ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics);
         const auto previous = ReadUpdateArchive(cache, *change.current);
         if (previous.HasError())
-            return Result<void>::Failure(previous.ErrorValue());
+            ReportMissingUpdateArchive(diagnostics, *change.current, "Current", previous.ErrorValue(), firstArchiveFailure);
+        if (previous.HasError() || candidate.HasError())
+            return Result<void>::Success();
         const auto behavior = Packages::InspectPackageBehaviorRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
         if (behavior.HasError())
             return Result<void>::Failure(behavior.ErrorValue());
