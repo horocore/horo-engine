@@ -77,6 +77,30 @@ namespace Horo::AI {
             CHECK(SymbolicDomain::Capture(input.facts, input.actions, tasks).HasError());
         }
 
+        TEST_CASE("Symbolic search accounts for reconstruction and ordering within its work budget", "[ai][planning]") {
+            const DomainFixture input;
+            const auto actions = std::span{input.actions}.subspan(1);
+            const auto captured = SymbolicDomain::Capture(input.facts, actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto &domain = captured.Value();
+            constexpr std::size_t frontierWork = 1 + 2 + 1 + 2 + 2 + 2 + 3;
+            constexpr std::size_t sequenceWork = 2 + 1;
+
+            for (std::size_t extra = 0; extra < sequenceWork; ++extra) {
+                const auto exhausted = domain.Search({}, input.goal, frontierWork + extra);
+                CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+                CHECK(exhausted.Steps().empty());
+                CHECK(exhausted.Cost() == 0);
+            }
+
+            const auto plan = domain.Search({}, input.goal, frontierWork + sequenceWork);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(plan.Steps().size() == 2);
+            CHECK(plan.Steps().front().task == input.pickTask);
+            CHECK(plan.Steps().back().task == input.openTask);
+            CHECK(plan.Cost() == 3);
+        }
+
         TEST_CASE("Symbolic searches distinguish cancellation, no plan and work exhaustion", "[ai][planning]") {
             DomainFixture input;
             const auto domain = input.Capture();

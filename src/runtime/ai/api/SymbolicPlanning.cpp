@@ -73,6 +73,36 @@ namespace Horo::AI {
             }
             return std::nullopt;
         }
+
+        /** @brief Builds only a complete sequence and charges traversal and ordering to the same work budget. */
+        SymbolicPlan Complete(const std::size_t current, std::span<const Action> actions, AiWorkBudget &budget,
+                              const CancellationToken &cancellation, const AiTaskOperationContext *operation) const noexcept {
+            using enum SymbolicPlanStatus;
+            SymbolicPlan result;
+            for (auto index = current; labels[index].parent != NoNode; index = labels[index].parent) {
+                if (PlanningCancelled(cancellation, operation))
+                    return Stopped(Cancelled);
+                if (!budget.Consume(1))
+                    return Stopped(BudgetExhausted);
+                result.steps_[result.count_++] = actions[labels[index].action].identity;
+            }
+            const auto swaps = result.count_ / 2;
+            if (swaps > 0 && !budget.Consume(swaps))
+                return Stopped(BudgetExhausted);
+            std::ranges::reverse(std::span{result.steps_}.first(result.count_));
+            if (PlanningCancelled(cancellation, operation))
+                return Stopped(Cancelled);
+            result.status_ = Solved;
+            result.cost_ = labels[current].cost;
+            return result;
+        }
+
+        /** @brief Failed searches never expose partially reconstructed actions or costs. */
+        static SymbolicPlan Stopped(const SymbolicPlanStatus status) noexcept {
+            SymbolicPlan result;
+            result.status_ = status;
+            return result;
+        }
     };
 
     std::optional<SymbolicDomain::Mask> SymbolicDomain::Encode(const std::span<const SymbolicLiteral> literals) const noexcept {
@@ -139,36 +169,24 @@ namespace Horo::AI {
         using enum SymbolicPlanStatus;
         const auto start = Encode(initial);
         const auto required = Encode(goal);
-        const auto stop = [](const SymbolicPlanStatus status) {
-            SymbolicPlan result;
-            result.status_ = status;
-            return result;
-        };
         if (!start || !required || work == 0 || work > MaximumWork)
-            return stop(InvalidInput);
+            return Frontier::Stopped(InvalidInput);
         Frontier queue;
         queue.labels.front().state = start->values;
         AiWorkBudget budget{work};
+        const auto actions = std::span{actions_}.first(actionCount_);
         while (!PlanningCancelled(cancellation, operation)) {
             if (!budget.Consume(queue.count))
-                return stop(BudgetExhausted);
+                return Frontier::Stopped(BudgetExhausted);
             const auto current = queue.Pop();
             if (current == NoNode)
-                return stop(NoPlan);
-            const auto &label = queue.labels[current];
-            if (required->Matches(label.state)) {
-                SymbolicPlan result;
-                result.status_ = Solved;
-                result.cost_ = label.cost;
-                for (auto index = current; queue.labels[index].parent != NoNode; index = queue.labels[index].parent)
-                    result.steps_[result.count_++] = actions_[queue.labels[index].action].identity;
-                std::ranges::reverse(std::span{result.steps_}.first(result.count_));
-                return PlanningCancelled(cancellation, operation) ? stop(Cancelled) : result;
-            }
-            if (const auto stopped = queue.Expand(current, std::span{actions_}.first(actionCount_), budget, cancellation, operation))
-                return stop(*stopped);
+                return Frontier::Stopped(NoPlan);
+            if (required->Matches(queue.labels[current].state))
+                return queue.Complete(current, actions, budget, cancellation, operation);
+            if (const auto stopped = queue.Expand(current, actions, budget, cancellation, operation))
+                return Frontier::Stopped(*stopped);
         }
-        return stop(Cancelled);
+        return Frontier::Stopped(Cancelled);
     }
 
     const SymbolicDomain::Action *SymbolicHierarchy::FindAction(const SymbolicActionId id) const noexcept {
