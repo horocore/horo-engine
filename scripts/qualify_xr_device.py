@@ -34,6 +34,15 @@ CORE_CHECKS = {"setup", "input", "displayEnumeration", "renderTiming",
                "comfort", "lifecycle", "recovery"}
 OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
+MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
+MR_CAPABILITY_CHECKS = {
+    "passthrough": set(),
+    "spatialAnchors": {"relocalization"},
+    "spatialAnchorPersistence": {"restore", "staleLocalization"},
+    "scenePlanes": set(),
+    "environmentHitTesting": set(),
+    "lightEstimation": set(),
+}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SOURCE_REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+/:@-]{0,127}")
@@ -221,16 +230,57 @@ def validate_record(value: object) -> dict:
     return record
 
 
-def check_physical_gate(record: dict, declaration: object, optional: set[str]) -> None:
-    expected = fields(declaration, {"tuple", "testPlan"}, "release declaration")
+def validate_declaration(value: object, optional: set[str]) -> dict:
+    """Validate an exact tuple and the scope of any optional MR claim."""
+    claims_mr = "optionalMR" in optional
+    keys = {"tuple", "testPlan"}
+    if claims_mr:
+        keys.add("mixedRealityCapabilities")
+    expected = fields(value, keys, "release declaration")
     require(is_token(expected["testPlan"]), "Missing required test-plan revision")
-    identity = validate_identity(expected["tuple"], complete=True)
+    validate_identity(expected["tuple"], complete=True)
+    if claims_mr:
+        capabilities = expected["mixedRealityCapabilities"]
+        require(isinstance(capabilities, list) and 0 < len(capabilities) <= len(MR_CAPABILITY_CHECKS),
+                "An optionalMR claim requires declared MR capabilities")
+        require(all(isinstance(name, str) and name in MR_CAPABILITY_CHECKS for name in capabilities),
+                "Invalid declared MR capability")
+        require(len(set(capabilities)) == len(capabilities), "Duplicate declared MR capability")
+    return expected
+
+
+def check_mixed_reality_capture(data: bytes, record: dict, capabilities: list[str]) -> None:
+    """Accept only redacted, complete per-capability evidence from the physical smoke run."""
+    require(len(data) <= MAX_RECORD_BYTES, "Mixed reality capture exceeds the size limit")
+    require(hashlib.sha256(data).hexdigest() == record["checks"]["optionalMR"]["evidenceSha256"],
+            "Mixed reality capture digest does not match")
+    try:
+        document = decode_record(data)
+    except (ValueError, RecursionError) as error:
+        raise ValueError("Invalid mixed reality capture JSON") from error
+    capture = fields(document, {"schemaVersion", "evidenceLevel", "tuple", "provenance", "capabilities"},
+                     "mixed reality capture")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported mixed reality capture schema")
+    require(capture["evidenceLevel"] == "PhysicalDeviceQualification", "Mixed reality capture requires physical headset evidence")
+    require(capture["tuple"] == record["tuple"], "Mixed reality capture is from a different product tuple")
+    require(capture["provenance"] == record["provenance"], "Mixed reality capture is from a different smoke run")
+    results = fields(capture["capabilities"], set(capabilities), "mixed reality capabilities")
+    for name, observed in results.items():
+        checks = fields(observed, MR_COMMON_CHECKS | MR_CAPABILITY_CHECKS[name], f"{name} evidence")
+        require(all(value is True for value in checks.values()), f"Required {name} scenario did not pass")
+
+
+def check_physical_gate(record: dict, declaration: object, optional: set[str], *, mr_capture: bytes | None = None) -> None:
+    expected = validate_declaration(declaration, optional)
     require(record["evidenceLevel"] == "PhysicalDeviceQualification", "Physical headset evidence is required")
-    require(record["tuple"] == identity, "Evidence does not match the declared product tuple")
+    require(record["tuple"] == expected["tuple"], "Evidence does not match the declared product tuple")
     require(record["provenance"]["testPlan"] == expected["testPlan"], "Evidence uses a different test plan")
     require(record["status"] in {"Passed", "PassedWithLimitations"}, "Physical smoke record did not pass")
     for name in sorted(CORE_CHECKS | optional):
         require(record["checks"][name]["status"] == "Passed", f"Required physical check {name} did not pass")
+    if "optionalMR" in optional:
+        require(mr_capture is not None, "Required mixed reality capture was not provided")
+        check_mixed_reality_capture(mr_capture, record, expected["mixedRealityCapabilities"])
 
 
 def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
@@ -317,9 +367,12 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     parser.add_argument("--desktop-preflight-sha256", help="Expected SHA-256 for a separate Desktop preflight receipt")
     parser.add_argument("--desktop-component-sha256", help="Installed OpenXR component SHA-256 from package provenance")
     parser.add_argument("--require", choices=sorted(OPTIONAL_CHECKS), action="append", default=[])
+    parser.add_argument("--mr-capture", type=Path, help="Redacted physical MR capability evidence for --require optionalMR")
     options = parser.parse_args()
     if options.require and options.expect is None:
         parser.error("--require needs --expect")
+    if (options.mr_capture is not None) != ("optionalMR" in options.require):
+        parser.error("--mr-capture and --require optionalMR must be used together")
     if options.desktop_preflight is not None and options.expect is None:
         parser.error("--desktop-preflight needs --expect")
     if options.desktop_preflight is None and (options.desktop_preflight_sha256 is not None or options.desktop_component_sha256 is not None):
@@ -333,7 +386,11 @@ def main() -> int:
     try:
         record = validate_record(load_record(options.record))
         if options.expect is not None:
-            check_physical_gate(record, load_record(options.expect), set(options.require))
+            mr_capture = None
+            if options.mr_capture is not None:
+                with options.mr_capture.open("rb") as source:
+                    mr_capture = source.read(MAX_RECORD_BYTES + 1)
+            check_physical_gate(record, load_record(options.expect), set(options.require), mr_capture=mr_capture)
         if options.desktop_preflight is not None:
             check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
                                          options.desktop_component_sha256)

@@ -63,7 +63,9 @@ Prepare a version 1 JSON matrix with these fields.
 
 Each claimed row has a complete smoke `declaration` with `tuple` and
 `testPlan`. Use `requiredOptionalChecks` to require `haptics` and
-`optionalMR` when the product claims them. An unrun claim has a null
+`optionalMR` when the product claims them. When requiring `optionalMR`,
+add the exact `mixedRealityCapabilities` list to the declaration.
+An unrun claim has a null
 `recordSha256` and blocks the gate. A Conditional or Future planning row
 uses `releaseClaim: false`. Its declaration and record may be null while
 the device owner investigates.
@@ -81,6 +83,20 @@ its digest in both `display.evidenceSha256` and the `displayEnumeration` check.
 The release checker compares the values and rejects captures from another run
 or connection mode. If an older record points to a generic artifact, transcribe
 the original runtime capture into this format or repeat the display check.
+
+When a release requires `optionalMR`, store a redacted physical-device result
+as JSON with `schemaVersion: 1`, `evidenceLevel: "PhysicalDeviceQualification"`,
+and the smoke record's exact `tuple` and `provenance`. Add a `capabilities`
+object keyed by the names in the declaration. Allowed names are
+`passthrough`, `spatialAnchors`, `spatialAnchorPersistence`, `scenePlanes`,
+`environmentHitTesting`, and `lightEstimation`. Each entry contains boolean
+`operation`, `consentDenial`, `revocation`, `fallback`, and `shutdown`
+results. Live anchors also require `relocalization`. Persistent anchors
+also require `restore` and `staleLocalization`. Record the passing results
+as `true` and reference the JSON digest in `checks.optionalMR.evidenceSha256`.
+Record failed or unavailable device work in the smoke check status. Keep raw
+images, geometry, gaze, anchor tokens, and diagnostic payloads out of this record.
+The release owner verifies the underlying observations before approving a claim.
 
 The packaged PCVR route requires Windows or Linux with Vulkan and a
 successful Desktop OpenXR preflight receipt. Use Windows or Linux for

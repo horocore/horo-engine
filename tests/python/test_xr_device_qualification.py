@@ -113,6 +113,30 @@ def test_a_limited_record_requires_a_passing_observation(smoke):
         xr.validate_record(smoke)
 
 
+def test_device_cli_requires_the_declared_mixed_reality_capture(tmp_path, smoke):
+    record_path = tmp_path / "device.json"
+    declaration_path = tmp_path / "declaration.json"
+    capture_path = tmp_path / "mixed-reality.json"
+    capture = {"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification",
+               "tuple": smoke["tuple"], "provenance": smoke["provenance"],
+               "capabilities": {"lightEstimation": {
+                   "operation": True, "consentDenial": True, "revocation": True, "fallback": True, "shutdown": True,
+               }}}
+    data = json.dumps(capture).encode()
+    capture_path.write_bytes(data)
+    smoke["checks"]["optionalMR"]["evidenceSha256"] = hashlib.sha256(data).hexdigest()
+    record_path.write_text(json.dumps(smoke), encoding="utf-8")
+    declaration = dict(declared(smoke), mixedRealityCapabilities=["lightEstimation"])
+    declaration_path.write_text(json.dumps(declaration), encoding="utf-8")
+    command = [sys.executable, str(SCRIPT), str(record_path), "--expect", str(declaration_path), "--require", "optionalMR"]
+
+    missing = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert missing.returncode != 0
+    assert "must be used together" in missing.stderr
+    valid = subprocess.run([*command, "--mr-capture", str(capture_path)], capture_output=True, text=True, check=False)
+    assert valid.returncode == 0, valid.stderr
+
+
 def test_cli_rejects_duplicate_record_members(tmp_path, smoke):
     record = tmp_path / "smoke.json"
     expected = tmp_path / "release.json"

@@ -10,7 +10,7 @@ from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_prefligh
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
-    is_source_revision, is_standalone_android, load_record, require, validate_identity, validate_record,
+    is_source_revision, is_standalone_android, load_record, require, validate_declaration, validate_record,
 )
 
 
@@ -64,6 +64,10 @@ class Evidence:
         with self.path(record["display"]["evidenceSha256"]).open("rb") as source:
             check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
 
+    def mixed_reality_capture(self, record: dict) -> bytes:
+        with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
+            return source.read(MAX_RECORD_BYTES + 1)
+
 
 def validate_preflight_declarations(row: dict) -> None:
     preflight = row.get("desktopPreflightSha256")
@@ -85,14 +89,12 @@ def validate_row(value: object) -> dict:
     if row["releaseClaim"]:
         require(row["category"] not in {"Conditional", "Future"}, "Conditional and Future rows are planning only")
         require(row["declaration"] is not None, "Claimed tuple requires a release declaration")
-    if row["declaration"] is not None:
-        declaration = fields(row["declaration"], {"tuple", "testPlan"}, "release declaration")
-        validate_identity(declaration["tuple"], complete=True)
-        require(is_token(declaration["testPlan"]), "Invalid release test-plan revision")
     optional = row["requiredOptionalChecks"]
     require(isinstance(optional, list) and all(in_set(name, OPTIONAL_CHECKS) for name in optional),
             "Invalid optional physical checks")
     require(len(optional) == len(set(optional)), "Duplicate optional physical checks")
+    if row["declaration"] is not None:
+        validate_declaration(row["declaration"], set(optional))
     require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
     validate_preflight_declarations(row)
     return row
@@ -136,7 +138,10 @@ def verify_android_route(expected: dict, evidence: Evidence, record: dict, revis
 def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
-    check_physical_gate(record, row["declaration"], set(row["requiredOptionalChecks"]))
+    optional = set(row["requiredOptionalChecks"])
+    claimed_mr_passed = "optionalMR" in optional and record["checks"]["optionalMR"]["status"] == "Passed"
+    mr_capture = evidence.mixed_reality_capture(record) if claimed_mr_passed else None
+    check_physical_gate(record, row["declaration"], optional, mr_capture=mr_capture)
     observed_revision = record["provenance"].get("sourceRevision")
     require(observed_revision is not None, "Device evidence does not record a source revision")
     require(observed_revision == revision, "Device evidence is from another source revision")
@@ -147,7 +152,11 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     if "androidPreflight" in row:
         verify_android_route(row["androidPreflight"], evidence, record, revision)
     evidence.display_capture(record)
-    for digest in {check["evidenceSha256"] for check in record["checks"].values()} - {None, record["display"]["evidenceSha256"]}:
+    check_digests = {check["evidenceSha256"] for check in record["checks"].values()}
+    check_digests.difference_update({None, record["display"]["evidenceSha256"]})
+    if mr_capture is not None:
+        check_digests.discard(record["checks"]["optionalMR"]["evidenceSha256"])
+    for digest in check_digests:
         evidence.verify(digest)
     return record["status"]
 

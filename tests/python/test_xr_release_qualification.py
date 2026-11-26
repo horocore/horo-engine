@@ -119,6 +119,87 @@ def test_a_failed_unclaimed_capability_cannot_be_reported_as_limited(release):
     assert "Standalone (xr-platform): A failed check requires a Failed record" in result.stderr
 
 
+@pytest.fixture
+def mr_claim(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    row["requiredOptionalChecks"].append("optionalMR")
+    row["declaration"]["mixedRealityCapabilities"] = ["passthrough", "spatialAnchorPersistence"]
+    checks = dict.fromkeys(("operation", "consentDenial", "revocation", "fallback", "shutdown"), True)
+    capture = {"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification",
+               "tuple": record["tuple"].copy(), "provenance": record["provenance"].copy(),
+               "capabilities": {"passthrough": checks.copy(),
+                                "spatialAnchorPersistence": dict(checks, restore=True, staleLocalization=True)}}
+    return row, record, capture
+
+
+def test_claimed_mixed_reality_requires_named_capabilities_and_typed_evidence(release, mr_claim):
+    row, _, _ = mr_claim
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Invalid mixed reality capture JSON" in result.stderr
+    del row["declaration"]["mixedRealityCapabilities"]
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Unexpected fields in release declaration" in result.stderr
+
+
+@pytest.mark.parametrize(("variation", "error"), [
+    ("valid", None),
+    ("simulator", "Mixed reality capture requires physical headset evidence"),
+    ("tuple", "Mixed reality capture is from a different product tuple"),
+    ("run", "Mixed reality capture is from a different smoke run"),
+    ("omitted", "Unexpected fields in mixed reality capabilities"),
+    ("revocation", "Required passthrough scenario did not pass"),
+    ("persistence", "Required spatialAnchorPersistence scenario did not pass"),
+    ("private", "Unexpected fields in passthrough evidence"),
+    ("digest", "Mixed reality capture digest does not match"),
+])
+def test_release_binds_mixed_reality_capabilities_to_physical_run(release, mr_claim, variation, error):
+    _, evidence = release
+    row, record, capture = mr_claim
+    if variation == "simulator":
+        capture["evidenceLevel"] = "SimulatorReplay"
+    elif variation == "tuple":
+        capture["tuple"]["connectionMode"] = "Tethered"
+    elif variation == "run":
+        capture["provenance"]["runId"] = "different-run"
+    elif variation == "omitted":
+        del capture["capabilities"]["spatialAnchorPersistence"]
+    elif variation == "revocation":
+        capture["capabilities"]["passthrough"]["revocation"] = False
+    elif variation == "persistence":
+        capture["capabilities"]["spatialAnchorPersistence"]["staleLocalization"] = 1
+    elif variation == "private":
+        capture["capabilities"]["passthrough"]["cameraPayload"] = "private-camera-payload"
+    digest = store(evidence, json.dumps(capture).encode())
+    if variation == "digest":
+        (evidence / digest).write_bytes(b"different bytes")
+    record["checks"]["optionalMR"]["evidenceSha256"] = digest
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    if error is None:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1
+        assert f"Standalone (xr-platform): {error}" in result.stderr
+        assert "private-camera-payload" not in result.stderr
+
+
+def test_unrun_mixed_reality_blocks_an_explicit_claim(release, mr_claim):
+    _, evidence = release
+    row, record, _ = mr_claim
+    record["status"] = "PassedWithLimitations"
+    record["checks"]["optionalMR"].update(status="NotRun", evidenceSha256=None, issue="missing-test-device")
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Standalone (xr-platform): Required physical check optionalMR did not pass" in result.stderr
+
+
 def test_a_nonreference_pcvr_claim_cannot_fill_the_reference_requirement(release):
     matrix, evidence = release
     matrix["tuples"][1] = make_claim(evidence, "WirelessStreaming", "Compatibility")

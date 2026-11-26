@@ -138,8 +138,11 @@ The release declaration is an object with a complete `tuple` and exact
 `testPlan` string, prepared independently by the release owner. The
 second invocation requires a passing physical record and passing checks
 for setup, input, display enumeration, timing, comfort, lifecycle and recovery.
-Add `--require haptics` or `--require optionalMR` when the release claims the
-capability. Keep any limited optional results visible in the matrix.
+Add `--require haptics` when the release claims haptics. For MR, add
+`mixedRealityCapabilities` to the declaration and pass `--require optionalMR`
+with `--mr-capture <capture.json>`. The
+[XR release qualification guide](xr-release-qualification.md) defines the exact
+redacted record. Keep any limited optional results visible in the matrix.
 For PCVR, `--desktop-preflight` validates the exact stdout receipt from
 `horo-engine --probe-xr-package ... --connection tethered` or
 `--connection wireless-streaming`, matching the tuple. Save the version 2
