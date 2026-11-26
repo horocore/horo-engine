@@ -80,6 +80,7 @@ namespace Horo::Tests::OpenXR {
         bool hasSnapshot{};
         std::function<void()> onPoll;
         std::function<void()> onCompleteScan;
+        XrResult snapshotDestroyResult{XR_SUCCESS};
 
         SpatialCaptureScript() {
             current = this;
@@ -161,6 +162,8 @@ namespace Horo::Tests::OpenXR {
             CHECK(current->hasSnapshot);
             if (current->failSnapshotDestroy)
                 return XR_ERROR_RUNTIME_FAILURE;
+            if (current->snapshotDestroyResult != XR_SUCCESS)
+                return current->snapshotDestroyResult;
             current->hasSnapshot = false;
             return XR_SUCCESS;
         }

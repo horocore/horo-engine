@@ -31,6 +31,7 @@ namespace Horo::XR::OpenXRInternal {
                 case XR_ERROR_INSTANCE_LOST:
                     return MakeError(XRErrors::IdentityStale, operation);
                 case XR_ERROR_FUNCTION_UNSUPPORTED:
+                case XR_ERROR_FEATURE_UNSUPPORTED:
                     return MakeError(XRErrors::OperationUnsupported, operation);
                 default:
                     return MakeError(XRErrors::OperationUnavailable, operation);
@@ -40,7 +41,8 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Identifies errors that invalidate all observations already published under the grant. */
         bool ObservationAccessLost(const Error &failure) noexcept {
             const auto code = failure.code.Value();
-            return code == XRErrors::PermissionDenied.code.Value() || code == XRErrors::IdentityStale.code.Value();
+            return code == XRErrors::PermissionDenied.code.Value() || code == XRErrors::IdentityStale.code.Value() ||
+                   code == XRErrors::OperationUnsupported.code.Value();
         }
 
         /** @brief Resolves one enabled native symbol from the exact instance's loader. */
@@ -358,8 +360,12 @@ namespace Horo::XR::OpenXRInternal {
         if (!snapshot_)
             return Result<void>::Success();
         const auto result = dispatch_.destroySnapshot(snapshot_);
-        if (result != XR_SUCCESS)
-            return Result<void>::Failure(CaptureError("xrDestroySpatialSnapshotEXT", result));
+        if (result != XR_SUCCESS) {
+            auto failure = CaptureError("xrDestroySpatialSnapshotEXT", result);
+            if (ObservationAccessLost(failure))
+                publication_.Revoke();
+            return Result<void>::Failure(std::move(failure));
+        }
         snapshot_ = XR_NULL_HANDLE;
         return Result<void>::Success();
     }

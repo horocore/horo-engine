@@ -47,6 +47,7 @@ namespace Horo::XR::OpenXRInternal {
                 case XR_ERROR_INSTANCE_LOST:
                     return MakeError(XRErrors::IdentityStale);
                 case XR_ERROR_FUNCTION_UNSUPPORTED:
+                case XR_ERROR_FEATURE_UNSUPPORTED:
                     return MakeError(XRErrors::OperationUnsupported);
                 default:
                     return MakeError(XRErrors::OperationUnavailable, "OpenXR spatial snapshot component query failed");

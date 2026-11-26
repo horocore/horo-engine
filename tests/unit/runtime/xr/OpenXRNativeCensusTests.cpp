@@ -904,6 +904,31 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(capture.Close().HasValue());
                 CHECK_FALSE(script.hasSnapshot);
             }
+            SECTION("snapshot cleanup distinguishes access loss from a transient provider failure") {
+                const auto [status, expected] = GENERATE(Catch::Generators::table<XrResult, const ErrorCodeDescriptor *>(
+                    {{XR_ERROR_PERMISSION_INSUFFICIENT, &XRErrors::PermissionDenied},
+                     {XR_ERROR_SESSION_LOST, &XRErrors::IdentityStale},
+                     {XR_ERROR_FEATURE_UNSUPPORTED, &XRErrors::OperationUnsupported},
+                     {XR_ERROR_RUNTIME_FAILURE, &XRErrors::OperationUnavailable}}));
+                script.snapshotDestroyResult = status;
+                const auto failed = advance(122);
+                CHECK(script.hasSnapshot);
+                const auto previous = capture.Read(scope, time(122));
+                const auto polls = script.polls;
+                script.snapshotDestroyResult = XR_SUCCESS;
+                const auto resumed = status == XR_ERROR_RUNTIME_FAILURE ? failed : advance(123);
+                CHECK(script.polls == polls);
+                REQUIRE(capture.Close().HasValue());
+                CHECK_FALSE(script.hasSnapshot);
+                RequireFailureIdentity(failed, *expected);
+                if (status == XR_ERROR_RUNTIME_FAILURE) {
+                    REQUIRE(previous.HasValue());
+                    CHECK(previous.Value().Planes()[0].id == original);
+                } else {
+                    RequireFailureIdentity(previous, XRErrors::OperationUnavailable);
+                    RequireFailureIdentity(resumed, XRErrors::OperationUnavailable);
+                }
+            }
             SECTION("withdrawal in a native callback stops the remaining reads and permits a new grant after retirement") {
                 enum class Revocation {
                     Poll,
