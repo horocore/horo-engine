@@ -12,7 +12,7 @@ namespace Horo::Application {
         std::optional<PlatformServices::ProviderObjectRevision> expectedRevision, const std::size_t maximumBytes,
         const CancellationToken &cancellation) {
         using Response = Result<StagedCloudSaveUpload>;
-        if (!journal.MatchesNamespace(target.address.namespaceAccess.expected))
+        if (!journal.MatchesAccess(target.address.namespaceAccess))
             return Response::Failure(MakeError(Runtime::SaveErrors::NamespaceStale));
         if (!mutation.IsValid() || (expectedRevision && !expectedRevision->IsValid()))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataInvalid));
@@ -44,6 +44,8 @@ namespace Horo::Application {
                                                                const Runtime::SaveNamespaceAccessRequest &access,
                                                                const CloudSaveDurableMutation &mutation,
                                                                const PlatformServices::CloudMutationResult &completion) const {
+        if (!OwnsAccess(access))
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::NamespaceStale));
         const auto current = lifecycle.ReadCloudRevision(access, scope_);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());

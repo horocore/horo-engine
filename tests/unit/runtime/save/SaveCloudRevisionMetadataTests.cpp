@@ -69,8 +69,10 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Application::CloudSaveTransport BoundTransport(Cloud::PlatformServicesFrontend &frontend,
                                                                       const Cloud::PlatformSessionSnapshot &session,
-                                                                      const SaveCloudMetadataScope &scope = Scope()) {
-            auto transport = Application::CloudSaveTransport::Create(frontend, scope, *session.Subject());
+                                                                      const SaveCloudMetadataScope &scope = Scope(),
+                                                                      const std::uint64_t bindingRevision = 1) {
+            auto transport = Application::CloudSaveTransport::Create(
+                frontend, scope, *session.Subject(), {scope.localNamespace, bindingRevision});
             REQUIRE(transport.HasValue());
             return std::move(transport).Value();
         }
@@ -222,7 +224,7 @@ namespace Horo::Runtime {
             auto frontend = Cloud::Frontend(backend, session);
             const auto slot = Id<SaveGameSlotId>(1);
             const auto readKey = [&](const SaveCloudMetadataScope &scope, const SaveGameSlotId requestedSlot) {
-                const auto transport = Application::CloudSaveTransport::Create(frontend, scope, *session.Subject());
+                const auto transport = Application::CloudSaveTransport::Create(frontend, scope, *session.Subject(), {scope.localNamespace, 1});
                 REQUIRE(transport.HasValue());
                 REQUIRE(transport.Value().Read(1, requestedSlot, 1).HasValue());
                 REQUIRE(backend->lastCloudRead);
@@ -246,19 +248,24 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session);
-            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
+            const SaveNamespaceAccessRequest access{Scope().localNamespace, 1};
+            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject(), access);
             REQUIRE(transport.HasValue());
             const auto slot = Id<SaveGameSlotId>(1);
             const auto oldSession = Cloud::Session({7}, {4});
-            const auto stale = Application::CloudSaveTransport::Create(frontend, Scope(), *oldSession.Subject());
+            const auto stale = Application::CloudSaveTransport::Create(frontend, Scope(), *oldSession.Subject(), access);
             REQUIRE(stale.HasValue());
             CHECK(stale.Value().Read(1, slot, 1).HasError());
             CHECK(transport.Value().List(0, 1).HasError());
             CHECK(transport.Value().List(1, 5).HasError());
             CHECK(transport.Value().Read(1, {}, 1).HasError());
             CHECK(transport.Value().Read(1, slot, 5).HasError());
-            CHECK(Application::CloudSaveTransport::Create(frontend, {}, *session.Subject()).HasError());
-            CHECK(Application::CloudSaveTransport::Create(frontend, Scope(), {}).HasError());
+            CHECK(Application::CloudSaveTransport::Create(frontend, {}, *session.Subject(), access).HasError());
+            CHECK(Application::CloudSaveTransport::Create(frontend, Scope(), {}, access).HasError());
+            Cloud::RequireError(Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject(), {access.expected, 0}),
+                                SaveErrors::NamespaceStale);
+            Cloud::RequireError(Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject(), {Scope(8).localNamespace, 1}),
+                                SaveErrors::NamespaceStale);
             CHECK(backend->TotalCalls() == 0);
         }
 
@@ -271,10 +278,9 @@ namespace Horo::Runtime {
             auto created = Cloud::PlatformServicesFrontend::Create(backend, std::move(capabilities).Value(), session);
             REQUIRE(created.HasValue());
             auto frontend = std::move(created).Value();
-            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
-            REQUIRE(transport.HasValue());
-            Cloud::RequireError(transport.Value().List(1, 1), Cloud::FrontendErrors::NullProvider);
-            Cloud::RequireError(transport.Value().Read(1, Id<SaveGameSlotId>(1), 1), Cloud::FrontendErrors::NullProvider);
+            const auto transport = BoundTransport(frontend, session);
+            Cloud::RequireError(transport.List(1, 1), Cloud::FrontendErrors::NullProvider);
+            Cloud::RequireError(transport.Read(1, Id<SaveGameSlotId>(1), 1), Cloud::FrontendErrors::NullProvider);
         }
 
         TEST_CASE("The durable Save journal replays the same mutation after rebinding",
@@ -287,9 +293,9 @@ namespace Horo::Runtime {
             const auto request = Cloud::TestSupport::CloudWrite();
             auto intent = UploadIntent(request);
             intent.revision = Cloud::TestSupport::CloudCommit(request).committedObject->revision;
-            {
+            const auto previous = [&] {
                 const auto journal = NativeJournal(directory, transport);
-                const auto stored = journal.Store(intent);
+                auto stored = journal.Store(intent);
                 REQUIRE(stored.HasValue());
                 REQUIRE(journal.Store(intent).HasValue());
                 auto changed = intent;
@@ -297,14 +303,17 @@ namespace Horo::Runtime {
                 Cloud::RequireError(journal.Store(changed), FileStorageErrors::Conflict);
                 const auto sent = transport.DispatchMutation(20, stored.Value(), request.bytes);
                 REQUIRE(sent.HasValue());
-            }
+                return std::move(stored).Value();
+            }();
             REQUIRE(backend->lastCloudWrite);
             auto original = *backend->lastCloudWrite;
 
             const auto resumedSession = Cloud::Session({7}, {6});
             auto resumedBackend = std::make_shared<Cloud::RoutingBackend>();
             auto resumedFrontend = CloudFrontend(resumedBackend, resumedSession);
-            auto resumed = BoundTransport(resumedFrontend, resumedSession);
+            auto resumed = BoundTransport(resumedFrontend, resumedSession, Scope(), 2);
+            Cloud::RequireError(resumed.DispatchMutation(21, previous, request.bytes), SaveErrors::CloudMetadataStale);
+            CHECK(resumedBackend->TotalCalls() == 0);
             const auto reopened = NativeJournal(directory, resumed);
             const auto recovered = reopened.Load(intent.mutation);
             REQUIRE(recovered.HasValue());
@@ -391,7 +400,7 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session, payload.size());
-            auto transport = BoundTransport(frontend, session, scope);
+            auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
             const Tests::OwnedTestDirectory directory{"save-cloud-stage"};
             const auto journal = NativeJournal(directory, transport);
             const auto mutation = Id<SaveCloudMutationId>(44);
@@ -419,7 +428,7 @@ namespace Horo::Runtime {
 
             auto foreignBackend = std::make_shared<Cloud::RoutingBackend>();
             auto foreignFrontend = CloudFrontend(foreignBackend, session, payload.size());
-            const auto foreignTransport = BoundTransport(foreignFrontend, session, scope);
+            const auto foreignTransport = BoundTransport(foreignFrontend, session, scope, fixture.Access().expectedRevision);
             const auto other = foreignTransport.DispatchMutation(3, staged.Value().mutation, staged.Value().bytes);
             REQUIRE(other.HasValue());
             CHECK(other.Value().handle.Id() == observed.id);
@@ -486,7 +495,7 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session, payload.size());
-            auto transport = BoundTransport(frontend, session, scope);
+            auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
             const Tests::OwnedTestDirectory directory{"save-cloud-recovery"};
             const auto journal = NativeJournal(directory, transport);
             const auto staged = Application::StageCloudSaveUpload(
@@ -599,7 +608,7 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session, payload.size());
-            auto transport = BoundTransport(frontend, session, scope);
+            auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
             const Tests::OwnedTestDirectory directory{"save-cloud-replace-recovery"};
             const auto journal = NativeJournal(directory, transport);
             const auto initial = Application::StageCloudSaveUpload(
@@ -658,7 +667,7 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session, payload.size() + 128);
-            const auto transport = BoundTransport(frontend, session, scope);
+            const auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
             const auto revision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{3}});
             REQUIRE(revision.HasValue());
             const auto remoteSlot = existing.entry->publication.slot;
@@ -720,7 +729,7 @@ namespace Horo::Runtime {
                 REQUIRE(frontend.Close().HasValue());
                 auto replacementBackend = std::make_shared<Cloud::RoutingBackend>();
                 auto replacementFrontend = CloudFrontend(replacementBackend, session, payload.size() + 128);
-                const auto replacement = BoundTransport(replacementFrontend, session, scope);
+                const auto replacement = BoundTransport(replacementFrontend, session, scope, fixture.Access().expectedRevision);
                 const auto fresh = replacement.DownloadRevision(31, remoteSlot, revision.Value(), payload.size() + 128);
                 REQUIRE(fresh.HasValue());
                 CHECK(fresh.Value().Request().handle.Id() == old.id);
@@ -728,6 +737,27 @@ namespace Horo::Runtime {
                 Cloud::RequireError(replacement.ImportDownload(*fixture.owner, download.Value(), old, target), Cloud::RequestErrors::Stale);
                 Cloud::RequireError(replacement.ImportDownload(*fixture.owner, fresh.Value(), old, target), Cloud::RequestErrors::Stale);
                 CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("Rebinding the same local profile invalidates old results even on the same frontend") {
+                const auto old = complete(payload, revision.Value());
+                CHECK(frontend.OwnsObservation(handle, old));
+                ++fixture.host.binding.revision;
+                const Application::CloudSaveImportTarget reboundTarget{fixture.Target(12), 0, {"Downloaded"}};
+                const auto replacement = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), old, reboundTarget),
+                                    SaveErrors::CloudMetadataStale);
+                Cloud::RequireError(replacement.ImportDownload(*fixture.owner, download.Value(), old, reboundTarget),
+                                    SaveErrors::CloudMetadataStale);
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), old, target),
+                                    SaveErrors::NamespaceStale);
+                CHECK(fixture.Index().entries == before.entries);
+
+                const auto fresh = replacement.DownloadRevision(31, remoteSlot, revision.Value(), payload.size());
+                REQUIRE(fresh.HasValue());
+                const auto &freshHandle = fresh.Value().Request().handle;
+                REQUIRE(backend->requests.MarkRunning(freshHandle).HasValue());
+                const auto current = completeRead(freshHandle, payload, revision.Value());
+                REQUIRE(replacement.ImportDownload(*fixture.owner, fresh.Value(), current, reboundTarget).HasValue());
             }
             SECTION("A valid archive belonging to a different slot remains isolated") {
                 const auto archive = SaveSlotLifecycleTest::ReadOwned(payload);
@@ -844,7 +874,7 @@ namespace Horo::Runtime {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
             const auto session = Cloud::Session();
             auto frontend = CloudFrontend(backend, session, candidate.size() + 128);
-            const auto transport = BoundTransport(frontend, session, scope);
+            const auto transport = BoundTransport(frontend, session, scope, fixture.Access().expectedRevision);
             const auto revision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{8}});
             REQUIRE(revision.HasValue());
             const auto download = transport.DownloadRevision(32, target.address.slot, revision.Value(), candidate.size() + 128);

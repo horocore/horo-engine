@@ -142,8 +142,8 @@ namespace Horo::Application {
     }
 
     CloudSaveDurableMutation::CloudSaveDurableMutation(CloudSaveMutationIntent intent, const Sha256Digest partition,
-                                                       CloudSaveObjectKey key)
-        : intent_(std::move(intent)), partition_(partition), key_(std::move(key)) {}
+                                                       CloudSaveObjectKey key, const std::uint64_t bindingRevision)
+        : intent_(std::move(intent)), partition_(partition), key_(std::move(key)), bindingRevision_(bindingRevision) {}
 
     CloudSaveMutationJournal::CloudSaveMutationJournal(std::shared_ptr<const ImmutableFileStorage> storage,
                                                        const CloudSaveTransport &transport)
@@ -157,9 +157,9 @@ namespace Horo::Application {
         return Result<CloudSaveMutationJournal>::Success(CloudSaveMutationJournal{std::move(storage), transport});
     }
 
-    /** @copydoc CloudSaveMutationJournal::MatchesNamespace */
-    bool CloudSaveMutationJournal::MatchesNamespace(const SaveNamespaceId &name) const noexcept {
-        return transport_->scope_.localNamespace == name;
+    /** @copydoc CloudSaveMutationJournal::MatchesAccess */
+    bool CloudSaveMutationJournal::MatchesAccess(const SaveNamespaceAccessRequest &access) const noexcept {
+        return transport_->OwnsAccess(access);
     }
 
     /** @copydoc CloudSaveMutationJournal::EntryName */
@@ -181,7 +181,8 @@ namespace Horo::Application {
         const auto published = storage_->Store(EntryName(intent.mutation), bytes, cancellation);
         if (published.HasError())
             return Response::Failure(published.ErrorValue());
-        return Response::Success(CloudSaveDurableMutation{std::move(intent), transport_->journalPartition_, std::move(key).Value()});
+        return Response::Success(
+            CloudSaveDurableMutation{std::move(intent), transport_->journalPartition_, std::move(key).Value(), transport_->bindingRevision_});
     }
 
     /** @copydoc CloudSaveMutationJournal::Load */
@@ -202,6 +203,6 @@ namespace Horo::Application {
         if (key.HasError() || !std::ranges::equal(key.Value().Bytes(), std::as_bytes(std::span{decoded->key})))
             return Response::Failure(MakeError(SaveErrors::CloudMetadataStale));
         return Response::Success(CloudSaveDurableMutation{std::move(decoded->intent), transport_->journalPartition_,
-                                                           std::move(key).Value()});
+                                                           std::move(key).Value(), transport_->bindingRevision_});
     }
 }

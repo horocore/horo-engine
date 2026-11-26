@@ -21,6 +21,7 @@ namespace Horo::Application {
     template <typename T> struct CloudSaveRequest final {
         OperationId operation;                              /**< Save owner's correlation identity. */
         PlatformServices::PlatformRequestHandle<T> handle; /**< Frontend-issued cancellation and completion identity. */
+        std::uint64_t bindingRevision{};                    /**< Local profile revision captured at admission. */
     };
 
     /** @brief An exact cloud revision selected for local validation. */
@@ -96,11 +97,13 @@ namespace Horo::Application {
          * @param frontend Live platform frontend. It must outlive the returned transport.
          * @param scope Private save scope authenticated by the application owner.
          * @param subject Live capability for that same authenticated provider account.
+         * @param access Exact local profile binding captured by the application owner.
          * @return A transport with its stable partition prefix, or a typed validation error.
          */
         [[nodiscard]] static Result<CloudSaveTransport> Create(PlatformServices::PlatformServicesFrontend &frontend,
                                                                const Runtime::SaveCloudMetadataScope &scope,
-                                                               PlatformServices::PlatformSubjectHandle subject);
+                                                               PlatformServices::PlatformSubjectHandle subject,
+                                                               const Runtime::SaveNamespaceAccessRequest &access);
 
         /** @brief Lists only the authenticated Save partition.
          * @param operation Owning Save operation ID. @param pageSize Bounded number of results. @param cursor Optional continuation.
@@ -177,6 +180,8 @@ namespace Horo::Application {
             using Response = Result<PlatformServices::PlatformRequestSubscription>;
             if (request.operation == 0 || !observer)
                 return Response::Failure(MakeError(Runtime::SaveErrors::OperationInvalid));
+            if (request.bindingRevision != bindingRevision_)
+                return Response::Failure(MakeError(Runtime::SaveErrors::NamespaceStale));
             return frontend_->OnCloudComplete(
                 request.handle,
                 [operation = request.operation, observer = std::move(observer)](const auto &snapshot) { observer(operation, snapshot); });
@@ -232,6 +237,10 @@ namespace Horo::Application {
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
         /** @brief Checks that a selected revision is still attributed to this exact account binding. */
         [[nodiscard]] bool OwnsDownload(const CloudSaveDownload &download) const noexcept;
+        /** @brief Checks the exact local profile binding captured by this transport. */
+        [[nodiscard]] bool OwnsAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept;
+        /** @brief Requires an intent proof loaded or stored under the current local binding. */
+        [[nodiscard]] bool OwnsMutation(const CloudSaveDurableMutation &mutation) const noexcept;
         /** @brief Publishes commit evidence after its originating request has been authenticated. */
         [[nodiscard]] Result<void> PublishUploadEvidence(
             Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
@@ -248,12 +257,13 @@ namespace Horo::Application {
 
         CloudSaveTransport(const PlatformServices::PlatformServicesFrontend &frontend, PlatformServices::PlatformSubjectHandle subject,
                            PlatformServices::CloudSaveObjectPrefix prefix, Sha256Digest journalPartition,
-                           Runtime::SaveCloudMetadataScope scope) noexcept;
+                           Runtime::SaveCloudMetadataScope scope, std::uint64_t bindingRevision) noexcept;
 
         const PlatformServices::PlatformServicesFrontend *frontend_;
         PlatformServices::PlatformSubjectHandle subject_;
         PlatformServices::CloudSaveObjectPrefix prefix_;
         Sha256Digest journalPartition_;
         Runtime::SaveCloudMetadataScope scope_;
+        std::uint64_t bindingRevision_;
     };
 }

@@ -44,10 +44,11 @@ namespace Horo::Application {
         friend class CloudSaveMutationJournal;
         friend class CloudSaveTransport;
         CloudSaveDurableMutation(CloudSaveMutationIntent intent, Sha256Digest partition,
-                                 PlatformServices::CloudSaveObjectKey key);
+                                 PlatformServices::CloudSaveObjectKey key, std::uint64_t bindingRevision);
         CloudSaveMutationIntent intent_;
         Sha256Digest partition_;
         PlatformServices::CloudSaveObjectKey key_;
+        std::uint64_t bindingRevision_; /**< In-memory authority only; the persisted mutation remains portable across binds. */
     };
 
     /** @brief Persists immutable coordinator intent entries below a host-granted durable Save root.
@@ -63,10 +64,10 @@ namespace Horo::Application {
         [[nodiscard]] static Result<CloudSaveMutationJournal> Bind(std::shared_ptr<const ImmutableFileStorage> storage,
                                                                    CloudSaveTransport &transport);
 
-        /** @brief Checks the local namespace before a coordinator obtains archive bytes.
-         * @param name Exact selected local namespace. @return True for this journal's bound namespace.
+        /** @brief Checks the local binding before a coordinator obtains archive bytes.
+         * @param access Exact selected local namespace and revision. @return True for this journal's bound profile.
          */
-        [[nodiscard]] bool MatchesNamespace(const Runtime::SaveNamespaceId &name) const noexcept;
+        [[nodiscard]] bool MatchesAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept;
 
         /** @brief Durably publishes a complete immutable intent or verifies an identical replay.
          * @param intent Exact local generation, mutation identity, payload evidence and remote revision condition.

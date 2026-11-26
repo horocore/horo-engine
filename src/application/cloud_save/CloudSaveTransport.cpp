@@ -46,14 +46,14 @@ namespace Horo::Application {
 
         /** @brief Admits only operations with an application owner and preserves the frontend result. */
         template <typename T, typename Submit>
-        Result<CloudSaveRequest<T>> Admit(const OperationId operation, Submit submit) {
+        Result<CloudSaveRequest<T>> Admit(const OperationId operation, const std::uint64_t bindingRevision, Submit submit) {
             using Response = Result<CloudSaveRequest<T>>;
             if (operation == 0)
                 return Response::Failure(MakeError(Runtime::SaveErrors::OperationInvalid));
             auto request = submit();
             if (request.HasError())
                 return Response::Failure(request.ErrorValue());
-            return Response::Success({.operation = operation, .handle = std::move(request).Value()});
+            return Response::Success({.operation = operation, .handle = std::move(request).Value(), .bindingRevision = bindingRevision});
         }
 
         /** @brief Checks exact session, object and bytes before accepting a commit for Save. */
@@ -230,17 +230,20 @@ namespace Horo::Application {
 
     CloudSaveTransport::CloudSaveTransport(const PlatformServicesFrontend &frontend, const PlatformSubjectHandle subject,
                                            CloudSaveObjectPrefix prefix, const Sha256Digest journalPartition,
-                                           const Runtime::SaveCloudMetadataScope scope) noexcept
+                                           const Runtime::SaveCloudMetadataScope scope, const std::uint64_t bindingRevision) noexcept
         : frontend_(&frontend), subject_(subject), prefix_(std::move(prefix)), journalPartition_(journalPartition),
-          scope_(scope) {}
+          scope_(scope), bindingRevision_(bindingRevision) {}
 
     /** @copydoc CloudSaveTransport::Create */
     Result<CloudSaveTransport> CloudSaveTransport::Create(PlatformServicesFrontend &frontend,
                                                          const Runtime::SaveCloudMetadataScope &scope,
-                                                         const PlatformSubjectHandle subject) {
+                                                         const PlatformSubjectHandle subject,
+                                                         const Runtime::SaveNamespaceAccessRequest &access) {
         const auto *owner = std::get_if<Runtime::UserProfileOwner>(&scope.localNamespace.owner);
         if (!owner || !scope.IsValid() || !subject.IsValid())
             return Result<CloudSaveTransport>::Failure(MakeError(Runtime::SaveErrors::CloudMetadataInvalid));
+        if (access.expectedRevision == 0 || access.expected != scope.localNamespace)
+            return Result<CloudSaveTransport>::Failure(MakeError(Runtime::SaveErrors::NamespaceStale));
         auto local = Runtime::EncodeSaveNamespaceKey(scope.localNamespace);
         if (local.HasError())
             return Result<CloudSaveTransport>::Failure(local.ErrorValue());
@@ -250,7 +253,7 @@ namespace Horo::Application {
             return Result<CloudSaveTransport>::Failure(prefix.ErrorValue());
         return Result<CloudSaveTransport>::Success(
             CloudSaveTransport{frontend, subject, std::move(prefix).Value(), HashJournalPartition(local.Value(), digest),
-                               scope});
+                               scope, access.expectedRevision});
     }
 
     /** @copydoc CloudSaveTransport::Key */
@@ -270,7 +273,7 @@ namespace Horo::Application {
     /** @copydoc CloudSaveTransport::List */
     Result<CloudSaveRequest<CloudObjectPage>> CloudSaveTransport::List(const OperationId operation, const std::uint32_t pageSize,
                                                                       std::optional<CloudListCursor> cursor) const {
-        return Admit<CloudObjectPage>(operation, [&] {
+        return Admit<CloudObjectPage>(operation, bindingRevision_, [&] {
             return frontend_->ListCloudObjects({.subject = subject_, .prefix = prefix_, .cursor = std::move(cursor), .pageSize = pageSize});
         });
     }
@@ -279,7 +282,7 @@ namespace Horo::Application {
     Result<CloudSaveRequest<CloudBlobReadResult>> CloudSaveTransport::Read(const OperationId operation,
                                                                          const Runtime::SaveGameSlotId slot,
                                                                          const std::uint64_t maximumBytes) const {
-        return Admit<CloudBlobReadResult>(operation, [&]() -> Result<PlatformRequestHandle<CloudBlobReadResult>> {
+        return Admit<CloudBlobReadResult>(operation, bindingRevision_, [&]() -> Result<PlatformRequestHandle<CloudBlobReadResult>> {
             auto key = Key(slot);
             if (key.HasError())
                 return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(key.ErrorValue());
@@ -300,7 +303,7 @@ namespace Horo::Application {
         if (key.HasError())
             return Response::Failure(key.ErrorValue());
         CloudBlobReadRequest read{subject_, std::move(key).Value(), maximumBytes};
-        auto admission = Admit<CloudBlobReadResult>(operation, [&] { return frontend_->ReadCloudObject(read); });
+        auto admission = Admit<CloudBlobReadResult>(operation, bindingRevision_, [&] { return frontend_->ReadCloudObject(read); });
         if (admission.HasError())
             return Response::Failure(admission.ErrorValue());
         return Response::Success(
@@ -309,7 +312,18 @@ namespace Horo::Application {
 
     /** @copydoc CloudSaveTransport::OwnsDownload */
     bool CloudSaveTransport::OwnsDownload(const CloudSaveDownload &download) const noexcept {
-        return frontend_->IsOpen() && download.partition_ == journalPartition_ && download.read_.subject == subject_;
+        return frontend_->IsOpen() && download.partition_ == journalPartition_ && download.read_.subject == subject_ &&
+               download.Request().bindingRevision == bindingRevision_;
+    }
+
+    /** @copydoc CloudSaveTransport::OwnsAccess */
+    bool CloudSaveTransport::OwnsAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept {
+        return access.expected == scope_.localNamespace && access.expectedRevision == bindingRevision_;
+    }
+
+    /** @copydoc CloudSaveTransport::OwnsMutation */
+    bool CloudSaveTransport::OwnsMutation(const CloudSaveDurableMutation &mutation) const noexcept {
+        return mutation.partition_ == journalPartition_ && mutation.bindingRevision_ == bindingRevision_;
     }
 
     /** @copydoc CloudSaveTransport::ImportDownload */
@@ -320,7 +334,7 @@ namespace Horo::Application {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         const auto &destination = target.destination;
         const auto &access = destination.address.namespaceAccess;
-        if (!OwnsDownload(download) || access.expected != scope_.localNamespace)
+        if (!OwnsDownload(download) || !OwnsAccess(access))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         if (destination.generation || destination.address.slot == download.slot_)
             return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
@@ -355,7 +369,8 @@ namespace Horo::Application {
         const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation,
         const CloudSaveQuarantinePolicy *quarantine) const {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
-        if (!OwnsDownload(download) || expected.Metadata().scope != scope_ || target.address.slot != download.slot_)
+        if (!OwnsDownload(download) || !OwnsAccess(target.address.namespaceAccess) || expected.Metadata().scope != scope_ ||
+            target.address.slot != download.slot_)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
@@ -381,9 +396,9 @@ namespace Horo::Application {
     /** @copydoc CloudSaveTransport::DispatchMutation */
     Result<CloudSaveRequest<CloudMutationResult>> CloudSaveTransport::DispatchMutation(
         const OperationId operation, const CloudSaveDurableMutation &mutation, std::optional<CloudBlobOwnedBytes> bytes) const {
-        return Admit<CloudMutationResult>(operation, [&]() -> Result<PlatformRequestHandle<CloudMutationResult>> {
+        return Admit<CloudMutationResult>(operation, bindingRevision_, [&]() -> Result<PlatformRequestHandle<CloudMutationResult>> {
             using Response = Result<PlatformRequestHandle<CloudMutationResult>>;
-            if (mutation.partition_ != journalPartition_)
+            if (!OwnsMutation(mutation))
                 return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
             const auto &intent = mutation.intent_;
             if (intent.upload.has_value() != bytes.has_value())
@@ -449,7 +464,7 @@ namespace Horo::Application {
         const CloudSaveDurableMutation &mutation, const Runtime::SaveCloudRevisionSnapshot &current) const {
         const auto &metadata = current.Metadata();
         const auto &intent = mutation.intent_;
-        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_ || metadata.scope != scope_ || !intent.upload)
+        if (!frontend_->IsOpen() || !OwnsMutation(mutation) || metadata.scope != scope_ || !intent.upload)
             return nullptr;
         const auto selected = std::ranges::lower_bound(metadata.records, intent.slot, {}, &Runtime::SaveCloudGenerationRecord::slot);
         if (selected == metadata.records.end() || selected->slot != intent.slot || selected->generation != intent.generation ||
@@ -463,6 +478,8 @@ namespace Horo::Application {
         Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
         const CloudSaveDurableMutation &mutation, const CloudSaveRequest<CloudMutationResult> &request,
         const PlatformRequestSnapshot<CloudMutationResult> &completion) const {
+        if (request.bindingRevision != bindingRevision_)
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::NamespaceStale));
         if (const auto observed = CheckTerminalObservation(*frontend_, request.handle, completion); observed.HasError())
             return observed;
         if (const auto *error = completion.terminal->ErrorValue())
@@ -477,7 +494,7 @@ namespace Horo::Application {
     Result<CloudSaveUploadProbe> CloudSaveTransport::ProbeUpload(const OperationId operation,
                                                                 const CloudSaveDurableMutation &mutation) const {
         using Response = Result<CloudSaveUploadProbe>;
-        if (mutation.partition_ != journalPartition_ || !mutation.intent_.upload)
+        if (!OwnsMutation(mutation) || !mutation.intent_.upload)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         const auto limits = frontend_->ServiceLimits(PlatformServiceKind::Cloud);
         if (limits.HasError())
@@ -539,7 +556,7 @@ namespace Horo::Application {
         const CancellationToken &cancellation) const {
         using Response = Result<CloudSaveUploadRecovery>;
         const auto &mutation = probe.mutation_;
-        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_)
+        if (!frontend_->IsOpen() || !OwnsAccess(access) || !OwnsMutation(mutation) || probe.Request().bindingRevision != bindingRevision_)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         const auto observed = ObserveUpload(probe, completion);
         if (observed.HasError())
