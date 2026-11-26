@@ -504,9 +504,13 @@ namespace {
     }
 
     TEST_CASE("A viewport action opens an editable chat preview with opt-in transforms", "[editor][agent][gui][viewport]") {
+        CancellationSource owner;
+        CancellationSource replacement;
+        bool replaceSelection = false;
         AgentSceneSelectionSnapshot selection{.documentEpoch = 1,
                                               .objects = {42},
                                               .objectCount = 1,
+                                              .lifetime = owner.Token(),
                                               .viewport = AgentViewportOverview{.revision = 1,
                                                                                 .position = {4, 5, 6},
                                                                                 .up = {0, 1, 0},
@@ -520,8 +524,14 @@ namespace {
             };
             context.captureAgentViewport = [&](const AgentViewportComponents scope) {
                 auto result = selection;
+                if (replaceSelection) {
+                    owner.RequestCancellation();
+                    result.lifetime = replacement.Token();
+                    result.selectionRevision = 2;
+                    result.objects.front() = 77;
+                }
                 if (scope == AgentViewportComponents::LocalTransforms) {
-                    result.transforms[0] = {42, {7, 8, 9}, {0, 0, 0, 1}, {1, 1, 1}};
+                    result.transforms[0] = {result.objects.front(), {7, 8, 9}, {0, 0, 0, 1}, {1, 1, 1}};
                     result.transformCount = 1;
                 }
                 return result;
@@ -531,10 +541,20 @@ namespace {
         CHECK_FALSE(offered);
         CHECK(fixture.DrawnText().find("local transform:") == std::string::npos);
         fixture.Enter("##Prompt", "Explain the selected transform");
-        fixture.Activate("###context_viewport_add_transforms");
-        CHECK(fixture.DrawnText().find("object 42 local transform: translation = [7, 8, 9]") != std::string::npos);
-        fixture.Activate("###context_viewport_remove_transforms");
-        CHECK(fixture.DrawnText().find("local transform:") == std::string::npos);
+        SECTION("the same capture can add and remove component values") {
+            fixture.Activate("###context_viewport_add_transforms");
+            CHECK(fixture.DrawnText().find("object 42 local transform: translation = [7, 8, 9]") != std::string::npos);
+            fixture.Activate("###context_viewport_remove_transforms");
+            CHECK(fixture.DrawnText().find("local transform:") == std::string::npos);
+        }
+        SECTION("a replacement selected during the component read needs its own review") {
+            replaceSelection = true;
+            fixture.Activate("###context_viewport_add_transforms");
+            const auto drawn = fixture.DrawnText();
+            CHECK(drawn.find("camera.position") == std::string::npos);
+            CHECK(drawn.find("object 77 local transform") == std::string::npos);
+            CHECK(drawn.find(fixture.gui.localization.Get("editor", "workspace.local_agent.context_stale")) != std::string::npos);
+        }
     }
 
     TEST_CASE("Scene query approval discloses the exact count and retires a denied or changed review", "[editor][agent][gui]") {

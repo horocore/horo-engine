@@ -1553,7 +1553,13 @@ namespace Horo::Editor {
                 if (!Button(locale, label, true))
                     return false;
                 const auto components = hasTransforms ? AgentViewportComponents::None : AgentViewportComponents::LocalTransforms;
-                PrepareSceneSelectionReview(captureAgentViewport_(components), "context_viewport_unavailable");
+                const auto captured = captureAgentViewport_(components);
+                if (!contextPreview_ || !ContextReviewCurrent()) {
+                    contextPreview_.reset();
+                    status_ = "context_stale";
+                    return true;
+                }
+                PrepareSceneSelectionReview(captured, "context_viewport_unavailable");
                 return true;
             }
 

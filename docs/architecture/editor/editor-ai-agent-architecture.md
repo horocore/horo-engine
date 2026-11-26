@@ -1615,6 +1615,24 @@ per frame (40.00–45.69 µs across runs). The disabled median was 40.25 µs
 run-to-run variation. This fixture measures panel CPU work and leaves GPU
 frame cost and native renderer parity to backend qualification.
 
+### Viewport Agent Qualification
+
+| Configuration | Evidence |
+|---|---|
+| Windows editor panel | The `[viewport]` cases in `HoroEditorLocalAgentPanelRenderTests` exercise the numeric preview and the transform disclosure controls. A selection replaced during the component read withdraws the review. A new selection needs its own review. |
+| Windows native OpenGL | The `[image-capture]` case in `HoroEditorViewportOpenGLSmoke` checks the requested crop pixels and withdrawal after authorization ends. |
+| Linux Vulkan with Xvfb and software rendering | The `[image-capture]` case in `HoroEditorVulkanPresentationSmoke` uses the locked viewport shader package. It checks crop pixels, revocation after copy submission, and presentation of the next frame. |
+
+For the manual editor sequence, open a scene with two distinguishable objects.
+Open a viewport review with the first object selected and toggle transform
+disclosure. Select the other object and check that the previous review clears.
+Open a new review, enter Play, and check that the authoring review clears again.
+After leaving Play, review a proposed transform, approve it explicitly, then
+undo it as a single operation. Repeat with the Local Agent panel disabled and
+verify the viewport review action is absent. Record the renderer, OS, and
+editor build with the result. Manual application runs and Linux hardware
+Vulkan coverage remain open.
+
 ## Failure Handling
 
 If an agent action fails:
