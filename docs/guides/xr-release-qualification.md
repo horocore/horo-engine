@@ -100,13 +100,16 @@ the smoke record's exact `tuple` and `provenance`, and these integer measurement
 | Field | Measurement |
 | --- | --- |
 | `targetRefreshMilliHertz` | Selected rate from the run's display capture. |
-| `durationNs` | Measured elapsed time of the sample window. |
-| `frameCount` | Number of frames measured in that window. |
-| `peakFrameIntervalNs` | Longest frame interval observed. |
+| `durationNs` | Sum of the consecutive, positive frame intervals in the sample window. |
+| `frameCount` | Number of measured intervals, one for each frame counted in the window. |
+| `peakFrameIntervalNs` | Longest of those same intervals. |
 | `missedDeadlines` | Number of measured frames that missed the deadline. |
 | `swapchainFailures` | Number of measured frames with a swapchain failure. |
 
-The release gate checks the measurement bounds and every declared limit.
+Exclude time outside the measured intervals, including leading or trailing
+time without a completed interval. The release gate rejects elapsed totals
+that cannot be reconciled with the observed peak and frame count. It also
+checks every declared limit.
 For older records, use the original run's timing measurements to create the
 capture and update the check digest, or rerun the timing check with the declared
 limits. Planning rows need no timing limits until they are claimed.

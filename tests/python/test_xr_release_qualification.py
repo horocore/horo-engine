@@ -197,6 +197,7 @@ def test_xr_1_0_claim_requires_stereo_in_a_measured_desktop_probe(release, measu
     ({"peakFrameIntervalNs": 12_000_001}, "exceeded the declared limits"),
     ({"missedDeadlines": 1}, "exceeded the declared limits"),
     ({"swapchainFailures": 1}, "exceeded the declared limits"),
+    ({"durationNs": 1_080_000_001}, "Render timing interval totals are inconsistent"),
     ({"targetRefreshMilliHertz": 120000}, "target was not enumerated"),
     ({"frameCount": True}, "Invalid render timing measurements"),
     ({"provenance": {"runId": "foreign"}}, "from a different smoke run"),
@@ -222,6 +223,21 @@ def test_release_claim_requires_explicit_timing_limits(release):
     result = run_matrix(release)
     assert result.returncode == 1
     assert "Claimed tuple requires render timing limits" in result.stderr
+
+
+@pytest.mark.parametrize(("duration", "accepted"), [(100, False), (101, True), (200, True), (201, False)])
+def test_timing_window_is_the_sum_of_its_measured_frame_intervals(release, duration, accepted):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    capture = timing_capture(record) | {"durationNs": duration, "frameCount": 2, "peakFrameIntervalNs": 100}
+    row["renderTimingLimits"].update(minimumDurationNs=1, minimumFrameCount=2, maximumPeakFrameIntervalNs=100)
+    record["checks"]["renderTiming"]["evidenceSha256"] = store(evidence, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "Render timing interval totals are inconsistent" in result.stderr
 
 
 def test_release_rejects_a_generic_artifact_with_a_valid_digest_for_timing(release):

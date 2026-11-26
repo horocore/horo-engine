@@ -130,6 +130,7 @@ def check_render_timing(data: bytes, digest: str, record: dict, limits: dict) ->
             0 < peak <= duration <= MAX_TIMING_WINDOW_NS and
             0 < frames <= MAX_TIMING_FRAMES and 0 <= missed <= frames and 0 <= failures <= frames,
             "Invalid render timing measurements")
+    require(peak + frames - 1 <= duration <= frames * peak, "Render timing interval totals are inconsistent")
     require(duration >= limits["minimumDurationNs"] and frames >= limits["minimumFrameCount"],
             "Render timing observation did not meet the required duration and frame count")
     require(peak <= limits["maximumPeakFrameIntervalNs"] and missed <= limits["maximumMissedDeadlines"] and
