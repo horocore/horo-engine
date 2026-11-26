@@ -69,11 +69,15 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] std::optional<Diagnostic> OfflineRemovalContributionBlocker(const Packages::LockedPackage &package);
 
-    /** @brief Lists sealed archive members that cannot depart without a live lifecycle owner.
-     * @param archive Exact cache or staging archive validated against the lock entry.
-     * @return Diagnostics in archive inventory order, empty for an asset-only archive.
+    /** @brief Reports sealed archive members that cannot depart without a live lifecycle owner.
+     * @param blockers Bounded diagnostics accumulated in lock and archive inventory order.
+     * @param locked Exact departing package identity.
+     * @param archive Cache or staging archive validated against the lock entry.
+     * @return Success or a typed diagnostic limit failure.
      */
-    [[nodiscard]] std::vector<Diagnostic> InspectOfflineRemovalArchive(const Packages::ValidatedPackageArchive &archive);
+    [[nodiscard]] Result<void> AppendOfflineRemovalArchiveBlockers(std::vector<Diagnostic> &blockers,
+                                                                    const Packages::LockedPackage &locked,
+                                                                    const Packages::ValidatedPackageArchive &archive);
 
     /** @brief Requires exact observations for departing runtime roles and for retained roles that could consume a departing service. */
     [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,

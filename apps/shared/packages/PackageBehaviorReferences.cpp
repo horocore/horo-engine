@@ -573,28 +573,35 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Accepts only exact staged archives that contain no executable or extension contribution. */
-        Result<void> CheckAssetOnlyRemovalCoverage(const std::shared_ptr<const Packages::PackageRestoreGraph> &graph,
+        Result<void> CheckAssetOnlyRemovalCoverage(const PackageRemovalSources &sources,
                                                    const Packages::ValidatedPackageLockfileV1 &lock,
                                                    const Packages::PackageRemovalGraphPreview &removal) {
+            const auto graph = sources.offline->Graph();
             if (!graph || graph->requestHash != lock.RequestHash())
                 return Result<void>::Failure(ReferenceError("packages.host.removal_archive_evidence_unavailable"));
+            std::vector<Diagnostic> blockers;
             for (const auto &expected : lock.Packages()) {
                 if (!IsDeparting(removal, expected.package))
                     continue;
+                if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
+                    return authority;
                 const auto *package = FindExactArchive(*graph, expected);
-                if (!package)
-                    return Result<void>::Failure(
-                        ReferenceError("packages.host.removal_archive_evidence_unavailable", expected.package.Value()));
-                auto blockers = InspectOfflineRemovalArchive(*package->archive);
+                if (!package) {
+                    blockers.emplace_back(DiagnosticCode{"packages.host.removal_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                                          expected.package.Value(), SourceLocation{"packages.lock"}, expected.package.Value());
+                } else if (auto reviewed = AppendOfflineRemovalArchiveBlockers(blockers, expected, *package->archive); reviewed.HasError()) {
+                    return reviewed;
+                }
                 if (auto contribution = OfflineRemovalContributionBlocker(expected))
                     blockers.push_back(std::move(*contribution));
-                if (!blockers.empty()) {
-                    auto error = ReferenceError("packages.host.removal_requires_lifecycle_owner", expected.package.Value());
-                    error.diagnostics = std::move(blockers);
-                    return Result<void>::Failure(std::move(error));
-                }
+                if (blockers.size() > MaximumRemovalCoverageDiagnostics)
+                    return Result<void>::Failure(ReferenceError("packages.host.removal_reference_coverage_limit"));
             }
-            return Result<void>::Success();
+            if (blockers.empty())
+                return Result<void>::Success();
+            auto error = ReferenceError(blockers.front().code.Value());
+            error.diagnostics = std::move(blockers);
+            return Result<void>::Failure(std::move(error));
         }
         /** @brief Reads the sealed archives from the removal reservation and checks required registration coverage. */
         Result<void> CheckLiveRemovalCoverage(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
@@ -664,16 +671,19 @@ namespace Horo::Application::Internal {
                           package.package.Value(), SourceLocation{"packages.host"}, package.package.Value()};
     }
 
-    /** @copydoc InspectOfflineRemovalArchive */
-    std::vector<Diagnostic> InspectOfflineRemovalArchive(const Packages::ValidatedPackageArchive &archive) {
-        std::vector<Diagnostic> blockers;
+    /** @copydoc AppendOfflineRemovalArchiveBlockers */
+    Result<void> AppendOfflineRemovalArchiveBlockers(std::vector<Diagnostic> &blockers, const Packages::LockedPackage &locked,
+                                                     const Packages::ValidatedPackageArchive &archive) {
         for (const auto &file : archive.Manifest().Entries()) {
-            if (!IsOfflineRemovalFile(file))
-                blockers.emplace_back(DiagnosticCode{"packages.host.removal_requires_lifecycle_owner"}, DiagnosticSeverity::Error,
-                                      "Archive member requires a live lifecycle owner.", SourceLocation{"packages.archive"},
-                                      file.id.path.Value());
+            if (IsOfflineRemovalFile(file))
+                continue;
+            if (blockers.size() >= MaximumRemovalCoverageDiagnostics)
+                return Result<void>::Failure(ReferenceError("packages.host.removal_reference_coverage_limit"));
+            blockers.emplace_back(DiagnosticCode{"packages.host.removal_requires_lifecycle_owner"}, DiagnosticSeverity::Error,
+                                  locked.package.Value() + ": Archive member requires a live lifecycle owner.",
+                                  SourceLocation{"packages.archive"}, file.id.path.Value());
         }
-        return blockers;
+        return Result<void>::Success();
     }
 
     /** @copydoc CheckRemovalRegistrationCoverage */
@@ -684,7 +694,7 @@ namespace Horo::Application::Internal {
         if (auto valid = ValidateWithdrawal(lock, removal); valid.HasError())
             return valid;
         if (sources.offline)
-            return CheckAssetOnlyRemovalCoverage(sources.offline->Graph(), lock, removal);
+            return CheckAssetOnlyRemovalCoverage(sources, lock, removal);
         return CheckLiveRemovalCoverage(sources, lock, removal);
     }
 

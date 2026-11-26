@@ -542,7 +542,9 @@ contributions that require a live lifecycle owner. When those checks pass, it
 lists the departing packages and returns an approval fingerprint. Add
 `--package-cache-root` to verify the exact departing archives during preview
 and identify any archive members that require a live owner. This check reads
-the cache without restoring packages or activating modules. Pass the fingerprint as `--approve` to `package
+the cache without restoring packages or activating modules. Preview and apply
+identify the owning package for each blocking archive member, including when
+one root withdrawal removes several packages. Pass the fingerprint as `--approve` to `package
 remove` together with the same project, package ID, and
 `--package-cache-root`. The command verifies the current locked archives from
 the local cache, matches the departing archive entries to the exact lock, and

@@ -75,7 +75,9 @@ namespace {
         Tests::Packages::TemporaryDirectory project{"cli package project ü"}, storage{"cli package storage ü"};
         Tests::PackageApplicationService::AssetGraph graph;
 
-        explicit NativeProject(bool native = false, std::string_view declaredContribution = {}) : graph(native, native) {
+        explicit NativeProject(bool native = false, std::string_view declaredContribution = {},
+                               std::optional<Packages::HoroPackageId> dependency = std::nullopt)
+            : graph(native, native) {
             if (declaredContribution.empty())
                 declaredContribution = native ? "native" : "assets";
             const nlohmann::json intent{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
@@ -93,8 +95,15 @@ namespace {
                                                    .packageFormatVersion = 1,
                                                    .platforms = {},
                                                    .contributions = {std::string{declaredContribution}}};
+            std::vector artifacts{artifact};
+            if (dependency) {
+                plan.packages.front().dependencies.push_back(*dependency);
+                plan.packages.push_back({*dependency, graph.version, graph.source, graph.archive.Digest(), {}});
+                artifact.package = *dependency;
+                artifacts.push_back(std::move(artifact));
+            }
             auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1U}, request.Value().Digest(),
-                                                                       std::span{&artifact, 1U});
+                                                                       artifacts);
             REQUIRE(lock.HasValue());
             std::filesystem::create_directories(project.Path() / ".horo");
             std::filesystem::create_directories(storage.Path() / "temporary");
@@ -792,12 +801,27 @@ namespace {
             CHECK(diagnostics[0].code.Value() == "packages.host.removal_requires_lifecycle_owner");
             CHECK(diagnostics[1].code.Value() == "packages.host.importer_in_use");
             CHECK(diagnostics[1].path == "Assets/sample.horoasset");
+
+            const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+            NativeDurableFileSystem files;
+            auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+            REQUIRE(cache.HasValue());
+            REQUIRE(std::move(cache).Value().Publish(fixture.graph.archive).HasValue());
+            auto cached = command;
+            cached.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            const auto reviewedArchive = preview.adapter->Execute(cached, context);
+            REQUIRE(reviewedArchive.HasError());
+            CHECK(std::ranges::any_of(reviewedArchive.ErrorValue().diagnostics, [&](const auto &finding) {
+                return finding.path == "extensions/native/extension.json" && finding.message.starts_with(id + ":");
+            }));
         });
     }
 
     TEST_CASE("Cached removal preview and apply explain files that contradict an asset-only lock",
               "[packages][application][cli][remove]") {
-        NativeProject fixture{true, "assets"};
+        const bool transitive = GENERATE(false, true);
+        const auto dependency = Packages::HoroPackageId::Parse("com.horo.withdrawal-dependency").Value();
+        NativeProject fixture{true, "assets", transitive ? std::optional{dependency} : std::nullopt};
         const auto root = std::filesystem::canonical(fixture.project.Path());
         std::filesystem::create_directories(root / "Assets");
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
@@ -823,11 +847,11 @@ namespace {
             auto verifiedCache = std::move(cache).Value();
             REQUIRE(verifiedCache.Publish(fixture.graph.archive).HasValue());
             fixture.WriteImporterReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
-            const auto checkBlockers = [](const Result<CliCommandResult> &result) {
+            const auto checkBlockers = [&](const Result<CliCommandResult> &result) {
                 REQUIRE(result.HasError());
                 CHECK(result.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
                 const auto &diagnostics = result.ErrorValue().diagnostics;
-                REQUIRE(diagnostics.size() == 3);
+                REQUIRE(diagnostics.size() == (transitive ? 5 : 3));
                 CHECK(std::ranges::any_of(diagnostics, [](const auto &finding) {
                     return finding.path == "extensions/native/extension.json";
                 }));
@@ -835,6 +859,13 @@ namespace {
                     return finding.path.starts_with("extensions/native/module.");
                 }));
                 CHECK(diagnostics.back().path == "Assets/sample.horoasset");
+                if (transitive) {
+                    for (const auto &package : {id, dependency.Value()}) {
+                        CHECK(std::ranges::any_of(diagnostics, [&](const auto &finding) {
+                            return finding.path.starts_with("extensions/native/module.") && finding.message.starts_with(package + ":");
+                        }));
+                    }
+                }
             };
             checkBlockers(preview.adapter->Execute(command, context));
             command.command = apply.adapter->GetDescriptor().path;

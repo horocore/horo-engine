@@ -420,16 +420,16 @@ namespace Horo::Application::Internal {
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                if (!change.current || change.candidate || OfflineRemovalContributionBlocker(*change.current))
+                if (!change.current || change.candidate)
                     continue;
                 const auto archive = ReadUpdateArchive(cache.Value(), *change.current);
                 if (archive.HasError()) {
                     diagnostics.emplace_back(DiagnosticCode{"packages.host.removal_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
                                              archive.ErrorValue().code.Value(), SourceLocation{"packages.host"}, change.current->package.Value());
-                    continue;
+                } else if (auto reviewed = AppendOfflineRemovalArchiveBlockers(diagnostics, *change.current, archive.Value());
+                           reviewed.HasError()) {
+                    return reviewed;
                 }
-                auto blockers = InspectOfflineRemovalArchive(archive.Value());
-                std::ranges::move(blockers, std::back_inserter(diagnostics));
                 if (diagnostics.size() > MaximumRemovalCoverageDiagnostics)
                     return Result<void>::Failure(
                         Error{ErrorCode{"packages.host.removal_reference_coverage_limit"}, ErrorDomainId{"packages.host"}});
