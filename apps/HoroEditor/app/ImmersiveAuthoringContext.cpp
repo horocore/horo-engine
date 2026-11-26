@@ -98,10 +98,9 @@ namespace Horo::Editor {
     Agent::AgentTurnResult ImmersiveAgentRequest::Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop) {
         if (reviewOnly_)
             return {.status = Agent::AgentTurnStatus::InvalidRequest};
-        Agent::AgentTurnRuntime runtime{[this] {
-            return IsCurrent();
-        }};
-        return runtime.Run(provider, nullptr, turnId, std::exchange(request_, {}), {}, stop);
+        const Agent::AgentTurnFreshness authority = [context = context_]() noexcept { return context.IsCurrent(); };
+        Agent::AgentTurnRuntime runtime{authority};
+        return runtime.RunScopedText(provider, turnId, std::exchange(request_, {}), {}, stop, authority);
     }
 
     ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop,

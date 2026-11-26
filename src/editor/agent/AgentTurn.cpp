@@ -348,6 +348,16 @@ namespace Horo::Agent {
         return RunTurn(provider, turnId, std::move(request), limits, cancellation, {tools, context, observeText, observeTool, nullptr});
     }
 
+    /** @copydoc AgentTurnRuntime::RunScopedText */
+    AgentTurnResult AgentTurnRuntime::RunScopedText(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
+                                                    const AgentTurnLimits &limits, const std::stop_token cancellation,
+                                                    const AgentTurnFreshness &providerAuthority) {
+        if (!providerAuthority)
+            return {InvalidRequest};
+        return RunTurn(provider, turnId, std::move(request), limits, cancellation,
+                       {nullptr, nullptr, {}, {}, nullptr, &providerAuthority});
+    }
+
     /** @copydoc AgentTurnRuntime::Plan */
     AgentTurnPlan AgentTurnRuntime::Plan(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
                                          const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,

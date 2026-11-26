@@ -154,6 +154,17 @@ namespace Horo::Agent {
                                           const AgentTurnContext *context = nullptr, const AgentTurnTextObserver &observeText = {},
                                           const AgentToolActivityObserver &observeTool = {});
 
+        /** @brief Runs a text-only turn under a revocable host scope.
+         * @param provider Exact host-selected provider. @param turnId Nonzero host-issued identity.
+         * @param request Bounded conversation without tools. @param limits Budget covering the entire turn.
+         * @param cancellation Host cancellation.
+         * @param providerAuthority Required thread-safe check over immutable or synchronized lifetime state.
+         * @return Terminal turn result. The provider is signalled even when it is waiting without emitting events.
+         */
+        [[nodiscard]] AgentTurnResult RunScopedText(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
+                                                    const AgentTurnLimits &limits, std::stop_token cancellation,
+                                                    const AgentTurnFreshness &providerAuthority);
+
         /** @brief Collects one model round and validates every proposed tool without dispatching any.
          * @param provider Exact host-selected provider. @param turnId Nonzero host-issued identity.
          * @param request Conversation and host-approved tool definitions.

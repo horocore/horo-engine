@@ -517,6 +517,39 @@ namespace Horo::Editor {
             CHECK(tools.scene->calls == 0);
         }
 
+        TEST_CASE("Immersive text inference stops a quiet provider when its context is retired", "[agent][immersive][turn]") {
+            ImmersiveAuthoringContext owner;
+            CancellationSource document;
+            auto identity = Opening();
+            const auto context = owner.Publish(identity, {}, document.Token());
+            REQUIRE(context);
+            auto request = owner.CaptureRequest(*context, ImmersiveRequestKind::Diagnostics, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            SECTION("The document lifetime ends") {
+                model.duringInference = [&] { document.RequestCancellation(); };
+            }
+            SECTION("The project is replaced") {
+                model.duringInference = [&] {
+                    ++identity.projectOpening;
+                    REQUIRE(owner.Publish(identity, {}));
+                };
+            }
+            bool observedStop{};
+            model.quietInference = [&](const std::stop_token stop) {
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds{2}, [] { return false; });
+                observedStop = stop.stop_requested();
+            };
+            const auto result = request->Run(model, 1);
+            CHECK(observedStop);
+            CHECK(model.calls == 1);
+            CHECK(result.status == Agent::AgentTurnStatus::ContextDenied);
+            CHECK(result.messages.empty());
+        }
+
         TEST_CASE("Immersive inference suppresses a worker reply after XR session retirement", "[agent][immersive][turn]") {
             ImmersiveAuthoringContext owner;
             const auto context = owner.Publish(Opening(), {});
