@@ -373,6 +373,7 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformServicesFrontend::Close */
     Result<void> PlatformServicesFrontend::Close() {
         open_ = false;
+        requestAuthority_.reset();
         if (shutdownInvoked_)
             return closeError_ ? Result<void>::Failure(*closeError_) : Result<void>::Success();
         shutdownInvoked_ = true;

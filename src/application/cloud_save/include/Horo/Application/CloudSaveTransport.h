@@ -11,7 +11,10 @@
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <type_traits>
+#include <utility>
 
 namespace Horo::Runtime {
     class SaveSlotLifecycle;
@@ -92,6 +95,25 @@ namespace Horo::Application {
         [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudMutationResult>> DispatchMutation(
             OperationId operation, const CloudSaveDurableMutation &mutation,
             std::optional<PlatformServices::CloudBlobOwnedBytes> bytes = {}) const;
+
+        /**
+         * @brief Routes a deferred terminal observation to its owning Save operation.
+         * @tparam T Cloud list, complete read or mutation result.
+         * @param request Original admission returned by this transport.
+         * @param observer Owner callback receiving operation correlation and the typed terminal snapshot.
+         * @return A suppression token retained by the owner or a typed registration failure.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformServices::PlatformRequestSubscription> OnComplete(
+            const CloudSaveRequest<T> &request,
+            std::type_identity_t<std::function<void(OperationId, const PlatformServices::PlatformRequestSnapshot<T> &)>> observer) const {
+            using Response = Result<PlatformServices::PlatformRequestSubscription>;
+            if (request.operation == 0 || !observer)
+                return Response::Failure(MakeError(Runtime::SaveErrors::OperationInvalid));
+            return frontend_->OnCloudComplete(
+                request.handle,
+                [operation = request.operation, observer = std::move(observer)](const auto &snapshot) { observer(operation, snapshot); });
+        }
 
         /** @brief Prepares a sidecar candidate from exact provider commit evidence.
          * @param mutation Original durable upload. @param completion Provider's complete commit result.

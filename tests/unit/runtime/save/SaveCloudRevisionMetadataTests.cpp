@@ -159,10 +159,10 @@ namespace Horo::Runtime {
             CHECK(backend->requests.Query(write.Value().handle).Value().cancellationRequested);
 
             OperationId reported{};
-            auto subscription = backend->requests.OnComplete<Cloud::CloudBlobReadResult>(
-                read.Value().handle, [&](const Cloud::PlatformRequestSnapshot<Cloud::CloudBlobReadResult> &snapshot) {
+            auto subscription = transport.OnComplete(
+                read.Value(), [&](const OperationId operation, const Cloud::PlatformRequestSnapshot<Cloud::CloudBlobReadResult> &snapshot) {
                     if (snapshot.terminal && snapshot.terminal->HasValue())
-                        reported = read.Value().operation;
+                        reported = operation;
                 });
             REQUIRE(subscription.HasValue());
             auto head = *commit.committedObject;
@@ -176,6 +176,24 @@ namespace Horo::Runtime {
             CHECK(reported == 0);
             CHECK(backend->requests.DispatchCompletions() == 1);
             CHECK(reported == 21);
+
+            std::vector<OperationId> failed;
+            const auto onFailure = [&failed](const OperationId operation, const auto &snapshot) {
+                REQUIRE(snapshot.terminal);
+                REQUIRE(snapshot.terminal->HasError());
+                failed.push_back(operation);
+            };
+            const auto listObserver = transport.OnComplete(listed.Value(), onFailure);
+            const auto deleteObserver = transport.OnComplete(deleted.Value(), onFailure);
+            REQUIRE(listObserver.HasValue());
+            REQUIRE(deleteObserver.HasValue());
+            REQUIRE(backend->requests.MarkRunning(listed.Value().handle).HasValue());
+            REQUIRE(backend->requests.MarkRunning(deleted.Value().handle).HasValue());
+            REQUIRE(backend->requests.CompleteFailure(listed.Value().handle, MakeError(Cloud::CloudObjectErrors::PartialTransfer)).HasValue());
+            REQUIRE(backend->requests.CompleteFailure(deleted.Value().handle, MakeError(Cloud::CloudObjectErrors::PreconditionFailed)).HasValue());
+            CHECK(failed.empty());
+            CHECK(backend->requests.DispatchCompletions() == 2);
+            CHECK(failed == std::vector<OperationId>{20, 23});
 
             upload.mutation = Id<SaveCloudMutationId>(11);
             upload.revision.reset();
@@ -472,7 +490,17 @@ namespace Horo::Runtime {
                 head.transportDigest.reset();
                 REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
                             Cloud::CloudBlobReadResult{write.subject, write.subject.SessionGeneration(), head, write.bytes}).HasValue());
-                REQUIRE(recover().Value() == CloudSaveUploadRecovery::Confirmed);
+                std::optional<CloudSaveUploadRecovery> delivered;
+                auto subscription = transport.OnComplete(probe.Value().Request(), [&](const OperationId operation, const auto &snapshot) {
+                    CHECK(operation == 3);
+                    const auto result = transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot);
+                    REQUIRE(result.HasValue());
+                    delivered = result.Value();
+                });
+                REQUIRE(subscription.HasValue());
+                CHECK_FALSE(delivered);
+                CHECK(backend->requests.DispatchCompletions() == 1);
+                CHECK(delivered == CloudSaveUploadRecovery::Confirmed);
                 fixture.Reopen();
                 const auto stored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
                 REQUIRE(stored.HasValue());

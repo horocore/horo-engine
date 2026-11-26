@@ -8,8 +8,10 @@
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::PlatformServices {
@@ -135,6 +137,34 @@ namespace Horo::PlatformServices {
             } catch (...) {  // NOSONAR: backend adapters are an extension boundary and may throw non-standard exceptions.
                 return Result<void>::Failure(MakeError(BackendErrors::ServiceUnavailable));
             }
+        }
+
+        /**
+         * @brief Registers one deferred observer for an admitted opaque cloud request.
+         * @tparam T Cloud list, complete read, or mutation result.
+         * @param request Handle issued by this frontend.
+         * @param observer Callback for the terminal result on the request store's owner lane.
+         * @return A suppression token or typed admission failure.
+         * @details Retain the token for delivery. Closing the frontend revokes observation before backend shutdown begins.
+         */
+        template <typename T>
+            requires (std::is_same_v<T, CloudObjectPage> || std::is_same_v<T, CloudBlobReadResult> ||
+                      std::is_same_v<T, CloudMutationResult>)
+        [[nodiscard]] Result<PlatformRequestSubscription> OnCloudComplete(
+            const PlatformRequestHandle<T> &request,
+            std::type_identity_t<std::function<void(const PlatformRequestSnapshot<T> &)>> observer) const {
+            using Response = Result<PlatformRequestSubscription>;
+            if (!open_)
+                return Response::Failure(MakeError(FrontendErrors::Unavailable));
+            if (!request.IsValid() || !observer)
+                return Response::Failure(MakeError(FrontendErrors::InvalidRequest));
+            if (!OwnsRequest(request.frontendAuthority_))
+                return Response::Failure(MakeError(RequestErrors::Stale));
+            return PlatformRequestStore::ObserveAdmitted<T>(
+                request, [authority = request.frontendAuthority_, observer = std::move(observer)](const auto &snapshot) {
+                    if (!authority.expired())
+                        observer(snapshot);
+                });
         }
 
         /**

@@ -410,6 +410,13 @@ invocation. Routing and idempotent `Close` are serialized by the composition own
 `Close` publishes closed admission before invoking backend shutdown. The completion
 queue and provider-to-frontend request-store handoff remain PLS-001.4 scope.
 
+For opaque cloud list, read and mutation requests, the handle carries a weak
+reference to the exact issuing request store. The frontend verifies its own
+issuance before subscribing to that store. The owner retains the suppression
+token, and delivery occurs on the store's later dispatch turn. Frontend close
+revokes delivery before backend shutdown. Rebuild C++ handle consumers together
+when updating the SDK because the handle carries additional private state.
+
 PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
 policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
 explicit caller cancellation. Existing direct host callers must pump

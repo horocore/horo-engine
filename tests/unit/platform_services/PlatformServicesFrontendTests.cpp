@@ -318,6 +318,59 @@ namespace Horo::PlatformServices {
         CHECK(backend->requests.RecordCount() == 0);
     }
 
+    TEST_CASE("Cloud terminal observers follow the exact issuing frontend and store",
+              "[platform-services][frontend][cloud][completion]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        auto otherBackend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        auto frontend = Frontend(backend, session);
+        auto otherFrontend = Frontend(otherBackend, session);
+        const auto subject = *session.Subject();
+        const auto key = MutationWrite(subject).key;
+        auto request = frontend.ReadCloudObject({subject, key, 2});
+        const auto other = otherFrontend.ReadCloudObject({subject, key, 2});
+        REQUIRE(request.HasValue());
+        REQUIRE(other.HasValue());
+        CHECK(request.Value().Id() == other.Value().Id());
+        CHECK(request.Value().Generation() == other.Value().Generation());
+        auto observer = [](const PlatformRequestSnapshot<CloudBlobReadResult> &) {};
+        RequireError(frontend.OnCloudComplete(other.Value(), observer), RequestErrors::Stale);
+        auto backendOnly = backend->requests.Admit<CloudBlobReadResult>();
+        REQUIRE(backendOnly.HasValue());
+        RequireError(frontend.OnCloudComplete(backendOnly.Value(), observer), RequestErrors::Stale);
+
+        auto movedFrontend = std::move(frontend);
+        PlatformRequestHandle<CloudBlobReadResult> handle;
+        handle = std::move(request).Value();
+        unsigned deliveries{};
+        auto watched = movedFrontend.OnCloudComplete(handle, [&](const auto &snapshot) {
+            ++deliveries;
+            REQUIRE(snapshot.terminal);
+            const auto *failure = snapshot.terminal->ErrorValue();
+            REQUIRE(failure);
+            CHECK(failure->code.Value() == CloudObjectErrors::NotFound.code.Value());
+            CHECK(failure->message != "private provider path");
+        });
+        REQUIRE(watched.HasValue());
+        auto cancelled = movedFrontend.OnCloudComplete(handle, [&](const auto &) { FAIL("Suppressed observer called"); });
+        REQUIRE(cancelled.HasValue());
+        auto cancelledObserver = std::move(cancelled).Value();
+        cancelledObserver.Reset();
+        REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+        REQUIRE(backend->requests.CompleteFailure(handle, MakeError(CloudObjectErrors::NotFound, "private provider path")).HasValue());
+        CHECK(deliveries == 0);
+        CHECK(otherBackend->requests.DispatchCompletions() == 0);
+        CHECK(backend->requests.DispatchCompletions() == 1);
+        CHECK(deliveries == 1);
+        CHECK(backend->requests.DispatchCompletions() == 0);
+
+        auto pending = movedFrontend.OnCloudComplete(handle, [&](const auto &) { FAIL("Closed frontend observer called"); });
+        REQUIRE(pending.HasValue());
+        REQUIRE(movedFrontend.Close().HasValue());
+        CHECK(backend->requests.DispatchCompletions() == 0);
+        RequireError(movedFrontend.OnCloudComplete(handle, observer), FrontendErrors::Unavailable);
+    }
+
     TEST_CASE("A retired frontend handle cannot cancel a new account request with reused numeric identity",
               "[platform-services][frontend][session][cancellation]") {
         auto oldBackend = std::make_shared<RoutingBackend>();
