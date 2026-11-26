@@ -123,6 +123,8 @@ of the receipt. The gate checks both files and verifies the receipt belongs to
 that check and run. One observation can support several checks in its original
 run. Other claimed tuples in the same matrix require their own observations,
 including when they connect to the same headset in a different mode.
+Display, render-timing, and required mixed-reality captures also belong to the
+original run and cannot be referenced as another tuple's physical observation.
 For older smoke records, create receipts from the original
 observations if their test run is known. Otherwise repeat the affected checks.
 

@@ -165,11 +165,10 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
         evidence.android_preflight(row["androidPreflight"], record)
     evidence.display_capture(record)
     evidence.render_timing(record, row["renderTimingLimits"])
-    check_digests = {check["evidenceSha256"] for check in record["checks"].values()}
-    check_digests.difference_update({None, record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]})
+    observations = {record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]}
     if mr_capture is not None:
-        check_digests.discard(record["checks"]["optionalMR"]["evidenceSha256"])
-    observations = set()
+        observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
+    check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - {None}
     for check in sorted((CORE_CHECKS | optional) - SPECIALIZED_PHYSICAL_CHECKS):
         observations.add(evidence.physical_check_capture(record, check))
         check_digests.discard(record["checks"][check]["evidenceSha256"])

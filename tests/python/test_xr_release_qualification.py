@@ -132,16 +132,22 @@ def test_reference_pair_and_optional_planning_owner(release):
     assert "XR 1.0 matrix evidence passed" in result.stdout
 
 
-@pytest.mark.parametrize("check", ["input", "comfort"])
-def test_physical_observation_cannot_be_rewrapped_for_another_connection(release, check):
+@pytest.mark.parametrize(("source_check", "target_check"), [
+    ("input", "input"),
+    ("input", "comfort"),
+    ("displayEnumeration", "input"),
+    ("renderTiming", "comfort"),
+])
+def test_physical_observation_cannot_be_rewrapped_for_another_connection(release, source_check, target_check):
     matrix, evidence = release
     first_row, second_row = matrix["tuples"]
     first = json.loads((evidence / first_row["recordSha256"]).read_bytes())
     second = json.loads((evidence / second_row["recordSha256"]).read_bytes())
-    original = json.loads((evidence / first["checks"]["input"]["evidenceSha256"]).read_bytes())
-    replacement = json.loads((evidence / second["checks"][check]["evidenceSha256"]).read_bytes())
-    replacement["artifactSha256"] = original["artifactSha256"]
-    second["checks"][check]["evidenceSha256"] = store(evidence, json.dumps(replacement).encode())
+    source_digest = first["checks"][source_check]["evidenceSha256"]
+    original = json.loads((evidence / source_digest).read_bytes())
+    replacement = json.loads((evidence / second["checks"][target_check]["evidenceSha256"]).read_bytes())
+    replacement["artifactSha256"] = original.get("artifactSha256", source_digest)
+    second["checks"][target_check]["evidenceSha256"] = store(evidence, json.dumps(replacement).encode())
     second_row["recordSha256"] = store(evidence, json.dumps(second).encode())
 
     result = run_matrix(release)
