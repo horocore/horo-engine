@@ -294,8 +294,10 @@ namespace Horo::Editor {
             return Status::Closed;
         if (!context_->SharesGeneration(context) || !context.IsCurrent())
             return Status::StaleContext;
-        if (overflowed_ || observations.size() > observations_.size() - count_) {
-            overflowed_ = true;
+        if (failure_)
+            return *failure_;
+        if (observations.size() > observations_.size() - count_) {
+            failure_ = Status::CapacityExceeded;
             return Status::CapacityExceeded;
         }
         std::ranges::copy(observations, std::span{observations_}.subspan(count_).begin());
@@ -305,10 +307,17 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersiveSpatialCapture::RecordPointing */
     ImmersiveSpatialCaptureStatus ImmersiveSpatialCapture::RecordPointing(const ImmersiveSpatialObservation &observation) noexcept {
+        using Status = ImmersiveSpatialCaptureStatus;
         if (!context_ || sealed_)
-            return ImmersiveSpatialCaptureStatus::Closed;
-        if (context_->Identity().xrSession != observation.cutoff.session)
-            return ImmersiveSpatialCaptureStatus::StaleContext;
+            return Status::Closed;
+        if (!context_->IsCurrent() || context_->Identity().xrSession != observation.cutoff.session)
+            return Status::StaleContext;
+        if (failure_)
+            return *failure_;
+        if (!observation.controllerPress) {
+            failure_ = Status::UnmeasuredPress;
+            return *failure_;
+        }
         return Record(*context_, std::span{&observation, 1});
     }
 
@@ -324,8 +333,10 @@ namespace Horo::Editor {
             return {StaleEvidence, {}};
         if (!sealed_)
             return {SpatialCaptureOpen, {}};
-        if (overflowed_)
+        if (failure_ == ImmersiveSpatialCaptureStatus::CapacityExceeded)
             return {CapacityExceeded, {}};
+        if (failure_ == ImmersiveSpatialCaptureStatus::UnmeasuredPress)
+            return {AmbiguousTiming, {}};
         if (count_ == 0)
             return ImmersiveCommandEnvelope::Assemble(*context_, speech);
         return ImmersiveCommandEnvelope::Assemble(*context_, speech,
@@ -357,7 +368,7 @@ namespace Horo::Editor {
         std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
         count_ = 0;
         context_.reset();
-        overflowed_ = false;
+        failure_.reset();
         sealed_ = false;
     }
 }  // namespace Horo::Editor

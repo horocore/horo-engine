@@ -175,7 +175,8 @@ namespace Horo::Editor {
         Recorded,
         Closed,
         StaleContext,
-        CapacityExceeded
+        CapacityExceeded,
+        UnmeasuredPress
     };
 
     /** @brief Fixed storage for admitted XR evidence during one listening operation.
@@ -190,7 +191,7 @@ namespace Horo::Editor {
         /** @brief Copies one complete, ordered batch without allocation or partially admitting an oversized batch. */
         [[nodiscard]] ImmersiveSpatialCaptureStatus Record(const ImmersivePlanningContext &context,
                                                            std::span<const ImmersiveSpatialObservation> observations) noexcept;
-        /** @brief Records one pointing observation in the bound listening context; rejects foreign XR sessions. */
+        /** @brief Records one observed press in the bound listening context. An unmeasured press invalidates spatial review. */
         [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPointing(const ImmersiveSpatialObservation &observation) noexcept;
 
         /** @brief Stops recording before the detached speech worker produces its final result. */
@@ -212,6 +213,6 @@ namespace Horo::Editor {
         std::array<ImmersiveSpatialObservation, ImmersiveCommandEnvelope::MaximumObservations> observations_{};
         std::size_t count_{};
         bool sealed_{};
-        bool overflowed_{};
+        std::optional<ImmersiveSpatialCaptureStatus> failure_;
     };
 }  // namespace Horo::Editor

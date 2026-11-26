@@ -835,7 +835,8 @@ namespace Horo::Editor {
             const auto speech = FinalEvidence(fixture);
             const auto context = fixture.Context();
             ImmersiveSpatialCapture capture;
-            const auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            sample.controllerPress = ImmersiveControllerPress{sample.earliest, sample.latest};
             const std::span observation{&sample, 1};
             CHECK(capture.Record(context, observation) == RecordStatus::Closed);
             capture.Begin(context);
@@ -903,7 +904,7 @@ namespace Horo::Editor {
             }
             ImmersiveSpatialCapture capture;
             capture.Begin(context);
-            REQUIRE(capture.RecordPointing(sample) == ImmersiveSpatialCaptureStatus::Recorded);
+            REQUIRE(capture.Record(context, {&sample, 1}) == ImmersiveSpatialCaptureStatus::Recorded);
             CHECK(capture.AssemblePreview(speech, sample.cutoff).status == SpatialCaptureOpen);
             capture.Seal();
             const auto preview = capture.AssemblePreview(speech, sample.cutoff);
@@ -918,6 +919,31 @@ namespace Horo::Editor {
             fixture.owner.Revoke();
             CHECK_FALSE(preview.envelope->IsCurrent(sample.cutoff));
             CHECK_FALSE(capture.AssemblePreview(speech, sample.cutoff).envelope);
+        }
+
+        TEST_CASE("An unmeasured controller press withdraws the complete spatial review", "[agent][immersive][speech]") {
+            using RecordStatus = ImmersiveSpatialCaptureStatus;
+            using CommandStatus = ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto measured = SpatialObservation(context, 1, 1'005'000, 1'010'000);
+            measured.controllerPress = ImmersiveControllerPress{measured.earliest, measured.latest};
+            const auto unmeasured = SpatialObservation(context, 2, 1'012'000, 1'015'000);
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            REQUIRE(capture.RecordPointing(measured) == RecordStatus::Recorded);
+            REQUIRE(capture.RecordPointing(unmeasured) == RecordStatus::UnmeasuredPress);
+            CHECK(capture.RecordPointing(measured) == RecordStatus::UnmeasuredPress);
+            capture.Seal();
+            const auto assembled = capture.Assemble(speech, unmeasured.cutoff);
+            CHECK(assembled.status == CommandStatus::AmbiguousTiming);
+            CHECK_FALSE(assembled.envelope);
+            const auto preview = capture.AssemblePreview(speech, unmeasured.cutoff);
+            REQUIRE(preview.status == CommandStatus::SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Spatial().empty());
+            CHECK(preview.envelope->Speech().Hypothesis().text == Transcript().text);
         }
 
         TEST_CASE("Immersive speech issues owned partial and final evidence after sealing PCM", "[agent][immersive][speech]") {
