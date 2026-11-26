@@ -256,8 +256,10 @@ Ownership rules:
   controller press copies bounded hit coordinates and plane identities from
   the admitted publication. Each preview checks the exact World space of the
   recorded ray and that the same grant and all referenced plane identities are
-  still live. Non-finite coordinates and invalid
-  classifications make the surface evidence unavailable for review.
+  still live. It also verifies that every captured coordinate remains on its
+  current finite surface with the captured classification. Review preserves
+  the original coordinates and withdraws the candidate set if a point no
+  longer has that support.
   Play mesh hits and listening lineage retain the structural revision of the
   draws, so recycled object identities require a new observation.
   World UI dispatch owns its targeted and reserved gestures. Scene evidence

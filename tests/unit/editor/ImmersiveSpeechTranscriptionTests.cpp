@@ -542,7 +542,7 @@ namespace Horo::Editor {
             }
         }
 
-        TEST_CASE("Physical surface review requires its original grant and current plane classification", "[agent][immersive][speech]") {
+        TEST_CASE("Physical surface review requires its original grant and current geometric support", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 7;
             SpeechFixture fixture;
             const auto context = fixture.Context();
@@ -565,7 +565,7 @@ namespace Horo::Editor {
                                               .surfaces = ImmersiveSurfaceHits{.scope = scope, .worldGeneration = World, .count = 1}};
             press.candidate.shape = Math::Ray{};
             press.candidate.space = scope.space;
-            press.surfaces->hits[0] = {wall.id, wall.classification, {1, 2, 3}};
+            press.surfaces->hits[0] = {wall.id, wall.classification, {1, 0, 1}};
             const std::array repeated{press, press};
             const auto candidates = CollectImmersiveSurfaceHits(repeated, World, live.Value());
             REQUIRE(candidates);
@@ -586,7 +586,30 @@ namespace Horo::Editor {
             hit.classification = XR::XRPlaneClassification::Count;
             CHECK_FALSE(CollectImmersiveSurfaceHits(malformed, World, live.Value()));
 
-            const auto correctedAt = XR::XRRuntimeTime::Create(101).Value();
+            auto moved = wall;
+            moved.centerMeters.x = 0.5F;
+            const auto movedAt = XR::XRRuntimeTime::Create(101).Value();
+            REQUIRE(publication.Publish(scope, movedAt, std::span{&moved, 1}).HasValue());
+            const auto compatible = publication.Read(scope, movedAt);
+            REQUIRE(compatible.HasValue());
+            const auto unchanged = CollectImmersiveSurfaceHits(repeated, World, compatible.Value());
+            REQUIRE(unchanged);
+            CHECK(unchanged->hits[0].worldPosition == press.surfaces->hits[0].worldPosition);
+
+            auto narrowed = moved;
+            narrowed.extentMeters.x = 0.5F;
+            auto shifted = moved;
+            shifted.centerMeters.y = 0.1F;
+            auto changedTime = 102;
+            for (const auto &changed : {narrowed, shifted}) {
+                const auto changedAt = XR::XRRuntimeTime::Create(changedTime++).Value();
+                REQUIRE(publication.Publish(scope, changedAt, std::span{&changed, 1}).HasValue());
+                const auto incompatible = publication.Read(scope, changedAt);
+                REQUIRE(incompatible.HasValue());
+                CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World, incompatible.Value()));
+            }
+
+            const auto correctedAt = XR::XRRuntimeTime::Create(changedTime++).Value();
             auto floor = wall;
             floor.classification = XR::XRPlaneClassification::Floor;
             REQUIRE(publication.Publish(scope, correctedAt, std::span{&floor, 1}).HasValue());
@@ -599,7 +622,7 @@ namespace Horo::Editor {
             REQUIRE(freshReview);
             CHECK(freshReview->hits[0].classification == floor.classification);
 
-            const auto later = XR::XRRuntimeTime::Create(102).Value();
+            const auto later = XR::XRRuntimeTime::Create(changedTime).Value();
             REQUIRE(publication.Publish(scope, later, {}).HasValue());
             const auto missing = publication.Read(scope, later);
             REQUIRE(missing.HasValue());

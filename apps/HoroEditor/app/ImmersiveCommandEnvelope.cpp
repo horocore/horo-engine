@@ -156,12 +156,23 @@ namespace Horo::Editor {
                    (result.structuralRevision == hits.structuralRevision && result.mounted == hits.mounted);
         }
 
+        /** @brief Checks the recorded point in the live plane's finite local rectangle without moving the point. */
+        bool ContainsCapturedPoint(const XR::XRPlaneObservation &plane, const Math::Vec3 point) noexcept {
+            const auto offset = point - plane.centerMeters;
+            const auto localX = Math::Dot(offset, plane.orientation.Rotate({1.0F, 0.0F, 0.0F}));
+            const auto localY = Math::Dot(offset, plane.orientation.Rotate({0.0F, 1.0F, 0.0F}));
+            const auto localZ = Math::Dot(offset, plane.orientation.Rotate({0.0F, 0.0F, 1.0F}));
+            return Math::NearlyEqual(localY, 0.0F) &&
+                   std::abs(localX) <= plane.extentMeters.x * 0.5F + Math::DefaultEpsilon &&
+                   std::abs(localZ) <= plane.extentMeters.y * 0.5F + Math::DefaultEpsilon;
+        }
+
         /** @brief Checks the copied press-time coordinates and classification against the current plane inventory. */
         bool ValidSurfaceHit(const ImmersiveSurfaceHits::Hit &hit, std::span<const XR::XRPlaneObservation> current) noexcept {
             if (!Math::IsFinite(hit.worldPosition) || hit.classification >= XR::XRPlaneClassification::Count)
                 return false;
             const auto plane = std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id);
-            return plane != current.end() && plane->classification == hit.classification;
+            return plane != current.end() && plane->classification == hit.classification && ContainsCapturedPoint(*plane, hit.worldPosition);
         }
 
         /** @brief Copies distinct current surface candidates or rejects the entire incomplete review. */

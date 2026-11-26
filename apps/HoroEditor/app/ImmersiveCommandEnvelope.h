@@ -95,7 +95,7 @@ namespace Horo::Editor {
                                                                                     std::uint64_t worldGeneration,
                                                                                     ImmersivePointingReviewKind kind) noexcept;
 
-    /** @brief Reviews press-time geometry in the exact measured World space against the current grant and plane classifications. */
+    /** @brief Reviews press-time points against the current grant, World space, plane classifications and finite surfaces. */
     [[nodiscard]] std::optional<ImmersiveSurfaceHits> CollectImmersiveSurfaceHits(std::span<const ImmersiveSpatialObservation> aligned,
                                                                                   std::uint64_t worldGeneration,
                                                                                   const XR::XRPlaneSnapshot &current) noexcept;
