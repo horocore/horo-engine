@@ -287,11 +287,11 @@ namespace Horo::Application::Internal {
             }
             if (auto admitted = Platform::CheckProjectReadContext(sources.context); admitted.HasError())
                 return ReferenceScan::Failure(admitted.ErrorValue());
-            if (candidate.status == Assets::AssetRegistryBuildStatus::Complete) {
+            if (candidate.status != Assets::AssetRegistryBuildStatus::Complete)
+                failures.MarkInventoryIncomplete();
+            if (!failures.Incomplete()) {
                 if (auto linked = subplans.AppendDiagnostics(diagnostics); linked.HasError())
                     return ReferenceScan::Failure(linked.ErrorValue());
-            } else {
-                failures.MarkInventoryIncomplete();
             }
             return std::move(failures).Finish(std::move(diagnostics));
         }

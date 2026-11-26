@@ -22,6 +22,11 @@ namespace Horo::Application::Internal {
         /** @brief Prevents a partial asset inventory from authorizing removal while retaining confirmed matches. */
         void MarkInventoryIncomplete();
 
+        /** @brief Reports whether saved sources or their inventory could not be fully reviewed. */
+        [[nodiscard]] bool Incomplete() const noexcept {
+            return first_.has_value();
+        }
+
         /** @brief Records a canonical project-relative source failure while keeping the first typed cause.
          * @param path Path from the admitted asset registry. @param failure Exact failure for that source.
          * @return Success to continue the scan or a resource-limit error.
