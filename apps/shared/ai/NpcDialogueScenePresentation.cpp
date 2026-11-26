@@ -47,7 +47,7 @@ namespace Horo::App {
     /** @copydoc NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent */
     bool NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent(const AI::NpcDialogueGrant &grant) const noexcept {
         return route == grant.route && generation == grant.providerGeneration &&
-               grant.fields.size() <= AI::NpcDialogueTurn::MaximumFacts && std::ranges::is_sorted(grant.fields) &&
+               grant.HasCanonicalFields() &&
                std::ranges::includes(grant.fields, std::span{fields}.first(count));
     }
 

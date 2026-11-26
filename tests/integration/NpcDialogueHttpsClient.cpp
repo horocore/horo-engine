@@ -156,8 +156,11 @@ namespace {
         static_cast<void>(timeline.Drain(*unrelated));
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return false;
+        const std::array duplicateFields{grant.fields.front(), grant.fields.front()};
         if (mode == "grant-after-drain")
             grant.fields = {};
+        if (mode == "malformed-grant-after-drain")
+            grant.fields = duplicateFields;
         static_cast<void>(scene.Drain(timeline, grant));
         return timeline.Cues().size() == 1 && timeline.Cues().front().cue.id == sound;
     }
@@ -171,19 +174,23 @@ namespace {
             return 7;
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
-        if (mode == "disable-after-drain" || mode == "cancel-after-drain" || mode == "grant-after-drain")
+        if (mode == "disable-after-drain" || mode == "cancel-after-drain" || mode == "grant-after-drain" ||
+            mode == "malformed-grant-after-drain")
             return CheckVisibleWithdrawal(scene, runtime, owner, turn, grant, mode) ? 0 : 19;
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return 14;
         auto liveGrant = grant;
+        const std::array invalidFields{NpcDialogueFactId{}, grant.fields.front()};
         if (mode == "grant-before-drain")
             liveGrant.fields = {};
+        if (mode == "malformed-grant-before-drain")
+            liveGrant.fields = invalidFields;
         if (mode == "unused-grant-before-drain")
             liveGrant.fields = liveGrant.fields.first(1);
         if (mode == "offline-replaced-grant")
             ++liveGrant.providerGeneration;
         const bool withdrawn = mode == "retired" || mode == "disable-before-drain" || mode == "cancel-before-drain" ||
-                               mode == "grant-before-drain";
+                               mode == "grant-before-drain" || mode == "malformed-grant-before-drain";
         const bool remoteCue = mode == "approved" || mode == "unused-grant-before-drain";
         return CheckTimeline(scene, liveGrant, withdrawn, remoteCue ? 1 : 0) ? 0 : 9;
     }

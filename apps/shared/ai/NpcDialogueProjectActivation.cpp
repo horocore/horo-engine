@@ -15,12 +15,6 @@ namespace Horo::App {
             const bool sameRoot = std::filesystem::equivalent(projectRoot, approval->projectRoot, error);
             return !error && sameRoot;
         }
-
-        /** @brief Rejects malformed grants before copying the intersection. */
-        bool ValidFields(std::span<const AI::NpcDialogueFactId> fields) noexcept {
-            return fields.size() <= AI::NpcDialogueTurn::MaximumFacts && (fields.empty() || fields.front().IsValid()) &&
-                   std::ranges::is_sorted(fields) && std::ranges::adjacent_find(fields) == fields.end();
-        }
     }  // namespace
 
     /** @copydoc NpcDialogueProjectActivation::Create */
@@ -46,13 +40,14 @@ namespace Horo::App {
         activation.presentation_ = policy.presentation;
         if (!Matches(projectRoot, project.Value(), policy.route, generation, approval))
             return Activation::Success(std::move(activation));
-        if (!ValidFields(approval->fields))
+        const AI::NpcDialogueGrant approved{policy.route, generation, approval->fields};
+        if (!approved.HasCanonicalFields())
             return Activation::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         auto binding = MakeNpcDialogueHttpsProvider(approval->endpoint);
         if (binding.HasError())
             return Activation::Failure(std::move(binding).ErrorValue());
 
-        const auto common = std::ranges::set_intersection(policy.fields, approval->fields, activation.fields_.begin());
+        const auto common = std::ranges::set_intersection(policy.fields, approved.fields, activation.fields_.begin());
         activation.count_ = static_cast<std::size_t>(common.out - activation.fields_.begin());
         activation.binding_ = std::move(binding).Value();
         return Activation::Success(std::move(activation));

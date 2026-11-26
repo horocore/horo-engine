@@ -21,8 +21,7 @@ namespace Horo::AI {
 
         /** @brief Compares the exact route, activation, and bounded list of approved fields. */
         bool Grants(const NpcDialogueGrant &grant, const NpcDialogueRoute &route, std::uint64_t generation) noexcept {
-            return grant.route == route && grant.providerGeneration == generation &&
-                   grant.fields.size() <= NpcDialogueTurn::MaximumFacts && CanonicalIds(grant.fields);
+            return grant.route == route && grant.providerGeneration == generation && grant.HasCanonicalFields();
         }
 
         /** @brief Requires nonzero local identity, route and deadline for the declared turn. */
@@ -49,6 +48,11 @@ namespace Horo::AI {
             return reply && reply->approved && std::ranges::binary_search(allowed, reply->cue);
         }
     }  // namespace
+
+    /** @copydoc NpcDialogueGrant::HasCanonicalFields */
+    bool NpcDialogueGrant::HasCanonicalFields() const noexcept {
+        return fields.size() <= NpcDialogueTurn::MaximumFacts && CanonicalIds(fields);
+    }
 
     /** @copydoc NpcDialogueTurn::Capture */
     Result<NpcDialogueTurn> NpcDialogueTurn::Capture(const NpcDialogueRequestIdentity &identity, const NpcDialogueRoute &route,

@@ -54,6 +54,11 @@ namespace Horo::AI {
         NpcDialogueRoute route;
         std::uint64_t providerGeneration{};
         std::span<const NpcDialogueFactId> fields; /**< Explicitly permitted fields in increasing ID order. */
+
+        /** @brief Checks the bounded disclosure list before it authorizes a request or cue.
+         * @return Whether all field IDs are valid, strictly increasing, and within the turn capacity.
+         */
+        [[nodiscard]] bool HasCanonicalFields() const noexcept;
     };
 
     /** @brief Input from a host decoder. Approval includes protocol validation and moderation. */

@@ -35,6 +35,8 @@ class Handler(BaseHTTPRequestHandler):
             "cancel-after-drain": (200, b"allow\n5\n"),
             "grant-before-drain": (200, b"allow\n5\n"),
             "grant-after-drain": (200, b"allow\n5\n"),
+            "malformed-grant-before-drain": (200, b"allow\n5\n"),
+            "malformed-grant-after-drain": (200, b"allow\n5\n"),
             "unused-grant-before-drain": (200, b"allow\n5\n"),
         }[mode]
         if mode == "timeout":
@@ -68,7 +70,8 @@ def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> Non
                "stale-grant", "other-route", "copied-project")
     modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout",
              "disable-before-drain", "cancel-before-drain", "disable-after-drain", "cancel-after-drain",
-             "grant-before-drain", "grant-after-drain", "unused-grant-before-drain", *offline)
+             "grant-before-drain", "grant-after-drain", "unused-grant-before-drain",
+             "malformed-grant-before-drain", "malformed-grant-after-drain", *offline)
     for mode in modes:
         server.mode = mode
         server.requests.clear()
