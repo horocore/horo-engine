@@ -31,7 +31,7 @@ namespace Horo::Editor {
         /** @brief Borrows the final transcript only while its XR capture is current. */
         [[nodiscard]] std::string_view Transcript() const &;
         /** @brief Borrows the latest live draft for display while final recognition is pending. */
-        [[nodiscard]] std::string_view PartialTranscript() const & noexcept;
+        [[nodiscard]] std::string_view PartialTranscript() const &;
 
         /** @brief Reads progress only for the current XR listening scope, including before the first draft. */
         [[nodiscard]] std::optional<ImmersiveSpeechProgress> ReadProgress() const;
@@ -78,6 +78,8 @@ namespace Horo::Editor {
         using Scope = Application::Internal::OpenXRPlayListeningScope;
         /** @brief Checks the listening lineage and any final envelope's Input cutoff. */
         [[nodiscard]] std::optional<Scope> Current() const;
+        /** @brief Rechecks the live XR scope and current microphone and speech consent. */
+        [[nodiscard]] std::optional<Scope> CurrentPresentation() const;
         /** @brief Assembles the final local preview after recognition finishes. */
         void AdoptFinalSpeech(const ImmersiveSpeechEvidence &evidence, const XR::XRInteractionCutoff &cutoff);
         /** @brief Releases the capture and preserves its user-visible terminal reason. */

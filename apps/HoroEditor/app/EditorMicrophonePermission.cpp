@@ -540,6 +540,11 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorMicrophonePermission::CanPresentSpeech */
+    bool EditorMicrophonePermission::CanPresentSpeech(const std::uint64_t generation) const noexcept {
+        return check_->OwnsSpeech(generation) && check_->SpeechCurrent(CaptureCheck::Clock::now()) && SpeechCaptureAllowed(true);
+    }
+
     /** @copydoc EditorMicrophonePermission::ReadSpeechClock */
     std::optional<Audio::AudioMonotonicTimestamp> EditorMicrophonePermission::ReadSpeechClock(
         const std::uint64_t generation) const noexcept {

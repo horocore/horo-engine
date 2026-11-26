@@ -137,6 +137,11 @@ namespace Horo::Editor {
         return worker_.ReadProgress();
     }
 
+    /** @copydoc EditorMicrophoneSpeechSession::CanPresent */
+    bool EditorMicrophoneSpeechSession::CanPresent() const noexcept {
+        return generation_ != 0 && microphone_.CanPresentSpeech(generation_);
+    }
+
     SpeechTranscriptionStatus EditorMicrophoneSpeechSession::TransferBlock(const bool foreground) {
         Audio::Backend::AudioCapturedBlock block{};
         const auto read = microphone_.ReadSpeechCapture(generation_, foreground, block, scratch_);

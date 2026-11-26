@@ -44,6 +44,8 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionUpdate Advance(bool foreground);
         /** @brief Reads the scalar progress of the current recognition operation. */
         [[nodiscard]] std::optional<ImmersiveSpeechProgress> ReadProgress() const noexcept;
+        /** @brief Rechecks native consent for presentation of this operation's text, progress and references. */
+        [[nodiscard]] bool CanPresent() const noexcept;
         /** @brief Reconciles native consent and assembles final speech with sealed spatial evidence. */
         [[nodiscard]] ImmersiveCommandAssembly AssembleCommand(bool foreground, const ImmersiveSpeechEvidence &speech,
                                                                const XR::XRInteractionCutoff &cutoff);

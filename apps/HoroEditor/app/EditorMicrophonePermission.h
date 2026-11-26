@@ -95,6 +95,8 @@ namespace Horo::Editor {
          * @return Success while the lease is current, or an error that withdraws its evidence.
          */
         [[nodiscard]] Result<void> ReconcileSpeechLease(std::uint64_t generation, bool foreground);
+        /** @brief Checks whether the exact live or detached lease still permits speech presentation on the editor lane. */
+        [[nodiscard]] bool CanPresentSpeech(std::uint64_t generation) const noexcept;
         /** @brief Reads the live lease's capture clock without querying native permissions or touching PCM.
          * @param generation Exact active lease generation, on the editor owner lane.
          * @return Current timestamp in the same SDL clock as microphone PCM, or empty after detachment or expiry.
