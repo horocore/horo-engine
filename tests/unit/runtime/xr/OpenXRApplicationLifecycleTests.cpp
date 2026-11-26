@@ -901,6 +901,26 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK_FALSE(fixture.play->ReadSetup().display);
             CHECK(fixture.script.native.liveSessions == 0);
         }
+        SECTION("a cancelled retest cannot skip refreshing retained display evidence") {
+            const bool refreshBeforeRetest = GENERATE(false, true);
+            const auto created = std::ranges::count(fixture.script.native.calls, "session");
+            fixture.graphics.deviceIdentity = 9;
+            if (refreshBeforeRetest)
+                fixture.play->RequestSetupRefresh();
+            const auto request = RequireValue(fixture.play->RequestSetupTest());
+            fixture.play->CancelSetupTest(request);
+            CHECK(fixture.play->ReadSetup().test == Cancelled);
+            if (!refreshBeforeRetest)
+                fixture.play->RequestSetupRefresh();
+
+            fixture.play->PumpSetupTest();
+
+            CHECK(fixture.play->ReadSetup().test == Failed);
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Stale);
+            CHECK_FALSE(fixture.play->ReadSetup().display);
+            CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
+            CHECK(fixture.session->ValidateDeviceQualification(admitted, fixture.frontend->Capabilities().support).HasError());
+        }
         SECTION("a failed replacement probe revokes the old result and retires the test session") {
             fixture.script.native.instanceDispatchAbsent = "xrWaitFrame";
             RequireValue(fixture.play->RequestSetupTest());

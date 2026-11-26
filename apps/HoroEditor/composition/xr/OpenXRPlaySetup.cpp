@@ -806,7 +806,6 @@ namespace Horo::Application::Internal {
             return Request::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (lastSetupTest_ == std::numeric_limits<std::uint64_t>::max())
             return Request::Failure(MakeError(XR::XRErrors::CapacityExceeded));
-        setupRefreshRequested_ = false;
         queuedSetupTest_ = {++lastSetupTest_};
         setup_.test = Editor::EditorXrSetupTestState::Queued;
         setup_.issue = setupCleanupPending_ ? Editor::EditorXrSetupIssue::Cleanup : Editor::EditorXrSetupIssue::None;
@@ -822,7 +821,7 @@ namespace Horo::Application::Internal {
     }
 
     void OpenXRPlayHost::RequestSetupRefresh() noexcept {
-        if (std::this_thread::get_id() == lane_ && !closing_ && setup_.test == Editor::EditorXrSetupTestState::Passed)
+        if (std::this_thread::get_id() == lane_ && !closing_ && setupPreflight_)
             setupRefreshRequested_ = true;
     }
 
@@ -851,6 +850,7 @@ namespace Horo::Application::Internal {
             return;
         }
         // Only a started replacement invalidates the previous qualification.
+        setupRefreshRequested_ = false;
         setupPreflight_.reset();
         const Operation operation{*this};
         if (setupCleanupPending_) {

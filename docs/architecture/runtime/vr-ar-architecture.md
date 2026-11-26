@@ -1301,6 +1301,9 @@ unpublished native session on the selected graphics binding, then retires it bef
 reporting success. Native permission denial is reported separately. Test teardown
 failures keep ownership in the application for a bounded explicit retry, and block
 Play preparation until the owner has retired the abandoned session.
+Reopening Setup revalidates retained evidence even after a queued retest was
+cancelled. The refresh withdraws stale display observations without opening a
+new native session.
 
 The same packaged preflight produces a sealed runtime compatibility row after
 its private session is retired. The row keeps the signed component, deployment
