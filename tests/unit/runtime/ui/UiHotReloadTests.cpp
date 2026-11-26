@@ -209,6 +209,54 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK_FALSE(publisher.InputEligible(current.id, receipt.view));
         }
 
+        TEST_CASE("World presentation withdrawal cancels capture before a later receipt restores the plane", "[runtime_ui][reload][world]") {
+            auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
+            auto publisher = Publisher(allocator);
+            auto &canvas = Canvas(publisher);
+            const UiWorldCanvasProjection plane{{}, {2, 0, 0}, {0, 2, 0}};
+            auto &tracker = canvas.presentations.front();
+            UiPresentationReceipt receipt{tracker.View(),
+                                          tracker.Canvas(),
+                                          canvas.layout->Descriptor().interaction,
+                                          Revision<UiRenderSnapshotRevision>(1),
+                                          UiPresentationOutcome::Presented,
+                                          UiPresentationReason::None,
+                                          plane};
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).Value());
+            const UiEventRoute route{canvas.tree.Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), canvas.tree.Revision(),
+                                     receipt.interactionRevision, canvas.controls.front().control.Element(), {}};
+            const UiPointerCaptureRequest request{{Owner(), 7, 1}, UiPointerId::Create(1).Value(), UiPointerButton::Primary, receipt.view,
+                                                  route};
+            auto acquired = canvas.captures->Capture(request, canvas.tree, tracker);
+            REQUIRE(acquired.HasValue());
+            auto token = std::move(acquired).Value();
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(2);
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).HasValue());
+            CHECK(token.IsActive());
+            receipt.outcome = UiPresentationOutcome::Failed;
+            receipt.reason = UiPresentationReason::ExecutionFailure;
+            receipt.worldProjection.reset();
+            CHECK(publisher.ApplyPresentation(canvas.id, receipt).HasError());  // Duplicate revision.
+            CHECK(token.IsActive());
+            REQUIRE(tracker.WorldProjection());
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(3);
+            const auto withdrawn = publisher.ApplyPresentation(canvas.id, receipt);
+            REQUIRE(withdrawn.HasValue());
+            CHECK_FALSE(withdrawn.Value());
+            CHECK_FALSE(tracker.WorldProjection());
+            CHECK(token.CancellationReason() == UiPointerCaptureCancellationReason::Suspended);
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(4);
+            receipt.outcome = UiPresentationOutcome::Presented;
+            receipt.reason = UiPresentationReason::None;
+            receipt.worldProjection = plane;
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).HasValue());
+            CHECK_FALSE(token.IsActive());
+            CHECK(canvas.captures->Capture(request, canvas.tree, tracker).HasValue());
+        }
+
         TEST_CASE("UI reload modal and route high water reject deep ABA and overflow without mutation", "[runtime_ui][reload][aba]") {
             auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
             auto generation = Generation(allocator, 1, 32, false, std::numeric_limits<std::uint32_t>::max() - 2,

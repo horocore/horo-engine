@@ -239,6 +239,7 @@ namespace Horo::Runtime::Ui {
          * @param canvas Stable authored canvas.
          * @param receipt Renderer-neutral terminal evidence for an admitted view and current interaction revision.
          * @return Whether input eligibility advanced, or a typed stale/provenance/lifecycle failure.
+         * @post A withdrawn World plane cancels capture for its view before another receipt can restore it.
          */
         [[nodiscard]] Result<bool> ApplyPresentation(UiCanvasId canvas, const UiPresentationReceipt &receipt);
         /** @brief Checks exact current successfully presented input eligibility without allocation.
