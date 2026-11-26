@@ -121,6 +121,36 @@ def test_reference_pair_and_optional_planning_owner(release):
     assert "XR 1.0 matrix evidence passed" in result.stdout
 
 
+@pytest.mark.parametrize("view_count", [1, 4])
+def test_xr_1_0_claim_requires_physical_stereo_capture(release, view_count):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    record["display"]["viewExtents"] = [{"width": 1024, "height": 800}] * view_count
+    store_display_capture(evidence, record)
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "XR 1.0 requires a primary stereo display capture" in result.stderr
+
+
+@pytest.mark.parametrize(("measurements", "error"), [
+    ("0,2,1024,800,1032,808", None),
+    ("0,4,1024,800,1032,808,640,480,648,488", "Desktop preflight must report primary stereo for XR 1.0"),
+])
+def test_xr_1_0_claim_requires_stereo_in_a_measured_desktop_probe(release, measurements, error):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    preflight = desktop_receipt(row).replace(b"qualification-v2", b"qualification-v3").removesuffix(b"\n")
+    row["desktopPreflightSha256"] = store(evidence, preflight + f" display={measurements}\n".encode())
+    result = run_matrix(release)
+    if error is None:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1
+        assert error in result.stderr
+
+
 @pytest.mark.parametrize(("changes", "reason"), [
     ({"durationNs": 999_999_999}, "did not meet the required duration"),
     ({"frameCount": 89}, "did not meet the required duration"),

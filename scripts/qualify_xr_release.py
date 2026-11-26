@@ -18,6 +18,7 @@ REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
 MAX_TIMING_WINDOW_NS = 86_400_000_000_000
 MAX_TIMING_FRAMES = 10_000_000
+PRIMARY_STEREO_VIEW_COUNT = 2
 TIMING_LIMITS = {
     "minimumDurationNs": (1, MAX_TIMING_WINDOW_NS),
     "minimumFrameCount": (1, MAX_TIMING_FRAMES),
@@ -48,7 +49,9 @@ class Evidence:
 
     def desktop_preflight(self, digest: str, identity: dict, component_digest: str | None) -> None:
         with self.path(digest).open("rb") as source:
-            check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
+            view_count = check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
+        if view_count is not None:
+            require(view_count == PRIMARY_STEREO_VIEW_COUNT, "Desktop preflight must report primary stereo for XR 1.0")
 
     def android_preflight(self, expected: dict, record: dict) -> None:
         self.verify(expected["apkSha256"])
@@ -169,6 +172,7 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     claimed_mr_passed = "optionalMR" in optional and record["checks"]["optionalMR"]["status"] == "Passed"
     mr_capture = evidence.mixed_reality_capture(record) if claimed_mr_passed else None
     check_physical_gate(record, row["declaration"], optional, mr_capture=mr_capture)
+    require(len(record["display"]["viewExtents"]) == PRIMARY_STEREO_VIEW_COUNT, "XR 1.0 requires a primary stereo display capture")
     observed_revision = record["provenance"].get("sourceRevision")
     require(observed_revision is not None, "Device evidence does not record a source revision")
     require(observed_revision == revision, "Device evidence is from another source revision")

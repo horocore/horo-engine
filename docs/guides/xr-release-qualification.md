@@ -145,9 +145,12 @@ connection mode as the physical evidence. Generate a separate receipt for each
 connection mode. Version 3 appends a bounded `display=` field containing a
 refresh rate count, ascending rates in millihertz, a view count, and ordered
 width and height pairs. A zero rate count means enumeration was unavailable.
-The checker continues to accept version 2 receipts. The release claim still
-requires its own physical display capture and the other checks for the
-declared connection mode.
+The XR 1.0 matrix requires exactly two ordered views in the physical display
+capture and in a version 3 Desktop receipt. Version 2 receipts remain usable
+for setup evidence because they carry no view measurements. The single-device
+checker can also validate four-view measurements for post-1.0 work.
+Each release claim requires the remaining physical checks for its declared
+connection mode.
 
 For a standalone Android claim, an optional `androidPreflight` object can
 attach the exact JSON stdout from a successful `project.py android-deploy
