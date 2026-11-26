@@ -24,6 +24,7 @@ namespace Horo::Runtime {
         RestoreDeleted,
         PublishSave,
         Retention,
+        CloudSync,
         Count
     };
     /** @brief Explicit deletion policy; unsupported recycle never falls back to permanent deletion. */
@@ -213,6 +214,22 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<SaveSlotVerifiedExport> ExportVerified(const SaveSlotLifecycleTarget &target, std::size_t maximumBytes,
                                                                    const CancellationToken &cancellation = {});
+        /** @brief Reads the selected catalog and cloud metadata together under the namespace lease.
+         * @param access Exact local binding. @param scope Authenticated coordinator's provider/account binding.
+         * @return Validated pair, derived all-unknown evidence for a legacy catalog, or a typed failure.
+         * @details Requires CloudSync capability. A different persisted provider/account scope must be explicitly rebound.
+         */
+        [[nodiscard]] Result<SaveCloudRevisionSnapshot> ReadCloudRevision(const SaveNamespaceAccessRequest &access,
+                                                                         const SaveCloudMetadataScope &scope) const;
+        /** @brief Atomically persists the candidate sidecar under exact catalog and previous sidecar consent.
+         * @param access Exact local binding. @param expected Current pair captured by ReadCloudRevision.
+         * @param candidate Validated same-index successor, or the same pair for idempotent confirmation.
+         * @return Durable success, no-write stale rejection, or typed storage failure including commit outcome unknown.
+         * @details Requires CloudSync capability and publishes through the existing selection manifest.
+         */
+        [[nodiscard]] Result<void> PublishCloudRevision(const SaveNamespaceAccessRequest &access,
+                                                        const SaveCloudRevisionSnapshot &expected,
+                                                        const SaveCloudRevisionSnapshot &candidate);
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.

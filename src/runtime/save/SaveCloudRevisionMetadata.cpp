@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SaveCloudRevisionMetadataInternal.h"
 
 #include <algorithm>
 #include <memory>
@@ -71,7 +72,44 @@ namespace Horo::Runtime {
             const auto found = std::ranges::lower_bound(previous.records, slot, {}, &SaveCloudGenerationRecord::slot);
             return found != previous.records.end() && found->slot == slot ? std::to_address(found) : nullptr;
         }
+
+        /** @brief Builds exact selected generation evidence for either live publication or restart. */
+        Result<SaveCloudRevisionMetadata> PairMetadata(const SaveSlotIndex &index, const SaveCloudMetadataScope &scope,
+                                                      const SaveCloudRevisionMetadata *previous, const std::uint64_t revision,
+                                                      const bool resetInFlight) {
+            SaveCloudRevisionMetadata candidate{.revision = revision, .indexRevision = index.revision, .scope = scope};
+            try {
+                candidate.records.reserve(index.entries.size());
+                using enum SaveCloudGenerationState;
+                for (const auto &entry : index.entries) {
+                    const auto slot = entry.publication.slot;
+                    const auto *found = previous ? FindPrevious(*previous, slot) : nullptr;
+                    if (found && Matches(*found, entry)) {
+                        candidate.records.push_back(*found);
+                        auto &record = candidate.records.back();
+                        if (resetInFlight && (record.state == Uploading || record.state == Downloading))
+                            record.state = Unknown;
+                    } else {
+                        candidate.records.push_back(
+                            {.slot = slot, .generation = entry.publication.generation, .archive = entry.publication.archiveContent});
+                    }
+                }
+            } catch (const std::bad_alloc &) {
+                return Result<SaveCloudRevisionMetadata>::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
+            }
+            return Result<SaveCloudRevisionMetadata>::Success(std::move(candidate));
+        }
     }  // namespace
+
+    /** @copydoc SaveCloudRevisionMetadataDetail::RebindIndex */
+    Result<SaveCloudRevisionMetadata> SaveCloudRevisionMetadataDetail::RebindIndex(const SaveSlotIndex &index,
+                                                                                  const SaveCloudRevisionMetadata &previous) {
+        const SaveCloudRevisionMetadataLimits limits;
+        if (index.entries.size() > limits.maximumRecords || ValidateSaveSlotIndex(index).HasError() ||
+            !StructurallyValidPrevious(previous, limits) || previous.indexRevision >= index.revision)
+            return Result<SaveCloudRevisionMetadata>::Failure(MakeError(SaveErrors::CloudMetadataStale));
+        return PairMetadata(index, previous.scope, &previous, previous.revision, false);
+    }
 
     /** @copydoc SaveCloudMetadataScope::IsValid */
     bool SaveCloudMetadataScope::IsValid() const noexcept {
@@ -148,29 +186,6 @@ namespace Horo::Runtime {
             return Result<SaveCloudRevisionMetadata>::Failure(MakeError(SaveErrors::CloudMetadataStale));
         if (validPrevious && previous->indexRevision > index.revision)
             return Result<SaveCloudRevisionMetadata>::Failure(MakeError(SaveErrors::CloudMetadataStale));
-        SaveCloudRevisionMetadata candidate{.schemaVersion = SaveCloudRevisionMetadataSchemaVersion,
-                                            .revision = nextRevision,
-                                            .indexRevision = index.revision,
-                                            .scope = scope};
-        try {
-            candidate.records.reserve(index.entries.size());
-            using enum SaveCloudGenerationState;
-            for (const auto &entry : index.entries) {
-                const auto slot = entry.publication.slot;
-                const auto *found = validPrevious ? FindPrevious(*previous, slot) : nullptr;
-                if (found && Matches(*found, entry)) {
-                    candidate.records.push_back(*found);
-                    auto &record = candidate.records.back();
-                    if (record.state == Uploading || record.state == Downloading)
-                        record.state = SaveCloudGenerationState::Unknown;
-                } else {
-                    candidate.records.push_back(
-                        {.slot = slot, .generation = entry.publication.generation, .archive = entry.publication.archiveContent});
-                }
-            }
-        } catch (const std::bad_alloc &) {
-            return Result<SaveCloudRevisionMetadata>::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
-        }
-        return Result<SaveCloudRevisionMetadata>::Success(std::move(candidate));
+        return PairMetadata(index, scope, validPrevious ? &*previous : nullptr, nextRevision, true);
     }
 }  // namespace Horo::Runtime

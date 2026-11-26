@@ -1690,7 +1690,13 @@ the selected generation and its verified lineage. It intersects the local archiv
 limit with the provider's byte budget before reading and leaves the local catalog
 untouched. Commit evidence produces a candidate sidecar only while the selected
 generation, archive digest, remote key and previous revision still match. Its
-owner publishes that candidate through the conditional catalog gate.
+owner publishes that candidate through the conditional catalog gate. A
+cloud-enabled catalog uses manifest version 3 to keep the sidecar under the
+same atomic replacement and integrity check as the selected records.
+Existing versions load with a derived unknown cloud state. Catalog changes
+carry forward evidence for matching generations and derive unknown state for
+changed rows. Publication requires explicit CloudSync capability and exact
+prior local and cloud snapshots.
 
 The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
 complete local `SaveNamespaceId` plus distinct provider and account identities. Each

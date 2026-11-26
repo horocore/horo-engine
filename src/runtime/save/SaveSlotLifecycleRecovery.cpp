@@ -23,7 +23,8 @@ namespace Horo::Runtime {
         if (auto selected = VerifySelected(operation); selected.HasError())
             return Result<bool>::Failure(selected.ErrorValue());
         // Establish selection durability before any journal or last-known-good retirement.
-        if (operation.catalog.revision != 1 || !operation.catalog.records.empty() || !operation.catalog.retired.empty()) {
+        if (operation.catalog.revision != 1 || !operation.catalog.records.empty() || !operation.catalog.retired.empty() ||
+            operation.catalog.cloud) {
             if (auto durable = state_->storage.SynchronizeLifecycleCatalog(); durable.HasError())
                 return Result<bool>::Failure(std::move(durable).ErrorValue());
         }

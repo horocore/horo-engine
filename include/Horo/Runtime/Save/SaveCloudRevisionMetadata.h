@@ -92,6 +92,8 @@ namespace Horo::Runtime {
         std::uint64_t indexRevision{};                                       /**< Exact paired local slot-index revision. */
         SaveCloudMetadataScope scope;                                        /**< Full local and provider/account authority. */
         std::vector<SaveCloudGenerationRecord> records;                      /**< Canonical strict slot order. */
+
+        [[nodiscard]] bool operator==(const SaveCloudRevisionMetadata &) const noexcept = default;
     };
 
     /**

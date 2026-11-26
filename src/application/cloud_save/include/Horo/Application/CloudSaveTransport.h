@@ -12,6 +12,10 @@
 #include <cstdint>
 #include <optional>
 
+namespace Horo::Runtime {
+    class SaveSlotLifecycle;
+}
+
 namespace Horo::Application {
     class CloudSaveDurableMutation;
     class CloudSaveMutationJournal;
@@ -73,6 +77,17 @@ namespace Horo::Application {
         [[nodiscard]] Result<Runtime::SaveCloudRevisionSnapshot> ConfirmUpload(
             const CloudSaveDurableMutation &mutation, const PlatformServices::CloudMutationResult &completion,
             const Runtime::SaveCloudRevisionSnapshot &current) const;
+
+        /** @brief Confirms an upload through the durable local catalog transaction.
+         * @param lifecycle Local catalog authority. @param access Exact bound namespace revision.
+         * @param mutation Original durable upload. @param completion Valid provider commit evidence.
+         * @return Durable success, stale selection or account, or typed I/O failure.
+         * @details Runs on the serialized coordinator's storage lane, with the frontend binding retained until the call finishes.
+         */
+        [[nodiscard]] Result<void> PublishUploadConfirmation(Runtime::SaveSlotLifecycle &lifecycle,
+                                                             const Runtime::SaveNamespaceAccessRequest &access,
+                                                             const CloudSaveDurableMutation &mutation,
+                                                             const PlatformServices::CloudMutationResult &completion) const;
 
     private:
         friend class CloudSaveMutationJournal;

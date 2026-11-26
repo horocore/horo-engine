@@ -1,4 +1,5 @@
 #include "Horo/Application/CloudSaveUpload.h"
+#include "Horo/Application/CloudSaveTransport.h"
 
 #include <algorithm>
 #include <utility>
@@ -36,5 +37,19 @@ namespace Horo::Application {
         if (durable.HasError())
             return Response::Failure(durable.ErrorValue());
         return Response::Success({.mutation = std::move(durable).Value(), .bytes = std::move(bytes).Value()});
+    }
+
+    /** @copydoc CloudSaveTransport::PublishUploadConfirmation */
+    Result<void> CloudSaveTransport::PublishUploadConfirmation(Runtime::SaveSlotLifecycle &lifecycle,
+                                                               const Runtime::SaveNamespaceAccessRequest &access,
+                                                               const CloudSaveDurableMutation &mutation,
+                                                               const PlatformServices::CloudMutationResult &completion) const {
+        const auto current = lifecycle.ReadCloudRevision(access, scope_);
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        const auto candidate = ConfirmUpload(mutation, completion, current.Value());
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        return lifecycle.PublishCloudRevision(access, current.Value(), candidate.Value());
     }
 }

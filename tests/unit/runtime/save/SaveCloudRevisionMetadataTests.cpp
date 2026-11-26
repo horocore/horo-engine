@@ -397,6 +397,12 @@ namespace Horo::Runtime {
             const auto duplicate = transport.ConfirmUpload(staged.Value().mutation, completion, confirmed.Value());
             REQUIRE(duplicate.HasValue());
             CHECK(duplicate.Value().Metadata().revision == confirmed.Value().Metadata().revision);
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion).HasValue());
+            fixture.Reopen();
+            const auto durable = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(durable.HasValue());
+            CHECK(durable.Value().Metadata() == confirmed.Value().Metadata());
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion).HasValue());
 
             auto superseding = confirmed.Value().Metadata();
             superseding.records.front().lastConfirmed = Id<SaveCloudMutationId>(45);
@@ -415,10 +421,80 @@ namespace Horo::Runtime {
             const auto fresh = SaveCloudRevisionSnapshot::Create(advanced, scope, Metadata(advanced, scope));
             REQUIRE(fresh.HasValue());
             Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, fresh.Value()), SaveErrors::CloudMetadataStale);
+            Cloud::RequireError(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), staged.Value().mutation, completion),
+                                SaveErrors::CloudMetadataStale);
             CHECK(fixture.Index().entries == advanced.entries);
             REQUIRE(frontend.Close().HasValue());
             Cloud::RequireError(transport.ConfirmUpload(staged.Value().mutation, completion, current.Value()),
                                 SaveErrors::CloudMetadataStale);
+        }
+
+        TEST_CASE("Cloud catalog publication preserves exact pairing across reload and local slot changes",
+                  "[unit][save][cloud-transport][catalog]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            fixture.Import(11);
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            const auto initial = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(initial.HasValue());
+            CHECK(initial.Value().Metadata().revision == 1);
+            CHECK(initial.Value().Metadata().records.front().state == SaveCloudGenerationState::Unknown);
+            auto proposed = initial.Value().Metadata();
+            ++proposed.revision;
+            proposed.records.front().state = SaveCloudGenerationState::Clean;
+            proposed.records.front().object = Object();
+            proposed.records.front().lastConfirmed = Id<SaveCloudMutationId>(45);
+            const auto candidate = SaveCloudRevisionSnapshot::Create(initial.Value().Index(), scope, proposed);
+            REQUIRE(candidate.HasValue());
+
+            SECTION("The old pair survives pre-visibility failure") {
+                fixture.InjectFailure(SaveSlotLifecycleIoStage::Replace, SaveSlotLifecycleFileKind::Catalog);
+                CHECK(fixture.owner->PublishCloudRevision(fixture.Access(), initial.Value(), candidate.Value()).HasError());
+                fixture.fault.enabled = false;
+                fixture.Reopen();
+                const auto restored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(restored.HasValue());
+                CHECK(restored.Value().Metadata() == initial.Value().Metadata());
+            }
+            SECTION("A visible replacement with failed directory sync is recoverable") {
+                fixture.InjectFailure(SaveSlotLifecycleIoStage::DirectorySync, SaveSlotLifecycleFileKind::Catalog);
+                Cloud::RequireError(fixture.owner->PublishCloudRevision(fixture.Access(), initial.Value(), candidate.Value()),
+                                    SaveErrors::SlotCommitOutcomeUnknown);
+                fixture.fault.enabled = false;
+                fixture.Reopen();
+                const auto restored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(restored.HasValue());
+                CHECK(restored.Value().Metadata() == proposed);
+                CHECK(fixture.owner->PublishCloudRevision(fixture.Access(), restored.Value(), candidate.Value()).HasValue());
+            }
+            SECTION("A newer catalog keeps only unchanged generation evidence") {
+                REQUIRE(fixture.owner->PublishCloudRevision(fixture.Access(), initial.Value(), candidate.Value()).HasValue());
+                Cloud::RequireError(fixture.owner->PublishCloudRevision(fixture.Access(), initial.Value(), candidate.Value()),
+                                    SaveErrors::CloudMetadataStale);
+                REQUIRE(fixture.owner->Execute(fixture.Copy(10, 11)).HasValue());
+                fixture.Reopen();
+                const auto newer = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(newer.HasValue());
+                CHECK(newer.Value().Metadata().indexRevision == newer.Value().Index().revision);
+                CHECK(newer.Value().Metadata().records.front() == proposed.records.front());
+                REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
+                fixture.Reopen();
+                const auto replaced = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(replaced.HasValue());
+                CHECK(replaced.Value().Metadata().records.front().state == SaveCloudGenerationState::Unknown);
+                CHECK_FALSE(replaced.Value().Metadata().records.front().lastConfirmed);
+                auto different = scope;
+                different.account = Id<SaveCloudAccountId>(16);
+                Cloud::RequireError(fixture.owner->ReadCloudRevision(fixture.Access(), different), SaveErrors::CloudMetadataStale);
+            }
+            SECTION("Storage binding alone does not grant cloud publication") {
+                fixture.policy.capabilities &= ~(1U << static_cast<unsigned>(SaveSlotLifecycleKind::CloudSync));
+                fixture.Reopen();
+                Cloud::RequireError(fixture.owner->ReadCloudRevision(fixture.Access(), scope), SaveErrors::StoragePermissionDenied);
+                Cloud::RequireError(fixture.owner->PublishCloudRevision(fixture.Access(), initial.Value(), candidate.Value()),
+                                    SaveErrors::StoragePermissionDenied);
+            }
         }
 
         /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */

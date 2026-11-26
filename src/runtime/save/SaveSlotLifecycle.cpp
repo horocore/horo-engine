@@ -139,13 +139,7 @@ namespace Horo::Runtime {
                 return Result<SaveSlotIndex>::Failure(MakeError(SaveErrors::StorageResultInvalid));
             if (auto loaded = Load(operation); loaded.HasError())
                 return Result<SaveSlotIndex>::Failure(loaded.ErrorValue());
-            SaveSlotIndex index{.revision = operation.catalog.revision};
-            index.entries.reserve(operation.catalog.records.size());
-            for (const auto &record : operation.catalog.records) {
-                if (record.deleted == deleted)
-                    index.entries.push_back(record.entry);
-            }
-            return Result<SaveSlotIndex>::Success(std::move(index));
+            return Result<SaveSlotIndex>::Success(CatalogIndex(operation.catalog, deleted));
         } catch (const std::bad_alloc &) {
             return Result<SaveSlotIndex>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
         }

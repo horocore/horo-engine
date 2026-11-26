@@ -653,6 +653,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotLifecycleRecovery.cpp
         runtime/save/SaveSlotLifecycleArchive.cpp
         runtime/save/SaveSlotLifecycleCatalog.cpp
+        runtime/save/SaveSlotLifecycleCloud.cpp
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp

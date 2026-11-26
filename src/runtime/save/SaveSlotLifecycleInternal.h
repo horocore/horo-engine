@@ -43,6 +43,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
         std::uint64_t clock{};
         std::vector<Record> records;
         std::vector<Retired> retired;
+        std::optional<SaveCloudRevisionMetadata> cloud;
     };
 
     /** @brief Exact unpublished artifact ownership; an identity collision alone never authorizes deletion. */
@@ -68,6 +69,8 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     [[nodiscard]] Result<std::vector<std::byte>> EncodeCatalog(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy);
     /** @brief Decodes canonical bounded selection evidence; malformed evidence is never treated as an empty catalog. */
     [[nodiscard]] Result<Catalog> DecodeCatalog(std::span<const std::byte> bytes, const SaveSlotLifecyclePolicy &policy);
+    /** @brief Projects one exact catalog revision into the selected or deleted slot index. */
+    [[nodiscard]] SaveSlotIndex CatalogIndex(const Catalog &catalog, bool deleted = false);
     /** @brief Verifies every untrusted input under fixed host signature, scope, compatibility and semantic policy. */
     [[nodiscard]] Result<ValidatedSaveArchive> Admit(std::vector<std::byte> bytes, const SaveSlotArchiveScope &scope,
                                                      const SaveSlotLifecyclePolicy &policy, ISaveSlotLifecycleHost &host);

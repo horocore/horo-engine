@@ -313,4 +313,37 @@ namespace Horo::Runtime {
                     .HasError());
         CHECK(std::filesystem::exists(fixture.native.Generation(retained.entry.publication.generation)));
     }
+
+    TEST_CASE("Local rotation uses durable cloud evidence from the same catalog lease", "[runtime][save][retention][cloud]") {
+        RetentionFixture fixture;
+        fixture.native.owner.reset();
+        fixture.native.policy.retention.cloudTombstones = true;
+        fixture.native.Open();
+        for (std::uint8_t slot = 1; slot <= 3; ++slot)
+            fixture.Commit(slot, slot * 10);
+
+        const auto access = fixture.native.Access();
+        const auto scope = fixture.CloudScope();
+        const auto baseline = fixture.native.owner->ReadCloudRevision(access, scope);
+        REQUIRE(baseline.HasValue());
+        const auto projection = fixture.Cloud();
+        auto metadata = projection.Metadata();
+        ++metadata.revision;
+        const auto cloud = SaveCloudRevisionSnapshot::Create(projection.Index(), scope, metadata);
+        REQUIRE(cloud.HasValue());
+        REQUIRE(fixture.native.owner->PublishCloudRevision(access, baseline.Value(), cloud.Value()).HasValue());
+        fixture.native.Reopen();
+
+        REQUIRE(fixture.native.owner->CommitSave(fixture.native.Target(4), fixture.Candidate(4), 40).HasValue());
+        fixture.native.Reopen();
+        const auto snapshot = fixture.Snapshot();
+        REQUIRE(snapshot.retained.size() == 1);
+        REQUIRE(snapshot.retained.front().cloud);
+        CHECK(snapshot.retained.front().cloud->generation == metadata.records.front());
+        const auto current = fixture.native.owner->ReadCloudRevision(access, scope);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().Metadata().indexRevision == current.Value().Index().revision);
+        CHECK(current.Value().Metadata().records.front() == metadata.records.at(1));
+        CHECK(current.Value().Metadata().records.back().state == SaveCloudGenerationState::Unknown);
+    }
 }  // namespace Horo::Runtime
