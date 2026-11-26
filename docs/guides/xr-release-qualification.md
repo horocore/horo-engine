@@ -176,6 +176,9 @@ for the physical run, the diagnostic `profile`, and `adbConnection` (`usb`
 or `tcpip`). Store the diagnostic APK and receipt in the same evidence
 directory as the physical record. The checker verifies the source revision,
 package and device build, connection, runtime version and process retirement.
+It uses the deployer's Android package profile to check the observed ABI and
+any API level reported by the receipt. The package's application, renderer and
+ABI inventory also have to match that profile when reported.
 When deployment uses `--expect-runtime-version`, the checker verifies both the
 selected version and the observed version against the physical run's tuple.
 When the cold OpenXR instance can enumerate the primary stereo recommendations,

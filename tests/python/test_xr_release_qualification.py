@@ -702,7 +702,9 @@ def test_android_discovery_rejects_unclassified_nested_evidence_without_echoing_
     ("artifact", "sourceRevision", "b" * 40, "another source revision"),
     ("artifact", "apkSha256", "a" * 64, "different diagnostic APK"),
     ("device", "buildSha256", "a" * 64, "different system build"),
-    ("device", "abi", "x86_64", "different packaged ABI"),
+    ("device", "abi", "x86_64", "ABI is not supported by the diagnostic profile"),
+    ("device", "androidApi", 28, "API level is below the diagnostic profile minimum"),
+    ("artifact", "abis", ["arm64-v8a", "x86_64"], "Invalid Android preflight packaged ABI list"),
     ("device", "androidApi", {"room": "private-room-observation"}, "Invalid Android preflight API level"),
     ("artifact", "applicationId", {"serial": "private-device"}, "Invalid Android preflight application"),
     ("qualification", "connection", {"requested": "usb", "observed": "tcpip"}, "different ADB connection"),
@@ -720,6 +722,31 @@ def test_android_matrix_rejects_wrong_or_partial_discovery(release, section, key
     result = run_matrix(release)
     assert result.returncode == 1
     assert message in result.stderr
+
+
+@pytest.mark.parametrize("profile, accepted", [
+    ("qualification-openxr-development", True),
+    ("qualification-openxr-quest-development", False),
+])
+def test_android_preflight_requires_a_profile_that_supports_the_observed_abi(release, profile, accepted):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    row["androidPreflight"]["profile"] = profile
+    receipt["artifact"]["profile"] = profile
+    receipt["artifact"]["openxrImages"]["abi"] = "x86_64"
+    receipt["qualification"]["profile"] = profile
+    receipt["device"]["abi"] = "x86_64"
+    receipt["device"]["androidApi"] = 29
+    receipt["observed"]["openxr"]["abi"] = "x86_64"
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+
+    result = run_matrix(release)
+
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "ABI is not supported by the diagnostic profile" in result.stderr
 
 
 def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_tuple(release):
