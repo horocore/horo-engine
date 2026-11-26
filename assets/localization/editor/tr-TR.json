@@ -4699,6 +4699,9 @@
     "workspace.packages.reference_coverage": {
       "text": "Çalışma zamanı modülünün referans kontrolleri eksik (tanımlayıcı / modül / paket)"
     },
+    "workspace.packages.reference_descriptor_unverified": {
+      "text": "Eklenti tanımı doğrulanamadı (arşiv yolu / paket)"
+    },
     "workspace.packages.reference_module_owner": {
       "text": "Modülü kaldırmak için yaşam döngüsü sahibi gerekli (tanımlayıcı / modül)"
     },

@@ -434,6 +434,7 @@ namespace {
                                   "workspace.packages.reference_subplan_ambiguous",
                                   "workspace.packages.reference_subplan_incompatible",
                                   "workspace.packages.reference_coverage",
+                                  "workspace.packages.reference_descriptor_unverified",
                                   "workspace.packages.reference_module_owner",
                                   "workspace.packages.reference_contribution_owner",
                                   "workspace.packages.reference_file_owner"};

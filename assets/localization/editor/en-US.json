@@ -4699,6 +4699,9 @@
     "workspace.packages.reference_coverage": {
       "text": "Runtime module reference checks are incomplete (descriptor / module / package)"
     },
+    "workspace.packages.reference_descriptor_unverified": {
+      "text": "Extension descriptor could not be verified (archive path / package)"
+    },
     "workspace.packages.reference_module_owner": {
       "text": "Module requires a lifecycle owner to remove it (descriptor / module)"
     },

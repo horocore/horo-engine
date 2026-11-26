@@ -352,16 +352,26 @@ namespace Horo::Packages {
         });
         RemovalArtifacts artifacts;
         std::vector<PackageRuntimeRoleDeclaration> roles;
+        std::optional<Error> firstDescriptorFailure;
         for (const auto &file : package.archive->Manifest().Entries() | std::views::filter(IsExtensionDescriptor)) {
             const auto &descriptor = file.id.path;
             auto declared = Detail::ReadDeclaredPackageDescriptor(package, descriptor);
-            if (declared.HasError())
-                return Roles::Failure(WithCause(std::move(outsideOwner), std::move(declared).ErrorValue()));
+            if (declared.HasError()) {
+                auto failure = std::move(declared).ErrorValue();
+                outsideOwner.diagnostics.emplace_back(DiagnosticCode{"packages.lifecycle.removal_descriptor_unverified"},
+                                                      DiagnosticSeverity::Error, failure.code.Value(),
+                                                      SourceLocation{descriptor.Value()}, package.lock.package.Value());
+                if (!firstDescriptorFailure)
+                    firstDescriptorFailure.emplace(std::move(failure));
+                continue;
+            }
             CollectRemovalArtifacts(declared.Value(), descriptor, allowImporters && !hasMountedAssets, artifacts[declared.Value().root],
                                     roles, outsideOwner.diagnostics);
         }
         CollectUnownedContributions(package.lock, artifacts, outsideOwner.diagnostics);
         CollectUnownedFiles(*package.archive, artifacts, outsideOwner.diagnostics);
+        if (firstDescriptorFailure)
+            return Roles::Failure(WithCause(std::move(outsideOwner), std::move(*firstDescriptorFailure)));
         if (!std::ranges::any_of(artifacts, [](const auto &owner) { return !owner.second.empty(); }) || !outsideOwner.diagnostics.empty())
             return Roles::Failure(std::move(outsideOwner));
         return Roles::Success(std::move(roles));

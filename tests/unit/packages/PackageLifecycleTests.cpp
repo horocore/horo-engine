@@ -34,6 +34,31 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Removal review reports an unverified descriptor and independent owners in one archive", "[packages][activation][removal]") {
+    const std::string packageId = "com.example.transaction";
+    const auto image = "module" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
+    const auto graph = Graph(HORO_PACKAGE_NATIVE_FIXTURE, true, true, packageId, NativeDescriptor(packageId, image, false),
+                             {{"extensions/a-unowned/extension.json", "{}"}, {"extensions/b-unowned/extension.json", "{}"},
+                              {"extensions/b-unowned/private.txt", "package data"}});
+    const auto review = InspectGameplayRemovalRoles(graph->packages.front());
+    REQUIRE(review.HasError());
+    const auto &error = review.ErrorValue();
+    REQUIRE(error.cause.Get());
+    for (const std::string_view path : {"extensions/a-unowned/extension.json", "extensions/b-unowned/extension.json"}) {
+        CHECK(std::ranges::any_of(error.diagnostics, [&](const Diagnostic &item) {
+            return item.code.Value() == "packages.lifecycle.removal_descriptor_unverified" && item.location.source == path &&
+                   item.path == packageId;
+        }));
+    }
+    CHECK(std::ranges::any_of(error.diagnostics, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_contribution_owner_required" && item.path == "fixture.importer";
+    }));
+    CHECK(std::ranges::any_of(error.diagnostics, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_file_owner_required" &&
+               item.location.source == "extensions/b-unowned/private.txt";
+    }));
+}
+
 TEST_CASE("Package lifecycle activates the exact installed native module and publishes real registrations and leases",
           "[packages][activation]") {
     Fixture fixture;

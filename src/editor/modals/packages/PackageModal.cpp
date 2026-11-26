@@ -39,6 +39,7 @@ namespace Horo::Editor {
             {"packages.host.saved_reference_source_unreadable", "reference_saved_source_unreadable", true, false},
             {"packages.host.runtime_registration_unobserved", "reference_registration", true, true, true},
             {"packages.host.removal_reference_coverage_unavailable", "reference_coverage", true, true, true},
+            {"packages.lifecycle.removal_descriptor_unverified", "reference_descriptor_unverified", true, true},
             {"packages.lifecycle.removal_module_owner_required", "reference_module_owner", true, true},
             {"packages.lifecycle.removal_contribution_owner_required", "reference_contribution_owner", true, true},
             {"packages.lifecycle.removal_file_owner_required", "reference_file_owner", true, true},

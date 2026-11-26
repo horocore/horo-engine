@@ -543,7 +543,10 @@ and defers checks that require a complete inventory, such as resolving
 composition links. Importer, Scene, Prefab and Decision checks share one
 admitted inventory within the removal transaction. The removal dialog shows the source and target of
 unresolved Scene, Prefab and Decision links, along with identified modules,
-contributions and archive paths that require a lifecycle owner. The application package project host borrows the
+contributions and archive paths that require a lifecycle owner. An unverified
+extension descriptor is reported at its archive path. Independent descriptors
+and unowned archive members are still reviewed in the same attempt.
+The application package project host borrows the
 inert EQS descriptor schema and authoring validator from AI Scene integration.
 The review does not compose a live Scene or execute queries.
 
