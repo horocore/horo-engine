@@ -123,6 +123,12 @@ namespace Horo::Application::Internal {
             return receipt->Failure() ? Result<void>::Failure(*receipt->Failure()) : Result<void>::Success();
         }
 
+        /** @brief Binds the existing AI structural owner to the identities reserved by this cooked population. */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> GuardStructuralParticipant(
+            std::unique_ptr<Runtime::SceneStructuralParticipant> participant) const {
+            return std::make_unique<GuardedParticipant>(std::move(participant), definition, population);
+        }
+
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition; /**< Pins every borrowed template. */
         std::vector<const Runtime::RuntimeEntityDefinition *> templates;
         std::shared_ptr<AI::AiReducedPopulation> population;
@@ -135,6 +141,79 @@ namespace Horo::Application::Internal {
         std::vector<DemotionCandidate> demotionCandidates;
 
     private:
+        /** @brief Checks host-owned template identities before the ordinary AI owner prepares a Scene transaction. */
+        class GuardedParticipant final : public Runtime::SceneStructuralParticipant {
+        public:
+            GuardedParticipant(std::unique_ptr<Runtime::SceneStructuralParticipant> participant,
+                               std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
+                               std::shared_ptr<const AI::AiReducedPopulation> population)
+                : participant_(std::move(participant)), definition_(std::move(definition)), population_(std::move(population)) {}
+
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return participant_->Owner();
+            }
+
+            Runtime::SceneStructuralPreparationPhase PreparationPhase() const noexcept override {
+                return participant_->PreparationPhase();
+            }
+
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView &active,
+                                           std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
+                for (const auto &baseline : baselines)
+                    for (const auto &entity : baseline.definition.Entities())
+                        if (FindTemplate(entity.object) || Tracks(entity.components))
+                            return Result<void>::Failure(IdentityConflict());
+                return participant_->ValidateBaselines(active, baselines);
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
+                                                                               std::span<const Runtime::RuntimeEntityView> created,
+                                                                               std::span<const Runtime::EntityRef> destroyed) override {
+                return PrepareWithHierarchy(scene, created, destroyed, {});
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareWithHierarchy(
+                const Runtime::RuntimeSceneView &scene, std::span<const Runtime::RuntimeEntityView> created,
+                std::span<const Runtime::EntityRef> destroyed, const Runtime::SceneStructuralHierarchyView &hierarchy) override {
+                using Output = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+                for (const auto &entity : created)
+                    if (!Accepts(entity))
+                        return Output::Failure(IdentityConflict());
+                return participant_->PrepareWithHierarchy(scene, created, destroyed, hierarchy);
+            }
+
+        private:
+            /** @brief Either namespace is reserved, and only its exact independent cooked AI binding can use both. */
+            bool Accepts(const Runtime::RuntimeEntityView &entity) const noexcept {
+                const auto *source = entity.authoredObject ? FindTemplate(*entity.authoredObject) : nullptr;
+                if (!source)
+                    return !Tracks(*entity.components);
+                return !entity.parent && entity.components->aiAgent == source->components.aiAgent &&
+                       entity.components->aiController == source->components.aiController;
+            }
+
+            /** @brief Resolves a reserved authored object from the immutable Scene's canonical object order. */
+            const Runtime::RuntimeEntityDefinition *FindTemplate(const Runtime::SceneObjectId object) const noexcept {
+                const auto entities = definition_->Entities();
+                const auto found = std::ranges::lower_bound(entities, object, {}, &Runtime::RuntimeEntityDefinition::object);
+                return found != entities.end() && found->object == object ? &*found : nullptr;
+            }
+
+            /** @brief Identifies a reserved AI identity even when the proposed object is absent or wrong. */
+            bool Tracks(const Runtime::RuntimeComponentSet &components) const noexcept {
+                return components.aiAgent && population_->Tracks(components.aiAgent->agent);
+            }
+
+            /** @brief Reports the rejected ownership without mutating either representation. */
+            static Error IdentityConflict() {
+                return MakeError(AI::AIErrors::SceneActivationInvalid, "Scene creation conflicts with a reserved reduced agent template.");
+            }
+
+            std::unique_ptr<Runtime::SceneStructuralParticipant> participant_;
+            std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition_;
+            std::shared_ptr<const AI::AiReducedPopulation> population_;
+        };
+
         /** @brief Records the actual structural operation instead of mutating reduced state during selection. */
         Result<void> QueueGroup(Runtime::RuntimeSceneService &scenes, Runtime::SceneCommandBuffer commands) {
             auto queued = scenes.QueueTrackedStructuralCommands(std::move(commands));

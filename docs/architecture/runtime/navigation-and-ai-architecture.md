@@ -4175,7 +4175,11 @@ agent templates with distinct Scene and AI identities and controllers already
 admitted for the authority. A controller declared only in the selected
 population is admitted from that immutable Scene with an explicit cooked plan
 selection. Controllers shared with the initial Scene or selected prefabs must
-agree on the authored decision binding. The product proposes nearby agents at the structural
+agree on the authored decision binding. The headless structural owner reserves the
+template's authored object and AI identity together. Streamed baselines cannot
+claim either identity. Ordinary group creation using either identity must match the
+independent cooked template's exact object, agent and controller binding.
+The product proposes nearby agents at the structural
 cutoff, limits the batch to free scheduler slots and yields the command slot to
 pending structural work. On a mounted World it retains global positions and
 projects them through the current origin before creating entities. An agent

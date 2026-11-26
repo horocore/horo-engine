@@ -685,8 +685,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                                                CaptureProjectSceneWorldPosition(scene, entity, origin.Value().Origin());
                 },
                 std::move(structural));
-            return participant.HasError() ? Result<void>::Failure(participant.ErrorValue()) :
-                                            record_->scenes->AddStructuralParticipant(std::move(participant).Value());
+            if (participant.HasError())
+                return Result<void>::Failure(participant.ErrorValue());
+            return record_->scenes->AddStructuralParticipant(
+                record_->reducedPopulation->GuardStructuralParticipant(std::move(participant).Value()));
         }
 
         /** @brief Returns the current mounted frame, or the exact configured startup origin for an unmounted Scene. */
