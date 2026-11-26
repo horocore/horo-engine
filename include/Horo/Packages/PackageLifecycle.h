@@ -20,7 +20,8 @@ namespace Horo::Packages {
     /** @brief Owner-issued guard held by the live package removal transaction.
      * @details Holds the sealed install record and the exact departing packages. A failed or abandoned attempt releases native
      * admission when its last lease ends. A published attempt keeps the old lifecycle closed to new activation until its host
-     * builds a session for the new lock. The lease does not borrow the lifecycle service and may be used or released on a worker.
+     * builds a session for the new lock. Shutdown signals cancellation to the transaction before its durable publication boundary.
+     * The lease does not borrow the lifecycle service and may be used or released on a worker.
      */
     class PackageRemovalLease final {
     public:
@@ -36,6 +37,9 @@ namespace Horo::Packages {
         [[nodiscard]] bool Matches(const std::filesystem::path &projectRoot, std::span<const LockedPackageReference> departing) const;
         /** @brief Returns the verified availability used when reserving removal. @return Owning immutable archive evidence. */
         [[nodiscard]] std::shared_ptr<const VerifiedPackageInstallRecord> InstalledRecord() const noexcept;
+        /** @brief Exposes owner shutdown to the transaction before publication.
+         * @return An owning observer of the lifecycle's cancellation signal. */
+        [[nodiscard]] CancellationToken Lifetime() const noexcept;
         /** @brief Checks whether the reserved archive can be reviewed through the configured native importer owner.
          * @param package Exact member of the sealed install being withdrawn.
          * @return True only for a pending reservation, an exact departing archive and the native backend owner.

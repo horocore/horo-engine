@@ -730,8 +730,11 @@ namespace Horo::Application::Internal {
     Result<PackageMetadataPublication> PublishPackageProjectRemoval(const PackageProjectPolicy &policy,
                                                                     const PreparedPackageProject &expected,
                                                                     const Packages::HoroPackageId &package, DurableFileSystem &files,
-                                                                    const PackageRemovalSources &sources) {
+                                                                    const PackageRemovalSources &requested) {
         using Publication = Result<PackageMetadataPublication>;
+        auto sources = requested;
+        if (sources.live)
+            sources.context.cancellation = CancellationToken::AnyOf(sources.context.cancellation, sources.live->Lifetime());
         if (auto authority = Platform::CheckProjectReadContext(sources.context); authority.HasError())
             return Publication::Failure(authority.ErrorValue());
         const auto directory = MetadataPath(policy.projectRoot);

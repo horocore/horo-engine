@@ -20,6 +20,7 @@ namespace Horo::Packages {
         std::filesystem::path projectRoot;
         std::vector<LockedPackageReference> departing;
         std::shared_ptr<const VerifiedPackageInstallRecord> install;
+        CancellationSource lifetime;
         bool nativeImporterOwner{};
         std::atomic<Status> status{Status::Reserved}; /**< Only lease abandonment and durable publication change admission. */
     };
@@ -35,8 +36,8 @@ namespace Horo::Packages {
     /** @copydoc PackageRemovalLease::Matches */
     bool PackageRemovalLease::Matches(const std::filesystem::path &projectRoot,
                                       const std::span<const LockedPackageReference> departing) const {
-        return state_->status.load() == State::Status::Reserved && projectRoot == state_->projectRoot &&
-               std::ranges::equal(departing, state_->departing);
+        return state_->status.load() == State::Status::Reserved && !Lifetime().IsCancellationRequested() &&
+               projectRoot == state_->projectRoot && std::ranges::equal(departing, state_->departing);
     }
 
     /** @copydoc PackageRemovalLease::InstalledRecord */
@@ -44,9 +45,15 @@ namespace Horo::Packages {
         return state_->install;
     }
 
+    /** @copydoc PackageRemovalLease::Lifetime */
+    CancellationToken PackageRemovalLease::Lifetime() const noexcept {
+        return state_->lifetime.Token();
+    }
+
     /** @copydoc PackageRemovalLease::AllowsNativeImporterReview */
     bool PackageRemovalLease::AllowsNativeImporterReview(const PackageRestorePackage &package) const {
-        if (!state_->nativeImporterOwner || state_->status.load() != State::Status::Reserved || !package.archive)
+        if (!state_->nativeImporterOwner || state_->status.load() != State::Status::Reserved || !package.archive ||
+            Lifetime().IsCancellationRequested())
             return false;
         if (std::ranges::find(state_->departing, LockedPackageReference{package.lock.package, package.lock.version}) ==
             state_->departing.end())
@@ -429,7 +436,7 @@ namespace Horo::Packages {
     Result<std::shared_ptr<const PackageRemovalLease>> PackageLifecycleService::ReserveRemoval(
         const std::span<const LockedPackageReference> departing) {
         using Output = Result<std::shared_ptr<const PackageRemovalLease>>;
-        if (std::this_thread::get_id() != impl_->owner || impl_->closed || impl_->StopRequested() || departing.empty())
+        if (std::this_thread::get_id() != impl_->owner || impl_->closed || impl_->StopRequested() || impl_->preparing || departing.empty())
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         if (impl_->RemovalReserved())
             return Output::Failure(MakeError(PackageLifecycleErrors::RemovalReserved));
@@ -485,6 +492,8 @@ namespace Horo::Packages {
     /** @copydoc PackageLifecycleService::Shutdown */
     void PackageLifecycleService::Shutdown() noexcept {
         impl_->shutdownRequested = true;
+        if (impl_->removal)
+            impl_->removal->lifetime.RequestCancellation();
         if (impl_->closed || impl_->preparing)
             return;
         impl_->closed = true;

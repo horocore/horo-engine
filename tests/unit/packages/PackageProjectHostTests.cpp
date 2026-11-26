@@ -466,6 +466,51 @@ namespace {
         CHECK(previous.Value().lock == oldLock);
     }
 
+    TEST_CASE("Package removal observes lifecycle shutdown up to the durable journal", "[packages][application][host][removal]") {
+        HostFixture fixture;
+        MetadataFiles files;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto sources = fixture.RemovalSources(*assets);
+        REQUIRE(sources.live);
+        const auto lifetime = sources.live->Lifetime();
+        REQUIRE_FALSE(lifetime.IsCancellationRequested());
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        const auto shutdown = [&] { fixture.removalLifecycle->Shutdown(); };
+        bool shouldCommit = false;
+        SECTION("shutdown before reference review rejects the retained reservation") {
+            shutdown();
+        }
+        SECTION("shutdown while staging rollback leaves both documents intact") {
+            files.OnRollbackCheckpoint(shutdown);
+        }
+        SECTION("shutdown after the durable journal completes the recorded transaction") {
+            files.OnMetadataJournal(shutdown);
+            shouldCommit = true;
+        }
+
+        const auto result = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, files, sources);
+        CHECK(lifetime.IsCancellationRequested());
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+        if (shouldCommit) {
+            REQUIRE(result.HasValue());
+            CHECK(fixture.Read("packages.lock") != oldLock);
+            const auto rollback = ReadPackageProjectRollback(policy, files, {});
+            REQUIRE(rollback.HasValue());
+            CHECK(rollback.Value().request == oldRequest);
+            CHECK(rollback.Value().lock == oldLock);
+        } else {
+            REQUIRE(result.HasError());
+            CHECK(fixture.Read("packages.json") == oldRequest);
+            CHECK(fixture.Read("packages.lock") == oldLock);
+            CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
+        }
+    }
+
     TEST_CASE("Interrupted package removal recovery keeps the journal for the next preparation", "[packages][application][host]") {
         HostFixture fixture;
         MetadataFiles files;

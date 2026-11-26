@@ -281,6 +281,27 @@ TEST_CASE("Package removal reserves only distinct members of the verified instal
     CHECK(reserved.Value()->InstalledRecord() == installed);
 }
 
+TEST_CASE("Package removal cannot reserve a graph while its native activation is preparing", "[packages][activation][removal]") {
+    bool attempted = false;
+    Fixture fixture{16U, [&](Fixture &owner) {
+        attempted = true;
+        const auto installed = owner.install.InstalledRecord();
+        REQUIRE(installed);
+        const auto &locked = installed->Graph()->packages.front().lock;
+        const std::array departing{LockedPackageReference{locked.package, locked.version}};
+        const auto reserved = owner.service->ReserveRemoval(departing);
+        REQUIRE(reserved.HasError());
+        CHECK(reserved.ErrorValue().code.Value() == PackageLifecycleErrors::InvalidLifecycle.code.Value());
+    }};
+    fixture.Install();
+    REQUIRE(fixture.Activate().HasValue());
+    CHECK(attempted);
+    const auto active = fixture.service->Active();
+    REQUIRE(active);
+    REQUIRE(active->activations.size() == 1);
+    CHECK(active->activations.front().IsUsable());
+}
+
 TEST_CASE("Package lifecycle shutdown during native preparation cannot publish or resurrect a graph", "[packages][activation]") {
     Fixture fixture;
     fixture.Install();
