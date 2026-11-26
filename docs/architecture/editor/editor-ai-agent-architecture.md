@@ -365,6 +365,9 @@ Authoring mode is part of admission, not presentation state:
 Mode, document, project or XR-session replacement invalidates outstanding
 approval. A retained proposal remains non-authoritative and must be reviewed
 against fresh context.
+The immersive MCP tool catalog is admitted for one exact authoring generation.
+An unchanged registry and tool grant cannot carry that catalog into a new
+project, document revision or mode.
 
 The `[immersive][replay]` case in `HoroEditorAgentTurnTests` runs the Simulate
 path from synthetic speech and a measured controller press through the

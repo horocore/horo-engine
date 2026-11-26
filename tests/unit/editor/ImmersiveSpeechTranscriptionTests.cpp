@@ -241,12 +241,12 @@ namespace Horo::Editor {
             auto registry = std::make_shared<Mcp::McpToolRegistry>();
             REQUIRE(registry->Publish(std::move(registrations).Value(), grants).HasValue());
             CancellationSource toolApproval;
-            const auto catalog = Agent::McpPlanCatalog::Capture(registry, grants, tools, toolApproval.Token());
+            const auto catalog = fixture.owner.CaptureMcpCatalog(context, registry, grants, tools, toolApproval.Token());
             REQUIRE(catalog);
             Agent::ModelRequest prompt{.model = "replay",
                                        .messages = {{.role = Agent::ModelRole::User,
                                                      .text = std::string{speech.PreviewText(Kind::Final)}}}};
-            auto stagedRequest = fixture.owner.CaptureMcpPlan(context, std::move(prompt), catalog);
+            auto stagedRequest = fixture.owner.CaptureMcpPlan(context, std::move(prompt), *catalog);
             REQUIRE(stagedRequest);
 
             ReplayModel model;

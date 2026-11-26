@@ -452,17 +452,22 @@ namespace Horo::Editor {
             Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
             const std::array approved{std::string{"scene.inspect"}};
             CancellationSource approval;
-            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, {}));
-            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, {}, approved, approval.Token()));
-            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token());
-            REQUIRE(catalog);
-            const std::array unregistered{std::string{"scene.unregistered"}};
-            CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, unregistered, approval.Token()));
             ImmersiveAuthoringContext owner;
             const auto context = owner.Publish(Opening(), {});
             REQUIRE(context);
-            auto request = owner.CaptureMcpPlan(*context, Prompt(), catalog);
-            auto pending = owner.CaptureMcpPlan(*context, Prompt(), catalog);
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, tools.registry, capabilities, approved, {}));
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, tools.registry, {}, approved, approval.Token()));
+            const std::array unregistered{std::string{"scene.unregistered"}};
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, tools.registry, capabilities, unregistered, approval.Token()));
+            const auto catalog = owner.CaptureMcpCatalog(*context, tools.registry, capabilities, approved, approval.Token());
+            REQUIRE(catalog);
+            ImmersiveAuthoringContext anotherOwner;
+            const auto foreign = anotherOwner.Publish(Opening(), {});
+            REQUIRE(foreign);
+            CHECK_FALSE(anotherOwner.CaptureMcpPlan(*foreign, Prompt(), *catalog));
+            CHECK_FALSE(owner.CaptureMcpCatalog(*foreign, tools.registry, capabilities, approved, approval.Token()));
+            auto request = owner.CaptureMcpPlan(*context, Prompt(), *catalog);
+            auto pending = owner.CaptureMcpPlan(*context, Prompt(), *catalog);
             REQUIRE(request);
             REQUIRE(pending);
             PlanningModel model;
@@ -479,8 +484,25 @@ namespace Horo::Editor {
                 const auto original = tools.registry->Read();
                 approval.RequestCancellation();
                 CHECK(tools.registry->Read() == original);
-                CHECK_FALSE(Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token()));
-                CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), catalog));
+                CHECK_FALSE(owner.CaptureMcpCatalog(*context, tools.registry, capabilities, approved, approval.Token()));
+                CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), *catalog));
+            }
+            SECTION("the same registry cannot carry an old catalog into another authoring generation") {
+                auto changed = Opening();
+                SECTION("project is replaced") { ++changed.projectOpening; }
+                SECTION("scene document is edited") { ++changed.documentRevision; }
+                SECTION("editor enters Simulate") {
+                    changed.mode = ImmersiveAuthoringMode::Simulate;
+                    changed.worldGeneration = 1;
+                }
+                const auto original = tools.registry->Read();
+                const auto current = owner.Publish(changed, {});
+                REQUIRE(current);
+                CHECK(tools.registry->Read() == original);
+                CHECK_FALSE(owner.CaptureMcpPlan(*current, Prompt(), *catalog));
+                const auto admitted = owner.CaptureMcpCatalog(*current, tools.registry, capabilities, approved, approval.Token());
+                REQUIRE(admitted);
+                CHECK(owner.CaptureMcpPlan(*current, Prompt(), *admitted));
             }
             CHECK_FALSE(review.Read(*context));
             CHECK(pending->Plan(model, 2, {}).Status() == ContextDenied);
@@ -494,13 +516,13 @@ namespace Horo::Editor {
             Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
             const std::array approved{std::string{"scene.inspect"}};
             CancellationSource approval;
-            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved, approval.Token());
-            REQUIRE(catalog);
             ImmersiveAuthoringContext owner;
             CancellationSource document;
             const auto context = owner.Publish(Opening(), {}, document.Token());
             REQUIRE(context);
-            auto request = owner.CaptureMcpPlan(*context, Prompt(), catalog);
+            const auto catalog = owner.CaptureMcpCatalog(*context, tools.registry, capabilities, approved, approval.Token());
+            REQUIRE(catalog);
+            auto request = owner.CaptureMcpPlan(*context, Prompt(), *catalog);
             REQUIRE(request);
             PlanningModel model;
             model.tools = {{"inspect", approved.front(), "{}"}};

@@ -255,18 +255,35 @@ namespace Horo::Editor {
         return ImmersiveAgentRequest{context, std::move(request), true, std::string{projectIdentity}};
     }
 
+    ImmersiveMcpCatalog::ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog)
+        : context_(std::move(context)), catalog_(std::move(catalog)) {}
+
+    /** @copydoc ImmersiveAuthoringContext::CaptureMcpCatalog */
+    std::optional<ImmersiveMcpCatalog> ImmersiveAuthoringContext::CaptureMcpCatalog(
+        const ImmersivePlanningContext &context, std::shared_ptr<const Mcp::McpToolRegistry> registry,
+        const std::span<const std::string> capabilities, const std::span<const std::string> approvedTools,
+        const CancellationToken &approvalLifetime) const {
+        if (Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted)
+            return std::nullopt;
+        auto catalog = Agent::McpPlanCatalog::Capture(std::move(registry), capabilities, approvedTools, approvalLifetime);
+        if (!catalog || !context.IsCurrent())
+            return std::nullopt;
+        return ImmersiveMcpCatalog{context, std::move(catalog)};
+    }
+
     /** @copydoc ImmersiveAuthoringContext::CaptureMcpPlan */
     std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CaptureMcpPlan(const ImmersivePlanningContext &context,
                                                                                    Agent::ModelRequest request,
-                                                                                   std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                                                                                   const ImmersiveMcpCatalog &catalog,
                                                                                    const std::string_view projectIdentity) const {
-        if (!catalog || !catalog->IsCurrent() || !request.tools.empty())
+        if (!catalog.context_.SharesGeneration(context) || !context.IsCurrent() || !catalog.catalog_ ||
+            !catalog.catalog_->IsCurrent() || !request.tools.empty())
             return std::nullopt;
-        request.tools = catalog->Tools();
+        request.tools = catalog.catalog_->Tools();
         request.requiredFeatures.bits |= static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
         auto captured = CapturePlan(context, std::move(request), projectIdentity);
         if (captured)
-            captured->catalog_ = std::move(catalog);
+            captured->catalog_ = catalog.catalog_;
         return captured;
     }
 }  // namespace Horo::Editor
