@@ -117,7 +117,10 @@ contains `schemaVersion: 1`, `evidenceLevel: "PhysicalDeviceQualification"`,
 the smoke record's exact `tuple` and `provenance`, the `check` name, and the
 observation's `artifactSha256`. Set the check's `evidenceSha256` to the digest
 of the receipt. The gate checks both files and verifies the receipt belongs to
-that check and run. For older smoke records, create receipts from the original
+that check and run. One observation can support several checks in its original
+run. Other claimed tuples in the same matrix require their own observations,
+including when they connect to the same headset in a different mode.
+For older smoke records, create receipts from the original
 observations if their test run is known. Otherwise repeat the affected checks.
 
 When a release requires `optionalMR`, store a redacted physical-device result

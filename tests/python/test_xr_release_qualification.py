@@ -130,6 +130,37 @@ def test_reference_pair_and_optional_planning_owner(release):
     assert "XR 1.0 matrix evidence passed" in result.stdout
 
 
+@pytest.mark.parametrize("check", ["input", "comfort"])
+def test_physical_observation_cannot_be_rewrapped_for_another_connection(release, check):
+    matrix, evidence = release
+    first_row, second_row = matrix["tuples"]
+    first = json.loads((evidence / first_row["recordSha256"]).read_bytes())
+    second = json.loads((evidence / second_row["recordSha256"]).read_bytes())
+    original = json.loads((evidence / first["checks"]["input"]["evidenceSha256"]).read_bytes())
+    replacement = json.loads((evidence / second["checks"][check]["evidenceSha256"]).read_bytes())
+    replacement["artifactSha256"] = original["artifactSha256"]
+    second["checks"][check]["evidenceSha256"] = store(evidence, json.dumps(replacement).encode())
+    second_row["recordSha256"] = store(evidence, json.dumps(second).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Tethered (xr-platform): Physical observation artifact was reused across smoke runs" in result.stderr
+
+
+def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    first = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
+    second = json.loads((evidence / record["checks"]["comfort"]["evidenceSha256"]).read_bytes())
+    second["artifactSha256"] = first["artifactSha256"]
+    record["checks"]["comfort"]["evidenceSha256"] = store(evidence, json.dumps(second).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("view_count", [1, 4])
 def test_xr_1_0_claim_requires_physical_stereo_capture(release, view_count):
     matrix, evidence = release
@@ -364,6 +395,7 @@ def test_another_connection_cannot_supply_the_required_input_capture(release):
     ({"provenance": {"runId": "old-run"}}, "input capture is from a different smoke run"),
     ({"evidenceLevel": "DeterministicFake"}, "input capture must identify physical evidence"),
     ({"artifactSha256": "b" * 64}, "Missing regular artifact"),
+    ({"artifactSha256": []}, "Missing or invalid artifact digest"),
 ])
 def test_required_capture_identifies_its_physical_check_and_artifact(release, change, reason):
     matrix, evidence = release

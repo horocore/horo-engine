@@ -43,6 +43,7 @@ class Evidence:
         return path
 
     def verify(self, digest: str) -> None:
+        require(is_digest(digest), "Missing or invalid artifact digest")
         if digest in self.verified:
             return
         verify_artifact(self.path(digest), digest)
@@ -91,8 +92,9 @@ class Evidence:
         require(capture["check"] == check, f"{check} capture is for a different check")
         require(capture["tuple"] == record["tuple"], f"{check} capture is from a different product tuple")
         require(capture["provenance"] == record["provenance"], f"{check} capture is from a different smoke run")
-        self.verify(capture["artifactSha256"])
-        return digest
+        artifact = capture["artifactSha256"]
+        self.verify(artifact)
+        return artifact
 
 
 def validate_preflight_declarations(row: dict) -> None:
@@ -183,7 +185,7 @@ def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
     evidence.desktop_preflight(expected, identity, component)
 
 
-def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
+def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set[str]]:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
     optional = set(row["requiredOptionalChecks"])
@@ -206,11 +208,13 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     check_digests.difference_update({None, record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]})
     if mr_capture is not None:
         check_digests.discard(record["checks"]["optionalMR"]["evidenceSha256"])
+    observations = set()
     for check in sorted((CORE_CHECKS | optional) - SPECIALIZED_PHYSICAL_CHECKS):
-        check_digests.discard(evidence.physical_check_capture(record, check))
+        observations.add(evidence.physical_check_capture(record, check))
+        check_digests.discard(record["checks"][check]["evidenceSha256"])
     for digest in check_digests:
         evidence.verify(digest)
-    return record["status"]
+    return record["status"], observations
 
 
 def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
@@ -241,13 +245,17 @@ def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
             owner = review.get("owner") if isinstance(review, dict) else None
             label = f"{name} ({owner})" if is_token(owner) else name
             failures.append(f"{label}: {error}")
+    claimed_observations: set[str] = set()
     for row in rows:
         label = f"{row['id']} ({row['owner']})"
         if not row["releaseClaim"]:
             messages.append(f"{label}: {row['category']} planning")
             continue
         try:
-            messages.append(f"{label}: {verify_claim(row, evidence, revision)}")
+            status, observations = verify_claim(row, evidence, revision)
+            require(claimed_observations.isdisjoint(observations), "Physical observation artifact was reused across smoke runs")
+            claimed_observations.update(observations)
+            messages.append(f"{label}: {status}")
         except (OSError, ValueError, RecursionError) as error:
             failures.append(f"{label}: {error}")
     return messages, failures
