@@ -195,7 +195,8 @@ namespace Horo::Editor {
             if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
                 continue;
             const auto &surfaces = observation.surfaces;
-            if (!observation.controllerPress || !surfaces || surfaces->scope != result.scope ||
+            if (!observation.controllerPress || !surfaces || observation.candidate.space != result.scope.space ||
+                surfaces->scope != result.scope ||
                 surfaces->worldGeneration != worldGeneration || !AppendSurfaceHits(result, *surfaces, current.Planes()))
                 return std::nullopt;
             queried = true;

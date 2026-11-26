@@ -564,6 +564,7 @@ namespace Horo::Editor {
             ImmersiveSpatialObservation press{.controllerPress = ImmersiveControllerPress{},
                                               .surfaces = ImmersiveSurfaceHits{.scope = scope, .worldGeneration = World, .count = 1}};
             press.candidate.shape = Math::Ray{};
+            press.candidate.space = scope.space;
             press.surfaces->hits[0] = {wall.id, wall.classification, {1, 2, 3}};
             const std::array repeated{press, press};
             const auto candidates = CollectImmersiveSurfaceHits(repeated, World, live.Value());
@@ -571,6 +572,11 @@ namespace Horo::Editor {
             REQUIRE(candidates->count == 1);
             CHECK(candidates->hits[0].classification == wall.classification);
             CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World + 1, live.Value()));
+            auto foreignRay = press;
+            ++foreignRay.candidate.space.id.slot.index;
+            CHECK_FALSE(CollectImmersiveSurfaceHits(std::span{&foreignRay, 1}, World, live.Value()));
+            const std::array mixed{press, foreignRay};
+            CHECK_FALSE(CollectImmersiveSurfaceHits(mixed, World, live.Value()));
 
             auto malformed = repeated;
             auto &hit = malformed[1].surfaces->hits[0];

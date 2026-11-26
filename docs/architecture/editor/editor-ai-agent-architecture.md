@@ -253,8 +253,9 @@ Ownership rules:
   objects. Separate points on one object remain separate location candidates.
   Physical surface review uses the separate one-session plane grant. The
   controller press copies bounded hit coordinates and plane identities from
-  the admitted publication. Each preview checks that the same grant and all
-  referenced plane identities are still live. Non-finite coordinates and invalid
+  the admitted publication. Each preview checks the exact World space of the
+  recorded ray and that the same grant and all referenced plane identities are
+  still live. Non-finite coordinates and invalid
   classifications make the surface evidence unavailable for review.
   Play mesh hits and listening lineage retain the structural revision of the
   draws, so recycled object identities require a new observation.
