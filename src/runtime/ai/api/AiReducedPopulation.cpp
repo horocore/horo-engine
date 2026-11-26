@@ -148,6 +148,23 @@ namespace Horo::AI {
         return state_ && state_->owner == std::this_thread::get_id() && state_->Find(agent).has_value();
     }
 
+    /** @copydoc AiReducedPopulation::NextUntrackedIdentity */
+    std::optional<std::uint64_t> AiReducedPopulation::NextUntrackedIdentity(const std::uint64_t after) const noexcept {
+        constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+        if (!state_ || state_->owner != std::this_thread::get_id() || after == maximum)
+            return std::nullopt;
+        auto next = after + 1;
+        const auto &identities = state_->identities;
+        auto occupied = std::ranges::lower_bound(identities, next, {}, &AgentId::Value);
+        while (occupied != identities.end() && occupied->Value() == next) {
+            if (next == maximum)
+                return std::nullopt;
+            ++occupied;
+            ++next;
+        }
+        return next;
+    }
+
     /** @copydoc AiReducedPopulation::PrepareTransition */
     Result<AiReducedPopulation::Transition> AiReducedPopulation::PrepareTransition(const std::span<const AgentId> promotions,
                                                                                    const std::span<const AiReducedAgent> demotions) const {

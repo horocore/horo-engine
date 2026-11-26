@@ -333,8 +333,8 @@ namespace Horo::AI::Detail {
         }
 
         /** @brief Reserves detached logical IDs; rollback does not advance the published owner's high-water. */
-        static Result<void> ReserveIdentities(StructuralCandidate &candidate, std::span<AiSceneAgentDescriptor> agents,
-                                              const std::span<const Runtime::RuntimeEntityView> created) {
+        Result<void> ReserveIdentities(StructuralCandidate &candidate, std::span<AiSceneAgentDescriptor> agents,
+                                       const std::span<const Runtime::RuntimeEntityView> created) const {
             candidate.lastAgentIdentity = candidate.state->lastAgentIdentity;
             // Ordinary authored IDs retain their established identity and reserve their domain before any prefab allocation.
             for (const auto &agent : agents) {
@@ -351,8 +351,13 @@ namespace Horo::AI::Detail {
                     continue;
                 if (!agent.agent.agent.IsValid() || candidate.lastAgentIdentity == std::numeric_limits<std::uint64_t>::max())
                     return Failure<void>("Prefab AI identity reservation is invalid or exhausted.");
+                const auto available = reduced_ ? reduced_->NextUntrackedIdentity(candidate.lastAgentIdentity)
+                                                : std::optional{candidate.lastAgentIdentity + 1};
+                if (!available)
+                    return Failure<void>("Prefab AI identity reservation is exhausted by the reduced population manifest.");
                 const auto original = agent.agent.agent;
-                agent.agent.agent = AgentId::Create(++candidate.lastAgentIdentity).Value();
+                candidate.lastAgentIdentity = *available;
+                agent.agent.agent = AgentId::Create(*available).Value();
                 candidate.identities.emplace_back(agent.owner, original, agent.agent.agent);
             }
             return Result<void>::Success();

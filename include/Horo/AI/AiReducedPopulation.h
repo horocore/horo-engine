@@ -11,6 +11,10 @@
 #include <vector>
 
 namespace Horo::AI {
+    namespace Detail {
+        class AiSceneStructuralParticipant;
+    }
+
     /** @brief Stationary population sample in exact signed world millimetres. */
     struct AiReducedAgent final {
         AgentId agent;
@@ -99,6 +103,14 @@ namespace Horo::AI {
                                                            std::span<const AiReducedAgent> demotions) const;
 
     private:
+        friend class Detail::AiSceneStructuralParticipant;
+
+        /** @brief Finds the next unreserved prefab identity after the Scene's staged high-water mark.
+         * @param after Current staged high-water value.
+         * @return First free value, or absence on exhaustion or outside the owner lane.
+         */
+        [[nodiscard]] std::optional<std::uint64_t> NextUntrackedIdentity(std::uint64_t after) const noexcept;
+
         explicit AiReducedPopulation(std::shared_ptr<State> state) noexcept;
 
         std::shared_ptr<State> state_;

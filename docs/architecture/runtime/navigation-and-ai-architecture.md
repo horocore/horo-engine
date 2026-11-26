@@ -4157,6 +4157,9 @@ A rejected Scene transaction leaves both representations unchanged, and
 re-promotion creates a fresh canonical runtime generation. The reduced population
 ceiling is 1,048,576 identities and the transfer limit is at most 65,536 per
 batch. Full agents have their own Scene and scheduler budgets.
+Prefab-generated agent identities skip the fixed reduced manifest. This keeps
+future promotions available and advances the Scene's generated identity counter
+only when the structural change publishes.
 
 The headless product selects a committed population with
 `--ai-reduced-population <cooked-scene-uuid> <promotions-per-frame>` alongside
