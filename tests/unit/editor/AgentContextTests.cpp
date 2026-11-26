@@ -378,7 +378,6 @@ namespace Horo::Agent {
             CHECK(observedStop);
             CHECK(review.Status() == ContextDenied);
             CHECK_FALSE(review.Read(*context));
-            return;
         }
         SECTION("changing trust stops a quiet provider within the same project opening") {
             bool observedStop{};
@@ -396,34 +395,35 @@ namespace Horo::Agent {
             CHECK(context->IsCurrent());
             CHECK(review.Status() == ContextDenied);
             CHECK_FALSE(review.Read(*context));
-            return;
         }
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{750};
-        bool verifyExpiry{};
+        const auto finishPlan = [&] {
+            auto review = correct->Plan(model, 25, {}, inspect, {}, &approved);
+            REQUIRE(review.Status() == Completed);
+            REQUIRE(model.sent.size() == 2);
+            CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
+            const auto *plan = review.Read(*context);
+            REQUIRE(plan);
+            CHECK(plan->draft->text == "Result");
+            return review;
+        };
         SECTION("a completed draft expires with the context used to produce it") {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{750};
             project.deadline = deadline;
-            verifyExpiry = true;
-        }
-        const auto review = correct->Plan(model, 25, {}, inspect, {}, &approved);
-        REQUIRE(review.Status() == Completed);
-        REQUIRE(model.sent.size() == 2);
-        CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
-        REQUIRE(review.Read(*context));
-        CHECK(review.Read(*context)->draft->text == "Result");
-        if (verifyExpiry) {
+            const auto review = finishPlan();
             project.deadline = std::chrono::steady_clock::time_point::max();
             std::this_thread::sleep_until(deadline);
             CHECK(context->IsCurrent());
             CHECK(review.Status() == ContextDenied);
             CHECK_FALSE(review.Read(*context));
-            return;
         }
 
         SECTION("closing the project retires the review") {
+            const auto review = finishPlan();
             projectLifetime.RequestCancellation();
             CHECK_FALSE(review.Read(*context));
         }
         SECTION("replacing trust retires the review within the same project opening") {
+            const auto review = finishPlan();
             CHECK_FALSE(policy.SetProjectTrust(false, 4));
             REQUIRE(review.Read(*context));
             REQUIRE(policy.SetProjectTrust(false, 5));
