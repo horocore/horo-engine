@@ -16,13 +16,17 @@ namespace Horo::Editor {
         UpdatePrefabAutosave(elapsedSeconds, intervalMinutes);
         UpdateUiCanvasAutosave(elapsedSeconds, intervalMinutes);
         UpdateAiDocumentRecovery(elapsedSeconds, intervalMinutes);
-        if (intervalMinutes <= 0 || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F || !m_document.IsDirty() ||
+        const auto currentState = m_document.State();
+        const auto dirty = m_document.IsDirty();
+        if (m_requestedSceneRecovery && (!dirty || !m_requestedSceneRecovery->Matches(m_document.Revision(), currentState)))
+            m_requestedSceneRecovery.reset();
+        if (intervalMinutes <= 0 || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F || !dirty ||
             m_viewModel.recoveryAvailable || m_autosaveSuppressedForDiscard) {
-            if (!m_document.IsDirty())
+            if (!dirty)
                 m_autosaveElapsedSeconds = 0.0F;
             return;
         }
-        if (m_document.State() == m_lastAutosavedState)
+        if (currentState == m_lastAutosavedState)
             return;
         if (m_autosaveRetryDelaySeconds > 0.0F) {
             m_autosaveRetryDelaySeconds = std::max(0.0F, m_autosaveRetryDelaySeconds - elapsedSeconds);
@@ -32,7 +36,7 @@ namespace Horo::Editor {
 
         m_autosaveElapsedSeconds += elapsedSeconds;
         const float intervalSeconds = static_cast<float>(intervalMinutes) * 60.0F;
-        if (m_autosaveElapsedSeconds >= intervalSeconds)
+        if (m_requestedSceneRecovery || m_autosaveElapsedSeconds >= intervalSeconds)
             WriteAutosaveRecovery();
     }
 
@@ -55,14 +59,18 @@ namespace Horo::Editor {
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr)
             return;
         const SceneDocumentSnapshot snapshot = m_document.Snapshot();
+        const auto approval = m_requestedSceneRecovery && m_requestedSceneRecovery->Matches(snapshot.revision, snapshot.state)
+                                  ? m_requestedSceneRecovery : std::nullopt;
         if (const Result<void> written = WriteProjectSceneRecovery(ProjectRoot(), *m_defaultScenePath, snapshot, m_document.SavedRevision(),
-                                                                   m_document.SavedState(), *m_mutations, *m_durableFiles);
+                                                                   m_document.SavedState(), *m_mutations, *m_durableFiles, approval);
             written.HasError()) {
             m_autosaveRetryDelaySeconds = 30.0F;
             LOG_ERROR("editor.scene_recovery", "Autosave recovery write failed: %s", written.ErrorValue().message.c_str());
             return;
         }
         m_lastAutosavedState = snapshot.state;
+        if (approval && m_requestedSceneRecovery == approval)
+            m_requestedSceneRecovery.reset();
         m_autosaveElapsedSeconds = 0.0F;
         m_autosaveRetryDelaySeconds = 0.0F;
         LOG_INFO("editor.scene_recovery", "Autosaved recovery revision %llu for '%s'.",
@@ -79,6 +87,7 @@ namespace Horo::Editor {
         }
         if (newActivePath.has_value())
             m_defaultScenePath = *newActivePath;
+        m_requestedSceneRecovery.reset();
         m_sceneFingerprint = std::move(fingerprint);
         if (m_sceneFileWatch != nullptr)
             m_sceneFileWatch->Reset();

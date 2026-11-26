@@ -94,10 +94,20 @@ namespace Horo::Editor {
                 break;
             case EditorWorkspaceViewCommand::ResolveAgentSceneReview:
                 if (const auto decision = cmd.agentSceneReviewDecision) {
-                    if (!decision->approve)
-                        static_cast<void>(CancelAgentSceneReview(decision->id));
-                    else if (const auto result = ApproveAgentSceneReview(decision->id); result.HasError())
-                        NotifyAgentSceneReviewWithdrawn();
+                    using enum EditorWorkspaceViewCommandData::AgentSceneReviewDecision::Action;
+                    switch (decision->action) {
+                        case Discard:
+                            static_cast<void>(CancelAgentSceneReview(decision->id));
+                            break;
+                        case ConfirmSpatialImpact:
+                            if (ConfirmAgentSceneReviewImpact(decision->id).HasError())
+                                NotifyAgentSceneReviewWithdrawn();
+                            break;
+                        case Apply:
+                            if (ApproveAgentSceneReview(decision->id).HasError())
+                                NotifyAgentSceneReviewWithdrawn();
+                            break;
+                    }
                 }
                 break;
             case EditorWorkspaceViewCommand::PreviewLightComponent:

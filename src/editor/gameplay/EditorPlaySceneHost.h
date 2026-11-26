@@ -55,7 +55,7 @@ namespace Horo::Editor {
         };
 
         struct Contact final {
-            Runtime::SceneObjectId peer;
+            Runtime::EntityId peer; /**< Slot and generation in the anchor's Scene. */
             Kind kind{};
             bool operator==(const Contact &) const = default;
         };

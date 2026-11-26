@@ -3656,6 +3656,7 @@
     "workspace.viewport.agent_review.rotation": {"text": "{} (nesne {}) yerel dönüş XYZW {} → {}"},
     "workspace.viewport.agent_review.scale": {"text": "{} (nesne {}) yerel ölçek {} → {}"},
     "workspace.viewport.agent_review.spatial_warning": {"text": "Öneriyi uygulamadan önce nesne yerleşimini ve kameraya etkilerini inceleyin."},
+    "workspace.viewport.agent_review.confirm_spatial_impact": {"text": "Yerleşim ve kamera etkisini onayla"},
     "workspace.viewport.agent_review.preview_legend": {"text": "Turuncu kopyalar önerilen konumları gösterir."},
     "workspace.viewport.agent_review.preview_unavailable": {"text": "Önerilen dönüşümleri aşağıdaki ayrıntılardan inceleyin."},
     "workspace.viewport.agent_review.rename": {"text": "{} → {} (nesne {})"},

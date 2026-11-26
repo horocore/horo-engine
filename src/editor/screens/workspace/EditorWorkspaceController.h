@@ -381,6 +381,8 @@ namespace Horo::Editor {
          * @return Success or the scene admission error; the matched review is consumed.
          */
         [[nodiscard]] Result<void> ApproveAgentSceneReview(std::uint64_t review);
+        /** @brief Acknowledges the spatial warning for the exact live proposal without committing an edit. */
+        [[nodiscard]] Result<void> ConfirmAgentSceneReviewImpact(std::uint64_t review);
 
         /** @brief Cancels the displayed proposal only if its identity still matches.
          * @param review Exact owner-issued review identity.
@@ -1142,6 +1144,7 @@ namespace Horo::Editor {
             SceneDocumentTransactions::ReplacementPreview preview;
             std::function<bool()> authorized;
             DocumentChangeKind kind;
+            bool spatialImpactConfirmed{};
         };
 
         std::optional<AgentSceneReview> m_agentSceneReview;
@@ -1312,6 +1315,7 @@ namespace Horo::Editor {
         float m_gameplaySourceWatchElapsedSeconds{0.0F};
         bool m_sceneFileWatchErrorPresented{false};
         DocumentStateId m_lastAutosavedState{};
+        std::optional<SceneApprovalRecoveryReceipt> m_requestedSceneRecovery; /**< Exact approval awaiting the next enabled autosave tick. */
         bool m_autosaveSuppressedForDiscard{false};
         DocumentRevision m_queuedRuntimeRevision{};
         Runtime::SceneDefinitionRevision m_activeRuntimeRevision{};

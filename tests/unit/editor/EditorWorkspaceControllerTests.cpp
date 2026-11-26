@@ -133,16 +133,20 @@ namespace {
             const auto scene = scenes_.ActiveScene();
             if (!scene || scene->Get(object).HasError())
                 return std::nullopt;
+            auto peer = scene->Find(contactPeer).value_or(Runtime::EntityRef{}).entity;
+            if (staleContactPeer)
+                ++peer.generation;
             return EditorPlayContactSnapshot{.anchor = object,
                                              .structuralRevision = scene->StructuralRevision(),
                                              .completedTick = 42,
-                                             .contacts = {{{contactPeer, EditorPlayContactSnapshot::Kind::TriggerEnter},
-                                                           {contactPeer, EditorPlayContactSnapshot::Kind::TriggerExit},
-                                                           {contactPeer, EditorPlayContactSnapshot::Kind::ContactEnd}}},
+                                             .contacts = {{{peer, EditorPlayContactSnapshot::Kind::TriggerEnter},
+                                                           {peer, EditorPlayContactSnapshot::Kind::TriggerExit},
+                                                           {peer, EditorPlayContactSnapshot::Kind::ContactEnd}}},
                                              .count = 3};
         }
 
         Runtime::SceneObjectId contactPeer{1};
+        bool staleContactPeer{};
 
     private:
         Runtime::RuntimeSceneService scenes_;
@@ -607,9 +611,23 @@ namespace {
         CHECK(controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token()).HasError());
 
         SECTION("approval uses canonical history and consumes the review") {
+            using Action = EditorWorkspaceViewCommandData::AgentSceneReviewDecision::Action;
+            CHECK(controller.ViewModel().agentSceneReview->requiresSpatialWarning);
+            CHECK_FALSE(controller.ViewModel().agentSceneReview->spatialImpactConfirmed);
+            const auto premature = controller.ApproveAgentSceneReview(preview.Value());
+            REQUIRE(premature.HasError());
+            CHECK(premature.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Unauthorized).code.Value());
+            CHECK(controller.ConfirmAgentSceneReviewImpact(preview.Value() + 1).HasError());
             EditorWorkspaceViewCommandData approval;
             approval.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
-            approval.agentSceneReviewDecision = {preview.Value(), true};
+            approval.agentSceneReviewDecision = {preview.Value(), Action::ConfirmSpatialImpact};
+            controller.ProcessCommand(approval);
+            REQUIRE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewModel().agentSceneReview->spatialImpactConfirmed);
+            CHECK(events.empty());
+            CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            approval.agentSceneReviewDecision = {preview.Value(), Action::Apply};
             controller.ProcessCommand(approval);
             CHECK(controller.ViewModel().objects.front().localTransform == desired);
             CHECK(controller.ViewModel().objects.front().name == renames.front().name);
@@ -665,11 +683,13 @@ namespace {
             CHECK_FALSE(controller.ViewModel().canUndo);
         }
         SECTION("approval cannot consume a different proposal installed during the authority check") {
+            REQUIRE(controller.ConfirmAgentSceneReviewImpact(preview.Value()).HasValue());
             replaceOnAuthorityCheck = preview.Value();
             CHECK(controller.ApproveAgentSceneReview(preview.Value()).HasError());
             REQUIRE(replacementReview);
             REQUIRE(controller.ViewModel().agentSceneReview);
             CHECK(controller.ViewModel().agentSceneReview->id == *replacementReview);
+            CHECK_FALSE(controller.ViewModel().agentSceneReview->spatialImpactConfirmed);
             CHECK(controller.ViewModel().objects.front().name == object.name);
             CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
             CHECK_FALSE(controller.ViewModel().isDirty);
@@ -687,11 +707,12 @@ namespace {
             CHECK(withdrawn == 1);
         }
         SECTION("approval of a cancelled proposal reports withdrawal once") {
+            REQUIRE(controller.ConfirmAgentSceneReviewImpact(preview.Value()).HasValue());
             proposal.RequestCancellation();
             const auto previousChecks = authorizationChecks;
             EditorWorkspaceViewCommandData approval;
             approval.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
-            approval.agentSceneReviewDecision = {preview.Value(), true};
+            approval.agentSceneReviewDecision = {preview.Value(), EditorWorkspaceViewCommandData::AgentSceneReviewDecision::Action::Apply};
             controller.ProcessCommand(approval);
             CHECK(origin() == baseline);
             CHECK(withdrawn == 1);
@@ -708,6 +729,67 @@ namespace {
             CHECK(events.empty());
             CHECK_FALSE(controller.ViewModel().isDirty);
             CHECK(withdrawn == 1);
+        }
+    }
+
+    TEST_CASE("Approved agent edits checkpoint their exact Scene state on the next enabled autosave tick", "[unit][editor][scene-review]") {
+        Tests::OwnedTestDirectory project{"workspace-agent-recovery"};
+        const auto root = std::filesystem::canonical(project.Path());
+        const auto scenePath = root / "assets/scenes/main.horo";
+        PrepareEmptyDefaultScene(root, scenePath);
+        const SceneSource::SceneObjectSnapshot source{.id = {7}, .name = "Original"};
+        const auto encoded = SceneSource::EncodeSceneSource({.objects = std::span{&source, 1}});
+        REQUIRE(static_cast<bool>(std::ofstream{scenePath, std::ios::binary} << encoded));
+
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations(files);
+        Runtime::RuntimeSceneService scenes;
+        CancellationSource process;
+        EditorWorkspaceDependencies dependencies;
+        dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+        dependencies.mutations = &mutations;
+        dependencies.durableFiles = &files;
+        EditorWorkspaceController controller{root, scenes, {}, dependencies};
+        REQUIRE(scenes.Startup(process.Token()).HasValue());
+        const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, process.Token()};
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+
+        const auto fence = controller.ViewModel().assetDropFence;
+        const std::array rename{AgentSceneObjectRename{source.id.value, "Approved name"}};
+        const auto preview = controller.PreviewAgentSceneEdits({fence.replacementEpoch, fence.revision.value}, {}, rename, {});
+        REQUIRE(preview.HasValue());
+        controller.UpdateAutosave(1.0F, 10);
+        REQUIRE_FALSE(InspectProjectSceneRecovery(root, scenePath).Value());
+        REQUIRE(controller.ApproveAgentSceneReview(preview.Value()).HasValue());
+        REQUIRE_FALSE(InspectProjectSceneRecovery(root, scenePath).Value());
+
+        SECTION("enabled autosave checkpoints the approved edit without saving the Scene") {
+            controller.UpdateAutosave(1.0F, 10);
+            const auto recovery = InspectProjectSceneRecovery(root, scenePath);
+            REQUIRE(recovery.HasValue());
+            REQUIRE(recovery.Value());
+            REQUIRE(recovery.Value()->objects.size() == 1);
+            CHECK(recovery.Value()->objects.front().name == rename.front().name);
+            REQUIRE(recovery.Value()->approval);
+            CHECK(recovery.Value()->approval->reviewId == preview.Value());
+            CHECK(recovery.Value()->approval->baseRevision.value == fence.revision.value);
+            CHECK(recovery.Value()->approval->affectedObjects == 1);
+            const auto saved = LoadProjectScene(root, scenePath);
+            REQUIRE(saved.HasValue());
+            REQUIRE(saved.Value().objects.size() == 1);
+            CHECK(saved.Value().objects.front().name == source.name);
+        }
+        SECTION("undo retires the approved snapshot before it can write recovery") {
+            controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
+            controller.UpdateAutosave(1.0F, 10);
+            CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(InspectProjectSceneRecovery(root, scenePath).Value());
+        }
+        SECTION("disabled autosave leaves the approved edit in memory") {
+            controller.UpdateAutosave(1.0F, 0);
+            CHECK(controller.ViewModel().isDirty);
+            CHECK_FALSE(InspectProjectSceneRecovery(root, scenePath).Value());
         }
     }
 
@@ -1109,7 +1191,12 @@ namespace {
             host.contactPeer = Runtime::SceneObjectId{peer};
             CHECK_FALSE(workspace.ReadAgentSceneContacts());
         }
+        host.contactPeer = Runtime::SceneObjectId{selected.value};
+        CHECK_FALSE(workspace.ReadAgentSceneContacts());
         host.contactPeer = Runtime::SceneObjectId{1};
+        host.staleContactPeer = true;
+        CHECK_FALSE(workspace.ReadAgentSceneContacts());
+        host.staleContactPeer = false;
         workspace.SelectMountedWorldPlay(true);
         CHECK_FALSE(workspace.AgentSceneContactsCurrent(*review));
         workspace.SelectMountedWorldPlay(false);

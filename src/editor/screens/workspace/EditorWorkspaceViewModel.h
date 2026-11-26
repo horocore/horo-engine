@@ -959,8 +959,9 @@ namespace Horo::Editor {
 
         /** @brief Explicit local decision for the exact currently displayed review. */
         struct AgentSceneReviewDecision final {
+            enum class Action : std::uint8_t { Discard, ConfirmSpatialImpact, Apply };
             std::uint64_t id{};
-            bool approve{};
+            Action action{Action::Discard};
         };
 
         std::optional<AgentSceneReviewDecision> agentSceneReviewDecision;
@@ -1211,6 +1212,7 @@ namespace Horo::Editor {
             std::vector<Light> lights;
             std::vector<Transform> transforms;
             bool requiresSpatialWarning{};
+            bool spatialImpactConfirmed{};
             bool hasSpatialPreview{};
         };
 

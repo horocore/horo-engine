@@ -65,6 +65,7 @@ namespace {
         "workspace.viewport.agent_review.rotation",
         "workspace.viewport.agent_review.scale",
         "workspace.viewport.agent_review.spatial_warning",
+        "workspace.viewport.agent_review.confirm_spatial_impact",
         "workspace.viewport.agent_review.preview_legend",
         "workspace.viewport.agent_review.preview_unavailable",
         "workspace.viewport.agent_review.rename",

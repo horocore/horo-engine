@@ -99,9 +99,12 @@ namespace Horo::Application::Internal {
             if (first != anchor && second != anchor)
                 return true;
             const auto peer = first == anchor ? second : first;
-            if (!scene.Find(peer))
+            if (peer == anchor)
+                return true;
+            const auto entity = scene.Find(peer);
+            if (!entity)
                 return false;
-            const Editor::EditorPlayContactSnapshot::Contact contact{peer, *kind};
+            const Editor::EditorPlayContactSnapshot::Contact contact{entity->entity, *kind};
             const auto observed = std::span{review.contacts}.first(review.count);
             if (std::ranges::find(observed, contact) != observed.end())
                 return true;

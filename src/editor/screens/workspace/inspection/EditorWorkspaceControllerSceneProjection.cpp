@@ -715,20 +715,26 @@ namespace Horo::Editor {
             return std::nullopt;
         }
 
-        /** @brief Translates a complete Physics publication after checking every peer against the authored Scene. */
+        /** @brief Translates a complete Physics publication after checking every peer's generation and editor eligibility. */
         std::optional<AgentSceneContactReview> ReviewAgentContactPeers(AgentSceneContactReview review,
-                                                                       const EditorPlayContactSnapshot &contacts,
-                                                                       const std::span<const SceneObjectSnapshot> objects,
-                                                                       const Runtime::RuntimeSceneView &play) {
+                                                                        const EditorPlayContactSnapshot &contacts,
+                                                                        const std::span<const SceneObjectSnapshot> objects,
+                                                                        const Runtime::RuntimeSceneView &play) {
             if (contacts.structuralRevision != review.structuralRevision || contacts.completedTick == 0 ||
                 contacts.count > std::min(contacts.contacts.size(), review.contacts.size()))
                 return std::nullopt;
             review.completedTick = contacts.completedTick;
             for (const auto &contact : std::span{contacts.contacts}.first(contacts.count)) {
                 const auto kind = AgentContactKind(contact.kind);
-                if (!kind || ClassifyAgentReference(objects, true, play, {contact.peer.value}) != AgentSceneReferenceState::Available)
+                if (!kind || contact.peer == contacts.anchor.entity)
                     return std::nullopt;
-                review.contacts[review.count++] = {contact.peer.value, *kind};
+                const auto peer = play.Get({contacts.anchor.runtime, contact.peer});
+                if (peer.HasError() || !peer.Value().authoredObject)
+                    return std::nullopt;
+                const auto object = peer.Value().authoredObject->value;
+                if (ClassifyAgentReference(objects, true, play, {object}) != AgentSceneReferenceState::Available)
+                    return std::nullopt;
+                review.contacts[review.count++] = {object, *kind};
             }
             return review;
         }

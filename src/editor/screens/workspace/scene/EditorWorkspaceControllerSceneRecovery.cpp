@@ -62,6 +62,7 @@ namespace Horo::Editor {
         if (!preserveRecovery)
             m_viewModel.recoveryAvailable = false;
         m_lastAutosavedState = {};
+        m_requestedSceneRecovery.reset();
         m_autosaveElapsedSeconds = 0.0F;
         m_autosaveRetryDelaySeconds = 0.0F;
         m_autosaveSuppressedForDiscard = false;
@@ -185,6 +186,7 @@ namespace Horo::Editor {
         m_selection.Clear();
         m_viewModel.recoveryAvailable = false;
         m_lastAutosavedState = m_document.State();
+        m_requestedSceneRecovery.reset();
         m_autosaveSuppressedForDiscard = false;
         RefreshSceneProjections();
         LOG_INFO("editor.scene_recovery", "Recovery restored into a new dirty document session.");
@@ -201,6 +203,7 @@ namespace Horo::Editor {
         }
         m_viewModel.recoveryAvailable = false;
         m_lastAutosavedState = {};
+        m_requestedSceneRecovery.reset();
         m_autosaveSuppressedForDiscard = true;
         LOG_INFO("editor.scene_recovery", "Recovery state discarded explicitly.");
     }

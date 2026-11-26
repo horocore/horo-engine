@@ -293,8 +293,10 @@ Ownership rules:
   resident body handles when they fit the Physics filter budget and uses the
   complete tick otherwise. The local panel makes this review available during
   Play without starting speech capture. It displays the tick alongside the
-  events and clears the preview when Play stops or pauses. Incomplete event batches and
-  hidden, locked, or deleted peers suppress the preview. A new selection,
+  events and clears the preview when Play stops or pauses. Internal contacts
+  between bodies of the selected object are ignored. Each peer must resolve
+  through its exact live entity generation. Incomplete batches and hidden,
+  locked, deleted, or recycled peers suppress the preview. A new selection,
   document revision, or Scene structural revision withdraws the captured review.
 - MCP validates admitted tools. The editor document/command owner validates and
   commits mutations. AIA owns orchestration and presentation only.
@@ -792,11 +794,17 @@ For authored object replacements, `SceneDocumentTransactions::PreviewReplacement
 validates the complete batch and returns the effective typed changes for review.
 The same validated changes determine the counts of created, updated, and removed
 objects and flag camera or world-transform changes. The viewport review displays
-a spatial impact warning before approval when either flag is set.
+a spatial impact warning and requires a separate local confirmation before
+approval when either flag is set.
 The review owns detached values tied to the original document opening and
 revision. After approval, the owner calls `ApplyReviewedReplacements` with fresh
 edit admission. It revalidates the reviewed batch against the live document and
 records one canonical history entry.
+The next enabled Scene autosave can checkpoint that exact committed state with
+a redacted approval receipt. The receipt records the review identity, base
+revision, committed state, affected-object count and spatial confirmation. Its
+checksum binds it to the canonical Scene path, saved baseline and recovered
+payload. Invalid receipt metadata leaves the ordinary Scene recovery available.
 
 `scene.propose_transforms` accepts a bounded batch of local transforms for
 visible authored objects on the exact Scene revision returned by inspection.

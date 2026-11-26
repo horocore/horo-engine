@@ -502,6 +502,7 @@ TEST_CASE("Scene Recovery Round Trips Without Mutating Canonical Scene", "[unit]
     REQUIRE((inspected.Value()->savedState == DocumentStateId{1}));
     REQUIRE((inspected.Value()->recoveredRevision == authored.revision));
     REQUIRE((inspected.Value()->recoveredState == authored.state));
+    CHECK_FALSE(inspected.Value()->approval);
     REQUIRE((inspected.Value()->objects.size() == authored.objects.size()));
     RequireSameSceneObject(inspected.Value()->objects.front(), authored.objects.front());
 
@@ -517,6 +518,59 @@ TEST_CASE("Scene Recovery Round Trips Without Mutating Canonical Scene", "[unit]
     auto absent = InspectProjectSceneRecovery(project.Root(), project.ScenePath());
     REQUIRE((absent.HasValue()));
     REQUIRE((!absent.Value().has_value()));
+}
+
+TEST_CASE("Scene recovery validates redacted approval evidence separately from the Scene", "[unit][editor][persistence][recovery]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    const SceneDocumentSnapshot authored = AuthoredScene();
+    const SceneApprovalRecoveryReceipt approval{41, {authored.revision.value - 1}, authored.state, 1, true};
+    auto stale = approval;
+    ++stale.baseRevision.value;
+    CHECK(WriteProjectSceneRecovery(project.Root(), project.ScenePath(), authored, {}, {1}, mutations, files, stale).HasError());
+    CHECK_FALSE(std::filesystem::exists(project.RecoveryPath()));
+    REQUIRE(WriteProjectSceneRecovery(project.Root(), project.ScenePath(), authored, {}, {1}, mutations, files, approval).HasValue());
+    const auto original = InspectProjectSceneRecovery(project.Root(), project.ScenePath());
+    REQUIRE(original.HasValue());
+    REQUIRE(original.Value());
+    CHECK(original.Value()->approval == approval);
+
+    std::string raw;
+    {
+        std::ifstream input{project.RecoveryPath(), std::ios::binary};
+        REQUIRE(input.good());
+        raw.assign(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
+    }
+    auto destination = project.ScenePath();
+    std::string_view previous = "\"reviewId\": 41";
+    std::string_view replacement = "\"reviewId\": 42";
+    SECTION("changing the review identity invalidates the receipt") {}
+    SECTION("changing the saved revision invalidates the receipt") {
+        previous = "\"savedRevision\": 0";
+        replacement = "\"savedRevision\": 1";
+    }
+    SECTION("moving the recovery to another Scene invalidates the receipt") {
+        destination.replace_filename("other.horo");
+        const auto previousName = project.ScenePath().filename().string();
+        const auto found = raw.find(previousName, raw.find("\"canonicalPath\""));
+        REQUIRE(found != std::string::npos);
+        raw.replace(found, previousName.size(), destination.filename().string());
+        previous = {};
+    }
+    if (!previous.empty()) {
+        const auto found = raw.find(previous);
+        REQUIRE(found != std::string::npos);
+        raw.replace(found, previous.size(), replacement);
+    }
+    REQUIRE(static_cast<bool>(std::ofstream{project.RecoveryPath(), std::ios::binary | std::ios::trunc} << raw));
+    const auto recovered = InspectProjectSceneRecovery(project.Root(), destination);
+    REQUIRE(recovered.HasValue());
+    REQUIRE(recovered.Value());
+    CHECK_FALSE(recovered.Value()->approval);
+    REQUIRE(recovered.Value()->objects.size() == authored.objects.size());
+    RequireSameSceneObject(recovered.Value()->objects.front(), authored.objects.front());
 }
 
 TEST_CASE("Scene Recovery Rejects Payload Whose Checksum No Longer Matches", "[unit][editor][persistence][recovery]") {

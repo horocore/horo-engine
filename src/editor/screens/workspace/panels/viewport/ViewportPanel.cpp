@@ -97,13 +97,17 @@ namespace Horo::Editor {
                 ImGui::TextWrapped("%s", localization.Get("editor", key).c_str());
             }
             DrawSceneReviewDetails(review, context);
-            const auto apply = localization.Get("editor", "workspace.viewport.agent_review.apply");
+            const bool confirmImpact = review.requiresSpatialWarning && !review.spatialImpactConfirmed;
+            const auto apply = localization.Get("editor", confirmImpact ? "workspace.viewport.agent_review.confirm_spatial_impact"
+                                                                         : "workspace.viewport.agent_review.apply");
             const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");
             const bool approved = Ui::Button({.label = apply.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
             const bool rejected = Ui::Button({.label = discard.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
             if (approved || rejected) {
+                using enum EditorWorkspaceViewCommandData::AgentSceneReviewDecision::Action;
                 command.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
-                command.agentSceneReviewDecision = {review.id, approved};
+                const auto action = confirmImpact ? ConfirmSpatialImpact : Apply;
+                command.agentSceneReviewDecision = {review.id, rejected ? Discard : action};
             }
         }
 

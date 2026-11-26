@@ -46,13 +46,18 @@ namespace Horo::Editor {
             std::vector<SceneObjectTransformPreview> transforms;
         };
 
+        /** @brief Selects the additional review step for authored transforms and camera changes. */
+        bool RequiresSpatialConfirmation(const SceneReplacementImpact &impact) {
+            return impact.changesWorldTransforms || impact.changesCameras;
+        }
+
         /** @brief Projects only effective, validated changes to existing objects. */
         AgentSceneReviewProjection ProjectAgentSceneReview(const SceneDocumentTransactions::ReplacementPreview &preview,
                                                            const std::span<const SceneObjectSnapshot> objects) {
             const auto impact = preview.Impact();
             AgentSceneReviewProjection result;
             result.view.objectCount = impact.updatedObjects;
-            result.view.requiresSpatialWarning = impact.changesWorldTransforms || impact.changesCameras;
+            result.view.requiresSpatialWarning = RequiresSpatialConfirmation(impact);
             for (const auto &change : preview.Changes()) {
                 const auto &prior = *std::ranges::find(objects, change.object, &SceneObjectSnapshot::id);
                 if (prior.localTransform != change.desired->localTransform) {
@@ -248,6 +253,8 @@ namespace Horo::Editor {
             static_cast<void>(CancelAgentSceneReview(review));
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
         }
+        if (RequiresSpatialConfirmation(m_agentSceneReview->preview.Impact()) && !m_agentSceneReview->spatialImpactConfirmed)
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
         auto proposal = std::move(*m_agentSceneReview);
         CancelObjectTransformPreview();
         std::vector<SceneObjectId> affected;
@@ -261,6 +268,9 @@ namespace Horo::Editor {
         const auto result = proposal.owner.ApplyReviewedReplacements(approval, std::move(proposal.preview));
         if (result.HasError())
             return Result<void>::Failure(result.ErrorValue());
+        if (result.Value().committed && m_defaultScenePath && m_mutations && m_durableFiles)
+            m_requestedSceneRecovery = SceneApprovalRecoveryReceipt{review, {proposal.context.revision}, {result.Value().state},
+                                                                   affected.size(), proposal.spatialImpactConfirmed};
         HandleDocumentCommandResult(Result<SceneCommandResult>::Success({{},
                                                                          {result.Value().revision},
                                                                          {result.Value().state},
@@ -268,6 +278,19 @@ namespace Horo::Editor {
                                                                          std::move(affected),
                                                                          result.Value().committed}),
                                     "Apply reviewed scene edits");
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ConfirmAgentSceneReviewImpact */
+    Result<void> EditorWorkspaceController::ConfirmAgentSceneReviewImpact(const std::uint64_t review) {
+        if (!IsAgentSceneReviewCurrent(review)) {
+            static_cast<void>(CancelAgentSceneReview(review));
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
+        }
+        if (!RequiresSpatialConfirmation(m_agentSceneReview->preview.Impact()))
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Invalid));
+        m_agentSceneReview->spatialImpactConfirmed = true;
+        m_viewModel.agentSceneReview->spatialImpactConfirmed = true;
         return Result<void>::Success();
     }
 
