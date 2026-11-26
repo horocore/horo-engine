@@ -294,6 +294,8 @@ namespace {
             "workspace.local_agent.cloud_unavailable",
             "workspace.local_agent.cloud_auth_failed",
             "workspace.local_agent.cloud_rate_limited",
+            "workspace.local_agent.rate_limited",
+            "workspace.local_agent.request_budget_exceeded",
             "workspace.local_agent.cloud_timeout",
             "workspace.local_agent.cloud_working",
             "workspace.local_agent.source_patch_stale",

@@ -212,6 +212,34 @@ namespace Horo::Agent {
         CHECK(tools.scene->calls == 0);
     }
 
+    TEST_CASE("Editor Agent stops on a provider rate limit or output overrun before dispatching tools", "[agent][turn]") {
+        Tools tools;
+        Model model;
+        auto expected = AgentTurnStatus::BudgetExceeded;
+        std::optional<ModelErrorCode> providerError;
+        model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            return Emit(sink, {Intent("inspect-1"), {.kind = ModelEventKind::Usage, .usage = {8, 3}},
+                               {.kind = ModelEventKind::Completed}});
+        };
+        SECTION("provider reports output above the reserved allowance") {}
+        SECTION("rate limit after a streamed intent") {
+            expected = AgentTurnStatus::ProviderFailed;
+            providerError = ModelErrorCode::RateLimited;
+            model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+                if (auto output = Emit(sink, {Intent("inspect-1")}); !output.Succeeded())
+                    return output;
+                return ModelOutcome{ModelError{ModelErrorCode::RateLimited, "Rate limited", 429}};
+            };
+        }
+        const auto result = tools.Run(model, Request(true), AgentTurnLimits{.maximumOutputTokens = 2});
+        CHECK(result.status == expected);
+        CHECK(result.providerError == providerError);
+        CHECK(result.messages.empty());
+        CHECK(tools.scene->calls == 0);
+        REQUIRE(model.requests.size() == 1);
+        CHECK(model.requests.front().maximumOutputTokens == 2);
+    }
+
     TEST_CASE("Editor Agent cancels cooperative providers and charges emitted data before retaining it", "[agent][turn]") {
         Model model;
         std::stop_source parent;

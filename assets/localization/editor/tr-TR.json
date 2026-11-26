@@ -159,6 +159,8 @@
     "workspace.local_agent.cloud_unavailable": {"text": "Bulut hizmetine ulaşılamadı. HTTPS adresini ve bağlantınızı kontrol edin."},
     "workspace.local_agent.cloud_auth_failed": {"text": "Bulut kimlik doğrulaması başarısız oldu. Bu adrese ait erişim anahtarını kontrol edin."},
     "workspace.local_agent.cloud_rate_limited": {"text": "Bulut sağlayıcısı istekleri sınırlandırdı. Daha sonra yeniden deneyin."},
+    "workspace.local_agent.rate_limited": {"text": "Yerel sağlayıcı istekleri sınırlandırdı. Daha sonra yeniden deneyin."},
+    "workspace.local_agent.request_budget_exceeded": {"text": "İstek bir yapay zekâ sınırını aştı. Mesajı veya ekli bağlamı kısaltın ya da işi daha küçük isteklere bölün."},
     "workspace.local_agent.cloud_timeout": {"text": "Bulut isteği zaman aşımına uğradı."},
     "workspace.local_agent.cloud_working": {"text": "Bulut hizmeti bekleniyor…"},
     "workspace.local_agent.discover": {"text": "Modelleri bul"},

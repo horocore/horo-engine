@@ -159,6 +159,8 @@
     "workspace.local_agent.cloud_unavailable": {"text": "Could not reach the cloud service. Check the HTTPS address and your connection."},
     "workspace.local_agent.cloud_auth_failed": {"text": "Cloud authentication failed. Check the access key for this address."},
     "workspace.local_agent.cloud_rate_limited": {"text": "The cloud provider limited requests. Try again later."},
+    "workspace.local_agent.rate_limited": {"text": "The local provider limited requests. Try again later."},
+    "workspace.local_agent.request_budget_exceeded": {"text": "The request exceeded an AI limit. Reduce the message or attached context, or split the task into smaller requests."},
     "workspace.local_agent.cloud_timeout": {"text": "The cloud request timed out."},
     "workspace.local_agent.cloud_working": {"text": "Waiting for the cloud service…"},
     "workspace.local_agent.discover": {"text": "Find models"},

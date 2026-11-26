@@ -247,11 +247,26 @@ namespace Horo::Editor {
                 return "tools_unsupported";
             if (cloud && (error == Authentication || error == CredentialUnavailable))
                 return "cloud_auth_failed";
-            if (cloud && error == RateLimited)
-                return "cloud_rate_limited";
+            if (error == RateLimited)
+                return cloud ? "cloud_rate_limited" : "rate_limited";
             if (error == Unavailable || error == Transport)
                 return cloud ? "cloud_unavailable" : "unavailable";
             return "failed";
+        }
+
+        /** @brief Preserves turn-owned limits and cancellation even without a provider error. */
+        const char *TurnFailureKey(const AgentTurnResult &result, const bool cloud) noexcept {
+            using enum AgentTurnStatus;
+            switch (result.status) {
+                case BudgetExceeded:
+                    return "request_budget_exceeded";
+                case Cancelled:
+                    return "cancelled";
+                case TimedOut:
+                    return cloud ? "cloud_timeout" : "timeout";
+                default:
+                    return FailureKey(result.providerError, cloud);
+            }
         }
 
         /** @brief Presents and reviews results from the editor-owned background operation. */
@@ -2196,8 +2211,7 @@ namespace Horo::Editor {
                     }
                     return;
                 }
-                const auto *timeout = cloudMode_ ? "cloud_timeout" : "timeout";
-                status_ = result.status == AgentTurnStatus::TimedOut ? timeout : FailureKey(result.providerError, cloudMode_);
+                status_ = TurnFailureKey(result, cloudMode_);
                 if (cloudMode_)
                     return;
                 history_.FinishRecovery(result.status == AgentTurnStatus::Cancelled ? AgentHistoryMessageState::Cancelled
