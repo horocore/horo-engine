@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <imgui_internal.h>
 #include <utility>
 
 namespace Horo::Editor {
@@ -164,10 +165,15 @@ namespace Horo::Editor {
         if (status == SourceReviewStatus::None)
             return;
         if (status == SourceReviewStatus::Ready) {
-            if (Button(context, "workspace.source_review.previous") && widget.NavigateReview(false))
-                focusSource_ = true;
-            if (Button(context, "workspace.source_review.next") && widget.NavigateReview(true))
-                focusSource_ = true;
+            const auto step = [&](const char *key, const bool forward) {
+                if (!Button(context, key) || !widget.NavigateReview(forward))
+                    return;
+                // Keep keyboard navigation on the review action so Enter cannot reach the source editor.
+                if (ImGui::GetCurrentContext()->NavActivateDownId != ImGui::GetItemID())
+                    focusSource_ = true;
+            };
+            step("workspace.source_review.previous", false);
+            step("workspace.source_review.next", true);
         } else {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.source_review.conflict"), Theme::ConsoleWarning(),
                             context.theme.fonts);

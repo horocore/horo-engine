@@ -8,6 +8,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <utility>
 
 namespace {
     using namespace Horo;
@@ -74,7 +75,7 @@ TEST_CASE("Source review shows and navigates only changed bytes in the editing s
     CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().SharesStateWith(source));
 }
 
-TEST_CASE("Narrow source review keeps its localized dismissal inside the content width", "[editor][source][review]") {
+TEST_CASE("Narrow source review keeps localized controls reachable by keyboard", "[editor][source][review]") {
     WidgetFixture fixture;
     const auto source = fixture.Open("code.cpp", "alpha\nbeta\n");
     fixture.first.Publish(source);
@@ -91,14 +92,49 @@ TEST_CASE("Narrow source review keeps its localized dismissal inside the content
     const EditorGuiContext context{engineEvents, editorEvents, locale, theme, settings};
     SourceEditorTools tools;
 
-    fixture.gui.BeginFrame();
-    ImGui::SetNextWindowSize({96, 500});
-    ImGui::Begin("Narrow review", nullptr, ImGuiWindowFlags_NoScrollbar);
-    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-    CHECK_FALSE(tools.Draw(fixture.first, source, {}, {}, context));
-    CHECK(ImGui::GetItemRectMax().x <= right);
-    ImGui::End();
-    fixture.gui.EndFrame();
+    auto &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGuiID next{};
+    bool focusWindow = true;
+    const auto frame = [&] {
+        fixture.gui.BeginFrame();
+        ImGui::SetNextWindowSize({96, 500});
+        if (std::exchange(focusWindow, false))
+            ImGui::SetNextWindowFocus();
+        ImGui::Begin("Narrow review", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::PushID(0);
+        ImGui::PushID(static_cast<int>(fixture.first.Identity().value));
+        next = ImGui::GetID(locale.Get("editor", "workspace.source_review.next").c_str());
+        ImGui::PopID();
+        ImGui::PopID();
+        const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+        CHECK_FALSE(tools.Draw(fixture.first, source, {}, {}, context));
+        if (fixture.first.ReviewStatus() == SourceReviewStatus::Ready)
+            CHECK(ImGui::GetItemRectMax().x <= right);
+        const auto available = ImGui::GetContentRegionAvail();
+        CHECK_FALSE(fixture.first.Draw({available.x, available.y, 1.0F, tools.TakeFocusRequest(), true}));
+        ImGui::End();
+        fixture.gui.EndFrame();
+    };
+    const auto press = [&](const ImGuiKey key) {
+        io.AddKeyEvent(key, true);
+        frame();
+        io.AddKeyEvent(key, false);
+        frame();
+    };
+    frame();
+    frame();
+    for (int attempt = 0; attempt < 6 && ImGui::GetCurrentContext()->NavId != next; ++attempt)
+        press(ImGuiKey_Tab);
+    REQUIRE(ImGui::GetCurrentContext()->NavId == next);
+    press(ImGuiKey_Enter);
+    CHECK(fixture.first.Selection().caret == 6);
+    REQUIRE(ImGui::GetCurrentContext()->NavId == next);
+    press(ImGuiKey_Enter);
+    CHECK(fixture.first.Selection().caret == 0);
+    press(ImGuiKey_Tab);
+    press(ImGuiKey_Enter);
+    CHECK(fixture.first.ReviewStatus() == SourceReviewStatus::None);
     CHECK(source.IsCurrent());
 }
 
