@@ -23,7 +23,7 @@ namespace Horo::Application {
         PlatformServices::PlatformRequestHandle<T> handle; /**< Frontend-issued cancellation and completion identity. */
     };
 
-    /** @brief An exact cloud revision selected for explicit import into a new local slot. */
+    /** @brief An exact cloud revision selected for local validation. */
     class CloudSaveDownload final {
     public:
         /** @brief Returns the correlation and observation identity for the owning Save operation. */
@@ -111,7 +111,7 @@ namespace Horo::Application {
          * @param revision Exact selected remote revision. @param maximumBytes Caller-imposed complete read bound.
          * @return A download retaining the selection and exact request, or a typed admission failure.
          */
-        [[nodiscard]] Result<CloudSaveDownload> DownloadForImport(
+        [[nodiscard]] Result<CloudSaveDownload> DownloadRevision(
             OperationId operation, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision revision,
             std::uint64_t maximumBytes) const;
 
@@ -126,6 +126,19 @@ namespace Horo::Application {
             Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
             const CloudSaveImportTarget &target, const CancellationToken &cancellation = {}) const;
+
+        /** @brief Applies a direct descendant to the same logical slot without rewriting its verified archive.
+         * @param lifecycle Local publication authority. @param download Admitted remote selection.
+         * @param completion Terminal observation of that exact read. @param target Existing local slot consent.
+         * @param expected Exact catalog and cloud evidence captured before transfer.
+         * @param cancellation Observed until local manifest publication.
+         * @return Durable local result or typed rejection. Runs on the serialized storage lane.
+         */
+        [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> ApplyDownload(
+            Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
+            const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
+            const CancellationToken &cancellation = {}) const;
 
         /** @brief Dispatches an exact durable mutation after checking its binding and payload.
          * @param operation Owning Save operation ID.
@@ -202,6 +215,8 @@ namespace Horo::Application {
         friend class CloudSaveMutationJournal;
         /** @brief Derives the versioned opaque key for one typed slot inside this authenticated partition. */
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
+        /** @brief Checks that a selected revision is still attributed to this exact account binding. */
+        [[nodiscard]] bool OwnsDownload(const CloudSaveDownload &download) const noexcept;
 
         /** @brief Validates the exact selected local generation in the current binding. */
         [[nodiscard]] const Runtime::SaveCloudGenerationRecord *FindUploadSelection(

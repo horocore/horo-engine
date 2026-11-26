@@ -116,8 +116,8 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
-        /** @brief Checks a complete download against the exact revision and address approved for import. */
-        Result<const CloudBlobReadResult *> CheckImportRead(
+        /** @brief Checks a complete download against the exact revision and address selected by the owner. */
+        Result<const CloudBlobReadResult *> CheckDownloadRead(
             const CloudSaveRequest<CloudBlobReadResult> &admission, const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
             const CloudBlobReadRequest &request, const ProviderObjectRevision &revision) {
             using Response = Result<const CloudBlobReadResult *>;
@@ -133,6 +133,12 @@ namespace Horo::Application {
             if (const auto valid = ValidateCloudBlobReadCompletion(*read, request, request.subject); valid.HasError())
                 return Response::Failure(valid.ErrorValue());
             return Response::Success(read);
+        }
+
+        /** @brief Copies the verified transport payload into immutable worker-owned Save staging. */
+        Runtime::ImmutableSaveArchive StageDownload(const CloudBlobReadResult &read) {
+            const auto bytes = read.bytes.Bytes();
+            return {std::make_shared<const std::vector<std::byte>>(bytes.begin(), bytes.end())};
         }
     }
 
@@ -205,8 +211,8 @@ namespace Horo::Application {
         });
     }
 
-    /** @copydoc CloudSaveTransport::DownloadForImport */
-    Result<CloudSaveDownload> CloudSaveTransport::DownloadForImport(const OperationId operation,
+    /** @copydoc CloudSaveTransport::DownloadRevision */
+    Result<CloudSaveDownload> CloudSaveTransport::DownloadRevision(const OperationId operation,
                                                                     const Runtime::SaveGameSlotId slot,
                                                                     ProviderObjectRevision revision,
                                                                     const std::uint64_t maximumBytes) const {
@@ -224,6 +230,11 @@ namespace Horo::Application {
             CloudSaveDownload{journalPartition_, slot, std::move(revision), std::move(read), std::move(admission).Value()});
     }
 
+    /** @copydoc CloudSaveTransport::OwnsDownload */
+    bool CloudSaveTransport::OwnsDownload(const CloudSaveDownload &download) const noexcept {
+        return frontend_->IsOpen() && download.partition_ == journalPartition_ && download.read_.subject == subject_;
+    }
+
     /** @copydoc CloudSaveTransport::ImportDownload */
     Result<Runtime::SaveSlotLifecycleResult> CloudSaveTransport::ImportDownload(
         Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
@@ -232,14 +243,13 @@ namespace Horo::Application {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         const auto &destination = target.destination;
         const auto &access = destination.address.namespaceAccess;
-        if (!frontend_->IsOpen() || download.partition_ != journalPartition_ || download.read_.subject != subject_ ||
-            access.expected != scope_.localNamespace)
+        if (!OwnsDownload(download) || access.expected != scope_.localNamespace)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         if (destination.generation || destination.address.slot == download.slot_)
             return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
-        const auto read = CheckImportRead(download.Request(), completion, download.read_, download.revision_);
+        const auto read = CheckDownloadRead(download.Request(), completion, download.read_, download.revision_);
         if (read.HasError())
             return Response::Failure(read.ErrorValue());
         const auto current = lifecycle.ReadCloudRevision(access, scope_);
@@ -249,14 +259,36 @@ namespace Horo::Application {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
 
         try {
-            const auto bytes = read.Value()->bytes.Bytes();
-            const auto staged = std::make_shared<const std::vector<std::byte>>(bytes.begin(), bytes.end());
             return lifecycle.ImportVerified({.kind = Runtime::SaveSlotLifecycleKind::Import,
                                              .source = destination,
-                                             .imported = {staged},
+                                             .imported = StageDownload(*read.Value()),
                                              .importSource = target.sourceScope,
                                              .display = target.display},
                                             download.slot_, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
+        }
+    }
+
+    /** @copydoc CloudSaveTransport::ApplyDownload */
+    Result<Runtime::SaveSlotLifecycleResult> CloudSaveTransport::ApplyDownload(
+        Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+        const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const Runtime::SaveSlotLifecycleTarget &target,
+        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation) const {
+        using Response = Result<Runtime::SaveSlotLifecycleResult>;
+        if (!OwnsDownload(download) || expected.Metadata().scope != scope_ || target.address.slot != download.slot_)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        if (cancellation.IsCancellationRequested())
+            return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
+        const auto read = CheckDownloadRead(download.Request(), completion, download.read_, download.revision_);
+        if (read.HasError())
+            return Response::Failure(read.ErrorValue());
+        try {
+            const auto key = download.read_.key.Bytes();
+            const auto revision = download.revision_.Bytes();
+            Runtime::SaveCloudObjectRef object{.key = {key.begin(), key.end()},
+                                               .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
+            return lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }

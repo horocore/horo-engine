@@ -239,6 +239,18 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PublishCloudRevision(const SaveNamespaceAccessRequest &access,
                                                         const SaveCloudRevisionSnapshot &expected,
                                                         const SaveCloudRevisionSnapshot &candidate);
+
+        /** @brief Applies a verified direct cloud descendant with its original generation and bytes.
+         * @param target Exact existing slot, binding and catalog revision.
+         * @param expected Catalog and provider evidence selected before the transfer.
+         * @param object Opaque key and exact observed provider revision.
+         * @param archive Immutable complete remote bytes verified again by the local Save authority.
+         * @param cancellation Observed before the atomic catalog visibility gate.
+         * @return Durable result or typed conflict, validation or storage failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {});
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.
@@ -341,6 +353,10 @@ namespace Horo::Runtime {
                                                                     const CancellationToken &cancellation, ArchiveTransfer *capture);
         /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
         [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
+        /** @brief Applies a cloud descendant while holding the exact local publication authority. */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendantLocked(
+            Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation);
         /** @brief Validates exact selected or retained consent before any metadata mutation. */
         [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
                                                         bool retained) const;

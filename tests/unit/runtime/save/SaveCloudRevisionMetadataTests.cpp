@@ -632,7 +632,7 @@ namespace Horo::Runtime {
             const auto revision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{3}});
             REQUIRE(revision.HasValue());
             const auto remoteSlot = existing.entry->publication.slot;
-            const auto download = transport.DownloadForImport(31, remoteSlot, revision.Value(), payload.size() + 128);
+            const auto download = transport.DownloadRevision(31, remoteSlot, revision.Value(), payload.size() + 128);
             REQUIRE(download.HasValue());
             REQUIRE(backend->lastCloudRead);
             const auto &handle = download.Value().Request().handle;
@@ -727,6 +727,105 @@ namespace Horo::Runtime {
                 CHECK(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target).HasError());
                 CHECK(std::ranges::equal(snapshot.terminal->Value()->bytes.Bytes(), damaged));
                 CHECK(fixture.Index().entries == before.entries);
+            }
+        }
+
+        TEST_CASE("A cloud successor preserves its generation and publishes paired remote evidence",
+                  "[unit][save][cloud-transport][download]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            fixture.Import(11);
+            const auto original = fixture.ExportBytes(10);
+            const auto target = fixture.Target(10);
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            const auto baseline = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(baseline.HasValue());
+            auto inFlight = baseline.Value().Metadata();
+            ++inFlight.revision;
+            inFlight.records.back().state = SaveCloudGenerationState::Uploading;
+            const auto uploading = SaveCloudRevisionSnapshot::Create(baseline.Value().Index(), scope, inFlight);
+            REQUIRE(uploading.HasValue());
+            REQUIRE(fixture.owner->PublishCloudRevision(fixture.Access(), baseline.Value(), uploading.Value()).HasValue());
+            const auto expected = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(expected.HasValue());
+            const auto archive = SaveSlotLifecycleTest::ReadOwned(original);
+            auto header = archive.Header();
+            header.slotGeneration = Id<SlotGenerationId>(90);
+            header.parentGeneration = target.generation;
+            const auto candidate = SaveSlotLifecycleTest::RewriteHeader(archive, header);
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session, candidate.size() + 128);
+            const auto transport = BoundTransport(frontend, session, scope);
+            const auto revision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{8}});
+            REQUIRE(revision.HasValue());
+            const auto download = transport.DownloadRevision(32, target.address.slot, revision.Value(), candidate.size() + 128);
+            REQUIRE(download.HasValue());
+            REQUIRE(backend->lastCloudRead);
+            const auto &handle = download.Value().Request().handle;
+            REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+            const auto subject = *session.Subject();
+            const auto complete = [&](const std::vector<std::byte> &payload) {
+                auto bytes = Cloud::CloudBlobOwnedBytes::Copy(payload);
+                REQUIRE(bytes.HasValue());
+                const Cloud::CloudObjectHead head{backend->lastCloudRead->key, revision.Value(), payload.size(), ComputeSha256(payload)};
+                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                            Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), head, std::move(bytes).Value()}).HasValue());
+                const auto snapshot = backend->requests.Query(handle);
+                REQUIRE(snapshot.HasValue());
+                return transport.ApplyDownload(*fixture.owner, download.Value(), snapshot.Value(), target, expected.Value());
+            };
+            const auto checkPublished = [&] {
+                fixture.Reopen();
+                CHECK(fixture.ExportBytes(10) == candidate);
+                CHECK(fixture.Target(10).generation == header.slotGeneration);
+                const auto pair = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(pair.HasValue());
+                REQUIRE(pair.Value().Metadata().records.size() == 2);
+                CHECK(pair.Value().Metadata().records.back() == inFlight.records.back());
+                const auto &record = pair.Value().Metadata().records.front();
+                CHECK(record.generation == header.slotGeneration);
+                CHECK(record.state == SaveCloudGenerationState::Clean);
+                REQUIRE(record.object);
+                REQUIRE(record.object->revision);
+                CHECK(std::ranges::equal(record.object->revision.value(), revision.Value().Bytes()));
+            };
+
+            SECTION("The exact remote archive is selected atomically") {
+                const auto applied = complete(candidate);
+                REQUIRE(applied.HasValue());
+                REQUIRE(applied.Value().entry);
+                CHECK(applied.Value().entry->publication.generation == header.slotGeneration);
+                checkPublished();
+            }
+            SECTION("A divergent archive leaves both observations intact") {
+                auto divergent = header;
+                divergent.parentGeneration = Id<SlotGenerationId>(91);
+                Cloud::RequireError(complete(SaveSlotLifecycleTest::RewriteHeader(archive, divergent)),
+                                    SaveErrors::SlotCommitGenerationStale);
+                CHECK(fixture.ExportBytes(10) == original);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+            }
+            SECTION("A concurrent local save invalidates the earlier selection") {
+                fixture.Import(10);
+                const auto newer = fixture.ExportBytes(10);
+                Cloud::RequireError(complete(candidate), SaveErrors::CloudMetadataStale);
+                CHECK(fixture.ExportBytes(10) == newer);
+            }
+            SECTION("A failed catalog replace keeps the old pair") {
+                fixture.InjectFailure(SaveSlotLifecycleIoStage::Replace, SaveSlotLifecycleFileKind::Catalog);
+                CHECK(complete(candidate).HasError());
+                fixture.fault.enabled = false;
+                fixture.Reopen();
+                CHECK(fixture.ExportBytes(10) == original);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+            }
+            SECTION("Recovery keeps the new archive and remote revision paired after visibility") {
+                fixture.InjectFailure(SaveSlotLifecycleIoStage::DirectorySync, SaveSlotLifecycleFileKind::Catalog);
+                Cloud::RequireError(complete(candidate), SaveErrors::SlotCommitOutcomeUnknown);
+                fixture.fault.enabled = false;
+                checkPublished();
             }
         }
 
