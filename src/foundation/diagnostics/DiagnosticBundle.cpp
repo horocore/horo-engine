@@ -153,7 +153,7 @@ namespace Horo::Diagnostics {
             return output;
         }
 
-        constexpr std::array DiagnosticNamespaceFields{"category", "subsystem", "domain", "code"};
+        constexpr std::array DiagnosticNamespaceFields{"category", "subsystem", "domain", "code", "error_domain", "error_code"};
 
         /** @brief Identifies direct values that could repeat a sibling's private diagnostic data. */
         [[nodiscard]] bool HasInlineData(const Json &value) {

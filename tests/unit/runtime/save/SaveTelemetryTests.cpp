@@ -107,12 +107,14 @@ namespace {
     }
 
     /** @brief Retries a fixture record when the bounded telemetry queue is momentarily contended. */
-    bool PublishLog(const std::string_view category, const std::string_view message) {
+    bool PublishLog(const std::string_view category, const std::string_view message,
+                    const std::vector<Telemetry::Field> &fields = {}) {
         for (std::size_t attempt = 0; attempt < 1000; ++attempt) {
             if (Telemetry::Runtime::EmitRecord({.subsystem = std::string{category},
                                                .payload = Telemetry::LogRecord{.severity = Log::Level::Error,
                                                                                .category = std::string{category},
-                                                                               .message = std::string{message}}}))
+                                                                               .message = std::string{message},
+                                                                               .fields = fields}}))
                 return true;
             std::this_thread::yield();
         }
@@ -637,6 +639,28 @@ TEST_CASE("Support bundles withhold diagnostic records that embed a private Save
     CHECK(archive.find("private-message-copy") == std::string::npos);
     CHECK(archive.find("private-display") == std::string::npos);
     CHECK(archive.find("unrelated-diagnostic") != std::string::npos);
+}
+
+TEST_CASE("Support bundles withhold forwarded Save errors from real structured logs", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    constexpr std::string_view category = "cinematic.property_binding";
+    REQUIRE(PublishLog(category, "private-forwarded-save-domain",
+                       {{"error_domain", std::string{SaveDiagnosticErrorDomain}}, {"display", std::string{"private-player-display"}}}));
+    REQUIRE(PublishLog(category, "private-forwarded-save-code",
+                       {{"error_code", std::string{"save.archive.chunk_hash_mismatch"}}, {"slot", std::uint64_t{56740092811}}}));
+    REQUIRE(PublishLog(category, "retained-forwarded-unrelated-error",
+                       {{"error_domain", std::string{"horo.saver"}}, {"error_code", std::string{"saver.archive.changed"}}}));
+    const auto bundled = session.host->GenerateDiagnosticBundle({.outputPath = session.directory / "bundle.zip"});
+    REQUIRE(bundled.HasValue());
+    const auto source = Read(session.directory / "save.jsonl");
+    const auto archive = Read(bundled.Value().outputPath);
+    for (const std::string_view value : {"private-forwarded-save-domain", "private-player-display", "private-forwarded-save-code",
+                                        "56740092811"}) {
+        REQUIRE(source.find(value) != std::string::npos);
+        CHECK(archive.find(value) == std::string::npos);
+    }
+    CHECK(archive.find("retained-forwarded-unrelated-error") != std::string::npos);
 }
 
 TEST_CASE("Support bundles withhold unclassified scalar values alongside private Save evidence", "[save][telemetry][privacy][bundle]") {
