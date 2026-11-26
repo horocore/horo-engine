@@ -420,8 +420,11 @@ must declare asset-only contributions and pass the same archive path and
 execution checks as replaced asset packages. An asset-only
 replacement can change versions or add files when the package manifest and
 lock policy stay identical and verified archives prove that every existing
-path keeps its bytes and contribution owner. Withdrawals and replacements
-outside those bounds require migration and reference review.
+path keeps its bytes and contribution owner. An offline update can exchange
+asset-only packages in one transaction. With a verified cache, preview
+checks both archives and reports saved importer references to departing
+packages. Publication repeats the reference checks under the project
+mutation lease. The same checks apply to the inverse exchange on rollback.
 
 The update host publishes a previously reviewed candidate only when the exact
 base and candidate documents still match the review and the candidate lock

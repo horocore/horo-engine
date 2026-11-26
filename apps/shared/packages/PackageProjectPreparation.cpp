@@ -580,25 +580,30 @@ namespace Horo::Application::Internal {
                    (!sources.live && sources.offline->ProjectRoot() == root && sources.offline->LockDigest() == expected.lockDigest);
         }
 
-        /** @brief Reviews changed retained assets against both exact, staged archive generations. */
-        Result<void> ReviewRetainedRollbackAssets(const Packages::PackageRestoreGraph &installed, const Packages::PackageRestoreGraph &candidate,
-                                                  const Packages::ValidatedPackageLockfileV1 &lock,
-                                                  const Platform::ProjectReadContext &context) {
+        /** @brief Reviews additions and retained assets in the exact staged archives. */
+        Result<void> ReviewWithdrawalCandidate(const Packages::PackageRestoreGraph &installed,
+                                               const Packages::PackageRestoreGraph &candidate,
+                                               const Packages::ValidatedPackageLockfileV1 &lock,
+                                               const Platform::ProjectReadContext &context) {
             std::vector<Diagnostic> diagnostics;
             for (const auto &retained : candidate.packages) {
                 if (auto current = Platform::CheckProjectReadContext(context); current.HasError())
                     return current;
                 const auto current = std::ranges::find(lock.Packages(), retained.lock.package, &Packages::LockedPackage::package);
-                if (current == lock.Packages().end())
-                    return Result<void>::Failure(MetadataConflict());
-                if (*current == retained.lock)
+                if (current != lock.Packages().end() && *current == retained.lock)
                     continue;
-                if (!CanRestoreRetainedAsset(*current, retained.lock))
-                    return Result<void>::Failure(UpdateNeedsMigration());
-                const auto archived = std::ranges::find(installed.packages, *current, &Packages::PackageRestorePackage::lock);
-                if (archived == installed.packages.end() || !archived->archive || !retained.archive)
+                if (!retained.archive)
                     return Result<void>::Failure(MetadataConflict());
-                auto reviewed = ReviewAssetFiles(*current, *archived->archive, retained.lock, *retained.archive, diagnostics);
+                if (!IsAssetOnly(retained.lock) || (current != lock.Packages().end() && !CanRestoreRetainedAsset(*current, retained.lock)))
+                    return Result<void>::Failure(UpdateNeedsMigration());
+                auto reviewed = [&] {
+                    if (current == lock.Packages().end())
+                        return ReviewAddedArchive(retained.lock, *retained.archive, diagnostics);
+                    const auto archived = std::ranges::find(installed.packages, *current, &Packages::PackageRestorePackage::lock);
+                    if (archived == installed.packages.end() || !archived->archive)
+                        return Result<void>::Failure(MetadataConflict());
+                    return ReviewAssetFiles(*current, *archived->archive, retained.lock, *retained.archive, diagnostics);
+                }();
                 if (reviewed.HasError()) {
                     auto error = std::move(reviewed).ErrorValue();
                     std::ranges::move(diagnostics, std::back_inserter(error.diagnostics));
@@ -609,15 +614,15 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reviews compatible retained assets and saved references to every exact departing package. */
-        Result<void> CheckRollbackWithdrawals(const MetadataDocuments &current, const Packages::PackageLockfileLimits &limits,
-                                              const Packages::PackageRestoreGraph &candidate, const PackageRemovalSources &sources) {
+        Result<void> CheckUpdateWithdrawals(const MetadataDocuments &current, const Packages::PackageLockfileLimits &limits,
+                                            const Packages::PackageRestoreGraph &candidate, const PackageRemovalSources &sources) {
             const auto lock = Packages::ValidatedPackageLockfileV1::Parse(current.lock, limits);
             if (lock.HasError())
                 return Result<void>::Failure(lock.ErrorValue());
             const auto installed = sources.offline->Graph();
             if (!installed || installed->requestHash != lock.Value().RequestHash())
                 return Result<void>::Failure(MetadataConflict());
-            auto retained = ReviewRetainedRollbackAssets(*installed, candidate, lock.Value(), sources.context);
+            auto retained = ReviewWithdrawalCandidate(*installed, candidate, lock.Value(), sources.context);
             Packages::PackageRemovalGraphPreview impact;
             for (const auto &entry : lock.Value().Packages()) {
                 if (std::ranges::none_of(candidate.packages, [&](const auto &retained) { return retained.lock.package == entry.package; }))
@@ -678,7 +683,7 @@ namespace Horo::Application::Internal {
         return Result<PreparedPackageProject>::Success(std::move(prepared));
     }
 
-    /** @brief Shares journaled publication with offline rollback reference review when packages depart. */
+    /** @brief Shares journaled publication with offline reference review when packages depart. */
     static Result<PackageMetadataPublication> PublishReviewedPackageUpdate(const PackageProjectPolicy &policy,
                                                                             const ApprovedPackageProjectUpdate &update,
                                                                             DurableFileSystem &files,
@@ -702,7 +707,7 @@ namespace Horo::Application::Internal {
             return Publication::Failure(previous.ErrorValue());
         // Reuse the same withdrawal review at the journal boundary after staging the rollback point.
         const auto review = [&]() {
-            return withdrawal ? CheckRollbackWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal)
+            return withdrawal ? CheckUpdateWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal)
                               : Result<void>::Success();
         };
         if (auto reviewed = review(); reviewed.HasError())
@@ -718,10 +723,10 @@ namespace Horo::Application::Internal {
         return PublishReviewedPackageUpdate(policy, update, files, context, nullptr);
     }
 
-    /** @copydoc PublishPackageWithdrawalRollback */
-    Result<PackageMetadataPublication> PublishPackageWithdrawalRollback(const PackageProjectPolicy &policy,
-                                                                        const ApprovedPackageProjectUpdate &update, DurableFileSystem &files,
-                                                                        const PackageRemovalSources &sources) {
+    /** @copydoc PublishPackageUpdateWithWithdrawals */
+    Result<PackageMetadataPublication> PublishPackageUpdateWithWithdrawals(const PackageProjectPolicy &policy,
+                                                                           const ApprovedPackageProjectUpdate &update,
+                                                                           DurableFileSystem &files, const PackageRemovalSources &sources) {
         if (!sources.offline || !MatchesRemovalProject(policy.projectRoot, update.base, sources))
             return Result<PackageMetadataPublication>::Failure(MetadataConflict());
         return PublishReviewedPackageUpdate(policy, update, files, sources.context, &sources);

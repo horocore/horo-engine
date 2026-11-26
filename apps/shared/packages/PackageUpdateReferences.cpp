@@ -8,8 +8,8 @@
 #include <map>
 
 namespace Horo::Application::Internal {
-    /** @brief Checks the contribution policy admitted by offline package updates. */
-    static bool IsAssetOnly(const Packages::LockedPackage &package) {
+    /** @copydoc IsAssetOnly */
+    bool IsAssetOnly(const Packages::LockedPackage &package) {
         return std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"});
     }
 

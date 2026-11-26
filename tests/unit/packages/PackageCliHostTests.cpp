@@ -154,24 +154,26 @@ namespace {
 
     /** @brief Writes a resolved asset candidate bound to the fixture's source and archive. */
     void WriteAssetCandidate(NativeProject &fixture, const Packages::PackageVersion &version,
-                             const Packages::ValidatedPackageArchive &archive, std::string_view contribution = "assets") {
-        const auto intent = nlohmann::json{
-            {"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
-            {"dependencies", {{fixture.graph.package.Value(), {{"source", "fixture.source"}, {"version", version.ToString()}}}}}}.dump();
+                             const Packages::ValidatedPackageArchive &archive, std::string_view contribution = "assets",
+                             std::optional<Packages::HoroPackageId> package = std::nullopt) {
+        const auto &id = package ? *package : fixture.graph.package;
+        const auto intent =
+            nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+                           {"dependencies", {{id.Value(), {{"source", "fixture.source"}, {"version", version.ToString()}}}}}}
+                .dump();
         const auto request = Packages::ValidatedPackageRequest::Parse(intent);
         REQUIRE(request.HasValue());
-        const Packages::PackageResolutionPlan plan{
-            .packages = {{fixture.graph.package, version, fixture.graph.source, archive.Digest(), {}}}};
-        const Packages::PackageLockArtifact entry{.package = fixture.graph.package,
-                                                 .version = version,
-                                                 .source = fixture.graph.source,
-                                                 .artifactDigest = archive.Digest(),
-                                                 .manifestDigest = archive.PackageManifestDigest(),
-                                                 .fileManifestDigest = archive.Manifest().Digest(),
-                                                 .packageFormatVersion = 1,
-                                                 .contributions = {std::string{contribution}}};
-        const auto lock = Packages::ValidatedPackageLockfileV1::Generate(
-            plan, std::span{&fixture.graph.package, 1}, request.Value().Digest(), std::span{&entry, 1});
+        const Packages::PackageResolutionPlan plan{.packages = {{id, version, fixture.graph.source, archive.Digest(), {}}}};
+        const Packages::PackageLockArtifact entry{.package = id,
+                                                  .version = version,
+                                                  .source = fixture.graph.source,
+                                                  .artifactDigest = archive.Digest(),
+                                                  .manifestDigest = archive.PackageManifestDigest(),
+                                                  .fileManifestDigest = archive.Manifest().Digest(),
+                                                  .packageFormatVersion = 1,
+                                                  .contributions = {std::string{contribution}}};
+        const auto lock =
+            Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&id, 1}, request.Value().Digest(), std::span{&entry, 1});
         REQUIRE(lock.HasValue());
         fixture.Write("candidate.json", intent);
         fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
@@ -454,6 +456,74 @@ namespace {
         });
     }
 
+    TEST_CASE("An offline update can replace an asset package and roll back the same exchange", "[packages][application][cli][update]") {
+        using namespace Packages;
+        NativeProject fixture;
+        const auto replacement = HoroPackageId::Parse("com.horo.replacement-assets").Value();
+        const auto archive = Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("replacement bytes"));
+        WriteAssetCandidate(fixture, fixture.graph.version, archive, "assets", replacement);
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto metadata = root / ".horo";
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        std::filesystem::create_directories(root / "Assets");
+        NativeDurableFileSystem files;
+        const auto read = [&](const char *name) {
+            return files.ReadFileBounded(metadata / name, 1U << 20U, {}).Value();
+        };
+        const auto oldRequest = read("packages.json");
+        const auto oldLock = read("packages.lock");
+        auto cache = PackageCacheStore::Create(files, cacheRoot).Value();
+        REQUIRE(cache.Publish(fixture.graph.archive).HasValue());
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const auto apply = MakePackageApplyUpdateCommandAdapter();
+        const auto rollbackPreview = MakePackageRollbackPreviewCommandAdapter();
+        const auto rollbackApply = MakePackageRollbackUpdateCommandAdapter();
+        InInvocation([&](CliExecutionContext &context) {
+            CliCommandRequest update{.command = preview.adapter->GetDescriptor().path,
+                                     .options = {NativeProject::PathOption("project", root),
+                                                 NativeProject::PathOption("candidate-request", metadata / "candidate.json"),
+                                                 NativeProject::PathOption("candidate-lock", metadata / "candidate.lock"),
+                                                 NativeProject::PathOption("package-cache-root", cacheRoot)}};
+            const auto missing = preview.adapter->Execute(update, context);
+            REQUIRE(missing.HasError());
+            CHECK(missing.ErrorValue().code.Value() == "packages.host.update_archive_evidence_unavailable");
+            REQUIRE(cache.Publish(archive).HasValue());
+            const auto reviewed = preview.adapter->Execute(update, context);
+            REQUIRE(reviewed.HasValue());
+            CHECK(read("packages.json") == oldRequest);
+            CHECK(read("packages.lock") == oldLock);
+            auto approved = update;
+            approved.command = apply.adapter->GetDescriptor().path;
+            approved.options.push_back(
+                {"approve", {{std::get<std::string>(reviewed.Value().fields.back().value), CliValueSource::Invocation, {}}}});
+            fixture.WriteImporterReference("late.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+            const auto referenced = preview.adapter->Execute(update, context);
+            REQUIRE(referenced.HasError());
+            CHECK(referenced.ErrorValue().code.Value() == "packages.host.importer_in_use");
+            const auto blocked = apply.adapter->Execute(approved, context);
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+            CHECK(read("packages.json") == oldRequest);
+            CHECK(read("packages.lock") == oldLock);
+            REQUIRE(std::filesystem::remove(root / "Assets/late.horoasset"));
+            REQUIRE(std::filesystem::remove(root / "Assets/late.horoasset.horo"));
+            REQUIRE(apply.adapter->Execute(approved, context).HasValue());
+            CHECK(read("packages.json") == read("candidate.json"));
+            CHECK(read("packages.lock") == read("candidate.lock"));
+            CliCommandRequest rollback{.command = rollbackPreview.adapter->GetDescriptor().path,
+                                       .options = {NativeProject::PathOption("project", root),
+                                                   NativeProject::PathOption("package-cache-root", cacheRoot)}};
+            const auto point = rollbackPreview.adapter->Execute(rollback, context);
+            REQUIRE(point.HasValue());
+            rollback.command = rollbackApply.adapter->GetDescriptor().path;
+            rollback.options.push_back(
+                {"approve", {{std::get<std::string>(point.Value().fields.back().value), CliValueSource::Invocation, {}}}});
+            REQUIRE(rollbackApply.adapter->Execute(rollback, context).HasValue());
+            CHECK(read("packages.json") == oldRequest);
+            CHECK(read("packages.lock") == oldLock);
+        });
+    }
+
     TEST_CASE("Headless package update preview reads candidate documents without repairing or modifying the project",
               "[packages][application][cli][update]") {
         NativeProject fixture;
@@ -536,7 +606,8 @@ namespace {
             const auto fingerprint = std::get<std::string>(fields[4].value);
             const auto blocked = apply(fingerprint);
             REQUIRE(blocked.Outcome().HasError());
-            CHECK(blocked.Outcome().ErrorValue().code.Value() == "packages.host.update_requires_migration_review");
+            CHECK(read(metadata / "packages.json") == originalRequest);
+            CHECK(read(metadata / "packages.lock") == originalLock);
             fixture.Write("candidate.json", candidate.dump() + '\n');
             const auto stale = apply(fingerprint);
             REQUIRE(stale.Outcome().HasError());
