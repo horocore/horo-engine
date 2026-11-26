@@ -173,8 +173,26 @@ When the probe receipt is also the package receipt, the checker uses
 Use the runtime-reported labels from the probe in `runtime` and `headsetModel`,
 and record `runtimeVersion` as `major.minor.patch`. The checker also confirms
 the executable digest, host, renderer, and declared connection mode. Verify the
-transport during the physical smoke test. The release
-owner verifies the referenced captures and package receipt before accepting the
+transport during the physical smoke test.
+
+For standalone Android, the same checker can match the cold-discovery receipt
+and diagnostic APK against an independently prepared Android preflight
+declaration and the physical smoke run.
+
+```sh
+python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json \
+  --android-preflight receipt.json --android-preflight-declaration android-preflight.json \
+  --android-apk diagnostic.apk
+```
+
+Use the same object shape as `androidPreflight` in the
+[release matrix guide](xr-release-qualification.md#assemble-the-matrix). The
+checker verifies the exact diagnostic APK bytes and the receipt's source
+revision, Android system build, OpenXR runtime version, declared ADB transport,
+and process retirement. Cold discovery remains setup evidence. The physical
+smoke record proves the on-device observations.
+
+The release owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).
 Use the [release matrix and example procedures](xr-release-qualification.md)
 to verify all claims together.

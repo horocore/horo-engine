@@ -10,6 +10,7 @@ import re
 
 
 MAX_RECORD_BYTES = 64 * 1024
+MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_DESKTOP_PREFLIGHT_BYTES = 1024
 MAX_DISPLAY_RATES = 32
 DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v2"
@@ -70,6 +71,20 @@ def decode_record(data: bytes) -> object:
 def load_record(path: Path) -> object:
     with path.open("rb") as source:
         return decode_record(source.read(MAX_RECORD_BYTES + 1))
+
+
+def verify_artifact(path: Path, digest: str) -> None:
+    """Match the bytes of one local qualification artifact to its independently declared digest."""
+    require(is_digest(digest), "Missing or invalid artifact digest")
+    require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
+    hasher = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            size += len(chunk)
+            require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
+            hasher.update(chunk)
+    require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
 
 
 def fields(value: object, required: set[str], name: str) -> dict:
@@ -367,6 +382,9 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     parser.add_argument("--desktop-preflight", type=Path, help="Exact packaged Desktop preflight receipt for the declared tuple")
     parser.add_argument("--desktop-preflight-sha256", help="Expected SHA-256 for a separate Desktop preflight receipt")
     parser.add_argument("--desktop-component-sha256", help="Installed OpenXR component SHA-256 from package provenance")
+    parser.add_argument("--android-preflight", type=Path, help="Redacted Android OpenXR cold-discovery receipt")
+    parser.add_argument("--android-preflight-declaration", type=Path, help="Independent Android preflight declaration")
+    parser.add_argument("--android-apk", type=Path, help="Exact diagnostic APK identified by the Android preflight declaration")
     parser.add_argument("--require", choices=sorted(OPTIONAL_CHECKS), action="append", default=[])
     parser.add_argument("--mr-capture", type=Path, help="Redacted physical MR capability evidence for --require optionalMR")
     options = parser.parse_args()
@@ -380,7 +398,19 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
         parser.error("--desktop-preflight needs --expect")
     if options.desktop_preflight is None and (options.desktop_preflight_sha256 is not None or options.desktop_component_sha256 is not None):
         parser.error("Desktop receipt digest options need --desktop-preflight")
+    android = (options.android_preflight, options.android_preflight_declaration, options.android_apk)
+    if any(android) and (not all(android) or options.expect is None):
+        parser.error("Android preflight requires --expect, --android-preflight, --android-preflight-declaration, and --android-apk")
     return options
+
+
+def validate_android_capture(options: argparse.Namespace, record: dict) -> None:
+    """Verify the diagnostic artifact and receipt against the local physical smoke record."""
+    from qualify_xr_android import check_android_preflight_file, validate_android_preflight
+
+    expected = validate_android_preflight(load_record(options.android_preflight_declaration))
+    check_android_preflight_file(options.android_preflight, expected, record)
+    verify_artifact(options.android_apk, expected["apkSha256"])
 
 
 def main() -> int:
@@ -400,11 +430,15 @@ def main() -> int:
         if options.desktop_preflight is not None:
             check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
                                          options.desktop_component_sha256)
+        if options.android_preflight is not None:
+            validate_android_capture(options, record)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")
     if options.display_capture is not None:
         print("Runtime display capture matches the physical smoke run")
+    if options.android_preflight is not None:
+        print("Android OpenXR preflight matches the physical smoke run")
     return 0
 
 

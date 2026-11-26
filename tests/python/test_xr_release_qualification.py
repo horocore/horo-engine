@@ -413,6 +413,50 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
     assert "Standalone (xr-platform): Missing or invalid artifact digest" in result.stderr
 
 
+@pytest.mark.parametrize(("change", "reason"), [
+    (None, None),
+    ("apk", "Artifact content does not match"),
+    ("build", "Android preflight and physical smoke use different system builds"),
+    ("revision", "Android preflight is from another source revision"),
+    ("runtime", "Android preflight uses a different runtime version"),
+    ("transport", "Android preflight uses a different ADB connection"),
+])
+def test_single_device_checker_verifies_android_deployment(release, change, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence, build="9" * 64 if change == "build" else ANDROID_BUILD)
+    receipt = android_receipt(row, evidence)
+    if change == "revision":
+        receipt["artifact"]["sourceRevision"] = "8" * 40
+    if change == "runtime":
+        receipt["observed"]["openxr"]["runtimeVersion"]["patch"] = 4
+    if change == "transport":
+        receipt["qualification"]["connection"]["observed"] = "tcpip"
+
+    expected = row["androidPreflight"]
+    expected["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    declaration = evidence.parent / "physical declaration.json"
+    declaration.write_text(json.dumps(row["declaration"]), encoding="utf-8")
+    preflight = evidence.parent / "Android preflight declaration.json"
+    preflight.write_text(json.dumps(expected), encoding="utf-8")
+    apk = evidence.parent / "diagnostic app.apk"
+    apk.write_bytes(b"foreign diagnostic APK" if change == "apk" else (evidence / expected["apkSha256"]).read_bytes())
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "qualify_xr_device.py"), str(evidence / row["recordSha256"]),
+         "--expect", str(declaration), "--android-preflight", str(evidence / expected["receiptSha256"]),
+         "--android-preflight-declaration", str(preflight), "--android-apk", str(apk)],
+        capture_output=True, text=True, check=False,
+    )
+    if reason is None:
+        assert result.returncode == 0, result.stderr
+        assert "Android OpenXR preflight matches the physical smoke run" in result.stdout
+    else:
+        assert result.returncode == 1
+        assert reason in result.stderr
+        assert not result.stdout
+
+
 @pytest.mark.parametrize(("build", "reason"), [
     (None, "Physical smoke record does not identify its Android system build"),
     ("9" * 64, "Android preflight and physical smoke use different system builds"),

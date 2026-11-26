@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
-from qualify_xr_device import decode_record, fields, in_set, is_digest, require
+from qualify_xr_device import decode_record, fields, in_set, is_digest, is_standalone_android, require
 
 
 MAX_ANDROID_RECEIPT_BYTES = 16 * 1024
@@ -141,3 +142,18 @@ def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_
     abi = check_android_target(receipt, expected, runtime_version)
     check_android_artifact(receipt.get("artifact"), expected, revision, abi)
     check_android_discovery(receipt.get("observed"), runtime_version, abi)
+
+
+def check_android_preflight_file(path: Path, expected: dict, record: dict) -> None:
+    """Match a deployment receipt to the standalone Android build recorded in the physical smoke run."""
+    identity = record["tuple"]
+    require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
+    provenance = record["provenance"]
+    observed_build = provenance.get("androidDeviceBuildSha256")
+    require(observed_build is not None, "Physical smoke record does not identify its Android system build")
+    require(observed_build == expected["deviceBuildSha256"],
+            "Android preflight and physical smoke use different system builds")
+    revision = provenance.get("sourceRevision")
+    require(revision is not None, "Device evidence does not record a source revision")
+    with path.open("rb") as source:
+        check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, identity["runtimeVersion"])

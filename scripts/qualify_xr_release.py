@@ -6,17 +6,16 @@ import argparse
 import hashlib
 from pathlib import Path
 
-from qualify_xr_android import MAX_ANDROID_RECEIPT_BYTES, check_android_preflight, validate_android_preflight
+from qualify_xr_android import check_android_preflight_file, validate_android_preflight
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
-    is_source_revision, is_standalone_android, load_record, require, validate_declaration, validate_record,
+    is_source_revision, load_record, require, validate_declaration, validate_record, verify_artifact,
 )
 
 
 REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
-MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_TIMING_WINDOW_NS = 86_400_000_000_000
 MAX_TIMING_FRAMES = 10_000_000
 TIMING_LIMITS = {
@@ -44,24 +43,16 @@ class Evidence:
     def verify(self, digest: str) -> None:
         if digest in self.verified:
             return
-        hasher = hashlib.sha256()
-        size = 0
-        with self.path(digest).open("rb") as source:
-            while chunk := source.read(1024 * 1024):
-                size += len(chunk)
-                require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
-                hasher.update(chunk)
-        require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
+        verify_artifact(self.path(digest), digest)
         self.verified.add(digest)
 
     def desktop_preflight(self, digest: str, identity: dict, component_digest: str | None) -> None:
         with self.path(digest).open("rb") as source:
             check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
 
-    def android_preflight(self, expected: dict, revision: str, runtime_version: str) -> None:
+    def android_preflight(self, expected: dict, record: dict) -> None:
         self.verify(expected["apkSha256"])
-        with self.path(expected["receiptSha256"]).open("rb") as source:
-            check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, runtime_version)
+        check_android_preflight_file(self.path(expected["receiptSha256"]), expected, record)
 
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:
@@ -171,17 +162,6 @@ def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
     evidence.desktop_preflight(expected, identity, component)
 
 
-def verify_android_route(expected: dict, evidence: Evidence, record: dict, revision: str) -> None:
-    """Require the physical smoke and cold discovery to identify the same Android system build."""
-    identity = record["tuple"]
-    require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
-    observed_build = record["provenance"].get("androidDeviceBuildSha256")
-    require(observed_build is not None, "Physical smoke record does not identify its Android system build")
-    require(observed_build == expected["deviceBuildSha256"],
-            "Android preflight and physical smoke use different system builds")
-    evidence.android_preflight(expected, revision, identity["runtimeVersion"])
-
-
 def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     record = evidence.smoke_record(row["recordSha256"])
     require(record["category"] == row["category"], "Evidence category does not match the matrix row")
@@ -197,7 +177,7 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     evidence.verify(identity["packageReceiptSha256"])
     verify_desktop_route(row, evidence, identity)
     if "androidPreflight" in row:
-        verify_android_route(row["androidPreflight"], evidence, record, revision)
+        evidence.android_preflight(row["androidPreflight"], record)
     evidence.display_capture(record)
     evidence.render_timing(record, row["renderTimingLimits"])
     check_digests = {check["evidenceSha256"] for check in record["checks"].values()}
