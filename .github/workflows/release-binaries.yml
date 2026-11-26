@@ -167,7 +167,10 @@ jobs:
 
       - name: Configure
         run: >
-          cmake --preset release
+          cmake -S . -B build/release -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DHORO_BUILD_AUDIO_SDL3=ON
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         env:
@@ -180,7 +183,10 @@ jobs:
         run: python3 scripts/dev.py verify-release-notes --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
 
       - name: Build HoroEditor
-        run: cmake --build --preset release --target HoroEditor --parallel
+        run: cmake --build build/release --target HoroEditor --parallel
+
+      - name: Stage signed capture-capable macOS bundle
+        run: python3 scripts/stage_macos_editor.py build/release HoroEngine-macos-arm64 --signing-identity=-
 
       - name: Generate SBOM
         run: |
@@ -193,8 +199,6 @@ jobs:
       - name: Package
         run: |
           DIST=HoroEngine-macos-arm64
-          mkdir -p "$DIST"
-          cp build/release/bin/HoroEditor "$DIST/"
           cp build/release/generated/ReleaseNotesSnapshot.json "$DIST/release-notes.json"
           cp -r build/release/sdk "$DIST/" 2>/dev/null || true
           cp build/release/sbom.spdx.json "$DIST/" 2>/dev/null || true
