@@ -3114,6 +3114,10 @@ horo_add_gameplay_module(HoroTestAiGameModule
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/AiGameModule.cpp)
 target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)
 get_property(HORO_TEST_AI_MODULE_REVISION_FILE TARGET HoroTestAiGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+target_compile_definitions(HoroWorldCookIntegrationTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+add_dependencies(HoroWorldCookIntegrationTests HoroTestAiGameModule)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
     add_dependencies(HoroCharacterSceneProductTests HoroTestAiGameModule)
     target_compile_definitions(HoroCharacterSceneProductTests PRIVATE

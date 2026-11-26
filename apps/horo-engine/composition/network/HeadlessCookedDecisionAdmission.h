@@ -79,8 +79,11 @@ namespace Horo::Application::Internal {
         std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
         const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
         HeadlessQueryPlanCatalog *queryPlans = nullptr, CookedSceneLocalPolicyCatalog *localPolicies = nullptr) {
+        const auto population = input.reducedPopulation && input.reducedPopulation->definition
+                                    ? input.reducedPopulation->definition->Entities()
+                                    : std::span<const Runtime::RuntimeEntityDefinition>{};
         return AdmitCookedSceneControllers(catalog, scene,
                                            {input.committed, input.environment, input.bindings, input.limits, input.querySchema},
-                                           prefabLimits, cancellation, queryPlans, localPolicies);
+                                           prefabLimits, cancellation, queryPlans, localPolicies, population);
     }
 }  // namespace Horo::Application::Internal

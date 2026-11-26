@@ -6,13 +6,16 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessSceneLoadBoundary.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
+#include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
@@ -25,6 +28,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -113,11 +117,34 @@ namespace Horo::WorldCook {
             std::shared_ptr<const HeadlessCookedDecisionInput> input;
             T::TempDir storage;
 
-            MountedReducedPopulation(A::AssetRegistry &registry, JobSystem &jobs) {
+            /** @brief Cooks a plan using the selected native descriptors without retaining the cook image. */
+            std::shared_ptr<const AI::CookedDecisionPlan> CookPlan(const GameplayWorldSelection *native,
+                                                                 std::vector<std::uint8_t> &cookedNativeGraph) {
                 namespace D = AI::DecisionGraphTestSupport;
-                auto source = D::TaskTree(10);
+                auto source = native ? D::TaskTree(10, 101) : D::TaskTree(10);
                 source.executionTask = D::MakeIdentity<AI::TaskId>(9000);
-                const auto plan = decisions.Compile(std::span{&source, 1}, 10);
+                if (!native)
+                    return decisions.Compile(std::span{&source, 1}, 10);
+                const auto image = Gameplay::GameModuleHost::PrepareImage(
+                    native->nativeArtifact, {native->moduleId, Gameplay::CurrentGameplayBuildFingerprint(), native->descriptorRevision});
+                REQUIRE(image.HasValue());
+                auto nodes = image.Value()->AcquireDecisionNodes();
+                REQUIRE(nodes.HasValue());
+                auto environment = decisions.Environment();
+                environment.nodes = std::move(nodes).Value();
+                auto compiled = AI::DecisionGraphCompiler::Compile(source.asset, std::span{&source, 1}, environment);
+                REQUIRE(compiled.HasValue());
+                REQUIRE(compiled.Value().plan);
+                auto encoded = AI::DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
+                REQUIRE(encoded.HasValue());
+                cookedNativeGraph = std::move(encoded).Value();
+                return std::move(compiled.Value().plan);
+            }
+
+            MountedReducedPopulation(A::AssetRegistry &registry, JobSystem &jobs, const GameplayWorldSelection *native) {
+                namespace D = AI::DecisionGraphTestSupport;
+                std::vector<std::uint8_t> cookedNativeGraph;
+                const auto plan = CookPlan(native, cookedNativeGraph);
                 const auto controller = D::MakeIdentity<AI::ControllerTypeId>(4);
                 controllers.front() = {.controller = controller,
                                        .decisionAsset = plan->Root(),
@@ -141,17 +168,29 @@ namespace Horo::WorldCook {
                 const auto payload = SceneCook::EncodeCookedSceneDefinition(definition.Value());
                 REQUIRE(payload.HasValue());
                 const auto target = T::Target("headless-null");
-                const auto type = A::AssetTypeId::Parse("core.scene").Value();
-                const auto envelope = A::EncodeCookedArtifact(
-                    {.id = manifestId, .type = type, .target = target, .payloadDigest = T::DigestOf(payload.Value()), .payload = payload.Value()});
-                REQUIRE(envelope.HasValue());
-                const std::array entries{A::AssetCookManifestEntry{manifestId, type, manifestId.ToString() + ".cooked",
-                                                                    T::DigestOf(envelope.Value())}};
-                const std::array artifacts{envelope.Value()};
+                std::vector<A::AssetCookManifestEntry> entries;
+                std::vector<std::vector<std::uint8_t>> artifacts;
+                std::vector<A::AssetRecord> records;
+                const auto add = [&](A::AssetId id, std::string_view typeName, std::string_view path,
+                                     const std::vector<std::uint8_t> &bytes) {
+                    const auto type = A::AssetTypeId::Parse(typeName).Value();
+                    auto envelope = A::EncodeCookedArtifact(
+                        {.id = id, .type = type, .target = target, .payloadDigest = T::DigestOf(bytes), .payload = bytes});
+                    REQUIRE(envelope.HasValue());
+                    entries.push_back({id, type, id.ToString() + ".cooked", T::DigestOf(envelope.Value())});
+                    records.push_back({id, type, ProjectPath::Parse(path).Value(), ProjectPath::Parse(std::string{path} + ".horo").Value()});
+                    artifacts.push_back(std::move(envelope).Value());
+                };
+                add(manifestId, "core.scene", "Assets/population.horo", payload.Value());
+                const auto graphId = Asset(91);
+                if (native) {
+                    add(graphId, AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree), "Assets/population.horo_bt", cookedNativeGraph);
+                    const auto schema = AI::BlackboardSchemaCodec::Encode(*decisions.schema);
+                    REQUIRE(schema.HasValue());
+                    add(Asset(92), AI::BlackboardSchemaAssetType, "Assets/population.horo_bb", schema.Value());
+                }
                 REQUIRE(T::PublishFixture(storage.path, target, entries, artifacts).HasValue());
-                REQUIRE(registry.Publish({A::AssetRecord{manifestId, type, ProjectPath::Parse("Assets/population.horo").Value(),
-                                                         ProjectPath::Parse("Assets/population.horo.horo").Value()}}).status ==
-                        A::AssetRegistryBuildStatus::Complete);
+                REQUIRE(registry.Publish(std::move(records)).status == A::AssetRegistryBuildStatus::Complete);
                 auto committed = CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {storage.path, target}, registry.Snapshot());
                 REQUIRE(committed.HasValue());
                 assets = std::move(committed).Value();
@@ -162,12 +201,43 @@ namespace Horo::WorldCook {
                 execution.scheduler.simulationProfile = AI::AiDecisionSimulationProfile{200, 400, 600, 2, 1};
                 input = std::make_shared<const HeadlessCookedDecisionInput>(HeadlessCookedDecisionInput{
                     .committed = *assets,
-                    .environment = decisions.Environment(),
+                    .environment = native ? AI::DecisionCompilationEnvironment{} : decisions.Environment(),
+                    .bindings = native ? std::vector<HeadlessCookedDecisionBinding>{{controller, graphId}}
+                                       : std::vector<HeadlessCookedDecisionBinding>{},
                     .execution = execution,
+                    .provider = native ? HeadlessDecisionProvider::SelectedNativeGameplay : HeadlessDecisionProvider::Captured,
                     .simulationAnchor = Anchor,
                     .reducedPopulation = HeadlessReducedPopulationSelection{
                         std::make_shared<const S::RuntimeSceneDefinition>(std::move(population).Value()), 1}});
             }
+        };
+
+        /** @brief Records actual node callbacks from the selected native test image. */
+        class NativeDecisionCounters final {
+        public:
+            explicit NativeDecisionCounters(const std::filesystem::path &module) {
+                auto image = Platform::LoadDynamicLibraryAtPath(module);
+                REQUIRE(image.HasValue());
+                image_ = std::move(image).Value();
+                const auto symbol = image_->GetSymbol("HoroTestObserveDecisionNodeLifecycle");
+                REQUIRE(symbol);
+                static_assert(sizeof(symbol) == sizeof(observe_));
+                std::memcpy(&observe_, &symbol, sizeof(observe_));
+                observe_(counts_.data());
+            }
+
+            ~NativeDecisionCounters() {
+                observe_(nullptr);
+            }
+
+            std::uint32_t Starts() const noexcept {
+                return counts_.front();
+            }
+
+        private:
+            std::unique_ptr<Platform::DynamicLibrary> image_;
+            void (*observe_)(std::uint32_t *) noexcept{};
+            std::array<std::uint32_t, 3> counts_{};
         };
 
         /** @brief Composes the ordinary standalone product over a durable cooked World and observes its exact Scene facade. */
@@ -175,10 +245,12 @@ namespace Horo::WorldCook {
         public:
             explicit MountedCellProduct(const bool enableLive, const bool firstDemand, const std::size_t maximumResidents = 1,
                                         const bool withReducedPopulation = false,
-                                        const std::optional<GameplayWorldSelection> &gameplay = std::nullopt) {
+                                        const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
+                                        const bool nativeDecisions = false) {
                 namespace N = Network;
                 if (withReducedPopulation) {
-                    reduced_.emplace(registry_, jobs_);
+                    REQUIRE((!nativeDecisions || gameplay.has_value()));
+                    reduced_.emplace(registry_, jobs_, nativeDecisions ? &*gameplay : nullptr);
                     // These two mutually exclusive cells represent the same moving gameplay anchor.
                     fixture_.entities.front().localTransform.translation.x = -2;
                     fixture_.entities.back().localTransform.translation.x = -1;
@@ -208,7 +280,7 @@ namespace Horo::WorldCook {
                 }
                 S::SceneDefinitionBuilder root{{99}, {1}};
                 S::RuntimeEntityDefinition parent{.object = parentObject_};
-                if (gameplay)
+                if (gameplay && !nativeDecisions)
                     parent.components.behaviors.push_back(
                         {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.replicated_presentation_motion").Value()});
                 root.Add(std::move(parent));
@@ -219,8 +291,9 @@ namespace Horo::WorldCook {
                                                    .registry = registry_,
                                                    .loads = loads_,
                                                    .load = load_,
-                                                   .aiControllers = reduced_ ? std::span<const AI::AiControllerDescriptor>{reduced_->controllers}
-                                                                             : std::span<const AI::AiControllerDescriptor>{},
+                                                   .aiControllers = reduced_ && !nativeDecisions
+                                                                        ? std::span<const AI::AiControllerDescriptor>{reduced_->controllers}
+                                                                        : std::span<const AI::AiControllerDescriptor>{},
                                                    .cookedDecisions = reduced_ ? reduced_->input : nullptr,
                                                    .mountedWorld = std::make_shared<const CommittedWorldSelection>(std::move(selection)),
                                                    .worldJobs = &jobs_};
@@ -738,6 +811,7 @@ namespace Horo::WorldCook {
               "[world_cook][native][mounted_world][live_cell][product][reduced-population]") {
         using Population = MountedReducedPopulation;
         std::optional<GameplayWorldSelection> gameplay;
+        std::optional<NativeDecisionCounters> native;
         SECTION("with only Scene and AI owners") {}
         SECTION("with a selected native Gameplay owner") {
             gameplay.emplace();
@@ -747,7 +821,17 @@ namespace Horo::WorldCook {
             std::ifstream revision{HORO_TEST_GAME_MODULE_REVISION_PATH};
             REQUIRE((revision >> gameplay->descriptorRevision));
         }
-        MountedCellProduct product{true, false, 1, true, gameplay};
+        SECTION("with controllers declared only in the reduced population and compiled from the selected native image") {
+            gameplay.emplace();
+            gameplay->moduleId = "game.ai.tests";
+            gameplay->nativeArtifact = HORO_TEST_AI_MODULE_PATH;
+            gameplay->moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+            std::ifstream revision{HORO_TEST_AI_MODULE_REVISION_PATH};
+            REQUIRE((revision >> gameplay->descriptorRevision));
+            native.emplace(gameplay->nativeArtifact);
+        }
+        MountedCellProduct product{true, false, 1, true, gameplay, native.has_value()};
+        const auto starts = [&] { return native ? native->Starts() : product.ReducedDecisions().starts; };
         const auto initialHeight = product.ParentHeight();
         REQUIRE_FALSE(product.Find(Population::Anchor));
         REQUIRE_FALSE(product.Find(Population::Agent));
@@ -763,9 +847,9 @@ namespace Horo::WorldCook {
         const auto first = product.Find(Population::Agent);
         REQUIRE(first);
         REQUIRE_FALSE(product.Find(Population::DistantAgent));
-        REQUIRE(product.ReducedDecisions().starts == 1);
+        REQUIRE(starts() == 1);
         CHECK(product.WorldPosition(*first).Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
-        if (gameplay)
+        if (gameplay && !native)
             CHECK(product.ParentHeight() < initialHeight);
 
         product.Withdraw();
@@ -791,7 +875,7 @@ namespace Horo::WorldCook {
         REQUIRE(replacement);
         CHECK(replacement != first);
         CHECK(product.WorldPosition(*replacement).Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
-        CHECK(product.ReducedDecisions().starts == 2);
+        CHECK(starts() == 2);
         CHECK_FALSE(product.Find(Population::DistantAgent));
     }
 

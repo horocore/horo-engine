@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HORO_APPLICATION_COOKED_DECISION_SCENE_ADMISSION_H
+#define HORO_APPLICATION_COOKED_DECISION_SCENE_ADMISSION_H
 
 /** @file CookedDecisionSceneAdmission.h @brief Shared application-owned verification of committed Scene Decision inputs. */
 #include "Horo/AI/AISceneActivation.h"
@@ -78,4 +79,13 @@ namespace Horo::Application::Internal {
         const CookedDecisionSceneAdmissionInput &input, const Prefab::PrefabLimitProfile &prefabLimits,
         const CancellationToken &cancellation, CookedSceneQueryPlanCatalog *queryPlans = nullptr,
         CookedSceneLocalPolicyCatalog *localPolicies = nullptr);
+
+    /** @brief Includes the explicit reduced population's declarations in the same controller catalog. */
+    [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitCookedSceneControllers(
+        std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
+        const CookedDecisionSceneAdmissionInput &input, const Prefab::PrefabLimitProfile &prefabLimits,
+        const CancellationToken &cancellation, CookedSceneQueryPlanCatalog *queryPlans,
+        CookedSceneLocalPolicyCatalog *localPolicies, std::span<const Runtime::RuntimeEntityDefinition> reducedPopulation);
 }  // namespace Horo::Application::Internal
+
+#endif

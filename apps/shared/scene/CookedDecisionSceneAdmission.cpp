@@ -172,8 +172,26 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Resolves explicit asset selections before decision decoding, once per selected template. */
+        /** @brief Checks selected controller declarations against the same authored identity. */
+        Result<void> SelectAuthoredControllers(std::span<const Runtime::RuntimeEntityDefinition> entities, Selections &selections,
+                                                const CancellationToken &cancellation) {
+            for (const auto &entity : entities) {
+                if (cancellation.IsCancellationRequested())
+                    return JobCancelled();
+                const auto &controller = entity.components.aiController;
+                if (!controller)
+                    continue;
+                const auto found = selections.find(controller->controller);
+                if (found != selections.end())
+                    if (auto captured = CaptureController(found->second, *controller); captured.HasError())
+                        return captured;
+            }
+            return Result<void>::Success();
+        }
+
         Result<Selections> SelectControllers(const Runtime::RuntimeSceneDefinition &scene, const CookedDecisionSceneAdmissionInput &input,
-                                             const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation) {
+                                             const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+                                             std::span<const Runtime::RuntimeEntityDefinition> reducedPopulation) {
             Selections selections;
             std::set<Assets::AssetId> templates;
             for (const auto &binding : input.bindings) {
@@ -188,17 +206,10 @@ namespace Horo::Application::Internal {
                     templates.insert(*binding.prefab);
             }
             if (!selections.empty()) {
-                for (const auto &entity : scene.Entities()) {
-                    if (cancellation.IsCancellationRequested())
-                        return Result<Selections>::Failure(JobCancelled().ErrorValue());
-                    const auto &controller = entity.components.aiController;
-                    if (!controller)
-                        continue;
-                    const auto found = selections.find(controller->controller);
-                    if (found != selections.end())
-                        if (auto captured = CaptureController(found->second, *controller); captured.HasError())
-                            return Result<Selections>::Failure(captured.ErrorValue());
-                }
+                if (auto authored = SelectAuthoredControllers(scene.Entities(), selections, cancellation); authored.HasError())
+                    return Result<Selections>::Failure(authored.ErrorValue());
+                if (auto reduced = SelectAuthoredControllers(reducedPopulation, selections, cancellation); reduced.HasError())
+                    return Result<Selections>::Failure(reduced.ErrorValue());
             }
             for (const auto id : templates) {
                 if (cancellation.IsCancellationRequested())
@@ -348,13 +359,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Catalog> Admit(const std::span<const AI::AiControllerDescriptor> catalog,
                                             const Runtime::RuntimeSceneDefinition &scene, const CookedDecisionSceneAdmissionInput &input,
                                             const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-                                            CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies) {
+                                            CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies,
+                                            std::span<const Runtime::RuntimeEntityDefinition> reducedPopulation) {
             Descriptors descriptors;
             for (const auto &descriptor : catalog)
                 if (!descriptors.emplace(descriptor.controller, descriptor).second)
                     return Result<Catalog>::Failure(MakeError(AI::AIErrors::DescriptorConflict));
 
-            const auto selected = SelectControllers(scene, input, prefabLimits, cancellation);
+            const auto selected = SelectControllers(scene, input, prefabLimits, cancellation, reducedPopulation);
             if (selected.HasError())
                 return Result<Catalog>::Failure(selected.ErrorValue());
             const auto environment = ResolveEnvironment(input, cancellation);
@@ -444,10 +456,20 @@ namespace Horo::Application::Internal {
                                                 const CookedDecisionSceneAdmissionInput &input,
                                                 const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
                                                 CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies) {
+        return AdmitCookedSceneControllers(catalog, scene, input, prefabLimits, cancellation, queryPlans, localPolicies, {});
+    }
+
+    /** @copydoc AdmitCookedSceneControllers */
+    Result<Catalog> AdmitCookedSceneControllers(const std::span<const AI::AiControllerDescriptor> catalog,
+                                                const Runtime::RuntimeSceneDefinition &scene,
+                                                const CookedDecisionSceneAdmissionInput &input,
+                                                const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+                                                CookedSceneQueryPlanCatalog *queryPlans, CookedSceneLocalPolicyCatalog *localPolicies,
+                                                const std::span<const Runtime::RuntimeEntityDefinition> reducedPopulation) {
         if (catalog.size() > AI::MaximumAiSceneAgents || input.bindings.size() > AI::MaximumAiSceneAgents)
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         try {
-            return Admit(catalog, scene, input, prefabLimits, cancellation, queryPlans, localPolicies);
+            return Admit(catalog, scene, input, prefabLimits, cancellation, queryPlans, localPolicies, reducedPopulation);
         } catch (const std::bad_alloc &) {
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         }

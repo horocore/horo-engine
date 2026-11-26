@@ -4169,7 +4169,10 @@ The headless product selects a committed population with
 `--ai-reduced-population <cooked-scene-uuid> <promotions-per-frame>` alongside
 `--ai-simulation-anchor`. The selected Scene contains independent assetless
 agent templates with distinct Scene and AI identities and controllers already
-admitted for the authority. The product proposes nearby agents at the structural
+admitted for the authority. A controller declared only in the selected
+population is admitted from that immutable Scene with an explicit cooked plan
+selection. Controllers shared with the initial Scene or selected prefabs must
+agree on the authored decision binding. The product proposes nearby agents at the structural
 cutoff, limits the batch to free scheduler slots and yields the command slot to
 pending structural work. On a mounted World it retains global positions and
 projects them through the current origin before creating entities. An agent
