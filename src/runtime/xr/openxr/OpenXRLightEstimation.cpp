@@ -285,14 +285,14 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<XRLightEstimate>;
         if (const auto access = CheckLightAccess(scope); access.HasError())
             return Outcome::Failure(access.ErrorValue());
-        if (!light_.current)
-            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (!now.IsValid() || now < light_.lastClock)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const LightOperation operation{lightCall_};
         if (const auto admitted = RecheckLightObservation(scope, authorization); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
         light_.lastClock = now;
+        if (!light_.current)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (now.Nanoseconds() - light_.current->sampledAt.Nanoseconds() > light_.limits.maximumAge.ToNanoseconds())
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         return Outcome::Success(*light_.current);

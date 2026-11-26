@@ -241,16 +241,26 @@ namespace Horo::Tests::OpenXR {
         CHECK_FALSE(fixture.script.live);
     }
 
-    TEST_CASE("A cached light read withdraws an exact grant before the next sample", "[unit][xr][native][lighting]") {
+    TEST_CASE("A light read withdraws the exact native grant with or without a cached sample", "[unit][xr][native][lighting]") {
         LightFixture fixture;
         fixture.native.census.lightEstimationSupport = XR_TRUE;
         fixture.Create();
         REQUIRE(fixture.Start(fixture.scope).HasValue());
-        REQUIRE(fixture.Advance(100).Value());
+        SECTION("Before the first estimate") {
+            RequireFailureIdentity(fixture.Read(100), XRErrors::OperationUnavailable);
+            CHECK(fixture.script.sampleCalls == 0);
+        }
+        SECTION("With a cached estimate") {
+            REQUIRE(fixture.Advance(100).Value());
+        }
+        const auto sampled = fixture.script.sampleCalls;
         fixture.lightPermitted = false;
         RequireFailureIdentity(fixture.Read(101), XRErrors::PermissionDenied);
+        CHECK(fixture.native.owner.NeedsLightRetirement(fixture.scope));
         fixture.lightPermitted = true;
         RequireFailureIdentity(fixture.Read(102), XRErrors::OperationUnavailable);
+        RequireFailureIdentity(fixture.Advance(103), XRErrors::OperationUnavailable);
+        CHECK(fixture.script.sampleCalls == sampled);
         REQUIRE(fixture.native.owner.Close().HasValue());
     }
 

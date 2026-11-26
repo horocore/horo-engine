@@ -463,8 +463,8 @@ namespace Horo::XR::OpenXRInternal {
                                                           const NativeLightAuthorization &authorization);
         /** @brief Copies current estimate evidence without calling the native feature.
          * @param scope Exact still-approved scope. @param now Cutoff in the same runtime clock.
-         * @param authorization Live approval, including for a previously cached observation.
-         * @return Current estimate, or a typed stale, incompatible or unavailable result.
+         * @param authorization Live approval, checked even when no estimate is cached.
+         * @return Current estimate, or a typed denied, stale, incompatible or unavailable result.
          */
         [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now,
                                                                   const NativeLightAuthorization &authorization);
