@@ -190,8 +190,9 @@ Ownership rules:
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.
 - The editor aligns final speech with bounded XR observations in the Audio
-  capture clock domain. PCM blocks may start on a rounded sample boundary.
-  A block that starts before that boundary interrupts the capture.
+  capture clock domain. Each PCM block must start at the floor or ceiling of its
+  exact sample position measured from the first block. An overlap or unreported
+  clock gap interrupts capture and withdraws the draft before provider delivery.
   Each XR observation carries the host's before/after
   measurement around its XR cutoff. XR timestamps order publications within
   that session. Uncertain phrase boundaries and overlapping observations fail

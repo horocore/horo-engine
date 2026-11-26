@@ -227,6 +227,8 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionUpdate Admit(const SpeechHypothesisView &hypothesis);
         [[nodiscard]] bool MatchesSource(const Audio::Backend::AudioCaptureBufferDescriptor &source) const noexcept;
         [[nodiscard]] bool ContinuesCapture(const Audio::Backend::AudioCapturedBlock &block) const noexcept;
+        /** @brief Requires the exact next sample position, allowing either integral nanosecond rounding of that boundary. */
+        [[nodiscard]] bool MatchesCaptureClock(const Audio::Backend::AudioCapturedBlock &block) const noexcept;
         [[nodiscard]] bool FitsWindow(const Audio::Backend::AudioCapturedBlock &block, std::uint64_t end) const noexcept;
         [[nodiscard]] bool ValidTiming(const SpeechHypothesisView &hypothesis) const noexcept;
         [[nodiscard]] bool ValidHypothesis(const SpeechHypothesisView &hypothesis) const noexcept;
@@ -241,7 +243,6 @@ namespace Horo::Editor {
         std::uint64_t nextFrame_{};
         std::uint64_t sequence_{};
         std::uint64_t firstTime_{};
-        std::uint64_t earliestNextStart_{};
         std::uint64_t endTime_{};
         std::uint32_t hypotheses_{};
         float minimumConfidence_{};

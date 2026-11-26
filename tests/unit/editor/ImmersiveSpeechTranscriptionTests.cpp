@@ -982,7 +982,7 @@ namespace Horo::Editor {
             CHECK_FALSE(partial.evidence->IsCurrent());
         }
 
-        TEST_CASE("Immersive speech admits capture rounding and rejects overlapping PCM", "[agent][immersive][speech]") {
+        TEST_CASE("Immersive speech admits capture rounding and rejects discontinuous PCM", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             fixture.StartWithAudio();
             fixture.provider.next = Transcript();
@@ -991,13 +991,32 @@ namespace Horo::Editor {
             auto block = Capture::AudioCapturedBlock{.start = {5, 1'041'666}, .firstFrame = 2, .sequence = 2, .frames = 2};
             auto expected = Status::Accepted;
             SECTION("next block starts at the floor of the previous frame boundary") {}
+            SECTION("next block starts at the ceiling of the previous frame boundary") {
+                ++block.start.nanoseconds;
+            }
             SECTION("next block starts before the rounded boundary") {
                 --block.start.nanoseconds;
+                expected = Status::CaptureInterrupted;
+            }
+            SECTION("next block starts after the rounded boundary without reporting dropped frames") {
+                block.start.nanoseconds += 2;
                 expected = Status::CaptureInterrupted;
             }
             CHECK(fixture.stream->Append(fixture.source, block, fixture.Samples) == expected);
             CHECK(fixture.provider.blocks == (expected == Status::Accepted ? 2 : 1));
             CHECK(partial.evidence->IsCurrent() == (expected == Status::Accepted));
+        }
+
+        TEST_CASE("Immersive speech measures each block against the original capture clock", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            Capture::AudioCapturedBlock block{.start = {5, 1'041'667}, .firstFrame = 2, .sequence = 2, .frames = 2};
+            REQUIRE(fixture.stream->Append(fixture.source, block, fixture.Samples) == Status::Accepted);
+            block = {.start = {5, 1'083'334}, .firstFrame = 4, .sequence = 3, .frames = 2};
+            REQUIRE(fixture.stream->Append(fixture.source, block, fixture.Samples) == Status::Accepted);
+            block = {.start = {5, 1'125'001}, .firstFrame = 6, .sequence = 4, .frames = 2};
+            CHECK(fixture.stream->Append(fixture.source, block, fixture.Samples) == Status::CaptureInterrupted);
+            CHECK(fixture.provider.blocks == 3);
         }
 
         TEST_CASE("Immersive speech rejects stale, malformed and low confidence updates", "[agent][immersive][speech]") {
@@ -1114,20 +1133,35 @@ namespace Horo::Editor {
 
         TEST_CASE("Immersive speech never sends PCM beyond the capture deadline", "[agent][immersive][speech]") {
             SpeechFixture fixture;
-            fixture.StartWithAudio();
-            constexpr std::uint64_t duration =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(ImmersiveSpeechTranscription::MaximumInputDuration).count();
-            constexpr std::uint64_t secondBlockLength = 41'667; // Two frames at 48 kHz, rounded up to nanoseconds.
-            const auto lastStart = SpeechFixture::FirstBlock().start.nanoseconds + duration - secondBlockLength;
-            Capture::AudioCapturedBlock last{.start = {5, lastStart}, .firstFrame = 2, .sequence = 2, .frames = 2};
+            constexpr std::uint32_t FramesPerBlock = 4'000;
+            constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
+            auto source = fixture.source;
+            source.maximumFrames = FramesPerBlock;
+            const auto start = SpeechFixture::FirstBlock().start;
+            auto prepared = ImmersiveSpeechTranscription::Prepare(fixture.owner, fixture.Context(), source, "tr-TR", 0.5F,
+                                                                   fixture.stop.get_token());
+            REQUIRE(prepared.status == Status::Accepted);
+            auto &stream = *prepared.stream;
+            REQUIRE(stream.Start(fixture.provider) == Status::Accepted);
+            const std::array<Audio::AudioSample, FramesPerBlock> samples{};
+            const auto limit = static_cast<std::uint64_t>(ImmersiveSpeechTranscription::MaximumInputDuration.count()) *
+                               source.format.sampleRate;
+            REQUIRE(limit % FramesPerBlock == 0);
+            auto block = Capture::AudioCapturedBlock{.start = start, .sequence = 1, .frames = FramesPerBlock};
+            for (; block.firstFrame + FramesPerBlock < limit; ++block.sequence) {
+                REQUIRE(stream.Append(source, block, samples) == Status::Accepted);
+                block.firstFrame += FramesPerBlock;
+                block.start.nanoseconds = start.nanoseconds + block.firstFrame * NanosecondsPerSecond / source.format.sampleRate;
+            }
+            const auto accepted = fixture.provider.blocks;
             auto expected = Status::Accepted;
             SECTION("PCM ends exactly at the deadline") {}
             SECTION("PCM ends one nanosecond after the deadline") {
-                ++last.start.nanoseconds;
+                ++block.start.nanoseconds;
                 expected = Status::CaptureLimitExceeded;
             }
-            CHECK(fixture.stream->Append(fixture.source, last, fixture.Samples) == expected);
-            CHECK(fixture.provider.blocks == (expected == Status::Accepted ? 2 : 1));
+            CHECK(stream.Append(source, block, samples) == expected);
+            CHECK(fixture.provider.blocks == accepted + (expected == Status::Accepted ? 1U : 0U));
         }
     }  // namespace
 }  // namespace Horo::Editor
