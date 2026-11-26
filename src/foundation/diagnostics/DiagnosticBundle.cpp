@@ -112,9 +112,15 @@ namespace Horo::Diagnostics {
                    (value[2] == '/' || value[2] == '\\');
         }
 
+        /** @brief Recognizes compact diagnostic labels while preserving URI authority separators. */
         [[nodiscard]] bool IsPathBoundary(const std::string_view value, const std::size_t index) noexcept {
-            return index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) || value[index - 1] == '=' ||
-                   value[index - 1] == '"' || value[index - 1] == '\'' || value[index - 1] == '(' || value[index - 1] == '[';
+            if (index == 0)
+                return true;
+            const auto previous = value[index - 1];
+            if (previous == ':')
+                return !value.substr(index).starts_with("//");
+            return std::isspace(static_cast<unsigned char>(previous)) || previous == '=' || previous == '"' || previous == '\'' ||
+                   previous == '(' || previous == '[';
         }
 
         /** @brief Recognizes local file URIs independently of the case of their ASCII scheme. */
