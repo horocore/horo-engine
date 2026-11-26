@@ -963,6 +963,7 @@ namespace {
         const auto mounted = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(mounted);
         CHECK(mounted->mounted);
+        CHECK(workspace.AgentSceneReferencesCurrent(*mounted));
         REQUIRE(mounted->Candidates().size() == 2);
         CHECK(mounted->RequiresClarification());
         CHECK(mounted->Candidates()[0].worldPosition == points[0].worldPosition);
@@ -975,6 +976,7 @@ namespace {
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(false);
         CHECK(mountedCapture->lifetime.IsCancellationRequested());
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*mounted));
     }
 
     /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */
@@ -1030,7 +1032,9 @@ namespace {
                                            .objects = objects,
                                            .source = AgentSceneReferenceSource::Pointing,
                                            .structuralRevision = play->StructuralRevision()};
-        REQUIRE(workspace.ReviewAgentSceneReferences(request));
+        const auto displayed = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(displayed);
+        CHECK(workspace.AgentSceneReferencesCurrent(*displayed));
 
         Runtime::SceneCommandBuffer removal;
         removal.Destroy(*retired);
@@ -1041,10 +1045,13 @@ namespace {
         const auto updated = scenes.ActiveScene();
         REQUIRE(updated);
         REQUIRE(updated->Find({selected.value}));
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*displayed));
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         CHECK(updated->StructuralRevision() != request.structuralRevision);
         request.structuralRevision = updated->StructuralRevision();
-        CHECK(workspace.ReviewAgentSceneReferences(request));
+        const auto refreshed = workspace.ReviewAgentSceneReferences(request);
+        REQUIRE(refreshed);
+        CHECK(workspace.AgentSceneReferencesCurrent(*refreshed));
     }
 
     TEST_CASE("Play Decision navigation honors the exact Scene and report identities", "[unit][editor][play][ai]") {

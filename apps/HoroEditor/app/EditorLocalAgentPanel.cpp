@@ -306,6 +306,7 @@ namespace Horo::Editor {
                 captureSceneSelection_ = context.captureSceneSelection;
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = context.reviewAgentSceneReferences;
+                agentSceneReferencesCurrent_ = context.agentSceneReferencesCurrent;
                 readAgentSceneContacts_ = context.readAgentSceneContacts;
                 agentSceneContactsCurrent_ = context.agentSceneContactsCurrent;
 #endif
@@ -589,7 +590,7 @@ namespace Horo::Editor {
             /** @brief Rechecks the captured selection on demand and displays its exact revision and every candidate. */
             void DrawListeningReferences(const EditorGuiContext &context) {
                 const auto &locale = context.localization;
-                const bool canReview = static_cast<bool>(reviewAgentSceneReferences_);
+                const bool canReview = reviewAgentSceneReferences_ && agentSceneReferencesCurrent_;
                 using enum AgentSceneReferenceSource;
                 if (Button(locale, "xr_reference_review", canReview))
                     LoadListeningReferences(Selection);
@@ -622,7 +623,8 @@ namespace Horo::Editor {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 const auto &fonts = context.theme.fonts;
                 const bool pointing = source != AgentSceneReferenceSource::Selection;
-                if (!listeningReferences_) {
+                if (!listeningReferences_ || !agentSceneReferencesCurrent_ || !agentSceneReferencesCurrent_(*listeningReferences_)) {
+                    listeningReferences_.reset();
                     Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_unavailable" : "xr_reference_stale"),
                                     Theme::Muted(), fonts);
                     return;
@@ -731,6 +733,7 @@ namespace Horo::Editor {
             int listeningInput_{-1};
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
+            std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent_;
             std::optional<AgentSceneReferenceReview> listeningReferences_;
             std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
             bool reviewingSurfaces_{};
@@ -802,6 +805,7 @@ namespace Horo::Editor {
                 captureSceneSelection_ = {};
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = {};
+                agentSceneReferencesCurrent_ = {};
                 readAgentSceneContacts_ = {};
                 agentSceneContactsCurrent_ = {};
 #endif

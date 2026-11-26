@@ -301,6 +301,9 @@ spatial references. Every evidence record identifies its source, timestamp,
 confidence, object generation, scene revision, and XR session generation.
 Destroyed, stale, cross-project, hidden, locked, or unauthorized identities are
 rejected before planning.
+The retained Play reference review remains visible only while its document
+opening, selection, live Scene topology, and mounted or authored source still
+match. The panel checks those revisions without rescanning the candidates.
 
 Immersive requests follow an explicit presentation state machine:
 

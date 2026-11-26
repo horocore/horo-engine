@@ -733,9 +733,26 @@ namespace Horo::Editor {
         if (!MatchesAgentReferenceSource(request, m_mountedWorldPlaySelected, play->StructuralRevision()))
             return std::nullopt;
         const auto objects = m_document.Objects();
-        if (request.source == AgentSceneReferenceSource::Location)
-            return ReviewAgentReferenceLocations(request, objects, *play);
-        return ReviewAgentReferenceObjects(request, objects, m_selection.Current().objects, *play);
+        const auto &selection = m_selection.Current();
+        auto review = request.source == AgentSceneReferenceSource::Location
+                          ? ReviewAgentReferenceLocations(request, objects, *play)
+                          : ReviewAgentReferenceObjects(request, objects, selection.objects, *play);
+        if (review) {
+            review->documentEpoch = request.documentEpoch;
+            review->worldGeneration = request.worldGeneration;
+            review->structuralRevision = play->StructuralRevision();
+            review->selectionRevision = selection.revision.value;
+            review->mounted = m_mountedWorldPlaySelected;
+        }
+        return review;
+    }
+
+    /** @copydoc EditorWorkspaceController::AgentSceneReferencesCurrent */
+    bool EditorWorkspaceController::AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const {
+        const auto play = ReadAgentReferenceScene();
+        return play && review.worldGeneration == play->RuntimeId().value && review.structuralRevision == play->StructuralRevision() &&
+               review.documentEpoch == m_document.ReplacementEpoch() && review.documentRevision == m_document.Revision().value &&
+               review.selectionRevision == m_selection.Current().revision.value && review.mounted == m_mountedWorldPlaySelected;
     }
 
     /** @copydoc EditorWorkspaceController::AgentSceneContactsCurrent */

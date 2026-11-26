@@ -115,6 +115,10 @@ namespace Horo::Editor {
         std::array<Candidate, AgentSceneSelectionSnapshot::MaximumObjects> candidates{};
         std::size_t count{};
         bool mounted{};
+        std::uint64_t documentEpoch{};       /**< Exact opening that produced the review. */
+        std::uint64_t worldGeneration{};     /**< Exact live Scene occurrence. */
+        std::uint64_t structuralRevision{}; /**< Published topology used to classify the candidates. */
+        std::uint64_t selectionRevision{};  /**< Selection used by the workspace for this review. */
 
         /** @brief Indicates that the captured evidence admits multiple distinct referents. */
         [[nodiscard]] bool RequiresClarification() const noexcept {

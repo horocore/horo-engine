@@ -282,6 +282,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 [this](const AgentSceneContactReview &review) {
             return controller_->AgentSceneContactsCurrent(review);
         },
+            .agentSceneReferencesCurrent =
+                [this](const AgentSceneReferenceReview &review) {
+            return controller_->AgentSceneReferencesCurrent(review);
+        },
         };
         if (std::ranges::any_of(contributions_.panels.GetAllPanels(), [](const auto &panel) {
             return panel->GetId() == LocalAgentWorkspacePanelId;

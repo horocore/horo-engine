@@ -154,6 +154,8 @@ namespace Horo::Editor {
         std::function<std::optional<AgentSceneContactReview>()> readAgentSceneContacts{};
         /** @brief Checks that a displayed preview still belongs to the live selection and Scene. */
         std::function<bool(const AgentSceneContactReview &)> agentSceneContactsCurrent{};
+        /** @brief Checks the lifetime of a displayed review without classifying its candidates again. */
+        std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

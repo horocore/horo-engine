@@ -342,6 +342,8 @@ namespace Horo::Editor {
             AgentSceneSelectionPurpose purpose = AgentSceneSelectionPurpose::SelectedObjects);
         /** @brief Reviews captured references against the same document and current Play scene. */
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewAgentSceneReferences(const AgentSceneReferenceRequest &request) const;
+        /** @brief Checks whether a retained reference review still describes the active Play publication. */
+        [[nodiscard]] bool AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const;
         /** @brief Reads the selected ordinary Scene object's latest complete Physics tick. */
         [[nodiscard]] std::optional<AgentSceneContactReview> ReadAgentSceneContacts();
         /** @brief Checks the exact document, Scene topology and selected owner of a retained preview. */
