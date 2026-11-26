@@ -642,9 +642,24 @@ namespace Horo::Editor {
             const auto outside = SpatialObservation(context, 2, Transcript().end.nanoseconds, Transcript().end.nanoseconds);
             std::array samples{sample, sample, outside};
             ++samples[1].candidate.device.slot.index;
+            using enum ImmersiveCommandStatus;
+            auto expected = Aligned;
+            SECTION("one World space can contain multiple devices") {}
+            SECTION("a different World space in the same cutoff rejects the capture") {
+                ++samples[1].candidate.space.id.slot.index;
+                expected = InvalidSpatialEvidence;
+            }
+            SECTION("a different World space outside the phrase still rejects the capture") {
+                ++samples[2].candidate.space.id.slot.index;
+                expected = InvalidSpatialEvidence;
+            }
             const auto result =
                 ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, outside.cutoff, samples});
-            REQUIRE(result.status == ImmersiveCommandStatus::Aligned);
+            REQUIRE(result.status == expected);
+            if (expected != Aligned) {
+                CHECK_FALSE(result.envelope);
+                return;
+            }
             REQUIRE(result.envelope);
             REQUIRE(result.envelope->Spatial().size() == 2);
             CHECK(result.envelope->Spatial()[1].candidate.device != result.envelope->Spatial()[0].candidate.device);

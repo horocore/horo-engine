@@ -77,6 +77,8 @@ namespace Horo::Editor {
                 return StaleEvidence;
             if (!ValidObservation(sample, clockDomain) || (sample.controllerPress && !ValidPress(*sample.controllerPress, clockDomain)))
                 return InvalidSpatialEvidence;
+            if (previous && sample.candidate.space != previous->candidate.space)
+                return InvalidSpatialEvidence;
             if (previous && !Follows(sample, *previous))
                 return AmbiguousTiming;
             return Aligned;

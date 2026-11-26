@@ -206,7 +206,8 @@ Ownership rules:
   lease accepts input. A pose batch must match both the measured XR cutoff
   and the listening generation before the editor retains it.
   Command assembly accepts finite World-space points, positive-radius spheres,
-  and nonempty ray segments from that cutoff.
+  and nonempty ray segments from that cutoff. The complete capture must share
+  one exact World space identity, including observations outside the phrase.
   The local panel retains eligible final speech when spatial geometry or timing
   is unusable, or when the spatial history exceeds its capacity. It marks the
   spatial evidence as unavailable and carries no rejected coordinates forward.
