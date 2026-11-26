@@ -237,6 +237,8 @@ namespace {
         NativeDurableFileSystem files;
         const auto oldLock = files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {});
         REQUIRE(oldLock.HasValue());
+        const auto oldRequest = files.ReadFileBounded(metadata / "packages.json", 1U << 20U, {});
+        REQUIRE(oldRequest.HasValue());
         auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
         REQUIRE(cache.HasValue());
         REQUIRE(std::move(cache).Value().Publish(archive).HasValue());
@@ -264,6 +266,32 @@ namespace {
                 const auto candidate = files.ReadFileBounded(metadata / "candidate.lock", 1U << 20U, {});
                 REQUIRE(candidate.HasValue());
                 CHECK(installed.Value() == candidate.Value());
+                if (mode != Assets)
+                    return;
+
+                std::filesystem::create_directories(root / "Assets");
+                const auto rollbackPreview = MakePackageRollbackPreviewCommandAdapter();
+                const auto rollbackApply = MakePackageRollbackUpdateCommandAdapter();
+                CliCommandRequest rollback{.command = rollbackPreview.adapter->GetDescriptor().path,
+                                           .options = {NativeProject::PathOption("project", root),
+                                                       NativeProject::PathOption("package-cache-root", cacheRoot)}};
+                const auto rollbackReview = rollbackPreview.adapter->Execute(rollback, context);
+                REQUIRE(rollbackReview.HasValue());
+                const auto rollbackFingerprint = std::get<std::string>(rollbackReview.Value().fields.back().value);
+                rollback.command = rollbackApply.adapter->GetDescriptor().path;
+                rollback.options.push_back({"approve", {{rollbackFingerprint, CliValueSource::Invocation, {}}}});
+
+                fixture.WriteImporterReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+                const auto blocked = rollbackApply.adapter->Execute(rollback, context);
+                REQUIRE(blocked.HasError());
+                CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+                CHECK(files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {}).Value() == candidate.Value());
+
+                REQUIRE(std::filesystem::remove(root / "Assets/sample.horoasset"));
+                REQUIRE(std::filesystem::remove(root / "Assets/sample.horoasset.horo"));
+                REQUIRE(rollbackApply.adapter->Execute(rollback, context).HasValue());
+                CHECK(files.ReadFileBounded(metadata / "packages.lock", 1U << 20U, {}).Value() == oldLock.Value());
+                CHECK(files.ReadFileBounded(metadata / "packages.json", 1U << 20U, {}).Value() == oldRequest.Value());
                 return;
             }
             CHECK(installed.Value() == oldLock.Value());

@@ -432,6 +432,9 @@ retained pair automatically. Pass its fingerprint as `--approve` to
 `--package-cache-root`. Rollback stages the older lock before publication and
 applies the same reference-safety boundary as forward updates. A successful
 rollback retains the pair it replaced as the next rollback point.
+When rolling back an asset-only addition, the host also verifies the departing
+archives and checks the saved project references under the package mutation
+lease before restoring the exact older documents.
 
 ## Uninstall Policy
 

@@ -564,6 +564,25 @@ namespace Horo::Application::Internal {
             return !sources.offline ||
                    (!sources.live && sources.offline->ProjectRoot() == root && sources.offline->LockDigest() == expected.lockDigest);
         }
+
+        /** @brief Proves the staged rollback only withdraws entries and reviews their current saved references. */
+        Result<void> CheckRollbackWithdrawals(const MetadataDocuments &current, const Packages::PackageLockfileLimits &limits,
+                                              const Packages::PackageRestoreGraph &candidate, const PackageRemovalSources &sources) {
+            const auto lock = Packages::ValidatedPackageLockfileV1::Parse(current.lock, limits);
+            if (lock.HasError())
+                return Result<void>::Failure(lock.ErrorValue());
+            const auto installed = lock.Value().Packages();
+            for (const auto &retained : candidate.packages) {
+                if (std::ranges::find(installed, retained.lock) == installed.end())
+                    return Result<void>::Failure(MetadataConflict());
+            }
+            Packages::PackageRemovalGraphPreview impact;
+            for (const auto &entry : installed) {
+                if (std::ranges::find(candidate.packages, entry, &Packages::PackageRestorePackage::lock) == candidate.packages.end())
+                    impact.removed.push_back({entry.package, entry.version});
+            }
+            return CheckRemovalReferences(sources, lock.Value(), impact);
+        }
     }  // namespace
 
     /** @copydoc PreparePackageProject */
@@ -611,10 +630,12 @@ namespace Horo::Application::Internal {
         return Result<PreparedPackageProject>::Success(std::move(prepared));
     }
 
-    /** @copydoc PublishPackageProjectUpdate */
-    Result<PackageMetadataPublication> PublishPackageProjectUpdate(const PackageProjectPolicy &policy,
-                                                                   const ApprovedPackageProjectUpdate &update, DurableFileSystem &files,
-                                                                   const Platform::ProjectReadContext &context) {
+    /** @brief Shares journaled publication with offline rollback reference review when packages depart. */
+    static Result<PackageMetadataPublication> PublishReviewedPackageUpdate(const PackageProjectPolicy &policy,
+                                                                            const ApprovedPackageProjectUpdate &update,
+                                                                            DurableFileSystem &files,
+                                                                            const Platform::ProjectReadContext &context,
+                                                                            const PackageRemovalSources *withdrawal) {
         using Publication = Result<PackageMetadataPublication>;
         if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
             return Publication::Failure(authority.ErrorValue());
@@ -631,8 +652,29 @@ namespace Horo::Application::Internal {
         const auto previous = ReadApprovedDocuments(metadata, limits, update.base, files, context.cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
+        if (withdrawal) {
+            const auto reviewed = CheckRollbackWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal);
+            if (reviewed.HasError())
+                return Publication::Failure(reviewed.ErrorValue());
+        }
         const MetadataDocuments next{std::string{update.candidateRequest}, std::string{update.candidateLock}};
         return CommitWithRollbackPoint(metadata, previous.Value(), next, limits, files, context);
+    }
+
+    /** @copydoc PublishPackageProjectUpdate */
+    Result<PackageMetadataPublication> PublishPackageProjectUpdate(const PackageProjectPolicy &policy,
+                                                                   const ApprovedPackageProjectUpdate &update, DurableFileSystem &files,
+                                                                   const Platform::ProjectReadContext &context) {
+        return PublishReviewedPackageUpdate(policy, update, files, context, nullptr);
+    }
+
+    /** @copydoc PublishPackageWithdrawalRollback */
+    Result<PackageMetadataPublication> PublishPackageWithdrawalRollback(const PackageProjectPolicy &policy,
+                                                                        const ApprovedPackageProjectUpdate &update, DurableFileSystem &files,
+                                                                        const PackageRemovalSources &sources) {
+        if (!sources.offline || !MatchesRemovalProject(policy.projectRoot, update.base, sources))
+            return Result<PackageMetadataPublication>::Failure(MetadataConflict());
+        return PublishReviewedPackageUpdate(policy, update, files, sources.context, &sources);
     }
 
     /** @copydoc ReadPackageProjectRollback */

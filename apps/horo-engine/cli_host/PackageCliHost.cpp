@@ -64,6 +64,12 @@ namespace Horo::Application::Internal {
             PackageOperation operation;
             std::optional<Packages::HoroPackageId> removalPackage;
 
+            /** @brief Identifies a rollback whose retained packages have exactly the same lock entries. */
+            bool IsWithdrawalRollback() const {
+                return operation == PackageOperation::Rollback && !preview.changes.empty() &&
+                       std::ranges::all_of(preview.changes, [](const auto &change) { return change.current && !change.candidate; });
+            }
+
             /** @brief Identifies the reviewed project and exact old and proposed documents. */
             std::string ApprovalFingerprint() const {
                 constexpr std::array commands{"update", "rollback", "remove"};
@@ -253,8 +259,10 @@ namespace Horo::Application::Internal {
                 const auto preview = InspectUpdate(request, operation_, context.Cancellation());
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
-                const auto review = operation_ == PackageOperation::Removal ? ReviewOfflineRemoval(preview.Value(), request, context)
-                                                                           : ReviewCachedUpdate(preview.Value(), request, context);
+                const auto &update = preview.Value();
+                const auto review = update.removalPackage || update.IsWithdrawalRollback()
+                                        ? ReviewOfflineRemoval(update, request, context)
+                                        : ReviewCachedUpdate(update, request, context);
                 if (review.HasError())
                     return Output::Failure(review.ErrorValue());
                 return Output::Success(EncodePreview(preview.Value(), offset.Value()));
@@ -457,23 +465,42 @@ namespace Horo::Application::Internal {
                                                ErrorSeverity::Error, "", std::move(diagnostics)});
         }
 
+        /** @brief Retains the verified departing graph and fresh saved-project evidence through publication. */
+        struct OfflineWithdrawalEvidence final {
+            Packages::StagedPackageRestoreRecord staged;
+            RemovalInventory inventory;
+
+            /** @brief Borrows the staged archive and project authorities from this evidence owner. */
+            PackageRemovalSources Sources() const {
+                return {.assets = *inventory.assets, .files = *inventory.files, .context = inventory.admission, .offline = &staged};
+            }
+        };
+
+        /** @brief Opens the same current-lock evidence for uninstall and rollback. */
+        Result<OfflineWithdrawalEvidence> PrepareOfflineWithdrawal(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
+                                                                   Packages::PackageCacheStore &cache,
+                                                                   const Cli::CliExecutionContext &context) {
+            using Output = Result<OfflineWithdrawalEvidence>;
+            auto restore = update.base.application.restore;
+            restore.cancellation = context.Cancellation();
+            auto verified = StageWithCache(restore, files, cache, context);
+            if (verified.HasError())
+                return Output::Failure(std::move(verified).ErrorValue());
+            auto inventory = OpenRemovalInventory(update.policy, context);
+            if (inventory.HasError())
+                return Output::Failure(std::move(inventory).ErrorValue());
+            return Output::Success({std::move(verified).Value(), std::move(inventory).Value()});
+        }
+
         /** @brief Publishes an approved offline withdrawal after inspecting the real root-bound project inventory. */
         Result<Cli::CliCommandResult> ApplyRemoval(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
                                                    Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
             using Output = Result<Cli::CliCommandResult>;
-            auto restore = update.base.application.restore;
-            restore.cancellation = context.Cancellation();
-            const auto verified = StageWithCache(restore, files, cache, context);
-            if (verified.HasError())
-                return Output::Failure(verified.ErrorValue());
-            const auto inventory = OpenRemovalInventory(update.policy, context);
-            if (inventory.HasError())
-                return Output::Failure(inventory.ErrorValue());
-            const PackageRemovalSources sources{.assets = *inventory.Value().assets,
-                                                .files = *inventory.Value().files,
-                                                .context = inventory.Value().admission,
-                                                .offline = &verified.Value()};
-            const auto published = PublishPackageProjectRemoval(update.policy, update.base, *update.removalPackage, files, sources);
+            const auto evidence = PrepareOfflineWithdrawal(update, files, cache, context);
+            if (evidence.HasError())
+                return Output::Failure(evidence.ErrorValue());
+            const auto published =
+                PublishPackageProjectRemoval(update.policy, update.base, *update.removalPackage, files, evidence.Value().Sources());
             if (published.HasError())
                 return Output::Failure(published.ErrorValue());
             return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
@@ -506,6 +533,16 @@ namespace Horo::Application::Internal {
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
 
+        /** @brief Stages the departing lock and supplies fresh project evidence to the rollback transaction. */
+        Result<PackageMetadataPublication> RollBackWithdrawals(const InspectedPackageUpdate &update,
+                                                               const ApprovedPackageProjectUpdate &approved, NativeDurableFileSystem &files,
+                                                               Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
+            const auto evidence = PrepareOfflineWithdrawal(update, files, cache, context);
+            if (evidence.HasError())
+                return Result<PackageMetadataPublication>::Failure(evidence.ErrorValue());
+            return PublishPackageWithdrawalRollback(update.policy, approved, files, evidence.Value().Sources());
+        }
+
         /** @brief Verifies and publishes a candidate whose existing package references remain valid. */
         Result<Cli::CliCommandResult> PublishStagedUpdate(const InspectedPackageUpdate &update, NativeDurableFileSystem &files,
                                                           Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
@@ -519,12 +556,15 @@ namespace Horo::Application::Internal {
                                                files, cache, context);
             if (staged.HasError())
                 return Output::Failure(staged.ErrorValue());
-            if (const auto content = CheckStagedUpdateArchives(update, *staged.Value().Graph(), cache, context); content.HasError())
-                return Output::Failure(content.ErrorValue());
+            const bool withdrawal = update.IsWithdrawalRollback();
+            if (!withdrawal) {
+                if (const auto content = CheckStagedUpdateArchives(update, *staged.Value().Graph(), cache, context); content.HasError())
+                    return Output::Failure(content.ErrorValue());
+            }
 
-            const auto admission = ReadAuthority(update.policy, context);
             const ApprovedPackageProjectUpdate approved{update.base, staged.Value(), update.approval, update.request, update.lock};
-            const auto published = PublishPackageProjectUpdate(update.policy, approved, files, admission);
+            const auto published = withdrawal ? RollBackWithdrawals(update, approved, files, cache, context)
+                                              : PublishPackageProjectUpdate(update.policy, approved, files, ReadAuthority(update.policy, context));
             if (published.HasError())
                 return Output::Failure(published.ErrorValue());
             return Output::Success({.fields = {{"recoveryRequired", published.Value().recoveryDiagnostic.has_value()}}});
@@ -536,7 +576,7 @@ namespace Horo::Application::Internal {
             using Output = Result<Cli::CliCommandResult>;
             if (UpdateApproval(request) != update.ApprovalFingerprint())
                 return Output::Failure(Error{ErrorCode{"packages.host.update_approval_mismatch"}, ErrorDomainId{"packages.host"}});
-            if (!update.removalPackage) {
+            if (!update.removalPackage && !update.IsWithdrawalRollback()) {
                 auto blockers = ReviewUpdateLock(update.preview);
                 if (!blockers.empty())
                     return Output::Failure(UpdateNeedsMigration(std::move(blockers)));

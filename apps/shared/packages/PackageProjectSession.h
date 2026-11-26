@@ -121,6 +121,18 @@ namespace Horo::Application::Internal {
                                                                                  DurableFileSystem &files,
                                                                                  const Platform::ProjectReadContext &context);
 
+    /** @brief Restores an approved metadata pair after checking every withdrawn package under the mutation lease.
+     * @param policy Host-selected project, platform and verification requirements.
+     * @param update Approved base and exact rollback documents with verified staging.
+     * @param files Durable host filesystem.
+     * @param sources Current project inventory and offline staging for the exact departing lock.
+     * @return Committed publication or a typed approval, reference or recovery failure.
+     */
+    [[nodiscard]] Result<PackageMetadataPublication> PublishPackageWithdrawalRollback(const PackageProjectPolicy &policy,
+                                                                                       const ApprovedPackageProjectUpdate &update,
+                                                                                       DurableFileSystem &files,
+                                                                                       const PackageRemovalSources &sources);
+
     /** @brief Exact previous metadata bytes for the currently published update. */
     struct PackageRollbackDocuments final {
         std::string request;
