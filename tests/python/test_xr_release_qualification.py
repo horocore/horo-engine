@@ -42,6 +42,16 @@ def store_display_capture(root, record, content=None):
     record["checks"]["displayEnumeration"]["evidenceSha256"] = digest
 
 
+def timing_capture(record):
+    return {"schemaVersion": 1, "tuple": record["tuple"], "provenance": record["provenance"],
+            "targetRefreshMilliHertz": 90000, "durationNs": 1_000_000_000, "frameCount": 90,
+            "peakFrameIntervalNs": 12_000_000, "missedDeadlines": 0, "swapchainFailures": 0}
+
+
+def store_timing_capture(root, record):
+    record["checks"]["renderTiming"]["evidenceSha256"] = store(root, json.dumps(timing_capture(record)).encode())
+
+
 def make_claim(root, mode, category="Reference"):
     identity = dict.fromkeys(IDENTITY_FIELDS, "synthetic")
     identity.update(buildSha256=store(root, f"{mode} executable".encode()),
@@ -61,10 +71,14 @@ def make_claim(root, mode, category="Reference"):
                     "viewExtents": [{"width": 1024, "height": 800}, {"width": 1032, "height": 808}]},
     }
     store_display_capture(root, record)
+    store_timing_capture(root, record)
     row = {
         "id": mode, "category": category, "owner": "xr-platform", "releaseClaim": True,
         "declaration": {"tuple": identity, "testPlan": plan}, "requiredOptionalChecks": ["haptics"],
         "recordSha256": store(root, json.dumps(record).encode()),
+        "renderTimingLimits": {"minimumDurationNs": 1_000_000_000, "minimumFrameCount": 90,
+                               "maximumPeakFrameIntervalNs": 12_000_000, "maximumMissedDeadlines": 0,
+                               "maximumSwapchainFailures": 0},
     }
     if mode != "Standalone":
         row["desktopPreflightSha256"] = store(root, desktop_receipt(row))
@@ -105,6 +119,50 @@ def test_reference_pair_and_optional_planning_owner(release):
     assert result.returncode == 0, result.stderr
     assert "WirelessStreaming (xr-platform): Future planning" in result.stdout
     assert "XR 1.0 matrix evidence passed" in result.stdout
+
+
+@pytest.mark.parametrize(("changes", "reason"), [
+    ({"durationNs": 999_999_999}, "did not meet the required duration"),
+    ({"frameCount": 89}, "did not meet the required duration"),
+    ({"peakFrameIntervalNs": 12_000_001}, "exceeded the declared limits"),
+    ({"missedDeadlines": 1}, "exceeded the declared limits"),
+    ({"swapchainFailures": 1}, "exceeded the declared limits"),
+    ({"targetRefreshMilliHertz": 120000}, "target was not enumerated"),
+    ({"frameCount": True}, "Invalid render timing measurements"),
+    ({"provenance": {"runId": "foreign"}}, "from a different smoke run"),
+    ({"tuple": {"connectionMode": "WirelessStreaming"}}, "from a different product tuple"),
+    ({"privateData": "raw-frame-details"}, "Unexpected fields in render timing capture"),
+])
+def test_release_requires_timing_evidence_from_the_declared_run(release, changes, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    capture = timing_capture(record) | changes
+    record["checks"]["renderTiming"]["evidenceSha256"] = store(evidence, json.dumps(capture).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert reason in result.stderr
+    assert "raw-frame-details" not in result.stderr
+
+
+def test_release_claim_requires_explicit_timing_limits(release):
+    matrix, _ = release
+    del matrix["tuples"][0]["renderTimingLimits"]
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Claimed tuple requires render timing limits" in result.stderr
+
+
+def test_release_rejects_a_generic_artifact_with_a_valid_digest_for_timing(release):
+    matrix, evidence = release
+    row = matrix["tuples"][1]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    record["checks"]["renderTiming"]["evidenceSha256"] = store(evidence, b"{}")
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Unexpected fields in render timing capture" in result.stderr
 
 
 def test_a_failed_unclaimed_capability_cannot_be_reported_as_limited(release):
@@ -265,6 +323,7 @@ def update_claim_identity(row, evidence, **changes):
     record = json.loads((evidence / row["recordSha256"]).read_bytes())
     record["tuple"] = identity
     store_display_capture(evidence, record)
+    store_timing_capture(evidence, record)
     row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 
@@ -274,6 +333,7 @@ def capture_android_smoke(row, evidence, *, runtime_version="1.2.3", build=ANDRO
         record = json.loads((evidence / row["recordSha256"]).read_bytes())
         record["provenance"]["androidDeviceBuildSha256"] = build
         store_display_capture(evidence, record)
+        store_timing_capture(evidence, record)
         row["recordSha256"] = store(evidence, json.dumps(record).encode())
 
 

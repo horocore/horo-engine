@@ -17,6 +17,15 @@ from qualify_xr_device import (
 REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+MAX_TIMING_WINDOW_NS = 86_400_000_000_000
+MAX_TIMING_FRAMES = 10_000_000
+TIMING_LIMITS = {
+    "minimumDurationNs": (1, MAX_TIMING_WINDOW_NS),
+    "minimumFrameCount": (1, MAX_TIMING_FRAMES),
+    "maximumPeakFrameIntervalNs": (1, MAX_TIMING_WINDOW_NS),
+    "maximumMissedDeadlines": (0, MAX_TIMING_FRAMES),
+    "maximumSwapchainFailures": (0, MAX_TIMING_FRAMES),
+}
 
 
 class Evidence:
@@ -64,6 +73,11 @@ class Evidence:
         with self.path(record["display"]["evidenceSha256"]).open("rb") as source:
             check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
 
+    def render_timing(self, record: dict, limits: dict) -> None:
+        digest = record["checks"]["renderTiming"]["evidenceSha256"]
+        with self.path(digest).open("rb") as source:
+            check_render_timing(source.read(MAX_RECORD_BYTES + 1), digest, record, limits)
+
     def mixed_reality_capture(self, record: dict) -> bytes:
         with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
             return source.read(MAX_RECORD_BYTES + 1)
@@ -78,10 +92,40 @@ def validate_preflight_declarations(row: dict) -> None:
         validate_android_preflight(row["androidPreflight"])
 
 
+def validate_timing_limits(value: object) -> None:
+    limits = fields(value, set(TIMING_LIMITS), "render timing limits")
+    require(all(type(limits[name]) is int and lower <= limits[name] <= upper
+                for name, (lower, upper) in TIMING_LIMITS.items()), "Invalid render timing limits")
+
+
+def check_render_timing(data: bytes, digest: str, record: dict, limits: dict) -> None:
+    """Verify a bounded timing observation from the exact physical run against its release limits."""
+    require(len(data) <= MAX_RECORD_BYTES, "Render timing capture exceeds the size limit")
+    require(hashlib.sha256(data).hexdigest() == digest, "Render timing capture digest does not match")
+    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "targetRefreshMilliHertz",
+                                           "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines",
+                                           "swapchainFailures"}, "render timing capture")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported render timing capture schema")
+    require(capture["tuple"] == record["tuple"], "Render timing capture is from a different product tuple")
+    require(capture["provenance"] == record["provenance"], "Render timing capture is from a different smoke run")
+    refresh = capture["targetRefreshMilliHertz"]
+    require(type(refresh) is int and refresh in record["display"]["refreshMilliHertz"], "Render timing target was not enumerated")
+    duration, frames, peak, missed, failures = (capture[name] for name in (
+        "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines", "swapchainFailures"))
+    require(all(type(value) is int for value in (duration, frames, peak, missed, failures)) and
+            0 < peak <= duration <= MAX_TIMING_WINDOW_NS and
+            0 < frames <= MAX_TIMING_FRAMES and 0 <= missed <= frames and 0 <= failures <= frames,
+            "Invalid render timing measurements")
+    require(duration >= limits["minimumDurationNs"] and frames >= limits["minimumFrameCount"],
+            "Render timing observation did not meet the required duration and frame count")
+    require(peak <= limits["maximumPeakFrameIntervalNs"] and missed <= limits["maximumMissedDeadlines"] and
+            failures <= limits["maximumSwapchainFailures"], "Render timing observation exceeded the declared limits")
+
+
 def validate_row(value: object) -> dict:
     required = {"id", "category", "owner", "releaseClaim", "declaration", "requiredOptionalChecks", "recordSha256"}
     if isinstance(value, dict):
-        required |= value.keys() & {"desktopPreflightSha256", "desktopComponentSha256", "androidPreflight"}
+        required |= value.keys() & {"desktopPreflightSha256", "desktopComponentSha256", "androidPreflight", "renderTimingLimits"}
     row = fields(value, required, "matrix row")
     require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
     require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
@@ -89,6 +133,9 @@ def validate_row(value: object) -> dict:
     if row["releaseClaim"]:
         require(row["category"] not in {"Conditional", "Future"}, "Conditional and Future rows are planning only")
         require(row["declaration"] is not None, "Claimed tuple requires a release declaration")
+        require("renderTimingLimits" in row, "Claimed tuple requires render timing limits")
+    if "renderTimingLimits" in row:
+        validate_timing_limits(row["renderTimingLimits"])
     optional = row["requiredOptionalChecks"]
     require(isinstance(optional, list) and all(in_set(name, OPTIONAL_CHECKS) for name in optional),
             "Invalid optional physical checks")
@@ -152,8 +199,9 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> str:
     if "androidPreflight" in row:
         verify_android_route(row["androidPreflight"], evidence, record, revision)
     evidence.display_capture(record)
+    evidence.render_timing(record, row["renderTimingLimits"])
     check_digests = {check["evidenceSha256"] for check in record["checks"].values()}
-    check_digests.difference_update({None, record["display"]["evidenceSha256"]})
+    check_digests.difference_update({None, record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]})
     if mr_capture is not None:
         check_digests.discard(record["checks"]["optionalMR"]["evidenceSha256"])
     for digest in check_digests:

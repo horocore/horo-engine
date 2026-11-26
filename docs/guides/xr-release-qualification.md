@@ -84,6 +84,26 @@ The release checker compares the values and rejects captures from another run
 or connection mode. If an older record points to a generic artifact, transcribe
 the original runtime capture into this format or repeat the display check.
 
+Each claimed row also has `renderTimingLimits` with `minimumDurationNs`,
+`minimumFrameCount`, `maximumPeakFrameIntervalNs`, `maximumMissedDeadlines`,
+and `maximumSwapchainFailures`. Use the limits from the declared test plan.
+The `renderTiming` check references a separate JSON capture with `schemaVersion: 1`,
+the smoke record's exact `tuple` and `provenance`, and these integer measurements:
+
+| Field | Measurement |
+| --- | --- |
+| `targetRefreshMilliHertz` | Selected rate from the run's display capture. |
+| `durationNs` | Measured elapsed time of the sample window. |
+| `frameCount` | Number of frames measured in that window. |
+| `peakFrameIntervalNs` | Longest frame interval observed. |
+| `missedDeadlines` | Number of measured frames that missed the deadline. |
+| `swapchainFailures` | Number of measured frames with a swapchain failure. |
+
+The release gate checks the measurement bounds and every declared limit.
+For older records, use the original run's timing measurements to create the
+capture and update the check digest, or rerun the timing check with the declared
+limits. Planning rows need no timing limits until they are claimed.
+
 When a release requires `optionalMR`, store a redacted physical-device result
 as JSON with `schemaVersion: 1`, `evidenceLevel: "PhysicalDeviceQualification"`,
 and the smoke record's exact `tuple` and `provenance`. Add a `capabilities`
