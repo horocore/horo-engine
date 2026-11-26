@@ -50,6 +50,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) {
         if (auto world = AdvanceMountedWorldAtCutoff(frame); world.HasError())
             return world;
+        if (!mountedWorld_)
+            AdvanceNavigationRebuild(frame.cancellation);
         return AdvanceNpcDialogue(frame);
     }
 

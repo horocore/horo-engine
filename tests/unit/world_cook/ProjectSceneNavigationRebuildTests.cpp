@@ -1,11 +1,15 @@
+#include "EditorProjectSceneHost.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
 #include "navigation/NavigationContentPolicyFixture.h"
+#include "navigation/ProjectSceneNavigationFixture.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <chrono>
+#include <thread>
 
 namespace Horo::WorldCook {
     namespace {
@@ -145,6 +149,8 @@ namespace Horo::WorldCook {
             const std::array profiles{Nav::NavigationAgentProfileDescriptor{fixture.profile, "Grounded", fixture.geometry}};
             auto input = Nav::NavigationBakeInputSnapshot::Create(revisions, selection.catalog->Registry(), profiles, bindings, {},
                                                                   std::move(capture));
+            if (input.HasError())
+                UNSCOPED_INFO(input.ErrorValue().message);
             REQUIRE(input.HasValue());
             return {.expected = {previous, revisions, 1, 1, 2},
                     .nextTopology = Id<Nav::NavigationGeneration>(previous.topology.Value() + 1),
@@ -152,6 +158,19 @@ namespace Horo::WorldCook {
                     .compatibility = {fixture.digest, fixture.digest, fixture.digest},
                     .maximumRebuiltTiles = 2,
                     .maximumOwnedBytes = 12U * 1024U * 1024U};
+        }
+
+        /** @brief Awaits a real Play lifecycle barrier without pumping presentation or fixed work. */
+        template <typename Predicate, typename Advance> void AwaitPlayBarrier(Predicate ready, Advance advance) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+            for (std::uint64_t frame = 1; !ready() && std::chrono::steady_clock::now() < deadline; ++frame) {
+                auto result = advance(frame);
+                if (result.HasError())
+                    UNSCOPED_INFO(result.ErrorValue().message);
+                REQUIRE(result.HasValue());
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE(ready());
         }
     }  // namespace
 
@@ -225,5 +244,49 @@ namespace Horo::WorldCook {
         previous = {};
         static_cast<void>(world->CollectRetired());
         CHECK(world->RetiredCount() == 0);
+    }
+
+    TEST_CASE("Resident Editor Play publishes a queued NavMesh at the runtime Scene cutoff", "[world_cook][navigation][editor][native]") {
+        Application::CharacterSceneProductTest::NavigationProductFixture project;
+        project.Publish(decltype(project)::Input::Valid);
+        auto &jobs = project.project.jobs;
+        const auto projectScene = project.project.sceneId;
+        const auto factory = MakeEditorProjectSceneFactory(
+            jobs, {.cooked = SceneCookSelection{project.project.cooked.path, project.project.request.assets.target},
+                   .playNavigationScene = projectScene,
+                   .playNavigationRuntimeRebuild = true});
+        const auto definition = SceneSource::ConvertSceneSourceToRuntime({project.source.objects, project.source.prefabInstances},
+                                                                         SceneCook::SceneDefinitionIdForAsset(projectScene), {1});
+        REQUIRE(definition.HasValue());
+        auto created = factory(project.project.project.dir.path, Editor::EditorFirstPlayScene, definition.Value());
+        REQUIRE(created.HasValue());
+        unsigned observations{};
+        const CancellationToken cancellation;
+        auto play = std::move(created).Value();
+        REQUIRE(play->Scenes().Startup(cancellation).HasValue());
+        REQUIRE(play->QueueInitialScene(definition.Value(), nullptr, cancellation).HasValue());
+        AwaitPlayBarrier([&] { return play->Scenes().ActiveScene().has_value(); },
+                         [&](std::uint64_t frame) { return play->CommitSceneChanges({.frameNumber = frame, .cancellation = cancellation}); });
+
+        const auto id = play->Scenes().ActiveScene()->RuntimeId().value;
+        const Nav::NavigationWorldActivationDescriptor predecessor{Id<Nav::NavigationSceneRuntimeId>(id), Id<Nav::NavigationSceneGeneration>(id),
+                                                                   Id<Nav::NavigationWorldId>(id), Id<Nav::NavigationGeneration>(id)};
+        const ResidentNavigationFixture input{.surface = project.surface,
+                                             .scope = Nav::NavigationBakeScopeId::ForScene(projectScene.Bytes()).Value(),
+                                             .digest = project.tileDigest};
+        const auto selection = MakeSelection(input, jobs);
+        auto command = Command(input, *selection, predecessor);
+        command.observe = [&observations, expected = command.expected] {
+            ++observations;
+            return Result<Nav::NavigationRuntimeRebuildFence>::Success(expected);
+        };
+        REQUIRE(QueueEditorPlayNavigationRebuild(*play, command).HasValue());
+        CHECK(observations == 0);
+        AwaitPlayBarrier([&] { return observations >= 2 || InspectEditorPlayNavigationRebuildError(*play).has_value(); },
+                         [&](std::uint64_t frame) { return play->OnRuntimeSceneCutoff({.frameNumber = frame, .cancellation = cancellation}); });
+        CHECK_FALSE(InspectEditorPlayNavigationRebuildError(*play));
+        CHECK(observations == 2);
+        Nav::TestSupport::RequireError(QueueEditorPlayNavigationRebuild(*play, std::move(command)), Nav::NavigationErrors::StaleSnapshot);
+        play->Shutdown();
     }
 }  // namespace Horo::WorldCook

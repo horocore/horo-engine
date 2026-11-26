@@ -35,6 +35,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         SceneSource::SceneSourceDocument source;
         const Navigation::NavigationFilterId pathFilter{Navigation::NavigationFilterId::Create(13).Value()};
         const Assets::AssetId definitionId{Id("11223344-5566-7788-99aa-bbccddeeff88")};
+        const Navigation::SurfaceId surface{Navigation::SurfaceId::Create(53).Value()};
+        const Sha256Digest tileDigest{ComputeSha256(std::as_bytes(std::span{"nav product fixture", std::size_t{19}}))};
 
         Sha256Digest prefabDigest;
 
@@ -50,7 +52,6 @@ namespace Horo::Application::CharacterSceneProductTest {
                      const Navigation::INavigationMeshBuilder *tileBuilder = nullptr) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
-            const auto surface = SurfaceId::Create(53).Value();
             const auto area = NavigationAreaId::Create(11).Value();
             const auto filter = pathFilter;
             const auto origin = NavigationDescriptorSource{.id = NavigationDescriptorSourceId::Create(2).Value()};
@@ -94,7 +95,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             project.WriteText(".horo/navigation.json", EncodeNavigationProjectSettings(settings.Value()));
 
             const auto scope = NavScope::ForScene((input == Input::ForeignScope ? definitionId : project.sceneId).Bytes()).Value();
-            const auto digest = ComputeSha256(std::as_bytes(std::span{"nav product fixture", std::size_t{19}}));
+            const auto &digest = tileDigest;
             const NavigationPreparedTile tile{.tile = {.key = {profile, surface, {}, scope},
                                                        .bounds = {{0, -1, 0}, {10, 1, 10}},
                                                        .tileSizeMeters = 10},
