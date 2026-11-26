@@ -24,7 +24,7 @@ namespace Horo::Application {
         std::uint64_t bindingRevision{};                    /**< Local profile revision captured at admission. */
     };
 
-    /** @brief An exact cloud revision selected for local validation. */
+    /** @brief An exact cloud selection or an inspection-only read of the current remote head. */
     class CloudSaveDownload final {
     public:
         /** @brief Returns the correlation and observation identity for the owning Save operation. */
@@ -32,12 +32,13 @@ namespace Horo::Application {
 
     private:
         friend class CloudSaveTransport;
-        CloudSaveDownload(Sha256Digest partition, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision revision,
+        CloudSaveDownload(Sha256Digest partition, Runtime::SaveGameSlotId slot,
+                          std::optional<PlatformServices::ProviderObjectRevision> revision,
                           PlatformServices::CloudBlobReadRequest read,
                           CloudSaveRequest<PlatformServices::CloudBlobReadResult> admission);
         Sha256Digest partition_;
         Runtime::SaveGameSlotId slot_;
-        PlatformServices::ProviderObjectRevision revision_;
+        std::optional<PlatformServices::ProviderObjectRevision> revision_;
         PlatformServices::CloudBlobReadRequest read_;
         CloudSaveRequest<PlatformServices::CloudBlobReadResult> admission_;
     };
@@ -127,6 +128,14 @@ namespace Horo::Application {
         [[nodiscard]] Result<CloudSaveDownload> DownloadRevision(
             OperationId operation, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision revision,
             std::uint64_t maximumBytes) const;
+
+        /** @brief Refreshes the exact slot's current remote head after contention.
+         * @param operation Owning Save operation. @param slot Remote logical slot.
+         * @param maximumBytes Caller-imposed complete read bound.
+         * @return An inspection-only download. Applying it requires selecting the observed revision in a new operation.
+         */
+        [[nodiscard]] Result<CloudSaveDownload> RefreshForInspection(
+            OperationId operation, Runtime::SaveGameSlotId slot, std::uint64_t maximumBytes) const;
 
         /** @brief Validates the received archive and durably imports it into a distinct absent slot.
          * @param lifecycle Local catalog authority. @param download Admitted remote selection.
@@ -250,6 +259,10 @@ namespace Horo::Application {
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
         /** @brief Checks that a selected revision is still attributed to this exact account binding. */
         [[nodiscard]] bool OwnsDownload(const CloudSaveDownload &download) const noexcept;
+        /** @brief Admits a bounded read with optional exact-revision consent. */
+        [[nodiscard]] Result<CloudSaveDownload> BeginDownload(
+            OperationId operation, Runtime::SaveGameSlotId slot,
+            std::optional<PlatformServices::ProviderObjectRevision> revision, std::uint64_t maximumBytes) const;
         /** @brief Fences same-slot download work to the selected local profile and cloud scope. */
         [[nodiscard]] bool OwnsDownloadTarget(const CloudSaveDownload &download, const Runtime::SaveSlotLifecycleTarget &target,
                                               const Runtime::SaveCloudRevisionSnapshot &expected) const noexcept;

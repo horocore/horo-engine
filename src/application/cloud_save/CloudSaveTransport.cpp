@@ -124,7 +124,7 @@ namespace Horo::Application {
         Result<const CloudBlobReadResult *> CheckDownloadRead(
             const PlatformServicesFrontend &frontend, const CloudSaveRequest<CloudBlobReadResult> &admission,
             const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
-            const CloudBlobReadRequest &request, const ProviderObjectRevision &revision) {
+            const CloudBlobReadRequest &request, const std::optional<ProviderObjectRevision> &revision) {
             using Response = Result<const CloudBlobReadResult *>;
             if (const auto observed = CheckTerminalObservation(frontend, admission.handle, completion); observed.HasError())
                 return Response::Failure(observed.ErrorValue());
@@ -133,7 +133,7 @@ namespace Horo::Application {
             const auto *read = completion.terminal->Value();
             if (!read || completion.state != PlatformRequestState::Succeeded)
                 return Response::Failure(MakeError(CloudObjectErrors::InvalidProviderResponse));
-            if (read->head.revision != revision)
+            if (revision && read->head.revision != *revision)
                 return Response::Failure(MakeError(CloudObjectErrors::RevisionChanged));
             if (const auto valid = ValidateCloudBlobReadCompletion(*read, request, request.subject); valid.HasError())
                 return Response::Failure(valid.ErrorValue());
@@ -220,7 +220,7 @@ namespace Horo::Application {
     }
 
     CloudSaveDownload::CloudSaveDownload(const Sha256Digest partition, const Runtime::SaveGameSlotId slot,
-                                         ProviderObjectRevision revision, CloudBlobReadRequest read,
+                                         std::optional<ProviderObjectRevision> revision, CloudBlobReadRequest read,
                                          CloudSaveRequest<CloudBlobReadResult> admission)
         : partition_(partition), slot_(slot), revision_(std::move(revision)), read_(std::move(read)), admission_(std::move(admission)) {}
 
@@ -296,9 +296,22 @@ namespace Horo::Application {
                                                                     const Runtime::SaveGameSlotId slot,
                                                                     ProviderObjectRevision revision,
                                                                     const std::uint64_t maximumBytes) const {
-        using Response = Result<CloudSaveDownload>;
         if (!revision.IsValid())
-            return Response::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+            return Result<CloudSaveDownload>::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+        return BeginDownload(operation, slot, std::move(revision), maximumBytes);
+    }
+
+    /** @copydoc CloudSaveTransport::RefreshForInspection */
+    Result<CloudSaveDownload> CloudSaveTransport::RefreshForInspection(const OperationId operation, const Runtime::SaveGameSlotId slot,
+                                                                       const std::uint64_t maximumBytes) const {
+        return BeginDownload(operation, slot, std::nullopt, maximumBytes);
+    }
+
+    /** @copydoc CloudSaveTransport::BeginDownload */
+    Result<CloudSaveDownload> CloudSaveTransport::BeginDownload(const OperationId operation, const Runtime::SaveGameSlotId slot,
+                                                                std::optional<ProviderObjectRevision> revision,
+                                                                const std::uint64_t maximumBytes) const {
+        using Response = Result<CloudSaveDownload>;
         auto key = Key(slot);
         if (key.HasError())
             return Response::Failure(key.ErrorValue());
@@ -343,7 +356,7 @@ namespace Horo::Application {
         const auto &access = destination.address.namespaceAccess;
         if (!OwnsDownload(download) || !OwnsAccess(access))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
-        if (destination.generation || destination.address.slot == download.slot_)
+        if (!download.revision_ || destination.generation || destination.address.slot == download.slot_)
             return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
@@ -378,6 +391,8 @@ namespace Horo::Application {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         if (!OwnsDownloadTarget(download, target, expected))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        if (!download.revision_)
+            return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
         const auto read = CheckDownloadRead(*frontend_, download.Request(), completion, download.read_, download.revision_);
@@ -385,7 +400,7 @@ namespace Horo::Application {
             return Response::Failure(read.ErrorValue());
         try {
             const auto key = download.read_.key.Bytes();
-            const auto revision = download.revision_.Bytes();
+            const auto revision = download.revision_->Bytes();
             Runtime::SaveCloudObjectRef object{.key = {key.begin(), key.end()},
                                                .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
             auto applied = lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation);

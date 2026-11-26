@@ -879,6 +879,94 @@ namespace Horo::Runtime {
             }
         }
 
+        TEST_CASE("Competing Save devices refresh a stale write without authority to overwrite", "[unit][save][cloud-conflict]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            const auto firstTarget = fixture.Target(10);
+            const auto firstBytes = fixture.ExportBytes(10);
+            const auto baseline = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{2}});
+            const auto winnerRevision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{3}});
+            REQUIRE(baseline.HasValue());
+            REQUIRE(winnerRevision.HasValue());
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            const auto session = Cloud::Session();
+            auto firstBackend = std::make_shared<Cloud::RoutingBackend>();
+            auto secondBackend = std::make_shared<Cloud::RoutingBackend>();
+            const auto maximumBytes = firstBytes.size() + 256;
+            auto firstFrontend = CloudFrontend(firstBackend, session, maximumBytes);
+            auto secondFrontend = CloudFrontend(secondBackend, session, maximumBytes);
+            auto first = BoundTransport(firstFrontend, session, scope, fixture.Access().expectedRevision);
+            auto second = BoundTransport(secondFrontend, session, scope, fixture.Access().expectedRevision);
+            const Tests::OwnedTestDirectory firstDirectory{"save-cloud-concurrent-first"};
+            const Tests::OwnedTestDirectory secondDirectory{"save-cloud-concurrent-second"};
+            const auto firstJournal = NativeJournal(firstDirectory, first);
+            const auto secondJournal = NativeJournal(secondDirectory, second);
+            const auto stagedFirst = Application::StageCloudSaveUpload(
+                *fixture.owner, firstJournal, firstTarget, Id<SaveCloudMutationId>(51), baseline.Value(), maximumBytes);
+            REQUIRE(stagedFirst.HasValue());
+            fixture.Import(10);
+            const auto secondTarget = fixture.Target(10);
+            const auto secondBytes = fixture.ExportBytes(10);
+            REQUIRE(secondBytes != firstBytes);
+            const auto stagedSecond = Application::StageCloudSaveUpload(
+                *fixture.owner, secondJournal, secondTarget, Id<SaveCloudMutationId>(52), baseline.Value(), maximumBytes);
+            REQUIRE(stagedSecond.HasValue());
+            const auto left = first.DispatchMutation(1, stagedFirst.Value().mutation, stagedFirst.Value().bytes);
+            const auto right = second.DispatchMutation(2, stagedSecond.Value().mutation, stagedSecond.Value().bytes);
+            REQUIRE(left.HasValue());
+            REQUIRE(right.HasValue());
+            REQUIRE(firstBackend->lastCloudWrite);
+            REQUIRE(secondBackend->lastCloudWrite);
+            const auto &leftWrite = *firstBackend->lastCloudWrite;
+            const auto &rightWrite = *secondBackend->lastCloudWrite;
+            REQUIRE(leftWrite.key == rightWrite.key);
+
+            // Both admissions happen before the scripted atomic provider selects a winner.
+            auto remoteRevision = baseline.Value();
+            std::optional<Cloud::CloudBlobReadResult> selected;
+            const auto commit = [&](Cloud::RoutingBackend &device, const auto &request, const Cloud::CloudBlobWriteRequest &write) {
+                const auto &handle = request.handle;
+                REQUIRE(device.requests.MarkRunning(handle).HasValue());
+                const auto &condition = std::get<Cloud::CloudMatchProviderRevision>(write.precondition);
+                if (condition.revision != remoteRevision) {
+                    REQUIRE(device.requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::PreconditionFailed)).HasValue());
+                    return;
+                }
+                remoteRevision = winnerRevision.Value();
+                auto result = Cloud::TestSupport::CloudCommit(write);
+                result.committedObject->revision = remoteRevision;
+                selected = Cloud::CloudBlobReadResult{write.subject, write.subject.SessionGeneration(), *result.committedObject, write.bytes};
+                REQUIRE(device.requests.CompleteSuccess(handle.Id(), handle.Generation(), std::move(result)).HasValue());
+            };
+            commit(*firstBackend, left.Value(), leftWrite);
+            commit(*secondBackend, right.Value(), rightWrite);
+            REQUIRE(selected);
+            CHECK(std::ranges::equal(selected->bytes.Bytes(), firstBytes));
+            const auto rejected = secondBackend->requests.Query(right.Value().handle);
+            REQUIRE(rejected.HasValue());
+            Cloud::RequireError(second.PublishUploadConfirmation(*fixture.owner, fixture.Access(), stagedSecond.Value().mutation,
+                                                                  right.Value(), rejected.Value()),
+                                Cloud::CloudObjectErrors::PreconditionFailed);
+
+            const auto expected = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(expected.HasValue());
+            const auto refresh = second.RefreshForInspection(2, secondTarget.address.slot, maximumBytes);
+            REQUIRE(refresh.HasValue());
+            const auto &handle = refresh.Value().Request().handle;
+            REQUIRE(secondBackend->requests.MarkRunning(handle).HasValue());
+            REQUIRE(secondBackend->requests.CompleteSuccess(handle.Id(), handle.Generation(), *selected).HasValue());
+            const auto observed = secondBackend->requests.Query(handle);
+            REQUIRE(observed.HasValue());
+            const auto compared = second.InspectDownload(*fixture.owner, refresh.Value(), observed.Value(), secondTarget, expected.Value());
+            REQUIRE(compared.HasValue());
+            CHECK(compared.Value().relation == SaveCloudHeadRelation::LocalAhead);
+            Cloud::RequireError(second.ApplyDownload(*fixture.owner, refresh.Value(), observed.Value(), secondTarget, expected.Value()),
+                                SaveErrors::StoragePermissionDenied);
+            CHECK(fixture.ExportBytes(10) == secondBytes);
+            CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+        }
+
         TEST_CASE("A cloud successor preserves its generation and publishes paired remote evidence",
                   "[unit][save][cloud-transport][download]") {
             SaveSlotLifecycleTest::Fixture fixture;
