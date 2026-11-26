@@ -93,6 +93,48 @@ def test_display_requires_runtime_enumeration_and_a_matching_capture(smoke):
         xr.validate_record(smoke)
 
 
+@pytest.mark.parametrize(("change", "error"), [
+    (None, None),
+    ("digest", "Display capture digest does not match"),
+    ("run", "Display capture is from a different smoke run"),
+    ("connection", "Display capture is from a different product tuple"),
+    ("eye-order", "Display report does not match the captured runtime values"),
+])
+def test_device_cli_checks_runtime_display_capture(tmp_path, smoke, change, error):
+    capture = {
+        "schemaVersion": 1, "tuple": deepcopy(smoke["tuple"]), "provenance": deepcopy(smoke["provenance"]),
+        "refreshMilliHertz": smoke["display"]["refreshMilliHertz"],
+        "viewExtents": deepcopy(smoke["display"]["viewExtents"]),
+    }
+    if change == "run":
+        capture["provenance"]["runId"] = "another-run"
+    if change == "connection":
+        capture["tuple"]["connectionMode"] = "WirelessStreaming"
+    if change == "eye-order":
+        capture["viewExtents"].reverse()
+    data = json.dumps(capture).encode("utf-8")
+    digest = DIGEST if change == "digest" else hashlib.sha256(data).hexdigest()
+    smoke["checks"]["displayEnumeration"]["evidenceSha256"] = digest
+    smoke["display"]["evidenceSha256"] = digest
+    capture_path = tmp_path / "display capture.json"
+    record_path = tmp_path / "smoke.json"
+    expectation_path = tmp_path / "declaration.json"
+    capture_path.write_bytes(data)
+    record_path.write_text(json.dumps(smoke), encoding="utf-8")
+    expectation_path.write_text(json.dumps(declared(smoke)), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(record_path), "--expect", str(expectation_path), "--display-capture", str(capture_path)],
+        capture_output=True, text=True, check=False,
+    )
+    if error is None:
+        assert result.returncode == 0, result.stderr
+        assert "Runtime display capture matches the physical smoke run" in result.stdout
+    else:
+        assert result.returncode == 1
+        assert error in result.stderr
+        assert not result.stdout
+
+
 def test_optional_limitation_is_visible_and_required_claims_are_enforced(smoke):
     smoke["status"] = "PassedWithLimitations"
     smoke["checks"]["haptics"].update(status="NotRun", evidenceSha256=None, issue="not-in-release-plan")

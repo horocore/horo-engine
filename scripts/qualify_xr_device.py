@@ -363,6 +363,7 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     """Parse an invocation and validate the relationships between receipt inputs."""
     parser.add_argument("record", type=Path)
     parser.add_argument("--expect", type=Path, help="Exact release tuple and test-plan declaration")
+    parser.add_argument("--display-capture", type=Path, help="Runtime display capture for the exact physical smoke run")
     parser.add_argument("--desktop-preflight", type=Path, help="Exact packaged Desktop preflight receipt for the declared tuple")
     parser.add_argument("--desktop-preflight-sha256", help="Expected SHA-256 for a separate Desktop preflight receipt")
     parser.add_argument("--desktop-component-sha256", help="Installed OpenXR component SHA-256 from package provenance")
@@ -371,6 +372,8 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     options = parser.parse_args()
     if options.require and options.expect is None:
         parser.error("--require needs --expect")
+    if options.display_capture is not None and options.expect is None:
+        parser.error("--display-capture needs --expect")
     if (options.mr_capture is not None) != ("optionalMR" in options.require):
         parser.error("--mr-capture and --require optionalMR must be used together")
     if options.desktop_preflight is not None and options.expect is None:
@@ -391,12 +394,17 @@ def main() -> int:
                 with options.mr_capture.open("rb") as source:
                     mr_capture = source.read(MAX_RECORD_BYTES + 1)
             check_physical_gate(record, load_record(options.expect), set(options.require), mr_capture=mr_capture)
+        if options.display_capture is not None:
+            with options.display_capture.open("rb") as source:
+                check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
         if options.desktop_preflight is not None:
             check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
                                          options.desktop_component_sha256)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")
+    if options.display_capture is not None:
+        print("Runtime display capture matches the physical smoke run")
     return 0
 
 

@@ -137,6 +137,7 @@ failed observation has a digest and a stable `issue`.
 ```sh
 python scripts/qualify_xr_device.py smoke.json
 python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json --require haptics
+python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json --display-capture display.json
 python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json --desktop-preflight desktop-preflight.txt
 ```
 
@@ -144,6 +145,10 @@ The release declaration is an object with a complete `tuple` and exact
 `testPlan` string, prepared independently by the release owner. The
 second invocation requires a passing physical record and passing checks
 for setup, input, display enumeration, timing, comfort, lifecycle and recovery.
+Pass `--display-capture` to verify the actual display capture locally. The
+checker matches its digest, exact tuple and run identity, enumerated refresh
+rates, and ordered view extents to the smoke record. The release matrix
+performs this capture check for every claimed tuple.
 Add `--require haptics` when the release claims haptics. For MR, add
 `mixedRealityCapabilities` to the declaration and pass `--require optionalMR`
 with `--mr-capture <capture.json>`. The
