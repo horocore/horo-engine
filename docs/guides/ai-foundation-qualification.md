@@ -183,7 +183,9 @@ approval and reports no replay data or file paths.
 
 The exporter emits schema 1 with decision outcome counts and exact source, scene,
 canonical AI and plan digests. It omits IDs, paths, observation records and
-Blackboard values. The versioned provider, model, platform and workload tuple
+Blackboard values. The native per-frame limit also applies to each compact UTF-8
+frame in a replay window, within the separate total window limit. The versioned
+provider, model, platform and workload tuple
 is marked operator-declared. Use separate reproducible qualification runs to
 establish support for failure, bias, replay and offline behavior.
 

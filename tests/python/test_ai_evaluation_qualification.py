@@ -217,6 +217,32 @@ def test_rejects_malformed_replay_even_if_approved(export, data):
     assert not result.out and PRIVATE not in result.err
 
 
+@pytest.mark.parametrize(("frame_bytes", "status"), [
+    (evaluation.MAX_FRAME_BYTES - 1, 0),
+    (evaluation.MAX_FRAME_BYTES, 1),
+])
+def test_approved_replay_window_enforces_the_native_per_frame_byte_limit(export, frame_bytes, status):
+    first = frame(3, 2)
+    note = {"note": ""}
+    first["decision"]["records"] = [note]
+    empty_size = len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    pairs, remainder = divmod(frame_bytes - empty_size, 2)
+    note["note"] = "\u00e9" * pairs + "x" * remainder
+    data = json.dumps({"format": evaluation.REPLAY_FORMAT, "version": 2, "frames": [first, frame(4, 3)]},
+                      ensure_ascii=False).encode("utf-8")
+    assert len(data) < evaluation.MAX_FRAME_BYTES * 2
+
+    actual, result = export(data, approval_for(data))
+
+    assert actual == status
+    if status:
+        assert not result.out
+        assert result.err == "Replay window contains an oversized frame\n"
+    else:
+        assert not result.err
+        assert json.loads(result.out)["evidence"]["frameCount"] == 2
+
+
 def test_requires_explicit_approval_argument(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", "evidence.json"])
     with pytest.raises(SystemExit) as exit_status:

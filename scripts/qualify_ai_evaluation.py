@@ -135,6 +135,10 @@ def replay_frames(value: object, bytes_read: int) -> list[dict]:
     require(wire_version == 2 and value.keys() == {"format", "version", "frames"}, "Unsupported replay window")
     frames = value["frames"]
     require(isinstance(frames, list) and 2 <= len(frames) <= MAX_FRAMES, "Invalid replay window length")
+    for frame in frames:
+        compact = json.dumps(frame, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        # Native evidence reserves one byte for the trailing newline.
+        require(len(compact.encode("utf-8")) < MAX_FRAME_BYTES, "Replay window contains an oversized frame")
     return frames
 
 
