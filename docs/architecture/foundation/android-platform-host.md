@@ -424,6 +424,8 @@ After an attributed launch, failure gives cleanup its own five-second deadline.
 Cleanup checks the selected transport, installed digest and process identity
 before requesting a stop for the exact package and user. The JSON reports
 stopped, already_exited or unconfirmed alongside the deployment error.
+Before reporting retirement, the host confirms the same ADB transport after
+observing process absence. OpenXR probes also recheck the Android boot.
 The first Activity attests to a cold launch with a single-use random marker
 and the process's kernel start ticks. Ordinary launch and recovery after an
 interrupted start both require one matching record from the candidate UID and PID

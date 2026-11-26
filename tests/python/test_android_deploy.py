@@ -683,7 +683,7 @@ class AndroidDeployTests(unittest.TestCase):
     def test_openxr_discards_discovery_when_transport_changes_before_publication(self):
         status, report, _ = self.execute({
             LOGCAT: log_line(OPENXR),
-            ("get-serialno",): [SERIAL] * 6 + ["private-foreign-device"],
+            ("get-serialno",): [SERIAL] * 7 + ["private-foreign-device"],
         }, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "device_transport_changed"))
         self.assertNotIn("observed", report)
@@ -691,6 +691,23 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertNotIn("private-foreign-device", json.dumps(report))
+
+    def test_stop_requires_retirement_evidence_from_the_same_transport_and_boot(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        stop = ("shell", "am", "force-stop", "--user", "10", profile["applicationId"])
+        for query, response, reason in (
+            (("get-serialno",), [SERIAL] * 6 + ["private-new-device"], "device_transport_changed"),
+            (DEVICE_BOOT_QUERY, [DEVICE_BOOT] * 5 + ["btime 1795000001"], "device_boot_changed"),
+        ):
+            with self.subTest(reason=reason):
+                status, report, commands = self.execute({LOGCAT: log_line(OPENXR), query: response}, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_stop_unconfirmed"))
+                self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": reason})
+                self.assertEqual(commands.count(stop), 1)
+                self.assertNotIn("observed", report)
+                self.assertNotIn("private-new-device", json.dumps(report))
+                self.assertNotIn("1795000001", json.dumps(report))
 
     def test_openxr_cannot_reuse_evidence_or_stop_a_replacement_after_reboot(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
@@ -703,7 +720,7 @@ class AndroidDeployTests(unittest.TestCase):
             (2, "launch", "device_boot_changed", True, False, False),
             (3, "diagnostics", "application_stop_unconfirmed", True, True, False),
             (4, "diagnostics", "application_stop_unconfirmed", True, True, False),
-            (5, "diagnostics", "device_boot_changed", True, True, True),
+            (6, "diagnostics", "device_boot_changed", True, True, True),
         ):
             with self.subTest(stable=stable):
                 status, report, commands = self.execute({

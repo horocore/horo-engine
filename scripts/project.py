@@ -1844,8 +1844,16 @@ class AndroidPackageLaunch:
                         return False
                     receipts[name] = (logged, pid, int(match[1]))
         launch, crash = receipts.get("launch"), receipts.get("crash")
-        return bool(launch and crash and launch[0] < crash[0] and launch[1:] == crash[1:]
-                    and self.device.process_id(self.application) is None)
+        if not (launch and crash and launch[0] < crash[0] and launch[1:] == crash[1:]
+                and self.device.process_id(self.application) is None):
+            return False
+        self.require_rollback_target(self.device)
+        return True
+
+    def require_rollback_target(self, device: AdmittedAdbDevice) -> None:
+        """Fence retirement against ADB transport replacement and, for XR, reboot."""
+        device.require_identity()
+        require_deploy_boot(device, self.device_boot_time)
 
     def rollback(self) -> dict:
         """Use a separate deadline to stop only a provably attributed package process."""
@@ -1856,11 +1864,11 @@ class AndroidPackageLaunch:
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
                                    time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
         try:
-            device.require_identity()
-            require_deploy_boot(device, self.device_boot_time)
+            self.require_rollback_target(device)
             if device.process_id(self.application) is None:
                 if self.process is None:
                     raise AndroidDeployError("launch_process_unattributed")
+                self.require_rollback_target(device)
                 return {"status": "already_exited"}
             deploy_verified_install(device, self.application, self.user, self.digest)
             uid = deployed_uid(device, self.application, self.user)
@@ -1868,11 +1876,11 @@ class AndroidPackageLaunch:
                 self.recover_process(device, uid)
             elif uid != self.process.uid or deployed_process(device, self.application, uid) != self.process:
                 raise AndroidDeployError("application_process_changed")
-            require_deploy_boot(device, self.device_boot_time)
-            device.require_identity()
+            self.require_rollback_target(device)
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
                 raise AndroidDeployError("application_stop_unconfirmed")
+            self.require_rollback_target(device)
             return {"status": "stopped"}
         except AndroidDeployError as error:
             return {"status": "unconfirmed", "reason": error.code}
