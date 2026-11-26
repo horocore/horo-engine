@@ -2384,7 +2384,10 @@ detachment, the buffer scrubs all remaining PCM before releasing storage.
 
 SDL3 can attach the buffer to an explicitly selected recording endpoint. It
 requires a matching purpose and background policy in the host grant and
-current platform permission before open. The host reconciles current focus and
+current platform permission before open. The capture owner checks native
+permission again immediately before resuming callbacks and before publishing
+the opened generation. Failed admission closes the device and discards
+any provisional PCM. The host reconciles current focus and
 consent on Audio control independently of consumer reads. Revocation detaches
 the recording callback and retires the current generation.
 The host can observe activity without consuming PCM or querying the OS.

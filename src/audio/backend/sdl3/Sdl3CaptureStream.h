@@ -20,7 +20,7 @@ namespace Horo::Audio::Backend::Sdl3Detail {
         CaptureStream(const CaptureStream &) = delete;
         CaptureStream &operator=(const CaptureStream &) = delete;
 
-        /** @brief Opens the pinned endpoint and validates actual rate, channel count and bounded period before resume. */
+        /** @brief Validates the pinned endpoint and rechecks native permission before resume and publication. */
         [[nodiscard]] Result<void> Open();
         /** @brief Checks control-side permission, device presence and callback health. */
         [[nodiscard]] const ErrorCodeDescriptor *Failure() const noexcept;

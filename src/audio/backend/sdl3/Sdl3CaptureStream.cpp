@@ -107,8 +107,14 @@ namespace Horo::Audio::Backend::Sdl3Detail {
             !Matches(actual, descriptor.format) || frames <= 0 || static_cast<std::uint32_t>(frames) > descriptor.maximumFrames)
             return Sdl3Detail::Failure(AudioErrors::DeviceFormatUnsupported);
         // Recording postmix supplies the pinned SDL version's Float32 PCM without a bound SDL stream queue.
-        if (!SDL_SetAudioPostmixCallback(device_, &OnSamples, this) || !SDL_ResumeAudioDevice(device_))
+        if (!SDL_SetAudioPostmixCallback(device_, &OnSamples, this))
             return Sdl3Detail::Failure(AudioErrors::BackendFailed);
+        if (!CaptureAuthorized(CapturePermission()))
+            return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
+        if (!SDL_ResumeAudioDevice(device_))
+            return Sdl3Detail::Failure(AudioErrors::BackendFailed);
+        if (!CaptureAuthorized(CapturePermission()))
+            return Sdl3Detail::Failure(AudioErrors::CapturePermissionDenied);
         return Result<void>::Success();
     }
 
