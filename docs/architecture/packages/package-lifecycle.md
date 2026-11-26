@@ -386,9 +386,10 @@ reviewed project and the exact current and candidate documents. A pending packag
 the preview until a recovery-capable operation repairs the project.
 
 Pass `--package-cache-root` to `preview-update` or `preview-rollback` to
-review changed archives as well as lock metadata. The preview verifies the exact
-cached artifacts and reports removed paths, changed bytes or owners, and
-packages that require a migration or executable lifecycle owner. It emits an
+review the cached archives as well as lock metadata. The preview verifies
+changed archives and unchanged entries required for offline staging. It reports
+missing archives, removed paths, changed bytes or owners, and packages that
+require a migration or executable lifecycle owner. It emits an
 approval fingerprint only when this review succeeds. JSON output includes the
 bounded list of diagnosed package paths. This preview does not claim cache
 locks, quarantine artifacts, or write package metadata. Apply verifies the

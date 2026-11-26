@@ -15,6 +15,7 @@
 #include <format>
 #include <iterator>
 #include <ranges>
+#include <set>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -317,6 +318,28 @@ namespace Horo::Application::Internal {
             return Output::Failure(UpdateStopped(context));
         }
 
+        /** @brief Checks unchanged entries required by offline staging without re-reading changed archives. */
+        Result<void> ReviewCachedRetainedEntries(const InspectedPackageUpdate &update, const Packages::PackageCacheStore &cache,
+                                                 const Cli::CliExecutionContext &context, std::vector<Diagnostic> &diagnostics,
+                                                 const std::size_t diagnosticLimit) {
+            std::set<Packages::HoroPackageId> changed;
+            for (const auto &change : update.preview.changes)
+                if (change.current)
+                    changed.insert(change.current->package);
+            for (const auto &entry : update.base.application.lockedPlan->Packages()) {
+                if (context.IsStopRequested())
+                    return Result<void>::Failure(UpdateStopped(context));
+                if (diagnostics.size() >= diagnosticLimit)
+                    break;
+                if (changed.contains(entry.package))
+                    continue;
+                if (const auto verified = ReadUpdateArchive(cache, entry); verified.HasError())
+                    diagnostics.emplace_back(DiagnosticCode{"packages.host.update_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                                             verified.ErrorValue().code.Value(), SourceLocation{"packages.lock"}, entry.package.Value());
+            }
+            return Result<void>::Success();
+        }
+
         Result<void> ReviewCachedUpdate(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
                                         const Cli::CliExecutionContext &context) {
             if (std::ranges::find(request.options, "package-cache-root", &Cli::CliParsedOption::name) == request.options.end())
@@ -336,6 +359,9 @@ namespace Horo::Application::Internal {
                 if (auto reviewed = ReviewCachedChange(change, cache.Value(), diagnostics, claims); reviewed.HasError())
                     return reviewed;
             }
+            if (auto retained = ReviewCachedRetainedEntries(update, cache.Value(), context, diagnostics, MaximumUpdateDiagnostics);
+                retained.HasError())
+                return retained;
             if (auto reviewed = AppendBehaviorMigrationDiagnostics(update.policy, context, claims, diagnostics); reviewed.HasError())
                 return reviewed;
             if (context.IsStopRequested())
@@ -434,7 +460,7 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(
                         Error{ErrorCode{"packages.host.removal_reference_coverage_limit"}, ErrorDomainId{"packages.host"}});
             }
-            return Result<void>::Success();
+            return ReviewCachedRetainedEntries(update, cache.Value(), context, diagnostics, MaximumRemovalCoverageDiagnostics);
         }
 
         Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,

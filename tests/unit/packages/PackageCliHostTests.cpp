@@ -318,6 +318,74 @@ namespace {
         });
     }
 
+    TEST_CASE("Cached updates and withdrawal rollbacks require unchanged archive evidence", "[packages][application][cli][update]") {
+        using namespace Packages;
+        NativeProject fixture;
+        const auto added = HoroPackageId::Parse("com.horo.added-assets").Value();
+        const auto &base = fixture.graph;
+        const auto archive = Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("new package bytes"));
+        const nlohmann::json intent{
+            {"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+            {"dependencies", {{base.package.Value(), {{"source", "fixture.source"}, {"version", "1.0.0"}}},
+                              {added.Value(), {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}};
+        const auto request = ValidatedPackageRequest::Parse(intent.dump());
+        REQUIRE(request.HasValue());
+        const std::array roots{base.package, added};
+        const PackageResolutionPlan plan{.packages = {{base.package, base.version, base.source, base.archive.Digest(), {}},
+                                                      {added, base.version, base.source, archive.Digest(), {}}}};
+        const auto artifact = [&](const HoroPackageId &id, const ValidatedPackageArchive &content) {
+            return PackageLockArtifact{.package = id, .version = base.version, .source = base.source, .artifactDigest = content.Digest(),
+                                       .manifestDigest = content.PackageManifestDigest(), .fileManifestDigest = content.Manifest().Digest(),
+                                       .packageFormatVersion = 1, .contributions = {"assets"}};
+        };
+        const std::array artifacts{artifact(base.package, base.archive), artifact(added, archive)};
+        const auto lock = ValidatedPackageLockfileV1::Generate(plan, roots, request.Value().Digest(), artifacts);
+        REQUIRE(lock.HasValue());
+        fixture.Write("candidate.json", intent.dump());
+        fixture.Write("candidate.lock", lock.Value().SerializeCanonical());
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path());
+        NativeDurableFileSystem files;
+        auto cache = PackageCacheStore::Create(files, cacheRoot / "complete").Value();
+        auto partial = PackageCacheStore::Create(files, cacheRoot / "added-only").Value();
+        REQUIRE(partial.Publish(archive).HasValue());
+        REQUIRE(cache.Publish(archive).HasValue());
+        REQUIRE(cache.Publish(base.archive).HasValue());
+        const auto preview = MakePackageUpdatePreviewCommandAdapter();
+        const auto apply = MakePackageApplyUpdateCommandAdapter();
+        const auto rollback = MakePackageRollbackPreviewCommandAdapter();
+        std::filesystem::create_directories(root / "Assets");
+        const auto deniesMissing = [&](const Result<CliCommandResult> &result) {
+            REQUIRE(result.HasError());
+            CHECK(std::ranges::any_of(result.ErrorValue().diagnostics, [&](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_archive_evidence_unavailable" &&
+                       diagnostic.path == base.package.Value();
+            }));
+        };
+        InInvocation([&](CliExecutionContext &context) {
+            CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                      .options = {NativeProject::PathOption("project", root),
+                                                  NativeProject::PathOption("candidate-request", root / ".horo/candidate.json"),
+                                                  NativeProject::PathOption("candidate-lock", root / ".horo/candidate.lock"),
+                                                  NativeProject::PathOption("package-cache-root", cacheRoot / "added-only")}};
+            deniesMissing(preview.adapter->Execute(command, context));
+            command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "complete");
+            const auto reviewed = preview.adapter->Execute(command, context);
+            REQUIRE(reviewed.HasValue());
+            const auto fingerprint = std::get<std::string>(reviewed.Value().fields.back().value);
+            command.command = apply.adapter->GetDescriptor().path;
+            command.options.push_back({"approve", {{fingerprint, CliValueSource::Invocation, {}}}});
+            REQUIRE(apply.adapter->Execute(command, context).HasValue());
+
+            command = {.command = rollback.adapter->GetDescriptor().path,
+                       .options = {NativeProject::PathOption("project", root),
+                                   NativeProject::PathOption("package-cache-root", cacheRoot / "added-only")}};
+            deniesMissing(rollback.adapter->Execute(command, context));
+            command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "complete");
+            CHECK(rollback.adapter->Execute(command, context).HasValue());
+        });
+    }
+
     TEST_CASE("Headless package update preview reads candidate documents without repairing or modifying the project",
               "[packages][application][cli][update]") {
         NativeProject fixture;
