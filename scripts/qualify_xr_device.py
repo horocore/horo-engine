@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 import hashlib
 import json
 from pathlib import Path
@@ -45,6 +46,7 @@ CORE_CHECKS = {"setup", "input", "displayEnumeration", "renderTiming",
                "comfort", "lifecycle", "recovery"}
 OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
+SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
 
 
@@ -90,6 +92,13 @@ def decode_record(data: bytes) -> object:
 def load_record(path: Path) -> object:
     with path.open("rb") as source:
         return decode_record(source.read(MAX_RECORD_BYTES + 1))
+
+
+def artifact_path(root: Path, digest: str) -> Path:
+    require(is_digest(digest), "Missing or invalid artifact digest")
+    path = root / digest
+    require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
+    return path
 
 
 def verify_artifact(path: Path, digest: str) -> None:
@@ -359,6 +368,41 @@ def check_physical_gate(record: dict, declaration: object, optional: set[str], *
         check_mixed_reality_capture(mr_capture, record, expected["mixedRealityCapabilities"])
 
 
+def physical_check_capture(path: Path, record: dict, check: str) -> str:
+    """Verify the exact physical check receipt and return its redacted observation digest."""
+    with path.open("rb") as source:
+        data = source.read(MAX_RECORD_BYTES + 1)
+    require(len(data) <= MAX_RECORD_BYTES, f"{check} capture exceeds the size limit")
+    digest = record["checks"][check]["evidenceSha256"]
+    require(hashlib.sha256(data).hexdigest() == digest, f"{check} capture digest does not match")
+    capture = fields(decode_record(data), {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"},
+                     f"{check} capture")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, f"Unsupported {check} capture schema")
+    require(capture["evidenceLevel"] == record["evidenceLevel"], f"{check} capture must identify physical evidence")
+    require(capture["check"] == check, f"{check} capture is for a different check")
+    require(capture["tuple"] == record["tuple"], f"{check} capture is from a different product tuple")
+    require(capture["provenance"] == record["provenance"], f"{check} capture is from a different smoke run")
+    artifact = capture["artifactSha256"]
+    require(is_digest(artifact), "Missing or invalid artifact digest")
+    return artifact
+
+
+def required_physical_check_receipts(record: dict, optional: set[str]) -> Iterator[tuple[str, str]]:
+    """List the required checks whose captures use the generic receipt format."""
+    for check in sorted((CORE_CHECKS | optional) - SPECIALIZED_PHYSICAL_CHECKS):
+        yield check, record["checks"][check]["evidenceSha256"]
+
+
+def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:
+    """Validate each receipt and its referenced bytes in the selected evidence directory."""
+    verified = set()
+    for check, digest in required_physical_check_receipts(record, optional):
+        artifact = physical_check_capture(artifact_path(root, digest), record, check)
+        if artifact not in verified:
+            verify_artifact(artifact_path(root, artifact), artifact)
+            verified.add(artifact)
+
+
 def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
     require(len(words) == len(DESKTOP_PREFLIGHT_MAXIMA), "Invalid Desktop preflight facts")
     require(all(re.fullmatch(r"[0-9]{1,10}", word) for word in words), "Invalid Desktop preflight fact")
@@ -440,6 +484,7 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     """Parse an invocation and validate the relationships between receipt inputs."""
     parser.add_argument("record", type=Path)
     parser.add_argument("--expect", type=Path, help="Exact release tuple and test-plan declaration")
+    parser.add_argument("--physical-check-evidence-dir", type=Path, help="Directory of SHA-256-named physical check receipts and observations")
     parser.add_argument("--display-capture", type=Path, help="Runtime display capture for the exact physical smoke run")
     parser.add_argument("--render-timing-capture", type=Path, help="Timing capture for the exact physical smoke run")
     parser.add_argument("--render-timing-limits", type=Path, help="Independent render timing limits from the release plan")
@@ -454,6 +499,8 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     options = parser.parse_args()
     if options.require and options.expect is None:
         parser.error("--require needs --expect")
+    if options.physical_check_evidence_dir is not None and options.expect is None:
+        parser.error("--physical-check-evidence-dir needs --expect")
     if options.display_capture is not None and options.expect is None:
         parser.error("--display-capture needs --expect")
     timing = (options.render_timing_capture, options.render_timing_limits)
@@ -491,6 +538,8 @@ def main() -> int:
                 with options.mr_capture.open("rb") as source:
                     mr_capture = source.read(MAX_RECORD_BYTES + 1)
             check_physical_gate(record, load_record(options.expect), set(options.require), mr_capture=mr_capture)
+        if options.physical_check_evidence_dir is not None:
+            verify_physical_checks(options.physical_check_evidence_dir, record, set(options.require))
         if options.display_capture is not None:
             with options.display_capture.open("rb") as source:
                 check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
@@ -506,6 +555,8 @@ def main() -> int:
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")
+    if options.physical_check_evidence_dir is not None:
+        print("Physical check receipts and their observations match the smoke run")
     if options.display_capture is not None:
         print("Runtime display capture matches the physical smoke run")
     if options.render_timing_capture is not None:

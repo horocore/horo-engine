@@ -8,9 +8,10 @@ from pathlib import Path
 
 from qualify_xr_android import check_android_preflight_file, validate_android_preflight
 from qualify_xr_device import (
-    CATEGORIES, CORE_CHECKS, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
-    check_desktop_preflight, check_display_capture, check_physical_gate, decode_record, desktop_receipt_digest, fields, in_set, is_digest, is_token,
-    check_render_timing_file, is_source_revision, load_record, require, validate_declaration, validate_record,
+    CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
+    artifact_path, check_desktop_preflight, check_display_capture, check_physical_gate, check_render_timing_file, decode_record,
+    desktop_receipt_digest, fields, in_set, is_digest, is_source_revision, is_token, load_record, physical_check_capture, require,
+    required_physical_check_receipts, validate_declaration, validate_record,
     validate_timing_limits, verify_artifact,
 )
 
@@ -18,7 +19,6 @@ from qualify_xr_device import (
 REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
 MAX_TUPLES = 64
 PRIMARY_STEREO_VIEW_COUNT = 2
-SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 
 
 class Evidence:
@@ -29,10 +29,7 @@ class Evidence:
         self.verified: set[str] = set()
 
     def path(self, digest: str) -> Path:
-        require(is_digest(digest), "Missing or invalid artifact digest")
-        path = self.root / digest
-        require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
-        return path
+        return artifact_path(self.root, digest)
 
     def verify(self, digest: str) -> None:
         require(is_digest(digest), "Missing or invalid artifact digest")
@@ -68,24 +65,6 @@ class Evidence:
     def mixed_reality_capture(self, record: dict) -> bytes:
         with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
             return source.read(MAX_RECORD_BYTES + 1)
-
-    def physical_check_capture(self, record: dict, check: str) -> str:
-        """Verify the run-bound receipt and its redacted underlying artifact."""
-        digest = record["checks"][check]["evidenceSha256"]
-        with self.path(digest).open("rb") as source:
-            data = source.read(MAX_RECORD_BYTES + 1)
-        require(len(data) <= MAX_RECORD_BYTES, f"{check} capture exceeds the size limit")
-        require(hashlib.sha256(data).hexdigest() == digest, f"{check} capture digest does not match")
-        capture = fields(decode_record(data), {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"},
-                         f"{check} capture")
-        require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, f"Unsupported {check} capture schema")
-        require(capture["evidenceLevel"] == record["evidenceLevel"], f"{check} capture must identify physical evidence")
-        require(capture["check"] == check, f"{check} capture is for a different check")
-        require(capture["tuple"] == record["tuple"], f"{check} capture is from a different product tuple")
-        require(capture["provenance"] == record["provenance"], f"{check} capture is from a different smoke run")
-        artifact = capture["artifactSha256"]
-        self.verify(artifact)
-        return artifact
 
 
 def validate_preflight_declarations(row: dict) -> None:
@@ -169,9 +148,11 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
     if mr_capture is not None:
         observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
     check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - {None}
-    for check in sorted((CORE_CHECKS | optional) - SPECIALIZED_PHYSICAL_CHECKS):
-        observations.add(evidence.physical_check_capture(record, check))
-        check_digests.discard(record["checks"][check]["evidenceSha256"])
+    for check, digest in required_physical_check_receipts(record, optional):
+        artifact = physical_check_capture(evidence.path(digest), record, check)
+        evidence.verify(artifact)
+        observations.add(artifact)
+        check_digests.discard(digest)
     for digest in check_digests:
         evidence.verify(digest)
     return record["status"], observations

@@ -40,6 +40,50 @@ def declared(smoke):
     return {"tuple": deepcopy(smoke["tuple"]), "testPlan": smoke["provenance"]["testPlan"]}
 
 
+@pytest.mark.parametrize(("change", "reason"), [
+    ("valid", None),
+    ("foreign-run", "input capture is from a different smoke run"),
+    ("wrong-check", "input capture is for a different check"),
+    ("changed-observation", "Artifact content does not match"),
+    ("missing-haptics", "Missing regular artifact"),
+])
+def test_device_cli_validates_required_physical_check_receipts(tmp_path, smoke, change, reason):
+    evidence = tmp_path / "physical evidence"
+    evidence.mkdir()
+    for check, _ in xr.required_physical_check_receipts(smoke, {"haptics"}):
+        contents = f"redacted {check} observation".encode()
+        digest = hashlib.sha256(contents).hexdigest()
+        if check == "input" and change == "changed-observation":
+            contents = b"foreign observation"
+        (evidence / digest).write_bytes(contents)
+        capture = {"schemaVersion": 1, "evidenceLevel": smoke["evidenceLevel"], "tuple": smoke["tuple"],
+                   "provenance": smoke["provenance"], "check": check, "artifactSha256": digest}
+        if check == "input" and change == "foreign-run":
+            capture["provenance"] = dict(smoke["provenance"], runId="replacement")
+        if check == "input" and change == "wrong-check":
+            capture["check"] = "comfort"
+        receipt = json.dumps(capture).encode()
+        receipt_digest = hashlib.sha256(receipt).hexdigest()
+        smoke["checks"][check]["evidenceSha256"] = receipt_digest
+        if (check, change) != ("haptics", "missing-haptics"):
+            (evidence / receipt_digest).write_bytes(receipt)
+    record = tmp_path / "smoke.json"
+    record.write_text(json.dumps(smoke), encoding="utf-8")
+    declaration = tmp_path / "declaration.json"
+    declaration.write_text(json.dumps(declared(smoke)), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(record), "--expect", str(declaration), "--require", "haptics",
+         "--physical-check-evidence-dir", str(evidence)],
+        capture_output=True, text=True, check=False,
+    )
+    if reason:
+        assert result.returncode == 1 and reason in result.stderr
+        assert not result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert "Physical check receipts and their observations match the smoke run" in result.stdout
+
+
 def test_android_system_build_digest_is_scoped_to_standalone_android(smoke):
     smoke["provenance"]["androidDeviceBuildSha256"] = DIGEST
     with pytest.raises(ValueError, match="requires a standalone Android tuple"):
