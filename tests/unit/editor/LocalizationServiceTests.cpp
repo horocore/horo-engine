@@ -204,6 +204,7 @@ namespace {
             "workspace.local_agent.xr_listening_update_limit",
             "workspace.local_agent.xr_listening_resources_unavailable",
             "workspace.local_agent.xr_listening_provider_unavailable",
+            "workspace.local_agent.xr_listening_invalid_transcript",
             "workspace.local_agent.xr_listening_low_confidence",
             "workspace.local_agent.xr_listening_privacy",
             "workspace.local_agent.xr_listening_max_audio_seconds",

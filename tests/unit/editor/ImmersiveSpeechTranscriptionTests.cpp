@@ -1146,10 +1146,22 @@ namespace Horo::Editor {
         TEST_CASE("Immersive speech distinguishes adapter-reported malformed output from unavailability", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             fixture.StartWithAudio();
-            fixture.provider.next = SpeechProviderInvalidTranscript{};
+            fixture.provider.next = Transcript();
+            const auto draft = fixture.stream->Poll();
+            REQUIRE(draft.evidence);
+            auto expected = Status::InvalidTranscript;
+            SECTION("invalid transcript") {
+                fixture.provider.next = SpeechProviderInvalidTranscript{};
+            }
+            SECTION("provider unavailable") {
+                fixture.provider.next = SpeechProviderUnavailable{};
+                expected = Status::ProviderUnavailable;
+            }
             const auto update = fixture.stream->Poll();
-            CHECK(update.status == Status::InvalidTranscript);
+            CHECK(update.status == expected);
             CHECK_FALSE(update.evidence);
+            CHECK_FALSE(draft.evidence->IsCurrent());
+            CHECK(draft.evidence->PreviewText(Kind::Partial).empty());
             CHECK(fixture.provider.cancelled == 1);
         }
 

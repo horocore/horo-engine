@@ -188,6 +188,7 @@
     "workspace.local_agent.xr_listening_update_limit": {"text": "Konuşma tanıma çok fazla ara sonuç üretti. Daha kısa bir kayıt başlatın."},
     "workspace.local_agent.xr_listening_resources_unavailable": {"text": "Dinleme için gereken bellek ayrılamadı. Bellekte yer açıp tekrar deneyin."},
     "workspace.local_agent.xr_listening_provider_unavailable": {"text": "Bu dilde veya cihazda yerel konuşma tanıma kullanılamıyor."},
+    "workspace.local_agent.xr_listening_invalid_transcript": {"text": "Konuşma tanıma geçersiz bir metin döndürdü. Tekrar denemek için yeni bir kayıt başlatın."},
     "workspace.local_agent.xr_listening_low_confidence": {"text": "Konuşma net olarak tanınamadı. Yeniden kayıt yapmayı deneyin."},
     "workspace.local_agent.xr_listening_privacy": {"text": "Ses, konuşma metni ve XR bağlamı bu önizleme sırasında cihazda kalır."},
     "workspace.local_agent.xr_listening_max_audio_seconds": {"text": "Saniye cinsinden kayıt sınırı"},

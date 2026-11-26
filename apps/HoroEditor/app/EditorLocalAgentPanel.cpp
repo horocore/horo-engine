@@ -497,6 +497,8 @@ namespace Horo::Editor {
                         return "xr_listening_resources_unavailable";
                     case ProviderUnavailable:
                         return "xr_listening_provider_unavailable";
+                    case InvalidTranscript:
+                        return "xr_listening_invalid_transcript";
                     case LowConfidence:
                         return "xr_listening_low_confidence";
                     default:

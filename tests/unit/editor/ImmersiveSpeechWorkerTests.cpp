@@ -11,8 +11,9 @@ namespace Horo::Editor {
         /** @brief Worker-only fixture checks sample provenance and every sequence it receives. */
         class OrderedSpeechStream final : public ISpeechProviderStream {
         public:
-            OrderedSpeechStream(const float confidence, const bool reviseDraft, std::stop_source *const revokeOnFinal) noexcept
-                : revokeOnFinal_(revokeOnFinal), confidence_(confidence), reviseDraft_(reviseDraft) {}
+            OrderedSpeechStream(const float confidence, const bool reviseDraft, std::stop_source *const revokeOnFinal,
+                                const std::string_view finalText) noexcept
+                : revokeOnFinal_(revokeOnFinal), finalText_(finalText), confidence_(confidence), reviseDraft_(reviseDraft) {}
 
             bool Append(const Capture::AudioCapturedBlock &block, const std::span<const Audio::AudioSample> pcm,
                         std::stop_token) noexcept override {
@@ -30,7 +31,7 @@ namespace Horo::Editor {
                 if (finished_) {
                     if (revokeOnFinal_)
                         revokeOnFinal_->request_stop();
-                    return SpeechHypothesisView{Final, {5, 1'000'000}, {5, 1'040'000}, confidence_, "Both blocks"};
+                    return SpeechHypothesisView{Final, {5, 1'000'000}, {5, 1'040'000}, confidence_, finalText_};
                 }
                 if (received_ != 0 && drafted_ == 0) {
                     drafted_ = 1;
@@ -49,6 +50,7 @@ namespace Horo::Editor {
 
         private:
             std::stop_source *revokeOnFinal_{};
+            std::string_view finalText_;
             std::uint64_t received_{};
             float confidence_{};
             bool finished_{};
@@ -58,13 +60,14 @@ namespace Horo::Editor {
 
         class OrderedSpeechProvider final : public ISpeechProvider {
         public:
-            OrderedSpeechProvider(const float confidence, const bool reviseDraft, std::stop_source *const revokeOnFinal) noexcept
-                : revokeOnFinal_(revokeOnFinal), confidence_(confidence), reviseDraft_(reviseDraft) {}
+            OrderedSpeechProvider(const float confidence, const bool reviseDraft, std::stop_source *const revokeOnFinal,
+                                  const std::string_view finalText) noexcept
+                : revokeOnFinal_(revokeOnFinal), finalText_(finalText), confidence_(confidence), reviseDraft_(reviseDraft) {}
 
             std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
                                                         std::stop_token) noexcept override {
                 try {
-                    return std::make_unique<OrderedSpeechStream>(confidence_, reviseDraft_, revokeOnFinal_);
+                    return std::make_unique<OrderedSpeechStream>(confidence_, reviseDraft_, revokeOnFinal_, finalText_);
                 } catch (const std::bad_alloc &) {
                     return {};
                 }
@@ -72,6 +75,7 @@ namespace Horo::Editor {
 
         private:
             std::stop_source *revokeOnFinal_{};
+            std::string_view finalText_;
             float confidence_{};
             bool reviseDraft_{};
         };
@@ -89,7 +93,8 @@ namespace Horo::Editor {
             std::stop_source capture;
             ImmersiveSpeechWorker worker;
 
-            void Start(const float confidence = 0.9F, const bool reviseDraft = false, const bool revokeOnFinal = false) {
+            void Start(const float confidence = 0.9F, const bool reviseDraft = false, const bool revokeOnFinal = false,
+                       const std::string_view finalText = "Both blocks") {
                 const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
                 const ImmersiveContextIdentity identity{1,
                                                         1,
@@ -106,7 +111,8 @@ namespace Horo::Editor {
                                                         true};
                 const auto context = owner.Publish(identity, {});
                 REQUIRE(context);
-                auto provider = std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr);
+                auto provider = std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr,
+                                                                       finalText);
                 REQUIRE(worker.Start(owner, *context, source, capture.get_token(), std::move(provider), "en-US", 0.5F) == Accepted);
             }
         };
@@ -197,6 +203,40 @@ namespace Horo::Editor {
             const auto completed = WaitForUpdate(fixture.worker);
             CHECK(completed.status == Cancelled);
             CHECK_FALSE(completed.evidence);
+        }
+
+        TEST_CASE("Replacing the speech provider retires old evidence and requires fresh sealed capture", "[agent][immersive][speech]") {
+            SpeechWorkerFixture fixture;
+            const auto finishFreshCapture = [&] {
+                const std::array<Audio::AudioSample, 1> firstPcm{0.25F};
+                const Capture::AudioCapturedBlock first{.start = {5, 1'000'000}, .firstFrame = 0, .sequence = 1, .frames = 1};
+                REQUIRE(fixture.worker.Submit(first, firstPcm) == Accepted);
+                const auto draft = WaitForUpdate(fixture.worker);
+                REQUIRE(draft.evidence);
+                CHECK(draft.evidence->PreviewText(SpeechHypothesisKind::Final).empty());
+                const std::array<Audio::AudioSample, 1> secondPcm{0.5F};
+                const Capture::AudioCapturedBlock second{.start = {5, 1'020'833}, .firstFrame = 1, .sequence = 2, .frames = 1};
+                REQUIRE(fixture.worker.Submit(second, secondPcm) == Accepted);
+                auto tail = Capture::AudioCaptureBuffer::Create(fixture.source);
+                REQUIRE(tail.HasValue());
+                REQUIRE(fixture.worker.Seal(std::move(tail).Value()) == Accepted);
+                auto final = WaitForUpdate(fixture.worker);
+                REQUIRE(final.status == Finished);
+                REQUIRE(final.evidence);
+                CHECK(fixture.worker.OwnsEvidence(*final.evidence));
+                CheckRevokedDraft(draft);
+                return std::move(*final.evidence);
+            };
+
+            fixture.Start();
+            const auto previous = finishFreshCapture();
+            CHECK(previous.PreviewText(SpeechHypothesisKind::Final) == "Both blocks");
+            fixture.capture = std::stop_source{};
+            fixture.Start(0.9F, false, false, "New provider transcript");
+            CHECK_FALSE(fixture.worker.OwnsEvidence(previous));
+            CHECK(previous.PreviewText(SpeechHypothesisKind::Final).empty());
+            const auto current = finishFreshCapture();
+            CHECK(current.PreviewText(SpeechHypothesisKind::Final) == "New provider transcript");
         }
 
         TEST_CASE("Speech worker cancels when live PCM misses its original source sequence", "[agent][immersive][speech]") {
