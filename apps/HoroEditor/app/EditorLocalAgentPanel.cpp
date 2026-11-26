@@ -351,6 +351,7 @@ namespace Horo::Editor {
                 cloudProfileAdmitted_ = false;
                 cloudProfileRead_ = false;
                 response_.clear();
+                modelUsage_.reset();
                 sceneCount_ = {};
                 RevokeContext();
                 history_.Detach();
@@ -428,8 +429,10 @@ namespace Horo::Editor {
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 DrawSceneQueryActivity(locale, fonts, command);
-                if (!response_.empty())
+                if (!response_.empty()) {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
+                    DrawModelUsage(locale);
+                }
                 DrawSourceTransaction(locale, fonts, command);
                 DrawPatchReview(locale, fonts, command);
                 if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
@@ -566,6 +569,7 @@ namespace Horo::Editor {
                 const auto &fonts = context.theme.fonts;
                 const auto width = ImGui::GetContentRegionAvail().x;
                 Ui::WrappedText(width, LocalizedText(locale, ListeningStatusKey(*listening_)), Theme::Text(), fonts);
+                DrawListeningUsage(locale);
                 if (state == Idle || state == Interrupted) {
                     listeningReferences_.reset();
                     requestedListeningReferences_.reset();
@@ -587,6 +591,17 @@ namespace Horo::Editor {
                 } else if (const auto draft = listening_->PartialTranscript(); !draft.empty()) {
                     Ui::WrappedText(width, LocalizedText(locale, "xr_listening_draft"), Theme::Muted(), fonts);
                     Ui::WrappedText(width, draft, Theme::Text(), fonts);
+                }
+            }
+
+            /** @brief Shows the configured capture cap and the duration already admitted to recognition. */
+            void DrawListeningUsage(const ILocalizationService &locale) const {
+                ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_max_audio_seconds").c_str(),
+                                   static_cast<long long>(ImmersiveSpeechTranscription::MaximumInputDuration.count()));
+                if (const auto duration = listening_->AdmittedAudioDuration()) {
+                    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(*duration).count();
+                    ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_admitted_audio_ms").c_str(),
+                                       static_cast<long long>(milliseconds));
                 }
             }
 
@@ -1001,6 +1016,7 @@ namespace Horo::Editor {
                 submittedPrompt_.reset();
                 submittedReference_.reset();
                 response_.clear();
+                modelUsage_.reset();
                 try {
                     BackgroundTurn::Operation task{[review = std::move(reviewed), credentials = cloudProfiles_->Provider(),
                                                     turn = ++turn_](std::stop_token stop) mutable {
@@ -1022,8 +1038,10 @@ namespace Horo::Editor {
                 show(LocalizedText(locale, cloudReview_->request ? "cloud_review_prompt" : "cloud_review_discovery"));
                 show(cloudReview_->config.endpoint);
                 if (cloudReview_->request) {
-                    show(cloudReview_->request->model);
-                    show(cloudReview_->request->messages.front().text);
+                    const auto &request = *cloudReview_->request;
+                    show(request.model);
+                    show(request.messages.front().text);
+                    DrawModelRequestBudget(locale, request);
                 }
                 if (Button(locale, "cloud_approve", !Busy()))
                     SendCloudReview();
@@ -1073,8 +1091,29 @@ namespace Horo::Editor {
                     background_->Cancel();
                 if (status_)
                     show(LocalizedText(locale, status_));
-                if (!response_.empty())
+                if (!response_.empty()) {
                     show(response_);
+                    DrawModelUsage(locale);
+                }
+            }
+
+            /** @brief Displays known request bounds without treating bytes as token counts or billing. */
+            void DrawModelRequestBudget(const ILocalizationService &locale, const ModelRequest &request) const {
+                ImGui::TextWrapped("%s %zu", LocalizedText(locale, "message_utf8_bytes").c_str(), request.messages.front().text.size());
+                const auto outputCap = std::min(request.maximumOutputTokens, AgentTurnLimits{}.maximumOutputTokens);
+                ImGui::TextWrapped("%s %u", LocalizedText(locale, "model_output_cap").c_str(), static_cast<unsigned>(outputCap));
+            }
+
+            /** @brief Projects only numbers reported by the provider for the completed final inference. */
+            void DrawModelUsage(const ILocalizationService &locale) const {
+                if (!modelUsage_)
+                    return;
+                const auto show = [&](const char *key, const std::optional<std::uint64_t> count) {
+                    if (count)
+                        ImGui::TextWrapped("%s %llu", LocalizedText(locale, key).c_str(), static_cast<unsigned long long>(*count));
+                };
+                show("model_input_tokens_reported", modelUsage_->inputTokens);
+                show("model_output_tokens_reported", modelUsage_->outputTokens);
             }
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
@@ -2138,6 +2177,7 @@ namespace Horo::Editor {
                         displayedDraftBytes_ = 0;
                         status_ = "working";
                         response_.clear();
+                        modelUsage_.reset();
                         patchSource_ = {std::move(offeredSources), std::move(offeredModel), turn_};
                         if (patchSource_.sources.empty())
                             patchSource_.turn = 0;
@@ -2248,6 +2288,7 @@ namespace Horo::Editor {
                 }
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
+                    modelUsage_ = result.finalUsage;
                     status_ = response_.empty() ? "empty_response" : nullptr;
                     if (!cloudMode_) {
                         CapturePatchReview();
@@ -2294,6 +2335,7 @@ namespace Horo::Editor {
             std::string model_;
             std::string prompt_;
             std::string response_;
+            std::optional<ModelUsage> modelUsage_;
             std::string buttonLabel_; /**< Scratch for immediate-mode localized text and stable widget IDs. */
             std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles_;
             bool cloudMode_{};

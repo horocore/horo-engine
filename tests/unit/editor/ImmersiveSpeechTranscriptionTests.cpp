@@ -350,6 +350,14 @@ namespace Horo::Editor {
             CHECK(provider.cancelled == 1);
         }
 
+        TEST_CASE("Speech usage counts admitted PCM frames and revokes with the transcript", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto transcript = FinalEvidence(fixture);
+            CHECK(transcript.AdmittedAudioDuration() == std::chrono::nanoseconds{41'666});
+            fixture.stop.request_stop();
+            CHECK_FALSE(transcript.AdmittedAudioDuration());
+        }
+
         TEST_CASE("Immersive evidence clears the transcript bytes it owns on release", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             const auto final = FinalEvidence(fixture);

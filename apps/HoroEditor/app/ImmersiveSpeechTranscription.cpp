@@ -109,6 +109,13 @@ namespace Horo::Editor {
         return context_.IsCurrent() && !release_.stop_requested() && !stop_.stop_requested();
     }
 
+    /** @copydoc ImmersiveSpeechEvidence::AdmittedAudioDuration */
+    std::optional<std::chrono::nanoseconds> ImmersiveSpeechEvidence::AdmittedAudioDuration() const noexcept {
+        if (!IsCurrent())
+            return std::nullopt;
+        return admittedAudioDuration_;
+    }
+
     /** @copydoc ImmersiveSpeechEvidence::Hypothesis */
     SpeechHypothesisView ImmersiveSpeechEvidence::Hypothesis() const & noexcept {
         if (!IsCurrent())
@@ -287,6 +294,7 @@ namespace Horo::Editor {
         owned.kind_ = hypothesis.kind;
         owned.start_ = hypothesis.start;
         owned.end_ = hypothesis.end;
+        owned.admittedAudioDuration_ = std::chrono::nanoseconds{nextFrame_ * NanosecondsPerSecond / source_.format.sampleRate};
         owned.confidence_ = hypothesis.confidence;
         owned.textSize_ = hypothesis.text.size();
         std::ranges::copy(hypothesis.text, owned.text_.begin());

@@ -121,6 +121,9 @@ namespace Horo::Editor {
         [[nodiscard]] std::string_view PreviewText(SpeechHypothesisKind kind) const & noexcept;
         [[nodiscard]] std::string_view PreviewText(SpeechHypothesisKind kind) const && = delete;
 
+        /** @brief Returns the duration of PCM admitted to recognition, while this evidence remains current. */
+        [[nodiscard]] std::optional<std::chrono::nanoseconds> AdmittedAudioDuration() const noexcept;
+
     private:
         friend class ImmersiveSpeechTranscription;
         friend class ImmersiveSpeechWorker;
@@ -135,6 +138,7 @@ namespace Horo::Editor {
         SpeechHypothesisKind kind_{};
         Audio::AudioMonotonicTimestamp start_;
         Audio::AudioMonotonicTimestamp end_;
+        std::chrono::nanoseconds admittedAudioDuration_{};
         float confidence_{};
     };
 

@@ -280,6 +280,8 @@ namespace {
         CHECK(review.find("https://provider.invalid") != std::string::npos);
         CHECK(review.find("fixture-model") != std::string::npos);
         CHECK(review.find("Review this exact prompt") != std::string::npos);
+        CHECK(review.find("Message size in UTF-8 bytes 24") != std::string::npos);
+        CHECK(review.find("Maximum output tokens 1024") != std::string::npos);
         CHECK(review.find(CloudCredentialProbe::Key) == std::string::npos);
         CHECK(probe->resolutions == 0);
         fixture.Activate("###cloud_discard");
@@ -779,6 +781,26 @@ namespace {
             return text.find("Replacement workspace answer") != std::string::npos;
         }));
         CHECK_FALSE(leaked);
+    }
+
+    TEST_CASE("Chat shows reported token usage for the completed reply and clears it for a later failure", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US"};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "normal");
+        fixture.Enter("##Prompt", "Show usage for this inference");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Output tokens reported for the final inference 2") != std::string::npos;
+        }));
+        CHECK(fixture.DrawnText().find("Input tokens reported for the final inference 7") != std::string::npos);
+
+        fixture.Enter("##Model", "limited");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] { return fixture.DrawnText().find("The local provider limited requests.") != std::string::npos; }));
+        CHECK(fixture.DrawnText().find("tokens reported for the final inference") == std::string::npos);
     }
 
     TEST_CASE("AI model operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {

@@ -65,6 +65,13 @@ namespace Horo::Editor {
         return partial_->PreviewText(SpeechHypothesisKind::Partial);
     }
 
+    /** @copydoc EditorImmersiveListening::AdmittedAudioDuration */
+    std::optional<std::chrono::nanoseconds> EditorImmersiveListening::AdmittedAudioDuration() const noexcept {
+        if (preview_)
+            return preview_->Speech().AdmittedAudioDuration();
+        return partial_ ? partial_->AdmittedAudioDuration() : std::nullopt;
+    }
+
     /** @copydoc EditorImmersiveListening::ReviewReferences */
     std::optional<AgentSceneReferenceReview> EditorImmersiveListening::ReviewReferences(
         const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,

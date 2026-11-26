@@ -1190,6 +1190,12 @@ turn or model-list load counts once when accepted by the worker, including
 failed or cancelled operations. The panel displays the accepted operations
 against each enabled ceiling.
 
+Before cloud approval the panel displays the reviewed message size in UTF-8
+bytes and the output token ceiling. The completed response displays any
+provider-reported token counts for the final inference only. Play listening
+displays its audio duration limit and the PCM duration submitted to the
+recognizer with the current hypothesis. These figures do not represent charges.
+
 Rate limiting, quota exhaustion, offline state, credential loss, and provider
 failure are normal lifecycle results. They may offer an admitted local provider,
 queue a user-visible retry, or stop the request. They never trigger unbounded
