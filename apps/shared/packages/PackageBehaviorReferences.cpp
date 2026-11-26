@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -57,6 +58,7 @@ namespace Horo::Application::Internal {
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
             std::vector<Diagnostic> composition;
+            std::vector<Diagnostic> unusableAddresses;
             PackageSourceReviewFailures failures;
         };
 
@@ -64,6 +66,7 @@ namespace Horo::Application::Internal {
         struct SavedReferenceReview final {
             const SavedReferenceOwners &owners;
             std::span<const Assets::AssetRecord> compositionCatalog;
+            bool requiresUniqueAddresses{};
         };
 
         Error ReferenceError(std::string code, std::string_view path = {}) {
@@ -298,6 +301,37 @@ namespace Horo::Application::Internal {
             return composition->variantParent ? review.Check(composition->variantParent->Asset(), PrefabAssetType) : Result<void>::Success();
         }
 
+        /** @brief Finds the first authored address that cannot identify one exact Scene edit. */
+        std::optional<std::string> FindUnusableSceneAddress(const SceneSource::SceneSourceDocument &scene) {
+            std::set<SceneSource::SceneObjectId> objects;
+            for (const auto &object : scene.objects) {
+                if (!object.id.IsValid() || !objects.insert(object.id).second)
+                    return std::to_string(object.id.value);
+                std::set<Gameplay::BehaviorInstanceId> attachments;
+                for (const auto &behavior : object.components.behaviors)
+                    if (!attachments.insert(behavior.instanceId).second)
+                        return std::to_string(object.id.value) + '/' + std::to_string(behavior.instanceId.value);
+            }
+            return std::nullopt;
+        }
+
+        /** @brief Discards ambiguous edit targets while keeping findings from independently inspected sources. */
+        Result<void> CheckSceneMigrationAddresses(const SceneSource::SceneSourceDocument &scene, SavedReferenceScan &scan,
+                                                  std::size_t first, std::string_view path) {
+            if (first == scan.behaviors.size())
+                return Result<void>::Success();
+            const auto unusable = FindUnusableSceneAddress(scene);
+            if (!unusable)
+                return Result<void>::Success();
+            if (scan.unusableAddresses.size() >= MaximumBehaviorReferences)
+                return Result<void>::Failure(ReferenceError("packages.host.behavior_reference_limit", path));
+            scan.unusableAddresses.emplace_back(DiagnosticCode{"packages.host.behavior_migration_address_unusable"},
+                                                DiagnosticSeverity::Error, "The Scene edit address is invalid or ambiguous.",
+                                                SourceLocation{std::string{path}}, *unusable);
+            scan.behaviors.erase(scan.behaviors.begin() + static_cast<std::ptrdiff_t>(first), scan.behaviors.end());
+            return Result<void>::Success();
+        }
+
         /** @brief Reads direct authored attachments; each referenced child or prefab has its own registry entry. */
         Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceReview &review, std::string_view path, std::string_view text) {
             const auto scene = SceneSource::DecodeSceneSourceWithChildReferences(text);
@@ -310,8 +344,13 @@ namespace Horo::Application::Internal {
                     return unverified;
             }
             const auto &owners = review.owners;
+            const auto first = scan.behaviors.size();
             if (auto found = InspectSceneObjects(scene.Value(), scan, owners, path); found.HasError())
                 return found;
+            if (review.requiresUniqueAddresses) {
+                if (auto checked = CheckSceneMigrationAddresses(scene.Value(), scan, first, path); checked.HasError())
+                    return checked;
+            }
             if (auto links = InspectSceneSourceLinks(scene.Value(), {review.compositionCatalog, scan.composition, path}); links.HasError())
                 return links;
             return !owners.senses.empty() && RequiresSenseReview(scene.Value()) ? CollectSenseReview(scan, owners, path)
@@ -748,9 +787,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @brief Scans admitted sources and restricts catalog lookups to complete inventories. */
-    static Result<SavedReferenceScan> ScanSavedReferences(const Platform::IProjectReadFiles &files,
-                                                          Platform::ProjectReadContext context, const SavedReferenceOwners &owners,
-                                                          const Assets::AssetRegistryCandidate &inventory) {
+    static Result<SavedReferenceScan> ScanSavedReferences(const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
+                                                          const SavedReferenceOwners &owners,
+                                                          const Assets::AssetRegistryCandidate &inventory,
+                                                          bool requiresUniqueAddresses = false) {
         using Inspection = Result<SavedReferenceScan>;
         if (owners.Empty())
             return Inspection::Success({});
@@ -759,7 +799,7 @@ namespace Horo::Application::Internal {
         const bool complete = inventory.status == Assets::AssetRegistryBuildStatus::Complete;
         const std::span<const Assets::AssetRecord> records = inventory.records;
         const auto catalog = complete ? records : std::span<const Assets::AssetRecord>{};
-        return InspectAssets(files, context, records, {owners, catalog});
+        return InspectAssets(files, context, records, {owners, catalog, requiresUniqueAddresses});
     }
 
     /** @copydoc InspectPackageScenePrefabReferences */
@@ -808,13 +848,15 @@ namespace Horo::Application::Internal {
         const auto &inventory = captured.Value();
         if (inventory.status == Assets::AssetRegistryBuildStatus::Failed)
             return Inspection::Failure(MakeIncompletePackageInventoryError(inventory));
-        auto matches = ScanSavedReferences(files, std::move(context), assertedOwners, inventory);
+        auto matches = ScanSavedReferences(files, std::move(context), assertedOwners, inventory, true);
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
         auto scan = std::move(matches).Value();
         const bool unresolvedComposition = !scan.composition.empty();
+        const bool unusableAddresses = !scan.unusableAddresses.empty();
         std::vector<Diagnostic> diagnostics;
-        std::ranges::move(scan.composition | std::views::take(diagnosticLimit), std::back_inserter(diagnostics));
+        std::ranges::move(scan.unusableAddresses | std::views::take(diagnosticLimit), std::back_inserter(diagnostics));
+        std::ranges::move(scan.composition | std::views::take(diagnosticLimit - diagnostics.size()), std::back_inserter(diagnostics));
         for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit - diagnostics.size())) {
             const auto *target = targets.at({match.package, match.type});
             const auto &revision = scan.behaviorSourceRevisions.at(match.assetPath);
@@ -825,8 +867,9 @@ namespace Horo::Application::Internal {
         }
         auto reviewed = std::move(scan.failures).Finish(std::move(diagnostics));
         if (inventory.status == Assets::AssetRegistryBuildStatus::Complete) {
-            if (unresolvedComposition && reviewed.HasValue()) {
-                auto incomplete = ReferenceError("packages.host.saved_composition_incomplete");
+            if ((unresolvedComposition || unusableAddresses) && reviewed.HasValue()) {
+                auto incomplete = ReferenceError(unusableAddresses ? "packages.host.behavior_migration_address_unusable"
+                                                                   : "packages.host.saved_composition_incomplete");
                 incomplete.diagnostics = std::move(reviewed).Value();
                 return Inspection::Failure(std::move(incomplete));
             }

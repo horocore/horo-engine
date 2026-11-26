@@ -413,6 +413,9 @@ of its saved Scene or Prefab bytes. Unreadable sources block the review and
 appear alongside findings from readable sources within the diagnostic limit.
 With a complete asset inventory, the preview also reports missing and
 wrong-type child Scene and Prefab sources alongside the confirmed attachments.
+Missing object identities and duplicate object or attachment identities make
+a Scene's edit addresses unusable. The preview reports the address and keeps matches
+from other readable sources.
 
 `horo-engine package apply-update` takes the same project and candidate options,
 plus `--approve` with the preview fingerprint and `--package-cache-root` with the

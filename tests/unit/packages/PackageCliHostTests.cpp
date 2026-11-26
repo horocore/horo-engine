@@ -920,18 +920,36 @@ namespace {
         CHECK(after.Value() == unchanged.Value());
     }
 
+    enum class SceneMigrationAddress {
+        Unique,
+        MissingObjectIdentity,
+        DuplicateObject,
+        DuplicateAttachment
+    };
+
     /** @brief Writes distinct Scene and Prefab snapshots that use the same legacy behavior. */
-    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType, bool unresolvedLinks) {
+    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType, bool unresolvedLinks,
+                                                             SceneMigrationAddress address) {
         constexpr auto sceneId = "10213243-5465-7687-98a9-bacbdcedfe0e";
         constexpr auto prefabId = "10213243-5465-7687-98a9-bacbdcedfe0f";
         constexpr auto missingId = "10213243-5465-7687-98a9-bacbdcedfe11";
         const Gameplay::BehaviorComponent behavior{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(),
                                                     .enabled = false};
         SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
+        if (address == SceneMigrationAddress::MissingObjectIdentity)
+            object.id = {};
         object.components.behaviors = {behavior};
+        if (address == SceneMigrationAddress::DuplicateAttachment) {
+            auto duplicate = behavior;
+            duplicate.typeId = Gameplay::BehaviorTypeId::Parse("game.tests.unrelated_behavior").Value();
+            object.components.behaviors.push_back(std::move(duplicate));
+        }
+        std::vector objects{object};
+        if (address == SceneMigrationAddress::DuplicateObject)
+            objects.push_back(object);
         const SceneSource::SceneChildReference child{{1}, Assets::AssetId::Parse(missingId).Value()};
         const auto children = unresolvedLinks ? std::span{&child, 1} : std::span<const SceneSource::SceneChildReference>{};
-        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}, .childScenes = children});
+        const auto scene = SceneSource::EncodeSceneSource({.objects = objects, .childScenes = children});
         fixture.WriteScene("Migration.horoasset", sceneId, scene);
         const auto version = ParseHoroVersion("1.2.3").Value();
         const auto digest = ComputeSha256(std::as_bytes(std::span{scene}));
@@ -957,7 +975,7 @@ namespace {
 
     /** @brief Verifies which saved revisions contributed usable preview evidence. */
     void CheckBehaviorMigrationDiagnostics(const Error &error, const std::array<std::string, 2> &revisions, bool applies,
-                                            bool hasUnreadableSource) {
+                                           bool hasUnreadableSource, bool sceneAddressUnique) {
         CHECK(error.code.Value() == "packages.host.update_requires_migration_review");
         const auto failedSource = std::ranges::find_if(error.diagnostics, [](const auto &diagnostic) {
             return diagnostic.code.Value() == "packages.host.saved_reference_source_unreadable";
@@ -970,8 +988,9 @@ namespace {
             const auto match = std::ranges::find_if(error.diagnostics, [&](const auto &diagnostic) {
                 return diagnostic.code.Value() == "packages.host.update_possible_behavior_rename" && diagnostic.path == paths[index];
             });
-            REQUIRE((match != error.diagnostics.end()) == applies);
-            if (applies) {
+            const bool expectsMatch = applies && (index != 0 || sceneAddressUnique);
+            REQUIRE((match != error.diagnostics.end()) == expectsMatch);
+            if (expectsMatch) {
                 CHECK(match->message.find("source sha256:" + revisions[index]) != std::string::npos);
                 CHECK(match->message.find("game.tests.legacy_behavior -> game.tests.current_behavior") != std::string::npos);
                 CHECK(match->message.ends_with(index == 0 ? " (object 7, attachment 3)" : " (object 0, attachment 3)"));
@@ -987,7 +1006,9 @@ namespace {
         const bool unreadable = GENERATE(true, false);
         const bool degraded = GENERATE(true, false);
         const bool unresolvedLinks = GENERATE(true, false);
-        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType, unresolvedLinks);
+        using enum SceneMigrationAddress;
+        const auto address = GENERATE(Unique, MissingObjectIdentity, DuplicateObject, DuplicateAttachment);
+        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType, unresolvedLinks, address);
         if (unreadable)
             fixture.WriteScene("Unreadable.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "{");
         if (degraded) {
@@ -1027,7 +1048,16 @@ namespace {
             const auto result = preview.adapter->Execute(command, context);
             REQUIRE(result.HasError());
             const auto &error = result.ErrorValue();
-            CheckBehaviorMigrationDiagnostics(error, revisions, applies, unreadable);
+            CheckBehaviorMigrationDiagnostics(error, revisions, applies, unreadable, address == Unique);
+            const auto ambiguity = std::ranges::find_if(error.diagnostics, [](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.behavior_migration_address_unusable";
+            });
+            REQUIRE((ambiguity != error.diagnostics.end()) == (applies && address != Unique));
+            if (ambiguity != error.diagnostics.end()) {
+                CHECK(ambiguity->location.source == "Assets/Migration.horoasset");
+                constexpr std::array addresses{"", "0", "7", "7/3"};
+                CHECK(ambiguity->path == addresses[static_cast<std::size_t>(address)]);
+            }
             const auto hasCompositionFinding = [&](std::string_view code, std::string_view source, std::string_view asset) {
                 return std::ranges::any_of(error.diagnostics, [&](const auto &diagnostic) {
                     return diagnostic.code.Value() == code && diagnostic.severity == DiagnosticSeverity::Error &&
