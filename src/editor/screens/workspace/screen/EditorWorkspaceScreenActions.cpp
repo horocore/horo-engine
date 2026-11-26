@@ -554,7 +554,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 return false;
             const auto play = controller_->ViewModel().playState;
             return play == EditorPlayState::Idle || play == EditorPlayState::Failed;
-        }));
+        }, packages_.importerModuleOwner));
         if (opened.HasError())
             LOG_WARN("editor.packages", "Package modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
     }

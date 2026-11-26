@@ -1110,6 +1110,7 @@ namespace Horo::Editor {
         DurableFileSystem *m_durableFiles{};
         std::shared_ptr<const Assets::IAssetRegistrySource> m_assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
+        decltype(EditorWorkspaceAssetServices::acquireImporters) m_acquireImporters;
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         SourceOpenNavigator m_sourceOpenNavigator;
         DiagnosticSourceNavigator m_diagnosticSourceNavigator;
@@ -1346,6 +1347,8 @@ namespace Horo::Editor {
         void RefreshCollisionActivation();
         [[nodiscard]] Result<void> BindCollisionScene();
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
+        /** @brief Captures the project importers for one synchronous browser operation. */
+        [[nodiscard]] std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> CaptureProjectImporters() const;
         void ScheduleContentBrowserPreviews();
         /** @brief Refills bounded thumbnail admission from the immutable directory projection. */
         void AdmitContentBrowserPreviews();

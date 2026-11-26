@@ -1,6 +1,7 @@
 #include "PackageProjectSession.h"
 
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/NativePackageModuleHost.h"
 #include "PackageBehaviorReferences.h"
 
 #include <algorithm>
@@ -8,6 +9,17 @@
 #include <tuple>
 
 namespace Horo::Application::Internal {
+    /** @copydoc FindPackageImporterOwner */
+    const Packages::NativePackageModuleHost *FindPackageImporterOwner(
+        const Packages::PackageLifecycleConfiguration &configuration) noexcept {
+        for (const auto &host : configuration.moduleHosts) {
+            const auto *native = dynamic_cast<const Packages::NativePackageModuleHost *>(host.get());
+            if (native && native->Supports(Extensions::ExtensionModuleRole::BackendCapability))
+                return native;
+        }
+        return nullptr;
+    }
+
     namespace {
         using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
         using RemovalEvidence = Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>>;
@@ -141,6 +153,7 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Packages::PackageLifecycleService> lifecycle;
         std::unique_ptr<PackageApplication> application;
         Packages::GameplayPackageModuleHost *gameplayModules{};
+        const Packages::NativePackageModuleHost *importerModules{}; /**< Borrowed from the lifecycle configuration. */
         std::shared_ptr<const PackageRemovalRegistrationEvidence> removalEvidence;
         std::optional<Error> registrationFailure;
         std::uint64_t observedActivation{};
@@ -188,6 +201,7 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(SessionError("packages.host.policy_mismatch"));
         auto impl = std::make_unique<Impl>();
         impl->gameplayModules = policy.gameplayModules;
+        impl->importerModules = FindPackageImporterOwner(policy.lifecycle);
         auto cache = Packages::PackageCacheStore::Create(services.files, policy.cacheRoot, policy.limits.validation);
         if (cache.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(cache.ErrorValue());
@@ -285,6 +299,31 @@ namespace Horo::Application::Internal {
                    module.outcome == Packages::PackageModuleOutcome::Active && module.host == host;
         });
         return selected ? active->generation : 0;
+    }
+
+    /** @copydoc PackageProjectSession::ComposeImporters */
+    Result<PackageImporterCatalog> PackageProjectSession::ComposeImporters(PackageImporterCatalog host) const {
+        using Outcome = Result<PackageImporterCatalog>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Outcome::Failure(SessionError("packages.host.owner_lane"));
+        if (impl_->closed)
+            return Outcome::Failure(SessionError("packages.host.closed"));
+        const auto active = impl_->lifecycle->Active();
+        if (!active || !impl_->importerModules)
+            return Outcome::Success(std::move(host));
+
+        std::vector<PackageImporterCatalog> importers;
+        const auto owner = impl_->importerModules->Identity();
+        for (const auto &module : active->modules) {
+            if (module.role != Extensions::ExtensionModuleRole::BackendCapability ||
+                module.outcome != Packages::PackageModuleOutcome::Active || module.host != owner)
+                continue;
+            auto catalog = impl_->importerModules->Importers(module.package, module.module, active->generation);
+            if (!catalog)
+                return Outcome::Failure(SessionError("packages.host.importer_catalog_unavailable"));
+            importers.push_back(std::move(catalog));
+        }
+        return Assets::AssetImporterCatalogSnapshot::Compose(std::move(host), importers);
     }
 
     /** @copydoc PackageProjectSession::AcquireDecisionNodes */

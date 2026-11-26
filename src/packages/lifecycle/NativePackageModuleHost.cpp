@@ -6,6 +6,12 @@
 #include <algorithm>
 
 namespace Horo::Packages {
+    /** @copydoc NativePackageImporterBinding::Matches */
+    bool NativePackageImporterBinding::Matches(const PackageRestorePackage &installed, const std::string_view moduleId) const {
+        return installed.archive && package == installed.lock.package && (moduleId.empty() || module == moduleId) &&
+               archive == installed.archive->Digest() && manifest == installed.archive->PackageManifestDigest();
+    }
+
     namespace {
         /** @brief Keeps exact verified resources and owning-host registrations together through native callback drain. */
         struct NativeRoleState final {
@@ -60,6 +66,18 @@ namespace Horo::Packages {
     struct NativePackageModuleHost::Impl final {
         PackageLifecycleConfiguration configuration;
         std::vector<std::weak_ptr<NativeRoleState>> roles;
+        std::optional<std::vector<NativePackageImporterBinding>> importerBindings;
+
+        /** @brief Requires exact launcher approval before the scoped owner materializes or loads a module. */
+        bool Admits(const VerifiedPackageModule &selected) const {
+            if (!importerBindings)
+                return true;
+            if (!Detail::IsImporterOnlyModule(selected.Module(), selected.Manifest()))
+                return false;
+            return std::ranges::any_of(*importerBindings, [&](const auto &binding) {
+                return binding.Matches(selected.Package(), selected.Module().id);
+            });
+        }
     };
 
     /** @copydoc NativePackageModuleHost::NativePackageModuleHost */
@@ -70,7 +88,19 @@ namespace Horo::Packages {
         impl_->roles.reserve(64);
     }
 
+    /** @copydoc NativePackageModuleHost::NativePackageModuleHost */
+    NativePackageModuleHost::NativePackageModuleHost(PackageLifecycleConfiguration configuration,
+                                                   std::vector<NativePackageImporterBinding> importers)
+        : NativePackageModuleHost(std::move(configuration)) {
+        impl_->importerBindings.emplace(std::move(importers));
+    }
+
     NativePackageModuleHost::~NativePackageModuleHost() = default;
+
+    /** @copydoc NativePackageModuleHost::ImporterBindings */
+    const std::optional<std::vector<NativePackageImporterBinding>> &NativePackageModuleHost::ImporterBindings() const noexcept {
+        return impl_->importerBindings;
+    }
 
     /** @copydoc NativePackageModuleHost::Identity */
     std::string_view NativePackageModuleHost::Identity() const noexcept {
@@ -80,6 +110,8 @@ namespace Horo::Packages {
     /** @copydoc NativePackageModuleHost::Supports */
     bool NativePackageModuleHost::Supports(const Extensions::ExtensionModuleRole role) const noexcept {
         using enum Extensions::ExtensionModuleRole;
+        if (impl_->importerBindings)
+            return role == BackendCapability;
         return role == BackendCapability || role == HeadlessTooling ||
                (role == EditorPresentation && impl_->configuration.profile == Extensions::ExtensionHostProfile::Interactive &&
                 (impl_->configuration.editorHosts.activities || impl_->configuration.editorHosts.pages));
@@ -89,6 +121,8 @@ namespace Horo::Packages {
     Result<std::unique_ptr<IPackageModuleActivation>> NativePackageModuleHost::Activate(
         const VerifiedPackageModule &selectedModule, const std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
         const CancellationToken &cancellation) {
+        if (!impl_->Admits(selectedModule))
+            return Result<std::unique_ptr<IPackageModuleActivation>>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
         std::erase_if(impl_->roles, [](const auto &role) {
             return role.expired();
         });

@@ -50,9 +50,9 @@ namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
                                std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
-                               const bool gameplayModuleOwner, std::function<bool()> removalAllowed)
+                               const bool gameplayModuleOwner, std::function<bool()> removalAllowed, const bool importerModuleOwner)
         : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)), removalAllowed_(std::move(removalAllowed)),
-          gameplayModuleOwner_(gameplayModuleOwner) {}
+          gameplayModuleOwner_(gameplayModuleOwner), importerModuleOwner_(importerModuleOwner) {}
 
     ModalId PackageModal::Id() const {
         return ModalId{0x5041434B41474553ULL};
@@ -245,7 +245,7 @@ namespace Horo::Editor {
     }
 
     /** @brief Parses bounded explicit identity fields; the application authority rechecks selection and trust. */
-    void PackageModal::Activate(const bool gameplayModule) {
+    void PackageModal::Activate(const std::optional<Extensions::ExtensionModuleRole> role) {
         auto package = Packages::HoroPackageId::Parse(package_);
         if (package.HasError()) {
             error_ = package.ErrorValue();
@@ -256,9 +256,8 @@ namespace Horo::Editor {
             error_ = descriptor.ErrorValue();
             return;
         }
-        if (gameplayModule) {
-            const Packages::EnabledPackageModule selected{std::move(package).Value(), std::move(descriptor).Value(), module_,
-                                                          Extensions::ExtensionModuleRole::RuntimeParticipant};
+        if (role) {
+            const Packages::EnabledPackageModule selected{std::move(package).Value(), std::move(descriptor).Value(), module_, *role};
             Record(session_->ActivateModules(generation_, std::span{&selected, 1}));
             return;
         }
@@ -291,12 +290,15 @@ namespace Horo::Editor {
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
         const bool canActivate = session_ && !running && !package_.empty() && !descriptor_.empty();
         if (button("activate", canActivate))
-            Activate(false);
-        if (gameplayModuleOwner_) {
-            Ui::FieldLabel(Text("gameplay_module").c_str(), context_.theme.fonts);
+            Activate();
+        if (gameplayModuleOwner_ || importerModuleOwner_) {
+            Ui::FieldLabel(Text(importerModuleOwner_ ? "declared_module" : "gameplay_module").c_str(), context_.theme.fonts);
             static_cast<void>(Ui::InputTextControl("##PackageGameplayModule", module_, 256, context_.theme.fonts));
-            if (button("activate_gameplay_module", canActivate && !module_.empty()))
-                Activate(true);
+            const bool canActivateModule = canActivate && !module_.empty();
+            if (gameplayModuleOwner_ && button("activate_gameplay_module", canActivateModule))
+                Activate(Extensions::ExtensionModuleRole::RuntimeParticipant);
+            if (importerModuleOwner_ && button("activate_importer_module", canActivateModule))
+                Activate(Extensions::ExtensionModuleRole::BackendCapability);
         }
         if (button("disable", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Disable));

@@ -47,6 +47,9 @@ namespace Horo::Editor {
                                                                                              const PackageWorkspaceDecisionCatalog &)>
             acquireDecisionNodes;
         bool gameplayModuleOwner{}; /**< The executable supplied a gameplay host. Its execution approval remains separately enforced. */
+        bool importerModuleOwner{}; /**< The executable supplied an importer host for explicit module activation. */
+        std::function<Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>>(
+            const std::filesystem::path &, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>)> composeImporters;
     };
 
     /** @brief Registers the workspace with explicit optional package access; missing access remains unavailable.

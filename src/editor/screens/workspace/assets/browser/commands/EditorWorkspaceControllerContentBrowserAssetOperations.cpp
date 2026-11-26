@@ -359,7 +359,8 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::ReimportContentBrowserAsset(const std::filesystem::path &absolutePath) {
         m_viewModel.contentBrowserOperationError.clear();
-        if (m_mutations == nullptr || m_durableFiles == nullptr || m_mutableAssetRegistry == nullptr || m_importerCatalog == nullptr) {
+        const auto importers = CaptureProjectImporters();
+        if (m_mutations == nullptr || m_durableFiles == nullptr || m_mutableAssetRegistry == nullptr || !importers) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.unavailable";
             return;
         }
@@ -382,7 +383,7 @@ namespace Horo::Editor {
                     Assets::AssetReimportRequest{
                         .absoluteProjectRoot = NormalizeAbsolute(ProjectRoot()),
                         .absoluteAssetPath = target,
-                        .importerCatalog = m_importerCatalog,
+                        .importerCatalog = importers.get(),
                         .registry = m_mutableAssetRegistry,
                         .files = m_durableFiles,
                     },

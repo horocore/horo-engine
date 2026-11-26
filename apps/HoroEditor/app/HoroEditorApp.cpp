@@ -4140,7 +4140,7 @@ namespace Horo::Editor {
 #endif
             if (p.options.gameplayPackages && packages.selected)
                 return Output::Failure(MakeError(Packages::PackageLifecycleErrors::InvalidLifecycle,
-                                                 "Gameplay package execution is unavailable with the selected XR package owner."));
+                                                 "Approved package modules are unavailable with the selected XR package owner."));
             if (!packages.selected) {
                 const auto cache = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages";
                 Application::Internal::PackageProjectPolicy
@@ -4633,7 +4633,7 @@ namespace Horo::Editor {
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
             RegisterProjectLoadingScreen(screenRegistry);
-            RegisterEditorWorkspaceScreen(screenRegistry, {.acquire = [&packages](const std::filesystem::path &root) {
+            const PackageWorkspaceAccess packageWorkspace{.acquire = [&packages](const std::filesystem::path &root) {
                 return packages->Acquire(root);
             }, .pump = [&packages](const std::filesystem::path &root, Packages::PackageActivationBoundary boundary) {
                 return packages->PumpProject(root, boundary);
@@ -4647,7 +4647,12 @@ namespace Horo::Editor {
                 return std::nullopt;
             }, .acquireDecisionNodes = [&packages](const std::filesystem::path &root, const PackageWorkspaceDecisionCatalog &stamp) {
                 return packages->AcquireDecisionNodes(root, {stamp.project, stamp.activation});
-            }, .gameplayModuleOwner = packages->HasGameplayModuleOwner()});
+            }, .gameplayModuleOwner = packages->HasGameplayModuleOwner(), .importerModuleOwner = packages->HasImporterModuleOwner(),
+               .composeImporters = [&packages](const std::filesystem::path &root,
+                                              std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> host) {
+                   return packages->ComposeImporters(root, std::move(host));
+               }};
+            RegisterEditorWorkspaceScreen(screenRegistry, packageWorkspace);
             EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
             const auto navigationBakeAccess = navigationBakes.Access();
             const NavigationViewportAccess navigationOverlayAccess{.prepare = navigationBakeAccess.prepare,
@@ -4760,6 +4765,7 @@ namespace Horo::Editor {
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
                                                    packages,          p.operationServices.shaderReload, playSaveRetirement};
             screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
+            screenHost.Services().RegisterConst<PackageWorkspaceAccess>(packageWorkspace);
             screenHost.Services().RegisterConst<ConfigurationService>(p.configuration);
             if (querySchema.HasValue()) {
                 screenHost.Services().RegisterConst(querySchema.Value());
@@ -5917,7 +5923,7 @@ namespace Horo::Editor {
             const auto error = gameplayPackages.HasError()
                                    ? gameplayPackages.ErrorValue()
                                    : MakeError(Packages::PackageLifecycleErrors::InvalidCandidate,
-                                               "Gameplay package execution requires one explicit interactive --project.");
+                                               "Approved package modules require one explicit interactive --project.");
             LOG_ERROR("editor.packages", "%s: %s", error.code.Value().c_str(), error.message.c_str());
             return 1;
         }

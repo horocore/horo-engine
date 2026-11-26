@@ -109,6 +109,7 @@ namespace Horo::Editor {
           m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.world.documentSessionOwner),
           m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
           m_importerCatalog(dependencies.assets.importerCatalog),
+          m_acquireImporters(std::move(dependencies.assets.acquireImporters)),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
           m_diagnosticSourceNavigator(ComposeDiagnosticNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator)),

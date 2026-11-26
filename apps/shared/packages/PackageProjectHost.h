@@ -81,8 +81,12 @@ namespace Horo::Application::Internal {
          * @param root Exact project. @param stamp Exact owner and activation. @return Short-lived leaves or typed stale failure. */
         [[nodiscard]] Result<PackageDecisionNodeLeaves> AcquireDecisionNodes(const std::filesystem::path &root,
                                                                              const PackageDecisionCatalogStamp &stamp) const;
+        /** @brief Composes importers for the current exact project without preparing or activating packages. */
+        [[nodiscard]] Result<PackageImporterCatalog> ComposeImporters(const std::filesystem::path &root, PackageImporterCatalog host) const;
         /** @brief Reports whether the executable has configured a gameplay package role owner, without granting execution. */
         [[nodiscard]] bool HasGameplayModuleOwner() const noexcept;
+        /** @brief Reports whether composition supplied an importer role owner. @return Availability of explicit importer activation. */
+        [[nodiscard]] bool HasImporterModuleOwner() const noexcept;
         /** @brief Cancels admission and drains completed callbacks without waiting or destroying borrowed services.
          * @return Success once every owned callback/session is closed, otherwise typed busy. */
         [[nodiscard]] Result<void> Close();

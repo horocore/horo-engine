@@ -15,6 +15,7 @@ namespace Horo::Assets {
 
 namespace Horo::Packages {
     class GameplayPackageModuleHost;
+    class NativePackageModuleHost;
 }
 
 namespace Horo::Platform {
@@ -28,6 +29,11 @@ namespace Horo::Application::Internal {
     struct PackageRemovalSources;
     /** @brief Short-lived exact Decision declaration leases acquired on the package owner lane. */
     using PackageDecisionNodeLeaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+    using PackageImporterCatalog = std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>;
+
+    /** @brief Finds the explicitly configured native backend owner that publishes importer receipts. */
+    [[nodiscard]] const Packages::NativePackageModuleHost *FindPackageImporterOwner(
+        const Packages::PackageLifecycleConfiguration &configuration) noexcept;
 
     /** @brief Explicit product factories for root-bound saved removal evidence. */
     struct PackageRemovalReadAuthorities final {
@@ -239,6 +245,8 @@ namespace Horo::Application::Internal {
         /** @brief Acquires Decision leaves from only the expected live activation.
          * @param activation Exact previously observed generation. @return Admitted declarations or a typed stale/owner failure. */
         [[nodiscard]] Result<PackageDecisionNodeLeaves> AcquireDecisionNodes(std::uint64_t activation) const;
+        /** @brief Acquires a combined catalog from active importer receipts on the owner lane. */
+        [[nodiscard]] Result<PackageImporterCatalog> ComposeImporters(PackageImporterCatalog host) const;
         /** @brief Advances the shared operation at an actual host boundary. @param boundary Actual host phase. @return Typed outcome. */
         [[nodiscard]] Result<void> Pump(Packages::PackageActivationBoundary boundary);
         /** @brief Requests cancellation and owner-lane retirement without waiting.

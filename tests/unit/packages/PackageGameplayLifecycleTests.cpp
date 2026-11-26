@@ -33,7 +33,8 @@ using namespace Horo::Packages::Tests::Support;
 
 namespace {
     std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false,
-                                                       std::optional<std::string> moduleSignature = std::nullopt) {
+                                                       std::optional<std::string> moduleSignature = std::nullopt,
+                                                       std::optional<std::string> importerSignature = std::nullopt) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
                                   {"version", "1.0.0"},
@@ -58,9 +59,13 @@ namespace {
                                              {"entry", backend}});
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", "fixture.backend"}}};
             files.emplace_back("extensions/native/" + backend, FileBytes(HORO_PACKAGE_NATIVE_FIXTURE));
+            if (importerSignature)
+                files.emplace_back("extensions/native/" + backend + ".signature.json", std::move(*importerSignature));
         }
         return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files));
     }
+
+    enum class ImporterApproval { Unrestricted, Exact, WrongArchive };
 
     struct GameplayFixture final {
         Fixture base;
@@ -73,7 +78,7 @@ namespace {
         unsigned worldFactories{};
 
         explicit GameplayFixture(const bool approved = true, const bool correctFingerprint = true, const bool composeHost = true,
-                                 const bool mixed = false)
+                                 const bool mixed = false, const ImporterApproval importerApproval = ImporterApproval::Unrestricted)
             : withBackend(mixed) {
             base.service.reset();
             base.trust.capabilities = {{"runtime.participate"}};
@@ -101,15 +106,23 @@ namespace {
                                                  .artifactGate = ::Horo::Tests::CreateAcceptingArtifactGate()};
             if (composeHost)
                 config.moduleHosts = {gameplay};
+            auto graph = GameplayGraph(mixed);
             if (mixed) {
-                backend = std::make_shared<NativePackageModuleHost>(config);
+                if (importerApproval == ImporterApproval::Unrestricted) {
+                    backend = std::make_shared<NativePackageModuleHost>(config);
+                } else {
+                    const auto &archive = *graph->packages.front().archive;
+                    const auto digest = importerApproval == ImporterApproval::Exact ? archive.Digest() : ComputeSha256({});
+                    backend = std::make_shared<NativePackageModuleHost>(config, std::vector<NativePackageImporterBinding>{
+                        {enabled.package, "fixture.backend", digest, archive.PackageManifestDigest()}});
+                }
                 config.moduleHosts.push_back(backend);
             }
             config.moduleRetirements = retirement;
             auto created = PackageLifecycleService::Create(base.install, base.trust, std::move(config));
             REQUIRE(created.HasValue());
             base.service = std::move(created).Value();
-            base.Install(GameplayGraph(mixed));
+            base.Install(std::move(graph));
         }
 
         ~GameplayFixture() {
@@ -277,7 +290,7 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
 }
 
 TEST_CASE("Live mixed package withdrawal waits for the retained importer catalog", "[packages][gameplay][hybrid]") {
-    GameplayFixture fixture(true, true, true, true);
+    GameplayFixture fixture(true, true, true, true, ImporterApproval::Exact);
     REQUIRE(fixture.Activate().HasValue());
     auto &lifecycle = *fixture.base.service;
     const auto installed = fixture.base.install.InstalledRecord();
@@ -294,10 +307,47 @@ TEST_CASE("Live mixed package withdrawal waits for the retained importer catalog
     lifecycle.FinalizeRetirements();
     const auto lease = lifecycle.ReserveRemoval(departing);
     REQUIRE(lease.HasValue());
+    CHECK(lease.Value()->AllowsNativeImporterReview(package, "fixture.backend"));
+    CHECK_FALSE(lease.Value()->AllowsNativeImporterReview(package, "game.tests"));
     const auto roles = InspectLivePackageRemovalRoles(package, *lease.Value());
     REQUIRE(roles.HasValue());
     REQUIRE(roles.Value().size() == 1);
     CHECK(roles.Value().front().moduleId == "game.tests");
+}
+
+TEST_CASE("Importer owner rejects a module from an archive outside its startup approval", "[packages][gameplay][hybrid]") {
+    GameplayFixture fixture(true, true, true, true, ImporterApproval::WrongArchive);
+    CHECK_FALSE(fixture.backend->Supports(Extensions::ExtensionModuleRole::HeadlessTooling));
+    const auto activated = fixture.Activate();
+    REQUIRE(activated.HasError());
+    CHECK_FALSE(fixture.base.service->Active());
+    CHECK_FALSE(fixture.backend->Importers(fixture.enabled.package, "fixture.backend", 1));
+    const auto &package = fixture.base.install.InstalledRecord()->Graph()->packages.front();
+    const std::array departing{LockedPackageReference{package.lock.package, package.lock.version}};
+    const auto lease = fixture.base.service->ReserveRemoval(departing);
+    REQUIRE(lease.HasValue());
+    CHECK_FALSE(lease.Value()->AllowsNativeImporterReview(package));
+    CHECK(InspectLivePackageRemovalRoles(package, *lease.Value()).HasError());
+}
+
+TEST_CASE("Importer launcher options bind the exact archive and module", "[packages][decision-node][editor]") {
+    using namespace Horo::Application::Internal;
+    const auto identity = FormatSha256(ComputeSha256({}));
+    std::array<std::string, 9> args{"HoroEditor", "--gameplay-package-publisher-trust",
+                                    (std::filesystem::current_path() / "roots.json").string(),
+                                    "--approve-importer-package", "fixture.gameplay", "fixture.gameplay", "fixture.backend", identity,
+                                    identity};
+    std::array<char *, 9> argv{};
+    std::ranges::transform(args, argv.begin(), [](auto &text) { return text.data(); });
+    const auto parsed = ParseApprovedGameplayPackageArguments(argv);
+    REQUIRE(parsed.HasValue());
+    REQUIRE(parsed.Value());
+    REQUIRE(parsed.Value()->approvals.size() == 1);
+    const auto &entry = parsed.Value()->approvals.front();
+    CHECK(entry.role == Extensions::ExtensionModuleRole::BackendCapability);
+    CHECK(entry.module == "fixture.backend");
+    CHECK(entry.archive == ComputeSha256({}));
+    CHECK(ParseApprovedGameplayPackageArguments(std::span{argv}.first<8>()).HasError());
 }
 
 TEST_CASE("Verified package registrations copy behavior and service ownership without retaining native execution", "[packages][gameplay]") {
@@ -420,10 +470,13 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     using namespace Horo::Application::Internal;
     enum class Admission {
         Approved,
+        ApprovedWithImporter,
         ArchiveMismatch,
         NativeSignatureMismatch
     };
-    const auto admission = GENERATE(Admission::Approved, Admission::ArchiveMismatch, Admission::NativeSignatureMismatch);
+    const auto admission = GENERATE(Admission::Approved, Admission::ApprovedWithImporter, Admission::ArchiveMismatch,
+                                    Admission::NativeSignatureMismatch);
+    const bool withImporter = admission == Admission::ApprovedWithImporter;
     GameplayFixture fixture;
     Horo::Tests::Packages::TemporaryDirectory project{"editor package decisions"};
     const auto root = std::filesystem::canonical(project.Path());
@@ -434,7 +487,12 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     const auto moduleBytes = FileBytes(HORO_TEST_GAME_MODULE_PATH);
     const auto signedModule = key.Sign(std::as_bytes(
         std::span{admission == Admission::NativeSignatureMismatch ? std::string_view{"different bytes"} : std::string_view{moduleBytes}}));
-    const auto locked = GameplayGraph(false, EncodeDetachedSignatureDocument(signedModule));
+    std::optional<std::string> importerSignature;
+    if (withImporter) {
+        const auto bytes = FileBytes(HORO_PACKAGE_NATIVE_FIXTURE);
+        importerSignature = EncodeDetachedSignatureDocument(key.Sign(std::as_bytes(std::span{bytes})));
+    }
+    const auto locked = GameplayGraph(withImporter, EncodeDetachedSignatureDocument(signedModule), std::move(importerSignature));
     const auto &entry = locked->packages.front();
     const auto intent = nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
                                        {"dependencies", {{"fixture.gameplay", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}}
@@ -499,7 +557,11 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
                                            entry.lock.manifestDigest,
                                            Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
     CHECK(PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {projectTrust, {approved}}).HasError());
-    auto prepared = PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {trustDocument, {approved}});
+    ApprovedGameplayPackageArguments approvals{trustDocument, {approved}};
+    if (withImporter)
+        approvals.approvals.push_back({entry.lock.package, "fixture.gameplay", "fixture.backend", entry.lock.artifactDigest,
+                                       entry.lock.manifestDigest, 0, Extensions::ExtensionModuleRole::BackendCapability});
+    auto prepared = PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, approvals);
     REQUIRE(prepared.HasValue());
     auto configuration = std::move(prepared).Value();
     auto created =
@@ -510,6 +572,7 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     REQUIRE(created.HasValue());
     const auto host = std::move(created).Value();
     CHECK(host->HasGameplayModuleOwner());
+    CHECK(host->HasImporterModuleOwner() == withImporter);
     CHECK(host->Acquire(content).HasError());
     std::shared_ptr<Horo::Application::PackageApplication> application;
     for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -530,7 +593,11 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     const auto generation = modal.Open();
     REQUIRE(generation.HasValue());
     CHECK(modal.ActivateModules({generation.Value().value + 1}, std::span{&fixture.enabled, 1}).HasError());
-    const auto activated = modal.ActivateModules(generation.Value(), std::span{&fixture.enabled, 1});
+    std::vector selected{fixture.enabled};
+    if (withImporter)
+        selected.emplace_back(fixture.enabled.package, fixture.enabled.descriptor, "fixture.backend",
+                              Extensions::ExtensionModuleRole::BackendCapability);
+    const auto activated = modal.ActivateModules(generation.Value(), selected);
     REQUIRE(activated.HasValue());
     const auto pump = [&](Horo::Application::PackageOperationId operation) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -547,7 +614,7 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     };
     const auto publication = pump(activated.Value());
     INFO((publication.diagnostic ? publication.diagnostic->message : ""));
-    if (admission != Admission::Approved) {
+    if (admission == Admission::ArchiveMismatch || admission == Admission::NativeSignatureMismatch) {
         CHECK(publication.outcome == Horo::Application::PackageOperationOutcome::Failed);
         CHECK_FALSE(host->DecisionCatalog(root));
         REQUIRE(modal.Close(generation.Value()).HasValue());
@@ -565,6 +632,19 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     const auto activeRemoval = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
     REQUIRE(activeRemoval.HasError());
     CHECK(activeRemoval.ErrorValue().code.Value() == "packages.activation.package_in_use");
+    const auto builtinImporters = std::make_shared<const Assets::AssetImporterCatalogSnapshot>();
+    PackageImporterCatalog retainedImporters;
+    if (withImporter) {
+        auto importers = host->ComposeImporters(root, builtinImporters);
+        REQUIRE(importers.HasValue());
+        retainedImporters = std::move(importers).Value();
+        const auto *contribution = retainedImporters->FindById("fixture.importer");
+        REQUIRE(contribution);
+        CHECK(contribution->packageId == fixture.enabled.package.Value());
+        CHECK(retainedImporters->FindByExtension("raw") == contribution->strategy.get());
+        CHECK(host->ComposeImporters(content, builtinImporters).Value() == builtinImporters);
+        CHECK(host->ComposeImporters(root, retainedImporters).HasError());
+    }
     CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
     {
         const auto leaves = host->AcquireDecisionNodes(root, *stamp);
@@ -576,6 +656,14 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     const auto disable = modal.Submit(generation.Value(), Horo::Application::PackageOperationKind::Disable);
     REQUIRE(disable.HasValue());
     REQUIRE(pump(disable.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    if (withImporter) {
+        CHECK(host->ComposeImporters(root, builtinImporters).Value() == builtinImporters);
+        const auto leasedRemoval = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(leasedRemoval.HasError());
+        CHECK(leasedRemoval.ErrorValue().code.Value() == "packages.activation.package_in_use");
+        retainedImporters.reset();
+        REQUIRE(host->PumpProject(root, PackageActivationBoundary::Quiescent).HasValue());
+    }
     CHECK_FALSE(host->DecisionCatalog(root));
     CHECK(host->AcquireDecisionNodes(root, *stamp).HasError());
     const auto retained = host->RemovalRegistrations(root, stamp->project);
@@ -596,6 +684,24 @@ TEST_CASE("Signed offline Editor package selection publishes only exactly approv
     CHECK(host->RemovalRegistrations(root, stamp->project + 1).HasError());
 
     REQUIRE(std::filesystem::create_directory(root / "Assets"));
+    if (withImporter) {
+        const auto imported = root / "Assets/Sample.horoasset";
+        auto importerSidecar = imported;
+        importerSidecar += ".horo";
+        WriteFixtureSource(imported, "{}");
+        WriteFixtureSource(importerSidecar,
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff82","assetType":"core.texture","importerPackageId":"fixture.gameplay"})");
+        const auto attempt = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(attempt.HasValue());
+        const auto blocked = pump(attempt.Value());
+        REQUIRE(blocked.outcome == Horo::Application::PackageOperationOutcome::Failed);
+        REQUIRE(blocked.diagnostic);
+        CHECK(std::ranges::any_of(blocked.diagnostic->diagnostics, [](const auto &item) {
+            return item.code.Value() == "packages.host.importer_in_use" && item.path == "Assets/Sample.horoasset";
+        }));
+        REQUIRE(std::filesystem::remove(importerSidecar));
+        REQUIRE(std::filesystem::remove(imported));
+    }
     const auto graph = AI::DecisionGraphTestSupport::TaskTree(1, registration.decisionNodes.front().Value());
     const auto saved = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
     REQUIRE(saved.HasValue());

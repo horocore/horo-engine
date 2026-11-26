@@ -15,7 +15,7 @@ namespace Horo::Editor {
 
         /** @brief Binds presentation and an explicit project application capability. */
         PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
-                     bool gameplayModuleOwner, std::function<bool()> removalAllowed = {});
+                     bool gameplayModuleOwner, std::function<bool()> removalAllowed = {}, bool importerModuleOwner = false);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -50,7 +50,7 @@ namespace Horo::Editor {
         /** @brief Places navigation before the reference rows so it remains near the operation summary. */
         void DrawReferenceNavigation(std::size_t lastOffset);
         void DrawActions();
-        void Activate(bool gameplayModule);
+        void Activate(std::optional<Extensions::ExtensionModuleRole> role = std::nullopt);
         void Record(const Result<Application::PackageOperationId> &result);
         const EditorGuiContext &context_;
         std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire_;
@@ -58,6 +58,7 @@ namespace Horo::Editor {
         std::unique_ptr<PackageModalSession> session_;
         PackageModalGeneration generation_;
         bool gameplayModuleOwner_{};
+        bool importerModuleOwner_{};
 
         struct PlanRow final {
             std::string package;

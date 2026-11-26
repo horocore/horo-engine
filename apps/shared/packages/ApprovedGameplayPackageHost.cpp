@@ -1,6 +1,7 @@
 #include "ApprovedGameplayPackageHost.h"
 
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/NativePackageModuleHost.h"
 #include "Horo/Security/SecurityErrors.h"
 #include "HostSignatureDocument.h"
 #include "PackageHostPolicy.h"
@@ -17,15 +18,17 @@ namespace Horo::Application::Internal {
 
         Error InvalidPolicy() {
             return MakeError(PackageLifecycleErrors::InvalidCandidate,
-                             "Use explicit gameplay package approvals and an independent publisher trust file for one startup project.");
+                             "Use explicit package module approvals and an independent publisher trust file for one startup project.");
         }
 
         /** @brief Binds each package's approved modules to one exact signed archive and extension identity. */
         bool HasExactBindings(std::span<const ApprovedGameplayPackage> approvals) {
             for (std::size_t index = 0; index < approvals.size(); ++index) {
                 const auto &entry = approvals[index];
-                if (entry.extension.empty() || entry.module.empty() || entry.descriptorRevision == 0 || entry.archive == Sha256Digest{} ||
-                    entry.manifest == Sha256Digest{})
+                const auto runtime = entry.role == Extensions::ExtensionModuleRole::RuntimeParticipant;
+                const auto importer = entry.role == Extensions::ExtensionModuleRole::BackendCapability;
+                if (entry.extension.empty() || entry.module.empty() || (!runtime && !importer) ||
+                    (entry.descriptorRevision != 0) != runtime || entry.archive == Sha256Digest{} || entry.manifest == Sha256Digest{})
                     return false;
                 for (const auto &prior : approvals.first(index)) {
                     if (entry.package != prior.package)
@@ -39,26 +42,31 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Parses one launcher-owned identity tuple without accepting inferred SDK expectations. */
-        Result<ApprovedGameplayPackage> ParseApproval(std::span<char *const> fields) {
+        Result<ApprovedGameplayPackage> ParseApproval(std::span<char *const> fields, const Extensions::ExtensionModuleRole role) {
             using Output = Result<ApprovedGameplayPackage>;
-            if (fields.size() != 6 || std::ranges::any_of(fields, [](const char *value) {
+            const bool runtime = role == Extensions::ExtensionModuleRole::RuntimeParticipant;
+            if (fields.size() != (runtime ? 6U : 5U) || std::ranges::any_of(fields, [](const char *value) {
                 return !value || std::string_view{value}.empty() || std::string_view{value}.starts_with("--");
             }))
                 return Output::Failure(InvalidPolicy());
             auto package = HoroPackageId::Parse(fields[0]);
-            const std::string_view extension{fields[1]}, module{fields[2]}, revision{fields[5]};
+            const std::string_view extension{fields[1]}, module{fields[2]};
             const auto archive = ParseSha256(fields[3]);
             const auto manifest = ParseSha256(fields[4]);
             std::uint64_t expectedRevision{};
-            const auto *const revisionEnd = revision.data() + revision.size();
-            const auto parsed = std::from_chars(revision.data(), revisionEnd, expectedRevision);
             if (package.HasError() || archive.HasError() || manifest.HasError() || archive.Value() == Sha256Digest{} ||
                 manifest.Value() == Sha256Digest{} || extension.size() > Extensions::ExtensionManifestLimits{}.maximumIdentifierBytes ||
-                module.size() > Extensions::ExtensionManifestLimits{}.maximumIdentifierBytes || parsed.ec != std::errc{} ||
-                parsed.ptr != revisionEnd || expectedRevision == 0)
+                module.size() > Extensions::ExtensionManifestLimits{}.maximumIdentifierBytes)
                 return Output::Failure(InvalidPolicy());
+            if (runtime) {
+                const std::string_view revision{fields[5]};
+                const auto *end = revision.data() + revision.size();
+                const auto parsed = std::from_chars(revision.data(), end, expectedRevision);
+                if (parsed.ec != std::errc{} || parsed.ptr != end || expectedRevision == 0)
+                    return Output::Failure(InvalidPolicy());
+            }
             return Output::Success({std::move(package).Value(), std::string{extension}, std::string{module}, archive.Value(),
-                                    manifest.Value(), expectedRevision});
+                                    manifest.Value(), expectedRevision, role});
         }
 
         /** @brief Rejects directories outside the exact launcher namespace, including redirects. */
@@ -162,15 +170,18 @@ namespace Horo::Application::Internal {
                 result.publisherTrust = std::filesystem::u8path(arguments[++index]);
                 if (!result.publisherTrust.is_absolute())
                     return Output::Failure(InvalidPolicy());
-            } else if (flag == "--approve-gameplay-package") {
-                constexpr std::size_t Fields = 6;
-                if (arguments.size() - index <= Fields || result.approvals.size() == MaximumApprovals)
+            } else if (flag == "--approve-gameplay-package" || flag == "--approve-importer-package") {
+                const bool runtime = flag == "--approve-gameplay-package";
+                const std::size_t fields = runtime ? 6 : 5;
+                if (arguments.size() - index <= fields || result.approvals.size() == MaximumApprovals)
                     return Output::Failure(InvalidPolicy());
-                auto next = ParseApproval(arguments.subspan(index + 1, Fields));
+                const auto role = runtime ? Extensions::ExtensionModuleRole::RuntimeParticipant
+                                          : Extensions::ExtensionModuleRole::BackendCapability;
+                auto next = ParseApproval(arguments.subspan(index + 1, fields), role);
                 if (next.HasError())
                     return Output::Failure(std::move(next).ErrorValue());
                 result.approvals.push_back(std::move(next).Value());
-                index += Fields;
+                index += fields;
             }
         }
         if (result.publisherTrust.empty() && result.approvals.empty())
@@ -214,26 +225,40 @@ namespace Horo::Application::Internal {
         if (!IsCanonical(policy.lifecycle.temporaryRoot))
             return Output::Failure(InvalidPolicy());
         std::vector<GameplayPackageModuleBinding> bindings;
+        std::vector<NativePackageImporterBinding> importers;
         bindings.reserve(arguments.approvals.size());
-        for (const auto &approved : arguments.approvals)
+        for (const auto &approved : arguments.approvals) {
+            if (approved.role == Extensions::ExtensionModuleRole::BackendCapability) {
+                importers.push_back({approved.package, approved.module, approved.archive, approved.manifest});
+                continue;
+            }
             bindings.push_back({approved.package,
                                 approved.module,
                                 std::string{Gameplay::CurrentGameplayBuildFingerprint()},
                                 approved.descriptorRevision,
                                 {},
                                 {}});
-        auto host = std::make_shared<GameplayPackageModuleHost>(GameplayPackageHostConfiguration{policy.lifecycle.temporaryRoot,
-                                                                                                 std::move(gate).Value()},
-                                                                std::move(bindings));
-        if (!host->Supports(Extensions::ExtensionModuleRole::RuntimeParticipant))
-            return Output::Failure(InvalidPolicy());
+        }
         policy.requirePublisherVerification = true;
         policy.executionProjectRoot = policy.projectRoot;
-        policy.gameplayModules = host.get();
-        // Only the exact role-aware Gameplay host receives the verification gate for executable code.
-        policy.lifecycle.artifactGate = std::make_shared<UnconfiguredPackageGate>();
         policy.lifecycle.capabilities = {std::string{GameplayGrant}};
-        policy.lifecycle.moduleHosts = {std::move(host)};
+        policy.lifecycle.moduleHosts.clear();
+        policy.gameplayModules = nullptr;
+        if (!bindings.empty()) {
+            auto host = std::make_shared<GameplayPackageModuleHost>(
+                GameplayPackageHostConfiguration{policy.lifecycle.temporaryRoot, gate.Value()}, std::move(bindings));
+            if (!host->Supports(Extensions::ExtensionModuleRole::RuntimeParticipant))
+                return Output::Failure(InvalidPolicy());
+            policy.gameplayModules = host.get();
+            policy.lifecycle.moduleHosts.push_back(std::move(host));
+        }
+        if (!importers.empty()) {
+            auto native = policy.lifecycle;
+            native.artifactGate = std::move(gate).Value();
+            policy.lifecycle.moduleHosts.push_back(std::make_shared<NativePackageModuleHost>(std::move(native), std::move(importers)));
+        }
+        // Only exact role owners may verify executable code in this launcher configuration.
+        policy.lifecycle.artifactGate = std::make_shared<UnconfiguredPackageGate>();
         policy.lifecycle.moduleRetirements = std::make_shared<PackageModuleRetirementQueue>();
         return Output::Success({std::make_unique<ExecutionApproval>(arguments.approvals),
                                 std::make_unique<PackagePublisherVerificationService>(std::move(publishers).Value()), std::move(policy)});

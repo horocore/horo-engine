@@ -432,6 +432,8 @@ namespace {
                                   "workspace.packages.reference_unreadable",
                                   "workspace.packages.reference_saved_source_unreadable",
                                   "workspace.packages.reference_registration",
+                                  "workspace.packages.declared_module",
+                                  "workspace.packages.activate_importer_module",
                                   "workspace.packages.reference_composition_missing",
                                   "workspace.packages.reference_composition_type",
                                   "workspace.packages.reference_subplan_missing",

@@ -233,6 +233,22 @@ namespace Horo::Application::Internal {
         return owner && owner->Supports(Extensions::ExtensionModuleRole::RuntimeParticipant);
     }
 
+    /** @copydoc PackageProjectHost::HasImporterModuleOwner */
+    bool PackageProjectHost::HasImporterModuleOwner() const noexcept {
+        return FindPackageImporterOwner(impl_->policy.lifecycle) != nullptr;
+    }
+
+    /** @copydoc PackageProjectHost::ComposeImporters */
+    Result<PackageImporterCatalog> PackageProjectHost::ComposeImporters(const std::filesystem::path &root,
+                                                                      PackageImporterCatalog host) const {
+        using Outcome = Result<PackageImporterCatalog>;
+        if (const auto lane = impl_->Lane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (root != impl_->policy.projectRoot || !impl_->current || impl_->Admission().HasError())
+            return Outcome::Success(std::move(host));
+        return impl_->current->ComposeImporters(std::move(host));
+    }
+
     /** @copydoc PackageProjectHost::Close */
     Result<void> PackageProjectHost::Close() {
         if (auto valid = impl_->Lane(); valid.HasError())

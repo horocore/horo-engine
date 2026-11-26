@@ -42,9 +42,15 @@ namespace Horo::Packages {
         [[nodiscard]] CancellationToken Lifetime() const noexcept;
         /** @brief Checks whether the reserved archive can be reviewed through the configured native importer owner.
          * @param package Exact member of the sealed install being withdrawn.
-         * @return True only for a pending reservation, an exact departing archive and the native backend owner.
+         * @return True only for a pending reservation and an exact departing archive covered by the native backend owner.
          */
         [[nodiscard]] bool AllowsNativeImporterReview(const PackageRestorePackage &package) const;
+        /** @brief Checks removal review for a specific importer in the exact sealed archive.
+         * @param package Exact departing sealed package.
+         * @param module Exact importer module ID.
+         * @return Whether the configured native owner covers the module in this reservation.
+         */
+        [[nodiscard]] bool AllowsNativeImporterReview(const PackageRestorePackage &package, std::string_view module) const;
         /** @brief Revokes activation on the old session once the lock replacement commits.
          * @pre The transaction reached its durable commit point while holding the project mutation lease. */
         void MarkPublished() const noexcept;

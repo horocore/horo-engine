@@ -195,6 +195,15 @@ namespace Horo::Assets {
 
         explicit AssetImporterCatalogSnapshot(std::vector<AssetImporterContribution> entries) : entries_(std::move(entries)) {}
 
+        /** @brief Composes active project contributions with the host catalog through normal registration validation.
+         * @param host Immutable host importer catalog.
+         * @param project Active project catalogs whose leases stay pinned by the result.
+         * @return Published snapshot or the exact registration error.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<const AssetImporterCatalogSnapshot>> Compose(
+            std::shared_ptr<const AssetImporterCatalogSnapshot> host,
+            std::span<const std::shared_ptr<const AssetImporterCatalogSnapshot>> project);
+
         /**
          * @brief Finds the importer for the given file extension.
          * @param extension Lowercase extension without dot.

@@ -4737,6 +4737,12 @@
     "workspace.packages.activate_gameplay_module": {
       "text": "Oynanış modülünü etkinleştir"
     },
+    "workspace.packages.declared_module": {
+      "text": "Bildirilen paket modülünün kimliği"
+    },
+    "workspace.packages.activate_importer_module": {
+      "text": "İçe aktarma modülünü etkinleştir"
+    },
     "workspace.packages.disable": {
       "text": "Paket uzantılarını devre dışı bırak"
     },

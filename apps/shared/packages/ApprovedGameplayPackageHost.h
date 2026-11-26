@@ -13,6 +13,7 @@ namespace Horo::Application::Internal {
         Sha256Digest archive;
         Sha256Digest manifest;
         std::uint64_t descriptorRevision{};
+        Extensions::ExtensionModuleRole role{Extensions::ExtensionModuleRole::RuntimeParticipant};
     };
 
     struct ApprovedGameplayPackageArguments final {

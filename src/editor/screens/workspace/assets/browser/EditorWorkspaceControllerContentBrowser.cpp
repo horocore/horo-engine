@@ -29,12 +29,22 @@
 #include <vector>
 
 namespace Horo::Editor {
+    /** @copydoc EditorWorkspaceController::CaptureProjectImporters */
+    std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> EditorWorkspaceController::CaptureProjectImporters() const {
+        if (m_acquireImporters) {
+            auto acquired = m_acquireImporters(ProjectRoot());
+            return acquired.HasValue() ? std::move(acquired).Value() : nullptr;
+        }
+        // Standalone workspace fixtures borrow the host catalog for this operation.
+        return {std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>{}, m_importerCatalog};
+    }
 
     void EditorWorkspaceController::RebuildContentBrowserProjection(const std::filesystem::path &projectRoot,
                                                                     const std::filesystem::path &requestedDirectory) {
         RefreshPhysicsMaterials();
         RefreshRecentAiAssets();
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
+        const auto importers = CaptureProjectImporters();
+        m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, importers.get());
         auto &schemas = m_viewModel.decisionSchemaChoices;
         schemas.clear();
         for (const auto &record : m_assetRegistry.Records()) {
@@ -93,8 +103,10 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::AdmitContentBrowserPreviews */
     void EditorWorkspaceController::AdmitContentBrowserPreviews() {
         constexpr std::size_t MaximumPending = 32;
-        if (m_assetPreviews == nullptr)
+        if (m_assetPreviews == nullptr || m_pendingContentBrowserPreviews.size() >= MaximumPending ||
+            m_contentBrowserNextPreviewEntry >= m_viewModel.contentBrowser.entries.size())
             return;
+        const auto importers = CaptureProjectImporters();
         while (m_pendingContentBrowserPreviews.size() < MaximumPending &&
                m_contentBrowserNextPreviewEntry < m_viewModel.contentBrowser.entries.size()) {
             auto &entry = m_viewModel.contentBrowser.entries[m_contentBrowserNextPreviewEntry++];
@@ -133,8 +145,8 @@ namespace Horo::Editor {
                 }),
                     .requiresRevision = true,
                 };
-            } else if (m_importerCatalog != nullptr)
-                request = BuildPreviewRequest(entry, *m_importerCatalog);
+            } else if (importers)
+                request = BuildPreviewRequest(entry, *importers);
             if (!request)
                 continue;
             auto submitted = m_assetPreviews->Submit(*request);

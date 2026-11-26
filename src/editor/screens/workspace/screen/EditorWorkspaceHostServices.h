@@ -4,6 +4,7 @@
 
 #include "Horo/Application/WorldBakeApplication.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -32,6 +33,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry *mutableAssetRegistry{};
         std::shared_ptr<const Assets::IAssetRegistrySource> source;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
+        std::function<Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>>(const std::filesystem::path &)> acquireImporters;
     };
 
     /** @brief One document incarnation and its explicit canonical world/source and preview owners. */

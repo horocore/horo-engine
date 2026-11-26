@@ -197,6 +197,12 @@ namespace Horo::Editor {
 
         /** @brief Returns the current project root, or current_path() as fallback. */
         [[nodiscard]] std::filesystem::path CurrentProjectRoot() const noexcept;
+        /** @brief Captures the host catalog and active importers for the requested project.
+         * @param root Exact project root of the operation.
+         * @return Immutable importer catalog for this operation, or a composition error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>> AcquireImporterCatalog(
+            const std::filesystem::path &root) const;
 
         /** @brief Polls the borrowed update session on the owner thread, updates the screen, and checks pending leave dialogs. */
         void OnUpdate(float dt);

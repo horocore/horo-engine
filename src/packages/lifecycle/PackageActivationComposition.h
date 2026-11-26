@@ -14,6 +14,9 @@ namespace Horo::Packages::Detail {
     /** @brief Reads and owner-binds the exact declared descriptor without host work. */
     [[nodiscard]] Result<DeclaredPackageDescriptor> ReadDeclaredPackageDescriptor(const PackageRestorePackage &package,
                                                                                   const PackagePath &descriptor);
+    /** @brief Checks whether a native module declares only importer contributions with no other host dependencies. */
+    [[nodiscard]] bool IsImporterOnlyModule(const Extensions::ExtensionModuleManifest &module,
+                                           const Extensions::ExtensionManifest &manifest);
     /** @brief Applies the owning native platform suffix to an explicit selected entry. */
     [[nodiscard]] std::string SelectedPackageNativeEntry(std::string entry);
     /** @brief Captures the native process compatibility tuple without discovering a host. */

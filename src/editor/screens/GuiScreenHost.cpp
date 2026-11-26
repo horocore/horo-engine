@@ -8,6 +8,7 @@
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/AudioComponentPreview.h"
+#include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -1020,6 +1021,15 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc GuiScreenHost::AcquireImporterCatalog */
+    Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>> GuiScreenHost::AcquireImporterCatalog(
+        const std::filesystem::path &root) const {
+        const auto *packages = services_.TryGetConst<PackageWorkspaceAccess>();
+        if (packages && packages->composeImporters)
+            return packages->composeImporters(root, importerCatalog_);
+        return Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>>::Success(importerCatalog_);
+    }
+
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         if (IsWorkspaceMenuAction(invocation.action)) {
@@ -1037,8 +1047,15 @@ namespace Horo::Editor {
             case OpenProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 return;
-            case ImportAssets:
-                OpenImportWorkflow(modalHost_, context_.theme.fonts, m_importJobs, importerCatalog_,
+            case ImportAssets: {
+                if (!modalHost_ || modalHost_->HasOpenModal())
+                    return;
+                auto importers = AcquireImporterCatalog(currentProjectRoot_);
+                if (importers.HasError()) {
+                    LOG_ERROR("editor.import", "Importer catalog unavailable: %s", importers.ErrorValue().code.Value().c_str());
+                    return;
+                }
+                OpenImportWorkflow(modalHost_, context_.theme.fonts, m_importJobs, std::move(importers).Value(),
                                    {services_,
                                     {.assetRegistry = services_.TryGet<Assets::AssetRegistry>(),
                                      .operationStore = services_.TryGet<OperationStore>(),
@@ -1047,6 +1064,7 @@ namespace Horo::Editor {
                                      .inputRouter = inputRouter_}},
                                    currentProjectRoot_, invocation.assetDestination);
                 return;
+            }
             case OpenEditorSettings:
                 OpenEditorSettingsModal();
                 return;

@@ -108,6 +108,17 @@ signature is reverified from the offline cache. The selected native role also
 requires its own signed `<artifact>.signature.json` sibling in the exact
 verified contribution inventory. The SDK build fingerprint comes from the host.
 
+`--approve-importer-package <package> <extension> <module> <archive-sha256> <manifest-sha256>`
+uses the same project and publisher binding. The Package dialog can activate
+the declared importer module. The native owner verifies the detached signature
+and admits importer contributions from that exact module. Removal reservations
+carry the same immutable approval identities, so reference review can identify
+an importer outside the configured owner's scope.
+Import, file drop, and Content Browser operations acquire a combined catalog for
+the current project. Duplicate contribution IDs fail catalog composition. New
+operations see the host catalog when the project module is disabled, and open
+import operations retain their captured catalog until they close.
+
 Startup approval makes the role available for explicit activation from the
 existing Package dialog. Decision descriptors become visible only after that
 activation publishes and disappear when it is withdrawn. The configured package

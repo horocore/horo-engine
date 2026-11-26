@@ -481,9 +481,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
         const auto *latticeFactory = services_.TryGetConst<AI::LatticeQueryAuthoringFactory>();
         const auto *contextAccess = services_.TryGetConst<AI::QueryContextProviderAccess>();
+        const auto acquireImporters = [host = &host_](const std::filesystem::path &root) { return host->AcquireImporterCatalog(root); };
         return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = projectServices_.assetRegistry,
                                                       .source = std::move(sources.registry),
-                                                      .importerCatalog = projectServices_.importerCatalog},
+                                                      .importerCatalog = projectServices_.importerCatalog,
+                                                      .acquireImporters = acquireImporters},
                                            .world = {.sourceFiles = std::move(sources.world),
                                                      .documentSessionOwner = sources.owner,
                                                      .streamingPreviewPolicy = services_.TryGetConst<WorldStreamingPreviewRuntimePolicy>(),
