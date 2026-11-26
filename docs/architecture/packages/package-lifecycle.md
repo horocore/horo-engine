@@ -423,6 +423,9 @@ recognizes the point only if the current request and lock still match those
 digests. After writing the pending rollback point, the host rechecks the
 approved base pair before admitting the journal. An external edit detected
 there remains in place and the uncommitted rollback point is discarded.
+After writing the journal, the host checks the pair again before replacing
+either document. A changed pair aborts publication and leaves the external edit
+in place.
 Failed updates retain a previous completed rollback point. The point
 records package metadata and does not include project document migrations.
 

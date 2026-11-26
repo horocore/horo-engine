@@ -82,6 +82,10 @@ namespace {
             observeCheckpoint_ = std::move(observe);
         }
 
+        void OnMetadataJournal(std::function<void()> observe) {
+            observeJournal_ = std::move(observe);
+        }
+
         Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
             return native_.InspectEntry(path);
         }
@@ -127,6 +131,8 @@ namespace {
             auto replaced = native_.AtomicReplaceTracked(source, destination, receipt);
             if (replaced.HasValue() && observeCheckpoint_ && destination.filename() == "package-update.rollback.pending")
                 observeCheckpoint_();
+            if (replaced.HasValue() && observeJournal_ && destination.filename() == "package-metadata.pending")
+                observeJournal_();
             if (replaced.HasValue() && lock && write_ == LockWrite::FailAfterReplace)
                 return Result<void>::Failure(Failure());
             return replaced;
@@ -147,6 +153,7 @@ namespace {
 
         NativeDurableFileSystem native_;
         std::function<void()> observeCheckpoint_;
+        std::function<void()> observeJournal_;
         LockWrite write_{LockWrite::Normal};
         bool blockRecoveryRequest_{};
         bool failedLockWrite_{};
@@ -581,6 +588,22 @@ namespace {
             REQUIRE(rejected.HasError());
             CHECK(rejected.ErrorValue().code.Value() == "packages.host.metadata_conflict");
             CHECK(fixture.Read("packages.json") == edited);
+            CHECK_FALSE(std::filesystem::exists(journal.parent_path() / "package-update.rollback.pending"));
+        }
+        SECTION("an edit during metadata journal publication is preserved before writing either document") {
+            const auto edited = originalLock + '\n';
+            bool journalWritten{};
+            files.OnMetadataJournal([&] {
+                journalWritten = true;
+                fixture.Write("packages.lock", edited);
+            });
+            const auto rejected = PublishPackageProjectUpdate(policy, update, files, context);
+            REQUIRE(journalWritten);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "packages.host.metadata_conflict");
+            CHECK(fixture.Read("packages.json") == originalRequest);
+            CHECK(fixture.Read("packages.lock") == edited);
+            CHECK_FALSE(std::filesystem::exists(journal));
             CHECK_FALSE(std::filesystem::exists(journal.parent_path() / "package-update.rollback.pending"));
         }
         SECTION("failure before the lock replacement restores the original pair before returning") {

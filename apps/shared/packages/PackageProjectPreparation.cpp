@@ -425,9 +425,15 @@ namespace Horo::Application::Internal {
                 return Publication::Failure(stable.ErrorValue());
             if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
                 return Publication::Failure(authority.ErrorValue());
-            // Once the journal is admitted, finish it under the mutation lease even if the caller closes.
             if (auto recorded = ReplaceMetadata(journalPath, journal, files, journalReceipt); recorded.HasError())
                 return Publication::Failure(recorded.ErrorValue());
+            // Journal staging can race an independent editor that does not hold the project mutation lease.
+            // Once recorded, complete the check and transaction even if the caller closes.
+            if (auto stable = RecheckMetadataBase(metadata, limits, previous, {}); stable.HasError()) {
+                if (auto discarded = files.RemoveDurable(journalPath); discarded.HasError())
+                    return Publication::Failure(WithCause(std::move(stable).ErrorValue(), std::move(discarded).ErrorValue()));
+                return Publication::Failure(std::move(stable).ErrorValue());
+            }
             AtomicFileReplacementReceipt requestReceipt;
             if (auto written = ReplaceMetadata(metadata / "packages.json", next.request, files, requestReceipt); written.HasError())
                 return Publication::Failure(written.ErrorValue());
