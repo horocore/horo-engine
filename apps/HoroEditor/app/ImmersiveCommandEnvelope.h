@@ -126,6 +126,7 @@ namespace Horo::Editor {
          * @return An owned envelope, explicit speech-only degradation, or a typed evidence failure.
          * @details The host measures both ends of each observation in the same clock as the microphone.
          * The phrase includes its start and excludes its end. Candidates from a shared cutoff use the same interval.
+         * Presses from one device must also have disjoint ordered intervals, or be the same press at the same cutoff.
          * Raw XR timestamps are used only for ordering observations within that XR session. No clock offset is inferred.
          */
         [[nodiscard]] static ImmersiveCommandAssembly Assemble(const ImmersivePlanningContext &current,

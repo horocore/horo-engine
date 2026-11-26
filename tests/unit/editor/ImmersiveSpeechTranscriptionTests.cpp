@@ -463,6 +463,45 @@ namespace Horo::Editor {
             CHECK_FALSE(result.envelope);
         }
 
+        TEST_CASE("Immersive commands order press intervals independently of pose publications", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            std::array samples{SpatialObservation(context, 1, 1'005'000, 1'010'000), SpatialObservation(context, 2, 1'012'000, 1'015'000),
+                               SpatialObservation(context, 3, 1'025'000, 1'029'000)};
+            samples[0].controllerPress = ImmersiveControllerPress{{5, 1'006'000}, {5, 1'018'000}};
+            samples[2].controllerPress = ImmersiveControllerPress{{5, 1'020'000}, {5, 1'024'000}};
+            for (auto &sample : samples)
+                sample.candidate.shape = Math::Ray{{}, {0, 0, -1}, 0, 5};
+            auto expected = Aligned;
+            SECTION("a pose between two ordered presses does not erase the first press") {}
+            SECTION("closed press intervals for one device cannot touch") {
+                samples[2].controllerPress->earliest = samples[0].controllerPress->latest;
+                expected = AmbiguousTiming;
+            }
+            SECTION("ordered poses cannot admit reversed press updates") {
+                std::swap(samples[0].controllerPress, samples[2].controllerPress);
+                expected = AmbiguousTiming;
+            }
+            SECTION("different devices can contribute independent overlapping presses") {
+                samples[2].controllerPress = samples[0].controllerPress;
+                ++samples[2].candidate.device.slot.index;
+            }
+            SECTION("one cutoff can associate the same press with multiple candidates from the device") {
+                samples[1] = samples[0];
+            }
+            SECTION("one cutoff cannot associate conflicting press intervals with the same device") {
+                samples[1] = samples[0];
+                ++samples[1].controllerPress->latest.nanoseconds;
+                expected = AmbiguousTiming;
+            }
+            const auto result =
+                ImmersiveCommandEnvelope::Assemble(context, speech, ImmersiveSpatialHistoryView{context, samples.back().cutoff, samples});
+            CHECK(result.status == expected);
+            CHECK(result.envelope.has_value() == (expected == Aligned));
+        }
+
         TEST_CASE("Immersive commands can retain multiple candidates from a single measured cutoff", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             const auto speech = FinalEvidence(fixture);

@@ -101,6 +101,23 @@ namespace Horo::Editor {
             return press == Aligned ? pose : press;
         }
 
+        /** @brief Orders aligned press intervals per device while permitting one cutoff to share a press. */
+        bool FollowsPreviousPress(const ImmersiveSpatialObservation &sample,
+                                  const std::span<const ImmersiveSpatialObservation> aligned) noexcept {
+            if (!sample.controllerPress)
+                return true;
+            const auto previous = std::find_if(aligned.rbegin(), aligned.rend(), [&sample](const auto &observation) {
+                return observation.controllerPress && observation.candidate.device == sample.candidate.device;
+            });
+            if (previous == aligned.rend())
+                return true;
+            const auto &prior = *previous->controllerPress;
+            const auto &press = *sample.controllerPress;
+            if (sample.cutoff == previous->cutoff)
+                return prior.earliest.nanoseconds == press.earliest.nanoseconds && prior.latest.nanoseconds == press.latest.nanoseconds;
+            return prior.latest.nanoseconds < press.earliest.nanoseconds;
+        }
+
         /** @brief Requires an authored object and finite press-time geometry in world units. */
         bool ValidPointingHit(const ImmersivePointingHits::Hit &hit) noexcept {
             return hit.object.IsValid() && Math::IsFinite(hit.worldPosition) && std::isfinite(hit.distanceMeters) &&
@@ -242,8 +259,11 @@ namespace Horo::Editor {
             const auto overlap = ObservationOverlap(sample, phrase);
             if (overlap == AmbiguousTiming)
                 return AmbiguousTiming;
-            if (overlap == Aligned)
-                observations_[count_++] = sample;
+            if (overlap != Aligned)
+                continue;
+            if (!FollowsPreviousPress(sample, Spatial()))
+                return AmbiguousTiming;
+            observations_[count_++] = sample;
         }
         cutoff_ = history.cutoff;
         return count_ ? Aligned : SpeechOnly;
