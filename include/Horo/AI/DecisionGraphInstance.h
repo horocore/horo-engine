@@ -138,9 +138,12 @@ namespace Horo::AI {
          * @return The same lifecycle outcome or original typed failure as Step.
          */
         [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
-        /** @brief Tests whether an active tree or Utility action has an outstanding mailbox wake.
+        /** @brief Tests for a mailbox wake or a running graph that needs to retire a withdrawn provider.
          * @return False off the owner lane or while a step is in progress. */
         [[nodiscard]] bool HasPendingTaskWake() const noexcept;
+        /** @brief Rechecks live graph authority at the separate Gameplay intent dispatch phase.
+         * @return True on the owner lane while the graph and its exact provider generation still admit dispatch. */
+        [[nodiscard]] bool CanDispatchIntents() const noexcept;
         /** @brief Copies the earliest fixed deadline across active trees, Utility actions and running State Machines.
          * @return No deadline when the graph cannot be observed or has no active deadline. */
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;

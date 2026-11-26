@@ -325,14 +325,64 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
-        class CommitEmpty final : public IAiCookedDecisionIntentSink {
+        class CommitProbe final : public IAiCookedDecisionIntentSink {
         public:
             Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                ++commits;
                 return Result<bool>::Success(true);
             }
 
-            void Discard(AgentHandle) noexcept override {}
+            void Discard(AgentHandle) noexcept override {
+                ++discards;
+            }
+
+            std::size_t commits{};
+            std::size_t discards{};
         };
+
+        TEST_CASE("Scene decision revocation retires work without another provider event",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            std::array sources{TaskTree(11)};
+            sources.front().executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(sources, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto intents = std::make_shared<CommitProbe>();
+            REQUIRE(runtime
+                        .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                             .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                             .agent = {.intervalTicks = 0},
+                                                             .intents = intents,
+                                                             .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
+                        .HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().evaluated == 1);
+            REQUIRE(fixture.probe.continuation.IsCurrent());
+
+            SECTION("an already evaluated intent cannot dispatch after revocation") {
+                fixture.admission->store(false);
+                REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+                CHECK(intents->commits == 0);
+            }
+            SECTION("a reactive task wakes for retirement without a queued result") {
+                REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+                REQUIRE(scheduler->EvaluateAtDecision(2).Value().evaluated == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+                fixture.admission->store(false);
+                REQUIRE(scheduler->EvaluateAtDecision(3).Value().evaluated == 1);
+                REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
+                CHECK(intents->commits == 1);
+            }
+            CHECK(intents->discards == 1);
+            CHECK(fixture.probe.aborts == 1);
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK_FALSE(fixture.probe.continuation.IsCurrent());
+        }
 
         TEST_CASE("Scene cooked tasks receive the admitted scheduler event after idle ticks",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
@@ -360,7 +410,7 @@ namespace Horo::AI {
                         .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
                                                              .scheduler = {.mode = AiSchedulingMode::BestEffort},
                                                              .agent = {.intervalTicks = 0},
-                                                             .intents = std::make_shared<CommitEmpty>(),
+                                                             .intents = std::make_shared<CommitProbe>(),
                                                              .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();

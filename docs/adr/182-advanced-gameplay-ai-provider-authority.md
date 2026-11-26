@@ -64,6 +64,9 @@ or model data is unloaded.
 The decision mailbox rechecks a registered task provider when consuming its
 queued completion. Provider retirement invalidates a queued success even when
 the result was submitted before revocation.
+The Scene scheduler also wakes a running reactive graph for provider retirement,
+even without a queued result. Intent dispatch rechecks graph authority after
+evaluation and discards queued intents if it has been withdrawn.
 
 ### Deterministic and adaptive execution
 

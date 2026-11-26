@@ -181,6 +181,10 @@ namespace Horo::AI {
             }
 
             Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
+                if (!decision_->CanDispatchIntents()) {
+                    Cancel();
+                    intents_.reset();
+                }
                 return intents_ ? intents_->Commit(context, budget) : Result<bool>::Success(true);
             }
 

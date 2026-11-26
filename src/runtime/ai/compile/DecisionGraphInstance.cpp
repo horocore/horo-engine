@@ -195,18 +195,25 @@ namespace Horo::AI {
     }
 
     bool DecisionGraphInstance::Available() const noexcept {
-        return !shutdown_ && std::this_thread::get_id() == owner_ && providers_->CanAdmit() &&
+        return std::this_thread::get_id() == owner_ && !shutdown_ && providers_->CanAdmit() &&
                !binding_.operation.IsCancellationRequested();
     }
 
     /** @copydoc DecisionGraphInstance::HasPendingTaskWake */
     bool DecisionGraphInstance::HasPendingTaskWake() const noexcept {
-        if (!Available() || evaluating_)
+        if (std::this_thread::get_id() != owner_ || shutdown_ || evaluating_ || binding_.operation.IsCancellationRequested())
             return false;
+        if (!providers_->CanAdmit())
+            return occurrences_[0]->outcome == AiTaskState::Running;
         return std::ranges::any_of(occurrences_, [](const auto &occurrence) {
             const auto *action = ActiveAction(*occurrence);
             return action && action->HasPendingTaskWake();
         });
+    }
+
+    /** @copydoc DecisionGraphInstance::CanDispatchIntents */
+    bool DecisionGraphInstance::CanDispatchIntents() const noexcept {
+        return Available() && !evaluating_;
     }
 
     /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
