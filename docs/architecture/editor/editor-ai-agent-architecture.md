@@ -296,7 +296,9 @@ Ownership rules:
   invalidated draft cannot inspect additional targets.
   A registry-backed request advertises only definitions derived from its
   host-selected, capability-granted catalog. Replacing the MCP registry blocks
-  new inference and withdraws any draft from the old catalog.
+  new inference and withdraws any draft from the old catalog. During planning,
+  a deadline thread observes the captured document, context and catalog lifetime
+  so authority withdrawal stops a cooperative model even before its next event.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

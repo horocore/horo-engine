@@ -159,11 +159,14 @@ namespace Horo::Agent {
          * @param request Conversation and host-approved tool definitions.
          * @param limits Budget covering the entire draft. @param validateTool Independent, side-effect-free admission.
          * @param cancellation Host cancellation. @param context Optional exact user-approved context on this lane.
+         * @param providerAuthority Optional passive check used on the deadline thread to stop quiet providers. It must be
+         * thread-safe, bounded, and must only read immutable or synchronized lifetime state.
          * @return A complete review draft or a typed failure with no draft.
          */
         [[nodiscard]] AgentTurnPlan Plan(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
                                          const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
-                                         std::stop_token cancellation = {}, const AgentTurnContext *context = nullptr);
+                                         std::stop_token cancellation = {}, const AgentTurnContext *context = nullptr,
+                                         const AgentTurnFreshness &providerAuthority = {});
 
     private:
         struct PlanReview final {
@@ -177,6 +180,7 @@ namespace Horo::Agent {
             const AgentTurnTextObserver &observeText;
             const AgentToolActivityObserver &observeTool;
             PlanReview *plan;
+            const AgentTurnFreshness *providerAuthority{};
         };
 
         [[nodiscard]] AgentTurnResult RunTurn(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,

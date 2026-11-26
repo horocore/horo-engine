@@ -171,8 +171,12 @@ namespace Horo::Editor {
                 return Agent::AgentPlanToolInspection{Agent::AgentTurnStatus::ContextDenied};
             return inspected;
         };
-        auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext);
-        return {context_, std::move(plan), stop, approvedContext ? approvedContext->project.cancellation : CancellationToken{}, catalog_};
+        const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
+        const Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime]() noexcept {
+            return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && (!catalog || catalog->IsCurrent());
+        };
+        auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
+        return {context_, std::move(plan), stop, projectLifetime, catalog_};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}

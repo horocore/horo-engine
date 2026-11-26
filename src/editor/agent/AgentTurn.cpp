@@ -27,26 +27,33 @@ namespace Horo::Agent {
             }
         };
 
-        /** @brief Combines the monotonic deadline and host cancellation into the provider's cooperative token. */
+        /** @brief Treats a failing passive observer as authority withdrawal. */
+        bool HasProviderAuthority(const AgentTurnFreshness &providerAuthority) noexcept {
+            try {
+                return providerAuthority();
+            } catch (...) {
+                return false;
+            }
+        }
+
+        /** @brief Combines the deadline, authority withdrawal, and host cancellation into the cooperative token. */
         class TurnStop final {
         public:
-            TurnStop(const std::chrono::milliseconds timeout, const std::stop_token parent)
+            TurnStop(const std::chrono::milliseconds timeout, const std::stop_token parent,
+                     const AgentTurnFreshness *const providerAuthority)
                 : deadline_(Clock::now() + timeout), parent_(parent), cancel_(parent,
                                                                               [this] {
                                                                                   stop_.request_stop();
                                                                               }),
-                  timer_([this](const std::stop_token shutdown) {
-                      std::unique_lock lock{mutex_};
-                      wake_.wait_until(lock, shutdown, deadline_, [] {
-                          return false;
-                      });
-                      if (!shutdown.stop_requested())
-                          stop_.request_stop();
+                  timer_([this, providerAuthority](const std::stop_token shutdown) {
+                      Observe(shutdown, providerAuthority);
                   }) {}
 
             [[nodiscard]] std::optional<AgentTurnStatus> Status() const noexcept {
                 if (parent_.stop_requested())
                     return Cancelled;
+                if (authorityRevoked_.load(std::memory_order_acquire))
+                    return ContextDenied;
                 return Clock::now() >= deadline_ ? std::optional{TimedOut} : std::nullopt;
             }
 
@@ -59,11 +66,31 @@ namespace Horo::Agent {
             }
 
         private:
+            /** @brief Converts passive authority withdrawal into the provider's cooperative stop signal. */
+            void Observe(const std::stop_token shutdown, const AgentTurnFreshness *const providerAuthority) {
+                constexpr auto AuthorityCheckInterval = 10ms;
+                std::unique_lock lock{mutex_};
+                auto now = Clock::now();
+                while (!shutdown.stop_requested() && now < deadline_) {
+                    if (providerAuthority && !HasProviderAuthority(*providerAuthority)) {
+                        authorityRevoked_.store(true, std::memory_order_release);
+                        break;
+                    }
+                    const auto next = providerAuthority ? std::min(deadline_, now + AuthorityCheckInterval) : deadline_;
+                    wake_.wait_until(lock, shutdown, next, [] { return false; });
+                    now = Clock::now();
+                }
+                lock.unlock();
+                if (!shutdown.stop_requested())
+                    stop_.request_stop();
+            }
+
             Clock::time_point deadline_;
             std::stop_token parent_;
             std::stop_source stop_;
             std::mutex mutex_;
             std::condition_variable_any wake_;
+            std::atomic_bool authorityRevoked_{}; /**< Written by the joined deadline thread and observed by the worker. */
             std::stop_callback<std::function<void()>> cancel_;
             std::jthread timer_;
         };
@@ -324,11 +351,13 @@ namespace Horo::Agent {
     /** @copydoc AgentTurnRuntime::Plan */
     AgentTurnPlan AgentTurnRuntime::Plan(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
                                          const AgentTurnLimits &limits, const AgentPlanToolValidator &validateTool,
-                                         const std::stop_token cancellation, const AgentTurnContext *context) {
+                                         const std::stop_token cancellation, const AgentTurnContext *context,
+                                         const AgentTurnFreshness &providerAuthority) {
         if (!validateTool)
             return {InvalidRequest};
         PlanReview review{validateTool};
-        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation, {nullptr, context, {}, {}, &review});
+        auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation,
+                              {nullptr, context, {}, {}, &review, providerAuthority ? &providerAuthority : nullptr});
         if (result.status != Completed)
             return {.status = result.status, .providerError = result.providerError, .contextError = result.contextError};
         return {.status = Completed,
@@ -340,7 +369,7 @@ namespace Horo::Agent {
     /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
     AgentTurnResult AgentTurnRuntime::RunTurn(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
                                               const AgentTurnLimits &limits, const std::stop_token cancellation, const TurnPorts &ports) {
-        const auto &[tools, context, observeText, observeTool, plan] = ports;
+        const auto &[tools, context, observeText, observeTool, plan, providerAuthority] = ports;
         if (cancellation.stop_requested())
             return {Cancelled, {}};
         if (active_.test_and_set())
@@ -370,7 +399,9 @@ namespace Horo::Agent {
             if (!ChargeRequest(remaining.bytes, request))
                 return {BudgetExceeded, {}};
 
-            TurnStop stop{limits.timeout, cancellation};
+            if (providerAuthority && !HasProviderAuthority(*providerAuthority))
+                return StaleContextResult();
+            TurnStop stop{limits.timeout, cancellation, providerAuthority};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
             TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};

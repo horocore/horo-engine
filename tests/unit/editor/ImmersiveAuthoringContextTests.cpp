@@ -2,13 +2,16 @@
 #include "AgentTurnTestTools.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <condition_variable>
 #include <future>
+#include <mutex>
 
 namespace Horo::Editor {
     namespace {
         /** @brief Emits a deterministic completion, with a hook for an editor transition during inference. */
         struct PlanningModel final : Agent::IModelProvider {
             std::function<void()> duringInference;
+            std::function<void(std::stop_token)> quietInference;
             std::size_t calls{};
             std::vector<Agent::ModelToolIntent> tools;
             std::optional<Agent::ModelErrorCode> failure;
@@ -18,11 +21,13 @@ namespace Horo::Editor {
                 return {};
             }
 
-            Agent::ModelOutcome Stream(const Agent::ModelRequest &request, const Agent::ModelEventSink &sink, std::stop_token) override {
+            Agent::ModelOutcome Stream(const Agent::ModelRequest &request, const Agent::ModelEventSink &sink, std::stop_token stop) override {
                 ++calls;
                 advertised = request.tools;
                 if (duringInference)
                     duringInference();
+                if (quietInference)
+                    quietInference(stop);
                 for (const auto &tool : tools)
                     if (!sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = tool}))
                         return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
@@ -468,6 +473,46 @@ namespace Horo::Editor {
             REQUIRE(tools.registry->Publish({}).HasValue());
             CHECK_FALSE(review.Read(*context));
             CHECK(pending->Plan(model, 2, {}).Status() == ContextDenied);
+            CHECK(model.calls == 1);
+            CHECK(tools.scene->calls == 0);
+        }
+
+        TEST_CASE("Immersive planning stops a quiet provider when its authoring authority is withdrawn", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            const std::vector<std::string> capabilities{"editor.scene.inspect"};
+            Agent::TestSupport::Tools tools{Mcp::McpToolEffect::Query, capabilities};
+            const std::array approved{std::string{"scene.inspect"}};
+            const auto catalog = Agent::McpPlanCatalog::Capture(tools.registry, capabilities, approved);
+            REQUIRE(catalog);
+            ImmersiveAuthoringContext owner;
+            CancellationSource document;
+            const auto context = owner.Publish(Opening(), {}, document.Token());
+            REQUIRE(context);
+            auto request = owner.CaptureMcpPlan(*context, Prompt(), catalog);
+            REQUIRE(request);
+            PlanningModel model;
+            model.tools = {{"inspect", approved.front(), "{}"}};
+            SECTION("editor XR generation retires") {
+                model.duringInference = [&] { owner.Revoke(); };
+            }
+            SECTION("document lifetime is withdrawn") {
+                model.duringInference = [&] { document.RequestCancellation(); };
+            }
+            SECTION("MCP registry is replaced") {
+                model.duringInference = [&] { REQUIRE(tools.registry->Publish({}).HasValue()); };
+            }
+            bool observedStop{};
+            model.quietInference = [&](const std::stop_token stop) {
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds{2}, [] { return false; });
+                observedStop = stop.stop_requested();
+            };
+            const auto review = request->Plan(model, 3, Agent::AgentTurnLimits{.timeout = std::chrono::seconds{5}});
+            CHECK(observedStop);
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context));
             CHECK(model.calls == 1);
             CHECK(tools.scene->calls == 0);
         }
