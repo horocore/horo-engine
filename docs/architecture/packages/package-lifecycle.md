@@ -500,10 +500,14 @@ preview alone. The editor verifies the complete executable manifest, requires
 exact observations of every departing runtime role after retirement, and
 checks saved behavior, Decision and service references. Mixed roles, unknown
 archive paths and unreviewed component, asset, query or persistence
-contributions block removal. Custom senses block removal when saved authoring
-sources still require a binding review. The host decodes each Scene and Prefab
-once for behavior, native component and custom-sense review. Exact native
-component matches include saved property and topology overrides, including
+contributions block removal. The host reads native module identities from the
+descriptors in the sealed archive inventory and checks them against the lock.
+Each descriptor accounts for artifacts under its declared contribution root.
+A locked contribution without a covered descriptor or asset owner blocks
+withdrawal. Custom senses block removal when saved authoring sources still
+require a binding review. The host decodes each Scene and Prefab once for
+behavior, native component and custom-sense review. Exact native component
+matches include saved property and topology overrides, including
 conflicts and orphans. Child scenes, prefab placements and nested or variant
 prefabs must resolve to sources of the expected type in the same reviewed asset
 inventory. A missing or mismatched target blocks removal and reports its asset

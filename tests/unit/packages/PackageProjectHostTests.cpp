@@ -167,8 +167,9 @@ namespace {
         std::unique_ptr<Packages::PackageLifecycleService> removalLifecycle;
         std::shared_ptr<const Packages::PackageRemovalLease> removalLease;
 
-        explicit HostFixture(bool runtime = false, NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter)
-            : graph(runtime, runtime, contributions) {
+        explicit HostFixture(bool runtime = false, NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter,
+                             std::string_view contributionName = "native")
+            : graph(runtime, runtime, contributions, contributionName) {
             const auto root = std::filesystem::canonical(project.Path());
             std::filesystem::create_directories(root / ".horo");
             std::filesystem::create_directories(root / "Assets");
@@ -186,7 +187,7 @@ namespace {
                                                    .fileManifestDigest = graph.archive.Manifest().Digest(),
                                                    .packageFormatVersion = 1,
                                                    .platforms = {},
-                                                   .contributions = {runtime ? "native" : "assets"}};
+                                                   .contributions = graph.lock->Packages().front().contributions};
             auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1U}, request.Value().Digest(),
                                                                        std::span{&artifact, 1U});
             REQUIRE(lock.HasValue());
@@ -1075,7 +1076,7 @@ namespace {
         const std::array roots{fixture.graph.package, id};
         PackageResolutionPlan plan;
         std::vector<PackageLockArtifact> artifacts;
-        const auto add = [&](const auto &package, const auto &content) {
+        const auto add = [&](const auto &package, const auto &content, std::vector<std::string> contributions) {
             plan.packages.emplace_back(package, fixture.graph.version, fixture.graph.source, content.Digest(),
                                        std::vector<HoroPackageId>{});
             artifacts.push_back({.package = package,
@@ -1084,10 +1085,10 @@ namespace {
                                  .artifactDigest = content.Digest(),
                                  .manifestDigest = content.PackageManifestDigest(),
                                  .fileManifestDigest = content.Manifest().Digest(),
-                                 .contributions = {"native"}});
+                                 .contributions = std::move(contributions)});
         };
-        add(fixture.graph.package, fixture.graph.archive);
-        add(id, *archive);
+        add(fixture.graph.package, fixture.graph.archive, fixture.graph.lock->Packages().front().contributions);
+        add(id, *archive, {"native"});
         const auto lock = ValidatedPackageLockfileV1::Generate(plan, roots, validated.Value().Digest(), artifacts);
         REQUIRE(lock.HasValue());
         fixture.Write("packages.json", request.dump());
@@ -1110,7 +1111,8 @@ namespace {
     TEST_CASE("Package removal reports retained runtime blockers after an unsupported departing role",
               "[packages][application][host][removal-coverage]") {
         using namespace Packages;
-        HostFixture fixture{true, NativeArchiveContributions::WithBackendImporter};
+        const auto contribution = GENERATE("native", "gameplay-and-importers");
+        HostFixture fixture{true, NativeArchiveContributions::WithBackendImporter, contribution};
         const auto retained = AddRetainedRuntime(fixture);
         const auto assets = fixture.AssetSource({retained});
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
@@ -1121,6 +1123,7 @@ namespace {
         const auto provider = std::ranges::find(packages, fixture.graph.package, &LockedPackage::package);
         REQUIRE(provider != packages.end());
         auto registration = ObserveFixtureRuntime(*provider);
+        registration.descriptorPath = "extensions/" + std::string{contribution} + "/extension.json";
         registration.services.push_back({.id = Gameplay::GameplayServiceId::Parse("game.tests.required").Value()});
         auto sources = fixture.RemovalSources(*assets);
         sources.requireGameplayOwner = true;
@@ -1133,8 +1136,9 @@ namespace {
         REQUIRE(blocked.HasError());
         const auto &error = blocked.ErrorValue();
         CHECK(error.code.Value() == "packages.host.removal_requires_lifecycle_owner");
-        CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
-            return diagnostic.code.Value() == "packages.lifecycle.removal_module_owner_required";
+        CHECK(std::ranges::any_of(error.diagnostics, [&registration](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.lifecycle.removal_module_owner_required" &&
+                   diagnostic.location.source == registration.descriptorPath;
         }));
         CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
             return diagnostic.code.Value() == "packages.host.runtime_registration_unobserved" &&
@@ -1158,7 +1162,10 @@ namespace {
     TEST_CASE("Mixed package withdrawal uses the drained native importer owner and saved reference checks",
               "[packages][application][host][removal-coverage]") {
         using namespace Packages;
-        HostFixture fixture{true, NativeArchiveContributions::WithBackendImporter};
+        const std::string_view contribution = GENERATE("native", "gameplay-and-importers");
+        const auto layout = contribution == "native" ? NativeArchiveContributions::WithBackendImporter
+                                                      : NativeArchiveContributions::WithSeparateBackendImporter;
+        HostFixture fixture{true, layout, contribution};
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
                                           .platform = {"linux", "x64", "horo-sdk-2"}};
         const auto prepared = PreparePackageProject(policy, fixture.files, {});
@@ -1168,7 +1175,8 @@ namespace {
         const auto &locked = prepared.Value().application.lockedPlan->Packages().front();
         auto sources = fixture.RemovalSources(*assets);
         sources.requireGameplayOwner = true;
-        const std::array observations{ObserveFixtureRuntime(locked)};
+        std::array observations{ObserveFixtureRuntime(locked)};
+        observations.front().descriptorPath = "extensions/" + std::string{contribution} + "/extension.json";
         sources.registrations = observations;
         const auto originalRequest = fixture.Read("packages.json");
         const auto originalLock = fixture.Read("packages.lock");
@@ -1177,6 +1185,13 @@ namespace {
             const auto blocked = publish();
             REQUIRE(blocked.HasError());
             CHECK(blocked.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+            const auto importerRoot = layout == NativeArchiveContributions::WithSeparateBackendImporter ? FixtureImporterContribution
+                                                                                                       : contribution;
+            const auto descriptor = "extensions/" + std::string{importerRoot} + "/extension.json";
+            CHECK(std::ranges::any_of(blocked.ErrorValue().diagnostics, [&descriptor](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.lifecycle.removal_module_owner_required" &&
+                       diagnostic.location.source == descriptor;
+            }));
             CHECK(fixture.Read("packages.lock") == originalLock);
             return;
         }

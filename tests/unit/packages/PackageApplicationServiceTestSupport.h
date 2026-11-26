@@ -29,13 +29,15 @@ namespace Horo::Tests::PackageApplicationService {
         return std::move(verified).Value();
     }
 
-    enum class NativeArchiveContributions { WithImporter, ModuleOnly, WithBackendImporter };
+    enum class NativeArchiveContributions { WithImporter, ModuleOnly, WithBackendImporter, WithSeparateBackendImporter };
     inline constexpr std::string_view FixturePackageId = "com.horo.application-fixture";
+    inline constexpr std::string_view FixtureImporterContribution = "asset-importers";
 
     /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
     inline std::vector<std::byte> NativeAdmissionArchiveBytes(bool runtime = false, std::string_view id = FixturePackageId,
-                                                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter) {
-        constexpr auto root = "extensions/native";
+                                                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter,
+                                                            std::string_view contributionName = "native") {
+        const auto root = "extensions/" + std::string{contributionName};
 #if defined(_WIN32)
         constexpr auto image = "module.dll";
 #elif defined(__APPLE__)
@@ -56,13 +58,22 @@ namespace Horo::Tests::PackageApplicationService {
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", moduleId}}};
         std::vector<std::pair<std::string, std::string>> files{{"horo-package.toml", "schemaVersion = 1\n"},
                                                                {std::string{root} + '/' + image, "unloadable fixture image"}};
-        if (contributions == NativeArchiveContributions::WithBackendImporter) {
+        const bool separateImporter = contributions == NativeArchiveContributions::WithSeparateBackendImporter;
+        if (contributions == NativeArchiveContributions::WithBackendImporter || separateImporter) {
             const auto backendId = std::string{id} + ".backend";
             const auto backendImage = "backend-" + std::string{image};
-            descriptor["modules"].push_back({{"id", backendId}, {"version", "1.0.0"}, {"kind", "native"},
-                                             {"roles", {"backend-capability"}}, {"entry", backendImage}});
-            descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", backendId}}};
-            files.emplace_back(std::string{root} + '/' + backendImage, "unloadable backend fixture image");
+            const nlohmann::json backendModule{{"id", backendId}, {"version", "1.0.0"}, {"kind", "native"},
+                                               {"roles", {"backend-capability"}}, {"entry", backendImage}};
+            const nlohmann::json importers = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", backendId}}};
+            const auto backendRoot = separateImporter ? "extensions/" + std::string{FixtureImporterContribution} : root;
+            if (separateImporter) {
+                const nlohmann::json backend{{"id", id}, {"version", "1.0.0"}, {"modules", {backendModule}}, {"contributions", importers}};
+                files.emplace_back(backendRoot + "/extension.json", backend.dump());
+            } else {
+                descriptor["modules"].push_back(backendModule);
+                descriptor["contributions"] = importers;
+            }
+            files.emplace_back(backendRoot + '/' + backendImage, "unloadable backend fixture image");
         }
         files.emplace_back(std::string{root} + "/extension.json", descriptor.dump());
         mz_zip_archive zip{};
@@ -70,8 +81,8 @@ namespace Horo::Tests::PackageApplicationService {
         auto inventory = nlohmann::json::array();
         for (const auto &[path, bytes] : files) {
             auto entry = Tests::Packages::FileInventoryEntry(path, bytes);
-            if (path.starts_with(root))
-                entry["contributionRoot"] = root;
+            if (path.starts_with("extensions/"))
+                entry["contributionRoot"] = path.substr(0, path.rfind('/'));
             inventory.push_back(std::move(entry));
             REQUIRE(mz_zip_writer_add_mem(&zip, path.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION));
         }
@@ -90,8 +101,10 @@ namespace Horo::Tests::PackageApplicationService {
         std::optional<ValidatedPackageLockfileV1> lock;
 
         explicit AssetGraph(bool native = false, bool runtime = false,
-                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter)
-            : bytes(native ? NativeAdmissionArchiveBytes(runtime, FixturePackageId, contributions) : Tests::Packages::ValidPackageArchiveBytes()) {
+                            NativeArchiveContributions contributions = NativeArchiveContributions::WithImporter,
+                            std::string_view contributionName = "native")
+            : bytes(native ? NativeAdmissionArchiveBytes(runtime, FixturePackageId, contributions, contributionName)
+                           : Tests::Packages::ValidPackageArchiveBytes()) {
             PackageResolutionPlan plan{.packages = {{package, version, source, archive.Digest(), {}}}};
             PackageLockArtifact artifact{.package = package,
                                          .version = version,
@@ -101,7 +114,9 @@ namespace Horo::Tests::PackageApplicationService {
                                          .fileManifestDigest = archive.Manifest().Digest(),
                                          .packageFormatVersion = 1U,
                                          .platforms = {},
-                                         .contributions = {native ? "native" : "assets"}};
+                                         .contributions = {native ? std::string{contributionName} : "assets"}};
+            if (native && contributions == NativeArchiveContributions::WithSeparateBackendImporter)
+                artifact.contributions.emplace_back(FixtureImporterContribution);
             auto generated = ValidatedPackageLockfileV1::Generate(plan, std::span{&package, 1U}, requestHash, std::span{&artifact, 1U});
             REQUIRE(generated.HasValue());
             lock.emplace(std::move(generated).Value());
