@@ -1143,6 +1143,12 @@ A bundle does not include by default:
 - unrestricted user paths
 - unrelated logs from other games or projects
 
+The structured export withholds records indexed by a local path or file URI.
+In a diagnostic string it replaces the first recognized local path and the
+remaining text with a redaction marker, since spaces and punctuation can be
+part of the path. Manifest metadata rejects field names and values that contain
+local paths.
+
 Before export, the editor displays the bundle contents, time range, approximate
 size, included metrics/captures, and privacy level. Creation is local and does
 not upload automatically. The bundle is written to a user-selected location

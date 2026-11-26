@@ -112,44 +112,38 @@ namespace Horo::Diagnostics {
                    (value[2] == '/' || value[2] == '\\');
         }
 
-        /** @brief Detects an absolute path used directly as a diagnostic index. */
-        [[nodiscard]] bool IsAbsolutePathKey(const std::string_view key) noexcept {
-            return !key.empty() && (key.front() == '/' || key.front() == '\\' || StartsWithDrivePath(key));
-        }
-
-        [[nodiscard]] bool ContainsAbsolutePath(const std::string_view value) noexcept {
-            for (std::size_t index = 0; index < value.size(); ++index) {
-                if (const bool boundary = index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) ||
-                                          value[index - 1] == '=' || value[index - 1] == '"' || value[index - 1] == '\'';
-                    boundary && (value[index] == '/' || value[index] == '\\'))
-                    return true;
-                if (StartsWithDrivePath(value.substr(index)))
-                    return true;
-            }
-            return false;
-        }
-
         [[nodiscard]] bool IsPathBoundary(const std::string_view value, const std::size_t index) noexcept {
             return index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) || value[index - 1] == '=' ||
                    value[index - 1] == '"' || value[index - 1] == '\'' || value[index - 1] == '(' || value[index - 1] == '[';
         }
 
-        [[nodiscard]] std::string RedactAbsolutePaths(const std::string_view value) {
-            std::string output;
-            output.reserve(value.size());
-            for (std::size_t index = 0; index < value.size();) {
-                const bool posixPath = IsPathBoundary(value, index) && (value[index] == '/' || value[index] == '\\');
-                const bool windowsPath = StartsWithDrivePath(value.substr(index));
-                if (!posixPath && !windowsPath) {
-                    output += value[index++];
-                    continue;
-                }
-                output += "[REDACTED_PATH]";
-                index += windowsPath ? 3U : 1U;
-                while (index < value.size() && !std::isspace(static_cast<unsigned char>(value[index])) && value[index] != '"' &&
-                       value[index] != '\'' && value[index] != ')' && value[index] != ']')
-                    ++index;
+        /** @brief Recognizes local file URIs independently of the case of their ASCII scheme. */
+        [[nodiscard]] bool StartsWithFileUri(const std::string_view value) noexcept {
+            constexpr std::string_view scheme = "file:/";
+            return value.size() >= scheme.size() && std::ranges::equal(value.substr(0, scheme.size()), scheme, [](char actual, char lower) {
+                return actual == lower || (actual >= 'A' && actual <= 'Z' && actual - 'A' + 'a' == lower);
+            });
+        }
+
+        /** @brief Finds the first local path without treating the tail of a non-file URI scheme as a drive. */
+        [[nodiscard]] std::size_t FirstAbsolutePath(const std::string_view value) noexcept {
+            for (std::size_t index = 0; index < value.size(); ++index) {
+                const auto suffix = value.substr(index);
+                if (StartsWithDrivePath(suffix) &&
+                    (suffix[2] == '\\' || index == 0 || !std::isalnum(static_cast<unsigned char>(value[index - 1]))))
+                    return index;
+                if (IsPathBoundary(value, index) && (suffix.front() == '/' || suffix.front() == '\\' || StartsWithFileUri(suffix)))
+                    return index;
             }
+            return std::string_view::npos;
+        }
+
+        /** @brief A diagnostic with an unstructured path cannot safely expose the remaining suffix. */
+        [[nodiscard]] std::string RedactAbsolutePaths(const std::string_view value) {
+            const auto path = FirstAbsolutePath(value);
+            std::string output{value.substr(0, path)};
+            if (path != std::string_view::npos)
+                output += "[REDACTED_PATH]";
             return output;
         }
 
@@ -229,7 +223,7 @@ namespace Horo::Diagnostics {
             Json sanitizedEntries;
             bool privateDescendant = false;
             for (auto child = value.begin(); child != value.end();) {
-                const auto redaction = IsAbsolutePathKey(child.key()) ? Withheld : RedactJson(*child, namespaces);
+                const auto redaction = FirstAbsolutePath(child.key()) != std::string_view::npos ? Withheld : RedactJson(*child, namespaces);
                 const bool sensitiveKey = Detail::IsSensitiveKey(child.key());
                 if (redaction != Kept) {
                     if (hasInlineText || IsCausalField(child.key())) {
@@ -526,9 +520,10 @@ namespace Horo::Diagnostics {
         [[nodiscard]] Result<void> ValidateMetadata(const std::vector<std::pair<std::string, std::string>> &metadata) {
             TransparentStringSet metadataKeys;
             for (const auto &[key, val] : metadata) {
-                if (key.empty() || Detail::IsSensitiveKey(key) || ContainsAbsolutePath(val) || !metadataKeys.insert(key).second)
+                if (key.empty() || Detail::IsSensitiveKey(key) || FirstAbsolutePath(key) != std::string_view::npos ||
+                    FirstAbsolutePath(val) != std::string_view::npos || !metadataKeys.insert(key).second)
                     return Result<void>::Failure(
-                        MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle metadata keys must be unique."));
+                        MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle metadata must use unique, safe keys and values."));
             }
             return Result<void>::Success();
         }

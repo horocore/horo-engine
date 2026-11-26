@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -679,6 +680,47 @@ TEST_CASE("Support bundle rejects deeply nested private Save diagnostics before 
         {.outputPath = output, .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
     REQUIRE(accepted.HasValue());
     CHECK(Read(output).find("private-deep-save-payload") == std::string::npos);
+}
+
+TEST_CASE("Support bundles withhold complete local paths from crash text and record keys", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto input = session.directory / "diagnostics";
+    auto entry = std::filesystem::path{"crash/paths.json"};
+    const bool jsonl = GENERATE(false, true);
+    if (jsonl)
+        entry.replace_extension(".jsonl");
+    {
+        std::ofstream output{input, std::ios::binary};
+        output << R"({"records":[)"
+               << R"json({"message":"posix-diagnostic at (/home/Private Player/private-slot)"},)json"
+               << R"({"message":"windows-diagnostic at:C:\\Users\\Private Profile\\secret-slot"},)"
+               << R"({"message":"uri-diagnostic at FiLe:///home/Other%20Player/local-slot"},)"
+               << R"({"file:///home/private-uri-key":{"message":"private-indexed-row"}},)"
+               << R"({"message":"unrelated-diagnostic at https://example.invalid/diagnostics"}]})" << '\n';
+        REQUIRE(output.good());
+    }
+    const auto bundled = session.host->GenerateDiagnosticBundle(
+        {.outputPath = session.directory / "bundle.zip",
+         .crashMetadata = Application::HostDiagnosticFile{.sourcePath = input, .archivePath = entry}});
+    REQUIRE(bundled.HasValue());
+    const auto archive = Read(bundled.Value().outputPath);
+    for (const std::string_view withheld : {"Private Player", "Player/private-slot", "Profile", "secret-slot",
+                                           "Other%20Player", "local-slot", "private-uri-key", "private-indexed-row"})
+        CHECK(archive.find(withheld) == std::string::npos);
+    for (const std::string_view retained : {"posix-diagnostic", "windows-diagnostic", "uri-diagnostic",
+                                           "https://example.invalid/diagnostics", "[REDACTED_PATH]"})
+        CHECK(archive.find(retained) != std::string::npos);
+}
+
+TEST_CASE("Support bundle manifest rejects metadata indexed by a local path", "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto output = session.directory / "bundle.zip";
+    const auto result = session.host->GenerateDiagnosticBundle(
+        {.outputPath = output, .metadata = {{"file:///home/private-save-slot", "failed"}}});
+    REQUIRE(result.HasError());
+    CHECK_FALSE(std::filesystem::exists(output));
 }
 
 TEST_CASE("Save telemetry preserves production failure results and discards private error text", "[save][telemetry][failure]") {
