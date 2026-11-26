@@ -119,12 +119,11 @@ namespace Horo::Diagnostics {
             });
         }
 
-        /** @brief Matches compact labels that can prefix a forward-slash network path. */
-        [[nodiscard]] bool EndsWithLocalPathLabel(const std::string_view prefix) noexcept {
-            constexpr std::array<std::string_view, 2> labels{"path", "source"};
-            return std::ranges::any_of(labels, [prefix](const std::string_view label) {
-                return prefix.size() >= label.size() && EqualsAsciiLower(prefix.substr(prefix.size() - label.size()), label);
-            });
+        /** @brief Matches complete path labels without mistaking a URI scheme suffix for a label. */
+        [[nodiscard]] bool HasLocalPathLabel(const std::string_view prefix) noexcept {
+            const auto separator = prefix.find_last_of(" \t\r\n=\"'([");
+            const auto label = separator == std::string_view::npos ? prefix : prefix.substr(separator + 1);
+            return EqualsAsciiLower(label, "path") || EqualsAsciiLower(label, "source");
         }
 
         /** @brief Recognizes compact diagnostic labels while preserving URI authority separators. */
@@ -133,7 +132,7 @@ namespace Horo::Diagnostics {
                 return true;
             const auto previous = value[index - 1];
             if (previous == ':')
-                return !value.substr(index).starts_with("//") || EndsWithLocalPathLabel(value.substr(0, index - 1));
+                return !value.substr(index).starts_with("//") || HasLocalPathLabel(value.substr(0, index - 1));
             return std::isspace(static_cast<unsigned char>(previous)) || previous == '=' || previous == '"' || previous == '\'' ||
                    previous == '(' || previous == '[';
         }

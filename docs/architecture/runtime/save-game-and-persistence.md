@@ -1922,7 +1922,9 @@ used as diagnostic map keys out of support bundles.
 Entries indexed by absolute local paths are withheld with their keys, even when
 the values carry no Save diagnostic label.
 An absolute local path immediately after a diagnostic label such as `path:`
-is covered by the same rule. Non-file URI authority separators remain intact.
+is covered by the same rule. A forward-slash network share immediately after
+the full label `path:` or `source:` is also redacted. Other non-file URI
+authority separators remain intact.
 Raw diagnostic JSON and JSONL records with duplicate object members or
 excessive nesting fail bundle preparation before any archive is published.
 

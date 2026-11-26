@@ -800,6 +800,7 @@ TEST_CASE("Support bundles withhold complete local paths from crash text and rec
                << R"({"source:/home/private-compact-key":{"message":"private-compact-indexed-row"}},)"
                << R"({"source://private-server/private-key":{"message":"private-network-indexed-row"}},)"
                << R"({"file:///home/private-uri-key":{"message":"private-indexed-row"}},)"
+               << R"({"message":"other-uri at resource://diagnostics/public"},)"
                << R"({"message":"unrelated-diagnostic at https://example.invalid/diagnostics"}]})" << '\n';
         REQUIRE(output.good());
     }
@@ -814,7 +815,8 @@ TEST_CASE("Support bundles withhold complete local paths from crash text and rec
                                            "private-network-indexed-row"})
         CHECK(archive.find(withheld) == std::string::npos);
     for (const std::string_view retained : {"posix-diagnostic", "compact-diagnostic", "share-diagnostic", "windows-diagnostic",
-                                           "uri-diagnostic", "https://example.invalid/diagnostics", "[REDACTED_PATH]"})
+                                           "uri-diagnostic", "https://example.invalid/diagnostics", "resource://diagnostics/public",
+                                           "[REDACTED_PATH]"})
         CHECK(archive.find(retained) != std::string::npos);
 }
 
