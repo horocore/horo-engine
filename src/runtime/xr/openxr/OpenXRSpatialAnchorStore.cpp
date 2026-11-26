@@ -34,26 +34,31 @@ namespace Horo::XR::OpenXRInternal {
             return true;
         }
 
-        Error StoreFailure(XrResult status) {
+        /** @brief Maps a native store status to its portable error identity. */
+        const ErrorCodeDescriptor &StoreFailureCode(XrResult status) noexcept {
             switch (status) {
                 case XR_ERROR_PERMISSION_INSUFFICIENT:
-                    return MakeError(XRErrors::PermissionDenied);
+                    return XRErrors::PermissionDenied;
                 case XR_ERROR_LIMIT_REACHED:
                 case XR_ERROR_SIZE_INSUFFICIENT:
                 case XR_ERROR_OUT_OF_MEMORY:
-                    return MakeError(XRErrors::CapacityExceeded);
+                    return XRErrors::CapacityExceeded;
                 case XR_ERROR_SPATIAL_ANCHOR_NAME_INVALID_MSFT:
-                    return MakeError(XRErrors::OperationInvalid);
+                    return XRErrors::OperationInvalid;
                 case XR_ERROR_FUNCTION_UNSUPPORTED:
                 case XR_ERROR_FEATURE_UNSUPPORTED:
-                    return MakeError(XRErrors::OperationUnsupported);
+                    return XRErrors::OperationUnsupported;
                 case XR_SESSION_LOSS_PENDING:
                 case XR_ERROR_SESSION_LOST:
                 case XR_ERROR_INSTANCE_LOST:
-                    return MakeError(XRErrors::IdentityStale);
+                    return XRErrors::IdentityStale;
                 default:
-                    return MakeError(XRErrors::OperationUnavailable);
+                    return XRErrors::OperationUnavailable;
             }
+        }
+
+        Error StoreFailure(XrResult status) {
+            return MakeError(StoreFailureCode(status));
         }
 
         bool ValidName(std::string_view name) {
@@ -160,12 +165,21 @@ namespace Horo::XR::OpenXRInternal {
         return current.HasError() ? Outcome::Failure(current.ErrorValue()) : Outcome::Success(anchorStoreGeneration_);
     }
 
-    Result<std::size_t> OpenXRNativeSession::SpatialAnchorStore::Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) const {
+    /** @copydoc OpenXRNativeSession::SpatialAnchorStore::ObserveFailure */
+    void OpenXRNativeSession::SpatialAnchorStore::ObserveFailure(XrResult status) noexcept {
+        const auto &failure = StoreFailureCode(status);
+        if (&failure == &XRErrors::PermissionDenied || &failure == &XRErrors::IdentityStale || &failure == &XRErrors::OperationUnsupported)
+            admitted = false;
+    }
+
+    Result<std::size_t> OpenXRNativeSession::SpatialAnchorStore::Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) {
         using Outcome = Result<std::size_t>;
         std::uint32_t count{};
         const auto status = enumerate(connection, static_cast<std::uint32_t>(names.size()), &count, names.data());
-        if (status != XR_SUCCESS)
+        if (status != XR_SUCCESS) {
+            ObserveFailure(status);
             return Outcome::Failure(StoreFailure(status));
+        }
         if (count > names.size())
             return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
         return Outcome::Success(count);
@@ -233,6 +247,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(active.ErrorValue());
         const XrSpatialAnchorPersistenceInfoMSFT info{XR_TYPE_SPATIAL_ANCHOR_PERSISTENCE_INFO_MSFT, nullptr, selectedName, slot->anchor};
         const auto status = anchorStore_.persist(anchorStore_.connection, &info);
+        if (status != XR_SUCCESS)
+            anchorStore_.ObserveFailure(status);
         if (XR_FAILED(status))
             return Result<void>::Failure(StoreFailure(status));
         active = BorrowAnchorStore(scope, world);
@@ -302,6 +318,8 @@ namespace Horo::XR::OpenXRInternal {
             slot->lastSample = now;
             return Outcome::Success(id.Value());
         }
+        if (status != XR_SUCCESS)
+            anchorStore_.ObserveFailure(status);
         (void)active.Value()->Retire(scope, id.Value());
         auto failure = current.HasError() ? current.ErrorValue() : StoreFailure(status);
         if (auto retired = anchors_.Release(*slot); retired.HasError())

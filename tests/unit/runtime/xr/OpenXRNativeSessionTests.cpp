@@ -101,6 +101,9 @@ namespace Horo::Tests::OpenXR {
             std::function<void()> afterCreate;
             CancellationSource *revokeOnPersist{};
             CancellationSource *revokeOnRestore{};
+            XrResult readStatus{XR_SUCCESS};
+            XrResult persistStatus{XR_SUCCESS};
+            XrResult restoreStatus{XR_SUCCESS};
 
             AnchorStoreScript() {
                 active = this;
@@ -129,6 +132,8 @@ namespace Horo::Tests::OpenXR {
 
             static XRAPI_ATTR XrResult XRAPI_CALL Persist(XrSpatialAnchorStoreConnectionMSFT,
                                                           const XrSpatialAnchorPersistenceInfoMSFT *info) {
+                if (active->persistStatus != XR_SUCCESS)
+                    return active->persistStatus;
                 active->entry = info->spatialAnchorPersistenceName;
                 if (active->revokeOnPersist)
                     active->revokeOnPersist->RequestCancellation();
@@ -137,6 +142,8 @@ namespace Horo::Tests::OpenXR {
 
             static XRAPI_ATTR XrResult XRAPI_CALL Read(XrSpatialAnchorStoreConnectionMSFT, std::uint32_t capacity, std::uint32_t *count,
                                                        XrSpatialAnchorPersistenceNameMSFT *names) {
+                if (active->readStatus != XR_SUCCESS)
+                    return active->readStatus;
                 *count = active->entry ? 1U : 0U;
                 if (capacity < *count)
                     return XR_ERROR_SIZE_INSUFFICIENT;
@@ -147,6 +154,8 @@ namespace Horo::Tests::OpenXR {
 
             static XRAPI_ATTR XrResult XRAPI_CALL Restore(XrSession, const XrSpatialAnchorFromPersistedAnchorCreateInfoMSFT *info,
                                                           XrSpatialAnchorMSFT *out) {
+                if (active->restoreStatus != XR_SUCCESS)
+                    return active->restoreStatus;
                 if (!active->entry || std::string_view{active->entry->name} != info->spatialAnchorPersistenceName.name)
                     return XR_ERROR_SPATIAL_ANCHOR_NAME_NOT_FOUND_MSFT;
                 *out = NativeHandle<XrSpatialAnchorMSFT>(21);
@@ -409,6 +418,41 @@ namespace Horo::Tests::OpenXR {
             fixture.script.fail = {};
             REQUIRE(fixture.owner.CloseSpatialAnchorStore(scope).HasValue());
             CHECK_FALSE(storage.entry);
+            REQUIRE(fixture.owner.Close().HasValue());
+        }
+        SECTION("native permission denial withdraws only the exact store connection") {
+            std::array<XrSpatialAnchorPersistenceNameMSFT, 1> names{};
+            const auto connection = fixture.owner.CheckSpatialAnchorStore(scope, world);
+            REQUIRE(connection.HasValue());
+            SECTION("enumeration") {
+                storage.readStatus = XR_ERROR_PERMISSION_INSUFFICIENT;
+                RequireFailureIdentity(fixture.owner.ReadSpatialAnchorStore(scope, world, names), XRErrors::PermissionDenied);
+                storage.readStatus = XR_SUCCESS;
+            }
+            SECTION("persistence") {
+                storage.persistStatus = XR_ERROR_PERMISSION_INSUFFICIENT;
+                RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                                       XRErrors::PermissionDenied);
+                CHECK_FALSE(storage.entry);
+                storage.persistStatus = XR_SUCCESS;
+            }
+            SECTION("relocalization") {
+                REQUIRE(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one").HasValue());
+                REQUIRE(fixture.owner.RetireSpatialAnchor(scope, world, anchor.Value()).HasValue());
+                storage.restoreStatus = XR_ERROR_PERMISSION_INSUFFICIENT;
+                RequireFailureIdentity(fixture.owner.RestoreSpatialAnchor(scope, world, observedAt, "key-one"), XRErrors::PermissionDenied);
+                REQUIRE(storage.entry);
+                CHECK(std::string_view{storage.entry->name} == "key-one");
+                storage.restoreStatus = XR_SUCCESS;
+            }
+            CHECK_FALSE(consent.Token().IsCancellationRequested());
+            REQUIRE(publication->CheckScope(scope).HasValue());
+            RequireFailureIdentity(fixture.owner.CheckSpatialAnchorStore(scope, world), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.owner.ReadSpatialAnchorStore(scope, world, names), XRErrors::OperationUnavailable);
+            REQUIRE(fixture.owner.CloseSpatialAnchorStore(scope).HasValue());
+            CancellationSource replacementConsent;
+            REQUIRE(fixture.owner.OpenSpatialAnchorStore(scope, world, replacementConsent).HasValue());
+            CHECK(fixture.owner.CheckSpatialAnchorStore(scope, world).Value() > connection.Value());
             REQUIRE(fixture.owner.Close().HasValue());
         }
     }

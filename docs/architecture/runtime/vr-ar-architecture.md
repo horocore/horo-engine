@@ -1094,6 +1094,9 @@ or the live anchor scope is revoked.
 XR Setup offers a separate one-use storage grant for the next Play session.
 The operator can revoke storage during Play and keep an independently granted
 live preview.
+Native permission denial, loss of the owning session, or withdrawal of the
+storage feature also fences the exact store connection. Cached lookup access
+stays withdrawn until the host retires the connection and opens a new one.
 Editor Play Save prepares the optional anchor record before canonical capture.
 A localized World anchor gets a protected lookup scoped to the Play sandbox
 world with a one-day expiry. Repeated saves in that scope reuse the lookup.

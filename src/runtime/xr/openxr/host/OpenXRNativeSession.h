@@ -749,7 +749,9 @@ namespace Horo::XR::OpenXRInternal {
             CancellationToken consent;
             bool admitted{};
 
-            [[nodiscard]] Result<std::size_t> Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) const;
+            [[nodiscard]] Result<std::size_t> Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names);
+            /** @brief Withdraws connection access when the runtime invalidates permission or the owning session. */
+            void ObserveFailure(XrResult status) noexcept;
             [[nodiscard]] Result<void> UndoPendingWrite();
         } anchorStore_;
 
