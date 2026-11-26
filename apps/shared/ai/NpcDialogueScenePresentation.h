@@ -68,10 +68,11 @@ namespace Horo::App {
         [[nodiscard]] std::optional<Accessibility::CaptionAdmission> Pump(const AI::NpcDialogueGrant &grant, std::uint64_t tick);
 
         /** @brief Delivers queued captions and withdraws displayed dialogue if its authority is lost.
-         * @param timeline UI owner prepared for the same caption session. @return Number lost at timeline capacity.
+         * @param timeline UI owner prepared for the same caption session.
+         * @param grant Current provider disclosure grant. @return Number lost at timeline capacity.
          * @details Drain the caption before starting the next turn.
          */
-        [[nodiscard]] std::size_t Drain(Runtime::Ui::CaptionTimeline &timeline);
+        [[nodiscard]] std::size_t Drain(Runtime::Ui::CaptionTimeline &timeline, const AI::NpcDialogueGrant &grant);
 
         /** @brief Cancels pending work and drops undelivered captions before Scene retirement. */
         void Retire() noexcept;
@@ -88,14 +89,34 @@ namespace Horo::App {
         [[nodiscard]] const Application::ProjectNpcDialogueTrigger *FindTrigger(Application::NpcDialogueTriggerId trigger) const;
         /** @brief Retains the single turn slot until its caption is drained. */
         [[nodiscard]] bool CanStartTurn() const noexcept;
-        /** @brief Reconciles admitted dialogue cues with the HUD and their exact NPC and cancellation scopes. */
-        void ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, bool sceneCurrent);
+        /** @brief Holds only the field identities used in an admitted provider request. */
+        struct ProviderDisclosure final {
+            AI::NpcDialogueRoute route;
+            std::uint64_t generation;
+            std::array<AI::NpcDialogueFactId, AI::NpcDialogueTurn::MaximumFacts> fields;
+            std::size_t count;
 
-        struct DisplayedCue final {
-            Accessibility::CaptionCueId id;
+            /** @brief Captures field identities only from the already admitted, bounded projection. */
+            ProviderDisclosure(const AI::NpcDialogueGrant &grant, std::span<const AI::NpcDialogueFact> projection);
+            /** @brief Checks route, activation and every field actually disclosed to the provider. */
+            [[nodiscard]] bool IsCurrent(const AI::NpcDialogueGrant &grant) const noexcept;
+        };
+
+        struct CaptionAuthority final {
             AI::AgentHandle agent;
             AI::AgentId subject;
             CancellationToken cancellation;
+            std::optional<ProviderDisclosure> disclosure;
+        };
+
+        /** @brief Checks the live NPC and any provider grant used by the selected cue. */
+        [[nodiscard]] bool CaptionIsCurrent(const CaptionAuthority &authority, const AI::NpcDialogueGrant &grant) const;
+        /** @brief Withdraws admitted dialogue cues that no longer have live publication authority. */
+        void ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, const AI::NpcDialogueGrant &grant, bool sceneCurrent);
+
+        struct DisplayedCue final {
+            Accessibility::CaptionCueId id;
+            CaptionAuthority authority;
         };
 
         const JobSystem *jobs_;
@@ -112,7 +133,8 @@ namespace Horo::App {
         AI::NpcDialogueRequestIdentity request_;
         AI::AgentId subject_;
         CancellationToken cancellation_;
-        std::optional<CancellationToken> queuedCancellation_; /**< Retains request_ and subject_ until the HUD consumes this cue. */
+        std::optional<ProviderDisclosure> pendingDisclosure_;
+        std::optional<CaptionAuthority> queuedAuthority_; /**< Retains the turn slot until the HUD consumes this cue. */
         std::array<std::optional<DisplayedCue>, Accessibility::MaximumCaptionCues> displayed_;
         std::variant<std::monostate, AI::NpcDialogueTurn, AI::NpcDialogueJob> pending_;
     };

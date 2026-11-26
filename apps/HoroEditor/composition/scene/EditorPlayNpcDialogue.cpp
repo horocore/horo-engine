@@ -154,8 +154,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto tick = frame.completedSimulationTick;
         auto &timeline = *state.selection.timeline;
         timeline.BeginFrame(tick);
-        static_cast<void>(state.channel->Pump(state.activation.Grant(), tick));
-        static_cast<void>(state.channel->Drain(timeline));
+        const auto grant = state.activation.Grant();
+        static_cast<void>(state.channel->Pump(grant, tick));
+        static_cast<void>(state.channel->Drain(timeline, grant));
         DispatchCommittedNpcDialogue(state, frame);
         return Result<void>::Success();
     }

@@ -37,6 +37,20 @@ namespace Horo::App {
         }
     }  // namespace
 
+    /** @copydoc NpcDialogueScenePresentation::ProviderDisclosure::ProviderDisclosure */
+    NpcDialogueScenePresentation::ProviderDisclosure::ProviderDisclosure(const AI::NpcDialogueGrant &grant,
+                                                                         std::span<const AI::NpcDialogueFact> projection)
+        : route(grant.route), generation(grant.providerGeneration), fields{}, count(projection.size()) {
+        std::ranges::transform(projection, fields.begin(), &AI::NpcDialogueFact::field);
+    }
+
+    /** @copydoc NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent */
+    bool NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent(const AI::NpcDialogueGrant &grant) const noexcept {
+        return route == grant.route && generation == grant.providerGeneration &&
+               grant.fields.size() <= AI::NpcDialogueTurn::MaximumFacts && std::ranges::is_sorted(grant.fields) &&
+               std::ranges::includes(grant.fields, std::span{fields}.first(count));
+    }
+
     /** @brief Binds the Scene scheduler and caption owner without touching gameplay state. */
     NpcDialogueScenePresentation::NpcDialogueScenePresentation(const JobSystem &jobs, const AI::AiSceneRuntime &runtime,
                                                                AI::AiSceneActivationBinding scene,
@@ -64,7 +78,7 @@ namespace Horo::App {
 
     /** @copydoc NpcDialogueScenePresentation::CanStartTurn */
     bool NpcDialogueScenePresentation::CanStartTurn() const noexcept {
-        return !queuedCancellation_ && std::holds_alternative<std::monostate>(pending_) &&
+        return !queuedAuthority_ && std::holds_alternative<std::monostate>(pending_) &&
                lastTurn_ != std::numeric_limits<std::uint64_t>::max();
     }
 
@@ -118,10 +132,14 @@ namespace Horo::App {
         subject_ = binding->agent;
         cancellation_ = cancellation;
         if (provider_) {
-            auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation);
-            if (job.HasValue()) {
-                pending_.emplace<AI::NpcDialogueJob>(std::move(job).Value());
-                return Result<void>::Success();
+            if (const auto projection = turn.Context(request, grant, tick, cancellation)) {
+                ProviderDisclosure disclosure{grant, *projection};
+                auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation);
+                if (job.HasValue()) {
+                    pendingDisclosure_.emplace(std::move(disclosure));
+                    pending_.emplace<AI::NpcDialogueJob>(std::move(job).Value());
+                    return Result<void>::Success();
+                }
             }
         }
         pending_.emplace<AI::NpcDialogueTurn>(std::move(turn));
@@ -169,27 +187,31 @@ namespace Horo::App {
             return std::nullopt;
         pending_.emplace<std::monostate>();
         auto cancellation = std::exchange(cancellation_, {});
+        auto disclosure = std::exchange(pendingDisclosure_, std::nullopt);
         const auto captions = std::span{captions_}.first(count_);
         const auto cue = std::ranges::lower_bound(captions, outcome->cue, {}, &NpcDialogueCaption::cue);
         if (cue == captions.end() || cue->cue != outcome->cue)
             return std::nullopt;
         const auto admitted = queue_->TryEnqueue({{queue_->Session(), current.turn}, Accessibility::CaptionCueKind::Dialogue,
                                                  cue->text, cue->speaker, tick, cue->durationTicks});
-        if (admitted == Accessibility::CaptionAdmission::Accepted)
-            queuedCancellation_.emplace(std::move(cancellation));
+        if (admitted == Accessibility::CaptionAdmission::Accepted) {
+            if (outcome->status != AI::NpcDialogueStatus::Selected)
+                disclosure.reset();
+            queuedAuthority_.emplace(CaptionAuthority{current.agent, subject_, std::move(cancellation), std::move(disclosure)});
+        }
         return admitted;
     }
 
     /** @copydoc NpcDialogueScenePresentation::Drain */
-    std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline) {
+    std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline, const AI::NpcDialogueGrant &grant) {
         const bool sceneCurrent = queue_ && SceneIsCurrent();
-        ReconcileDisplayed(timeline, sceneCurrent);
+        ReconcileDisplayed(timeline, grant, sceneCurrent);
         if (queue_ && !sceneCurrent)
             Retire();
-        if (!queuedCancellation_)
+        if (!queuedAuthority_)
             return 0;
-        const auto cancellation = std::exchange(queuedCancellation_, std::nullopt);
-        if (cancellation->IsCancellationRequested() || !AgentIsActive(request_.agent, subject_)) {
+        auto authority = std::exchange(queuedAuthority_, std::nullopt);
+        if (!CaptionIsCurrent(*authority, grant)) {
             Accessibility::CaptionCue withdrawn;
             static_cast<void>(queue_->TryDequeue(withdrawn));
             return 0;
@@ -203,12 +225,19 @@ namespace Horo::App {
             static_cast<void>(timeline.Withdraw(id));
             return dropped + 1;
         }
-        free->emplace(DisplayedCue{id, request_.agent, subject_, std::move(*cancellation)});
+        free->emplace(DisplayedCue{id, std::move(*authority)});
         return dropped;
     }
 
+    /** @copydoc NpcDialogueScenePresentation::CaptionIsCurrent */
+    bool NpcDialogueScenePresentation::CaptionIsCurrent(const CaptionAuthority &authority, const AI::NpcDialogueGrant &grant) const {
+        return !authority.cancellation.IsCancellationRequested() && AgentIsActive(authority.agent, authority.subject) &&
+               (!authority.disclosure || authority.disclosure->IsCurrent(grant));
+    }
+
     /** @copydoc NpcDialogueScenePresentation::ReconcileDisplayed */
-    void NpcDialogueScenePresentation::ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, const bool sceneCurrent) {
+    void NpcDialogueScenePresentation::ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, const AI::NpcDialogueGrant &grant,
+                                                           const bool sceneCurrent) {
         for (auto &entry : displayed_) {
             if (!entry)
                 continue;
@@ -217,7 +246,7 @@ namespace Horo::App {
                 entry.reset();
                 continue;
             }
-            if (!sceneCurrent || entry->cancellation.IsCancellationRequested() || !AgentIsActive(entry->agent, entry->subject)) {
+            if (!sceneCurrent || !CaptionIsCurrent(entry->authority, grant)) {
                 static_cast<void>(timeline.Withdraw(id));
                 entry.reset();
             }
@@ -228,7 +257,8 @@ namespace Horo::App {
     void NpcDialogueScenePresentation::Retire() noexcept {
         pending_.emplace<std::monostate>();
         cancellation_ = {};
-        queuedCancellation_.reset();
+        pendingDisclosure_.reset();
+        queuedAuthority_.reset();
         queue_.reset();
         provider_.reset();
     }

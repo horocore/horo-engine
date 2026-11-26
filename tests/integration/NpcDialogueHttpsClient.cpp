@@ -43,12 +43,12 @@ namespace {
     }
 
     /** @brief Checks the one authored caption on the UI-side timeline. */
-    bool CheckTimeline(App::NpcDialogueScenePresentation &scene, bool retired, std::uint32_t text) {
+    bool CheckTimeline(App::NpcDialogueScenePresentation &scene, const NpcDialogueGrant &grant, bool retired, std::uint32_t text) {
         CaptionTimeline timeline;
         if (timeline.Reset(9).HasError())
             return false;
         timeline.BeginFrame(2);
-        static_cast<void>(scene.Drain(timeline));
+        static_cast<void>(scene.Drain(timeline, grant));
         const auto cues = timeline.Cues();
         if (retired)
             return cues.empty();
@@ -125,7 +125,7 @@ namespace {
         }
         release.set_value();
         jobs.Shutdown(ShutdownPolicy::Drain);
-        return CheckTimeline(scene, true, 0) ? 0 : 10;
+        return CheckTimeline(scene, grant, true, 0) ? 0 : 10;
     }
 
     /** @brief Applies the selected owner change before or after the HUD takes the cue. */
@@ -141,12 +141,12 @@ namespace {
 
     /** @brief Withdraws visible dialogue without affecting another caption on the same HUD. */
     bool CheckVisibleWithdrawal(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner,
-                                CancellationSource &turn, std::string_view mode) {
+                                CancellationSource &turn, NpcDialogueGrant grant, std::string_view mode) {
         CaptionTimeline timeline;
         if (timeline.Reset(9).HasError())
             return false;
         timeline.BeginFrame(2);
-        static_cast<void>(scene.Drain(timeline));
+        static_cast<void>(scene.Drain(timeline, grant));
         if (timeline.Cues().size() != 1 || timeline.Cues().front().cue.kind != Accessibility::CaptionCueKind::Dialogue)
             return false;
         auto unrelated = std::move(MakeQueue()).Value();
@@ -156,7 +156,9 @@ namespace {
         static_cast<void>(timeline.Drain(*unrelated));
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return false;
-        static_cast<void>(scene.Drain(timeline));
+        if (mode == "grant-after-drain")
+            grant.fields = {};
+        static_cast<void>(scene.Drain(timeline, grant));
         return timeline.Cues().size() == 1 && timeline.Cues().front().cue.id == sound;
     }
 
@@ -169,19 +171,28 @@ namespace {
             return 7;
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
-        if (mode == "disable-after-drain" || mode == "cancel-after-drain")
-            return CheckVisibleWithdrawal(scene, runtime, owner, turn, mode) ? 0 : 19;
+        if (mode == "disable-after-drain" || mode == "cancel-after-drain" || mode == "grant-after-drain")
+            return CheckVisibleWithdrawal(scene, runtime, owner, turn, grant, mode) ? 0 : 19;
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return 14;
-        const bool withdrawn = mode == "retired" || mode == "disable-before-drain" || mode == "cancel-before-drain";
-        return CheckTimeline(scene, withdrawn, mode == "approved" ? 1 : 0) ? 0 : 9;
+        auto liveGrant = grant;
+        if (mode == "grant-before-drain")
+            liveGrant.fields = {};
+        if (mode == "unused-grant-before-drain")
+            liveGrant.fields = liveGrant.fields.first(1);
+        if (mode == "offline-replaced-grant")
+            ++liveGrant.providerGeneration;
+        const bool withdrawn = mode == "retired" || mode == "disable-before-drain" || mode == "cancel-before-drain" ||
+                               mode == "grant-before-drain";
+        const bool remoteCue = mode == "approved" || mode == "unused-grant-before-drain";
+        return CheckTimeline(scene, liveGrant, withdrawn, remoteCue ? 1 : 0) ? 0 : 9;
     }
 
     /** @brief Verifies that an unknown or mismatched trigger cannot schedule or publish a turn. */
     int RunRejectedTrigger(App::NpcDialogueScenePresentation &scene, AgentHandle owner, const NpcDialogueGrant &grant, std::string_view mode) {
         const auto trigger = NpcDialogueTriggerId::Create(mode == "missing-trigger" ? MissingTrigger : OtherNpcTrigger).Value();
         const auto rejected = scene.Start(owner, trigger, grant, 1, 10, std::chrono::steady_clock::now() + 5s, {});
-        return rejected.HasError() && !scene.Pump(grant, 2) && CheckTimeline(scene, true, 0) ? 0 : 17;
+        return rejected.HasError() && !scene.Pump(grant, 2) && CheckTimeline(scene, grant, true, 0) ? 0 : 17;
     }
 
     /** @brief Runs the selected scenario using the same admitted project channel. */
@@ -230,7 +241,7 @@ namespace {
         return R"({"horoVersion":"0.2.0","persistentContract":")" + contract + R"(","projectId":"npc-fixture",
             "name":"NPC fixture","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",
             "settings":{"renderBackend":"null","ai":{"schemaVersion":1,
-            "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2],"triggers":[
+            "npcDialogue":{"provider":1,"destination":2,"version":1,"fields":[3,2,9],"triggers":[
               {"id":4,"agent":2,"facts":[{"field":2,"value":20}]},
               {"id":3,"agent":1,"facts":[{"field":3,"value":5678},{"field":1,"value":1234},{"field":2,"value":20}]}
             ]}}}})";
@@ -266,12 +277,13 @@ namespace {
         if (!fingerprint)
             return 12;
         App::NpcDialogueEndpointApproval approval{approvedRoot, *fingerprint, std::move(config),
-                                                  {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value()}};
+                                                  {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(2).Value(),
+                                                   NpcDialogueFactId::Create(9).Value()}};
         if (mode == "stale-grant")
             approval.projectSource.bytes[0] ^= 1;
         if (mode == "other-route")
             approval.endpoint.route.destination = NpcDialogueDestinationId::Create(3).Value();
-        const bool offline = mode == "offline" || mode == "retired";
+        const bool offline = mode == "offline" || mode == "retired" || mode == "offline-replaced-grant";
         const auto &projectRoot = mode == "copied-project" ? copiedRoot : approvedRoot;
         const auto activation = App::NpcDialogueProjectActivation::Create(projectRoot, 1, offline ? nullptr : &approval);
         if (activation.HasError() || !activation.Value())
