@@ -310,6 +310,17 @@ namespace Horo::Runtime::Ui {
         return dropped;
     }
 
+    /** @copydoc CaptionTimeline::Withdraw */
+    bool CaptionTimeline::Withdraw(const CaptionCueId id) noexcept {
+        auto active = std::span{active_}.first(count_);
+        const auto found = std::ranges::find_if(active, [id](const auto &entry) { return entry.cue.id == id; });
+        if (found == active.end())
+            return false;
+        std::move(found + 1, active.end(), found);
+        active_[--count_] = {};
+        return true;
+    }
+
     /** @copydoc CaptionTimeline::ObserveAudioTiming */
     Result<std::size_t> CaptionTimeline::ObserveAudioTiming(const std::span<const CaptionTimingObservation> observations) {
         if (observations.size() > MaximumCaptionCues)

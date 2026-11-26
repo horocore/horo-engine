@@ -67,7 +67,7 @@ namespace Horo::App {
          */
         [[nodiscard]] std::optional<Accessibility::CaptionAdmission> Pump(const AI::NpcDialogueGrant &grant, std::uint64_t tick);
 
-        /** @brief Delivers the queued caption if the same NPC generation and turn remain active.
+        /** @brief Delivers queued captions and withdraws displayed dialogue if its authority is lost.
          * @param timeline UI owner prepared for the same caption session. @return Number lost at timeline capacity.
          * @details Drain the caption before starting the next turn.
          */
@@ -88,6 +88,16 @@ namespace Horo::App {
         [[nodiscard]] const Application::ProjectNpcDialogueTrigger *FindTrigger(Application::NpcDialogueTriggerId trigger) const;
         /** @brief Retains the single turn slot until its caption is drained. */
         [[nodiscard]] bool CanStartTurn() const noexcept;
+        /** @brief Reconciles admitted dialogue cues with the HUD and their exact NPC and cancellation scopes. */
+        void ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, bool sceneCurrent);
+
+        struct DisplayedCue final {
+            Accessibility::CaptionCueId id;
+            AI::AgentHandle agent;
+            AI::AgentId subject;
+            CancellationToken cancellation;
+        };
+
         const JobSystem *jobs_;
         const AI::AiSceneRuntime *runtime_;
         AI::AiSceneActivationBinding scene_;
@@ -103,6 +113,7 @@ namespace Horo::App {
         AI::AgentId subject_;
         CancellationToken cancellation_;
         std::optional<CancellationToken> queuedCancellation_; /**< Retains request_ and subject_ until the HUD consumes this cue. */
+        std::array<std::optional<DisplayedCue>, Accessibility::MaximumCaptionCues> displayed_;
         std::variant<std::monostate, AI::NpcDialogueTurn, AI::NpcDialogueJob> pending_;
     };
 }  // namespace Horo::App

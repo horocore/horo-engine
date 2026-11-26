@@ -2399,6 +2399,9 @@ timeline. The fixed callback records only an interaction edge. A successful
 fixed commit releases it to the Scene cutoff, where the host resolves the
 live authored NPC and starts the turn. An aborted tick releases no interaction.
 Retiring or replacing the Scene revokes its channel and clears its captions.
+If an NPC retires or the turn is cancelled after its cue reaches the HUD, the
+channel withdraws that exact cue on the next presentation cutoff. Unrelated
+captions remain visible and a delayed duplicate cannot restore the withdrawn cue.
 
 When the host selects project-authored presentation, `settings.ai.npcDialogue.presentation`
 provides `trigger`, `fallback`, `deadlineTicks`, `workerMilliseconds` and

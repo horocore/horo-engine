@@ -128,15 +128,36 @@ namespace {
         return CheckTimeline(scene, true, 0) ? 0 : 10;
     }
 
-    /** @brief Applies the selected owner change after queue admission and before the HUD takes the cue. */
-    bool WithdrawBeforeDrain(AiSceneRuntime &runtime, AgentHandle owner, CancellationSource &turn, std::string_view mode) {
-        if (mode == "disable-before-drain")
+    /** @brief Applies the selected owner change before or after the HUD takes the cue. */
+    bool WithdrawTurn(AiSceneRuntime &runtime, AgentHandle owner, CancellationSource &turn, std::string_view mode) {
+        if (mode == "disable-before-drain" || mode == "disable-after-drain")
             return runtime.DisableAtSafePoint(owner).HasValue();
-        if (mode == "cancel-before-drain")
+        if (mode == "cancel-before-drain" || mode == "cancel-after-drain")
             turn.RequestCancellation();
         if (mode == "retired")
             runtime.BeginShutdown();
         return true;
+    }
+
+    /** @brief Withdraws visible dialogue without affecting another caption on the same HUD. */
+    bool CheckVisibleWithdrawal(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner,
+                                CancellationSource &turn, std::string_view mode) {
+        CaptionTimeline timeline;
+        if (timeline.Reset(9).HasError())
+            return false;
+        timeline.BeginFrame(2);
+        static_cast<void>(scene.Drain(timeline));
+        if (timeline.Cues().size() != 1 || timeline.Cues().front().cue.kind != Accessibility::CaptionCueKind::Dialogue)
+            return false;
+        auto unrelated = std::move(MakeQueue()).Value();
+        const Accessibility::CaptionCueId sound{9, 2};
+        if (unrelated->TryEnqueue({sound, Accessibility::CaptionCueKind::Sound, 0, 0, 2, 20}) != Accessibility::CaptionAdmission::Accepted)
+            return false;
+        static_cast<void>(timeline.Drain(*unrelated));
+        if (!WithdrawTurn(runtime, owner, turn, mode))
+            return false;
+        static_cast<void>(scene.Drain(timeline));
+        return timeline.Cues().size() == 1 && timeline.Cues().front().cue.id == sound;
     }
 
     /** @brief Drives a live NPC turn to HUD publication, then optionally withdraws the cue. */
@@ -148,7 +169,9 @@ namespace {
             return 7;
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
-        if (!WithdrawBeforeDrain(runtime, owner, turn, mode))
+        if (mode == "disable-after-drain" || mode == "cancel-after-drain")
+            return CheckVisibleWithdrawal(scene, runtime, owner, turn, mode) ? 0 : 19;
+        if (!WithdrawTurn(runtime, owner, turn, mode))
             return 14;
         const bool withdrawn = mode == "retired" || mode == "disable-before-drain" || mode == "cancel-before-drain";
         return CheckTimeline(scene, withdrawn, mode == "approved" ? 1 : 0) ? 0 : 9;

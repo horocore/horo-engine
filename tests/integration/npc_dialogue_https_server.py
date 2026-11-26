@@ -31,6 +31,8 @@ class Handler(BaseHTTPRequestHandler):
             "timeout": (200, b"allow\n5\n"),
             "disable-before-drain": (200, b"allow\n5\n"),
             "cancel-before-drain": (200, b"allow\n5\n"),
+            "disable-after-drain": (200, b"allow\n5\n"),
+            "cancel-after-drain": (200, b"allow\n5\n"),
         }[mode]
         if mode == "timeout":
             time.sleep(1)
@@ -62,7 +64,7 @@ def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> Non
     offline = ("untrusted", "offline", "retired", "queued-retire", "disabled-agent", "different-agent", "missing-trigger",
                "stale-grant", "other-route", "copied-project")
     modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout",
-             "disable-before-drain", "cancel-before-drain", *offline)
+             "disable-before-drain", "cancel-before-drain", "disable-after-drain", "cancel-after-drain", *offline)
     for mode in modes:
         server.mode = mode
         server.requests.clear()

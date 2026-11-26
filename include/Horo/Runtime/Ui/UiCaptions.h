@@ -175,6 +175,11 @@ namespace Horo::Runtime::Ui {
          * @return Number dropped because active capacity was exhausted.
          */
         [[nodiscard]] std::size_t Drain(CaptionCueQueue &queue) noexcept;
+        /** @brief Withdraws one visible or pending cue from the current session.
+         * @param id Exact session and sequence. @return True when the cue was removed.
+         * @details Its sequence stays consumed so delayed duplicates cannot restore the cue.
+         */
+        [[nodiscard]] bool Withdraw(CaptionCueId id) noexcept;
         /** @brief Merges bounded optional Audio timing evidence at the UI boundary.
          * @param observations At most MaximumCaptionCues fixed-size values copied from Audio-owned transport.
          * @return Number first matched to existing semantic cues, or CaptionInvalid for an oversized batch.

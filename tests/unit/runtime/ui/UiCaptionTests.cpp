@@ -33,6 +33,21 @@ namespace Horo::Runtime::Ui {
         REQUIRE(after == before);
     }
 
+    TEST_CASE("Withdrawing a caption preserves other cues and consumes its sequence", "[runtime_ui][captions]") {
+        CaptionTimeline timeline;
+        REQUIRE(timeline.Reset(1).HasValue());
+        auto queue = Queue();
+        REQUIRE(queue->TryEnqueue(Cue(1)) == CaptionAdmission::Accepted);
+        REQUIRE(queue->TryEnqueue(Cue(2)) == CaptionAdmission::Accepted);
+        REQUIRE(timeline.Drain(*queue) == 0);
+        CHECK_FALSE(timeline.Withdraw({2, 1}));
+        REQUIRE(timeline.Withdraw(Cue(1).id));
+        REQUIRE(queue->TryEnqueue(Cue(1)) == CaptionAdmission::Accepted);
+        REQUIRE(timeline.Drain(*queue) == 0);
+        REQUIRE(timeline.Cues().size() == 1);
+        CHECK(timeline.Cues().front().cue.id == Cue(2).id);
+    }
+
     TEST_CASE("Audio timing observations cannot create, replace or restart semantic captions", "[runtime_ui][captions][audio]") {
         CaptionTimeline timeline;
         REQUIRE(timeline.Reset(1).HasValue());

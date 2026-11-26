@@ -9,6 +9,11 @@ namespace Horo::App {
         using namespace AI;
         using Runtime::Ui::CaptionCueQueue;
 
+        /** @brief Tests exact identity against the UI's bounded visible and pending cues. */
+        bool ContainsCue(const Runtime::Ui::CaptionTimeline &timeline, Accessibility::CaptionCueId id) {
+            return std::ranges::any_of(timeline.Cues(), [id](const auto &entry) { return entry.cue.id == id; });
+        }
+
         /** @brief Checks catalog references and canonical cue order before the Scene adopts them. */
         bool ValidCaptions(std::span<const NpcDialogueCaption> captions, std::size_t catalogSize) {
             if (captions.size() > NpcDialogueTurn::MaximumCues ||
@@ -177,7 +182,9 @@ namespace Horo::App {
 
     /** @copydoc NpcDialogueScenePresentation::Drain */
     std::size_t NpcDialogueScenePresentation::Drain(Runtime::Ui::CaptionTimeline &timeline) {
-        if (queue_ && !SceneIsCurrent())
+        const bool sceneCurrent = queue_ && SceneIsCurrent();
+        ReconcileDisplayed(timeline, sceneCurrent);
+        if (queue_ && !sceneCurrent)
             Retire();
         if (!queuedCancellation_)
             return 0;
@@ -187,7 +194,34 @@ namespace Horo::App {
             static_cast<void>(queue_->TryDequeue(withdrawn));
             return 0;
         }
-        return timeline.Drain(*queue_);
+        const auto dropped = timeline.Drain(*queue_);
+        const Accessibility::CaptionCueId id{queue_->Session(), request_.turn};
+        if (!ContainsCue(timeline, id))
+            return dropped;
+        const auto free = std::ranges::find_if(displayed_, [](const auto &entry) { return !entry; });
+        if (free == displayed_.end()) {
+            static_cast<void>(timeline.Withdraw(id));
+            return dropped + 1;
+        }
+        free->emplace(DisplayedCue{id, request_.agent, subject_, std::move(*cancellation)});
+        return dropped;
+    }
+
+    /** @copydoc NpcDialogueScenePresentation::ReconcileDisplayed */
+    void NpcDialogueScenePresentation::ReconcileDisplayed(Runtime::Ui::CaptionTimeline &timeline, const bool sceneCurrent) {
+        for (auto &entry : displayed_) {
+            if (!entry)
+                continue;
+            const auto id = entry->id;
+            if (!ContainsCue(timeline, id)) {
+                entry.reset();
+                continue;
+            }
+            if (!sceneCurrent || entry->cancellation.IsCancellationRequested() || !AgentIsActive(entry->agent, entry->subject)) {
+                static_cast<void>(timeline.Withdraw(id));
+                entry.reset();
+            }
+        }
     }
 
     /** @copydoc NpcDialogueScenePresentation::Retire */
