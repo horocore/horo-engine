@@ -190,6 +190,31 @@ namespace Horo::Application {
             }
             return Result<void>::Failure(MakeError(FileStorageErrors::Capacity));
         }
+
+        /** @brief Records archive-validation evidence while preserving both validation and storage diagnostics. */
+        Result<Runtime::SaveSlotLifecycleResult> FinishDownload(Result<Runtime::SaveSlotLifecycleResult> result,
+                                                               const CloudBlobReadResult &read, const Sha256Digest &partition,
+                                                               const CloudSaveQuarantinePolicy *policy,
+                                                               const CancellationToken &cancellation) {
+            if (!policy || result.HasValue())
+                return result;
+            const auto &error = result.ErrorValue();
+            const auto &rejection = Runtime::SaveErrors::CloudArchiveRejected;
+            const auto *validation = &error;
+            if (error.domain.Value() == rejection.domain.Value() && error.code.Value() == rejection.code.Value())
+                validation = error.cause.Get();
+            const auto category = validation ? QuarantineCategory(*validation) : std::nullopt;
+            if (!category)
+                return result;
+            const auto retained = RetainRejectedDownload(read, partition, *category, *policy, cancellation);
+            if (retained.HasValue())
+                return result;
+            auto storageError = retained.ErrorValue();
+            if (error.cause)
+                storageError = WithCause(std::move(storageError), *error.cause.Get());
+            return Result<Runtime::SaveSlotLifecycleResult>::Failure(
+                WithCause(std::move(result).ErrorValue(), std::move(storageError)));
+        }
     }
 
     CloudSaveDownload::CloudSaveDownload(const Sha256Digest partition, const Runtime::SaveGameSlotId slot,
@@ -315,20 +340,7 @@ namespace Horo::Application {
                                                        .importSource = target.sourceScope,
                                                        .display = target.display},
                                                       download.slot_, cancellation);
-            if (!quarantine || imported.HasValue())
-                return imported;
-            const auto category = QuarantineCategory(imported.ErrorValue());
-            if (!category)
-                return imported;
-            const auto retained = RetainRejectedDownload(*read.Value(), journalPartition_, *category, *quarantine, cancellation);
-            if (retained.HasError()) {
-                auto error = std::move(imported).ErrorValue();
-                auto storageError = retained.ErrorValue();
-                if (error.cause)
-                    storageError = WithCause(std::move(storageError), *error.cause.Get());
-                return Response::Failure(WithCause(std::move(error), std::move(storageError)));
-            }
-            return imported;
+            return FinishDownload(std::move(imported), *read.Value(), journalPartition_, quarantine, cancellation);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }
@@ -338,7 +350,8 @@ namespace Horo::Application {
     Result<Runtime::SaveSlotLifecycleResult> CloudSaveTransport::ApplyDownload(
         Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
         const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const Runtime::SaveSlotLifecycleTarget &target,
-        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation) const {
+        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation,
+        const CloudSaveQuarantinePolicy *quarantine) const {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         if (!OwnsDownload(download) || expected.Metadata().scope != scope_ || target.address.slot != download.slot_)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
@@ -352,7 +365,12 @@ namespace Horo::Application {
             const auto revision = download.revision_.Bytes();
             Runtime::SaveCloudObjectRef object{.key = {key.begin(), key.end()},
                                                .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
-            return lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation);
+            auto applied = lifecycle.ApplyCloudDescendant(target, expected, std::move(object), StageDownload(*read.Value()), cancellation);
+            const auto &rejection = Runtime::SaveErrors::CloudArchiveRejected;
+            if (applied.HasError() && applied.ErrorValue().code.Value() == rejection.code.Value() &&
+                applied.ErrorValue().domain.Value() == rejection.domain.Value())
+                return FinishDownload(std::move(applied), *read.Value(), journalPartition_, quarantine, cancellation);
+            return applied;
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }

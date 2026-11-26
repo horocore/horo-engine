@@ -144,13 +144,14 @@ namespace Horo::Application {
          * @param completion Terminal observation of that exact read. @param target Existing local slot consent.
          * @param expected Exact catalog and cloud evidence captured before transfer.
          * @param cancellation Observed until local manifest publication.
+         * @param quarantine Optional host grant for retaining rejected archive evidence.
          * @return Durable local result or typed rejection. Runs on the serialized storage lane.
          */
         [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> ApplyDownload(
             Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
             const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
-            const CancellationToken &cancellation = {}) const;
+            const CancellationToken &cancellation = {}, const CloudSaveQuarantinePolicy *quarantine = nullptr) const;
 
         /** @brief Dispatches an exact durable mutation after checking its binding and payload.
          * @param operation Owning Save operation ID.

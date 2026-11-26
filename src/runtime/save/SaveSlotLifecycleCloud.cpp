@@ -173,7 +173,7 @@ namespace Horo::Runtime {
             return Response::Failure(MakeError(SaveErrors::StoragePermissionDenied));
         const auto verified = Admit(*archive.bytes, state_->policy.destination, state_->policy, *state_->host);
         if (verified.HasError())
-            return Response::Failure(verified.ErrorValue());
+            return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, verified.ErrorValue()));
         const auto &header = verified.Value().Header();
         if (header.slot != target.address.slot || header.parentGeneration != target.generation || header.slotGeneration == target.generation)
             return Response::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));

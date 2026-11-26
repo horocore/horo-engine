@@ -809,7 +809,7 @@ namespace Horo::Runtime {
             const auto &handle = download.Value().Request().handle;
             REQUIRE(backend->requests.MarkRunning(handle).HasValue());
             const auto subject = *session.Subject();
-            const auto complete = [&](const std::vector<std::byte> &payload) {
+            const auto complete = [&](const std::vector<std::byte> &payload, const Application::CloudSaveQuarantinePolicy *policy = nullptr) {
                 auto bytes = Cloud::CloudBlobOwnedBytes::Copy(payload);
                 REQUIRE(bytes.HasValue());
                 const Cloud::CloudObjectHead head{backend->lastCloudRead->key, revision.Value(), payload.size(), ComputeSha256(payload)};
@@ -817,7 +817,7 @@ namespace Horo::Runtime {
                             Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), head, std::move(bytes).Value()}).HasValue());
                 const auto snapshot = backend->requests.Query(handle);
                 REQUIRE(snapshot.HasValue());
-                return transport.ApplyDownload(*fixture.owner, download.Value(), snapshot.Value(), target, expected.Value());
+                return transport.ApplyDownload(*fixture.owner, download.Value(), snapshot.Value(), target, expected.Value(), {}, policy);
             };
             const auto checkPublished = [&] {
                 fixture.Reopen();
@@ -857,9 +857,40 @@ namespace Horo::Runtime {
                 CHECK(fixture.ExportBytes(10) == newer);
             }
             SECTION("A failed catalog replace keeps the old pair") {
+                const Tests::OwnedTestDirectory directory{"save-cloud-apply-publication"};
+                auto storage = Platform::CreateNativeImmutableFileStorage(directory.Path(), "evidence");
+                REQUIRE(storage.HasValue());
+                const Application::CloudSaveQuarantinePolicy policy{*storage.Value(), candidate.size(), 1};
                 fixture.InjectFailure(SaveSlotLifecycleIoStage::Replace, SaveSlotLifecycleFileKind::Catalog);
-                CHECK(complete(candidate).HasError());
+                const auto failure = complete(candidate, &policy);
+                REQUIRE(failure.HasError());
+                CHECK(failure.ErrorValue().code.Value() != SaveErrors::CloudArchiveRejected.code.Value());
+                CHECK_FALSE(std::filesystem::exists(directory.Path() / "evidence" / "quarantine"));
                 fixture.fault.enabled = false;
+                fixture.Reopen();
+                CHECK(fixture.ExportBytes(10) == original);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+            }
+            SECTION("A malformed same-slot download is quarantined without touching the selected pair") {
+                const Tests::OwnedTestDirectory directory{"save-cloud-apply-rejected"};
+                auto storage = Platform::CreateNativeImmutableFileStorage(directory.Path(), "evidence");
+                REQUIRE(storage.HasValue());
+                const Application::CloudSaveQuarantinePolicy policy{*storage.Value(), candidate.size(), 1};
+                auto damaged = candidate;
+                damaged.front() ^= std::byte{1};
+                const auto rejected = complete(damaged, &policy);
+                Cloud::RequireError(rejected, SaveErrors::CloudArchiveRejected);
+                REQUIRE(rejected.ErrorValue().cause);
+                std::size_t count{};
+                for (const auto &entry : std::filesystem::recursive_directory_iterator(directory.Path() / "evidence")) {
+                    if (entry.is_regular_file()) {
+                        const auto bytes = SaveSlotLifecycleTest::DiskBytes(entry.path());
+                        REQUIRE(bytes.size() > damaged.size());
+                        CHECK(std::ranges::equal(std::span{bytes}.last(damaged.size()), damaged));
+                        ++count;
+                    }
+                }
+                CHECK(count == 1);
                 fixture.Reopen();
                 CHECK(fixture.ExportBytes(10) == original);
                 CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
