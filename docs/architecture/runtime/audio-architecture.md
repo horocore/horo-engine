@@ -2448,7 +2448,9 @@ Raw microphone data is privacy-sensitive. It is excluded from ordinary logs,
 conversation history, diagnostic bundles, and telemetry by default. Recording
 or retaining it requires a separate explicit user action and storage policy.
 
-Recorded candidates enter AST staging and atomic publication; the capture callback
+Recorded candidates enter AST staging and atomic publication. A native capacity
+error during private staging remains visible after the initial free-space check
+and the incomplete take is withdrawn. The capture callback
 never writes project files. Network voice consumes capture through a bounded PCM
 adapter and returns validated remote PCM as an ordinary Audio source. Audio never
 sees sockets, packets, credentials or peer authority, and a slow NET/Speech/

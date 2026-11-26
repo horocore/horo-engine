@@ -20,7 +20,7 @@ namespace Horo::Application::Internal {
         /** @brief Injects storage failures and cancellation at recording publication boundaries. */
         class RecordingStorage final : public TestSupport::NativePublicationFiles {
         public:
-            bool failSecondWrite{};
+            const ErrorCodeDescriptor *secondWriteFailure{};
             CancellationSource *cancelDuringStageCleanup{};
             std::optional<std::uint64_t> freeBytes;
 
@@ -30,8 +30,8 @@ namespace Horo::Application::Internal {
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms permissions) override {
-                if (failSecondWrite && ++writes_ == 2)
-                    return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed, "Injected full disk"));
+                if (secondWriteFailure && ++writes_ == 2)
+                    return Result<void>::Failure(MakeError(*secondWriteFailure));
                 return native.WritePrivateDurable(path, bytes, created, permissions);
             }
 
@@ -188,7 +188,7 @@ namespace Horo::Application::Internal {
 
         TEST_CASE("A recording write failure withdraws both the staged recording and its identity", "[audio][recording]") {
             RecordingFixture fixture;
-            fixture.files.failSecondWrite = true;
+            fixture.files.secondWriteFailure = &FileStorageErrors::IoFailed;
             auto buffer = fixture.Buffer();
             REQUIRE(buffer.TryWrite({7, 0}, 0, 1, StereoFrame) == AudioCaptureWrite::Accepted);
             auto recording = fixture.Recording();
@@ -211,6 +211,25 @@ namespace Horo::Application::Internal {
             CHECK(result.ErrorValue().code.Value() == FileStorageErrors::Capacity.code.Value());
             CHECK_FALSE(std::filesystem::exists(fixture.root / "assets"));
             CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
+        }
+
+        TEST_CASE("Editor recording can retry after staging runs out of disk space", "[audio][recording][editor]") {
+            RecordingFixture fixture;
+            fixture.files.freeBytes = 32U << 20U;
+            fixture.files.secondWriteFailure = &FileStorageErrors::Capacity;
+            Editor::EditorRecordingPublication publication{fixture.mutations, fixture.files, fixture.registry};
+            fixture.StartEditorSave(publication);
+            const auto full = WaitForSave(publication);
+            REQUIRE(full.HasError());
+            CHECK(full.ErrorValue().code.Value() == FileStorageErrors::Capacity.code.Value());
+            CHECK_FALSE(publication.Busy());
+            CHECK(std::filesystem::is_empty(fixture.root / "assets"));
+            CHECK_FALSE(fixture.registry.Snapshot().Find(fixture.destination.id));
+
+            fixture.files.secondWriteFailure = nullptr;
+            fixture.StartEditorSave(publication);
+            REQUIRE(WaitForSave(publication).HasValue());
+            CHECK(fixture.registry.Snapshot().Find(fixture.destination.id));
         }
 
         TEST_CASE("Recording cancellation and capture loss discard the complete unpublished take", "[audio][recording]") {

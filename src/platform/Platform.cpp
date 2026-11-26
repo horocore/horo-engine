@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 
 #include "PlatformFileInternal.h"
 
@@ -36,15 +37,22 @@ namespace Horo {
 #endif
     namespace {
 #if defined(_WIN32)
+        /** @brief Preserves a native out-of-space result before handle cleanup can replace it. */
+        const ErrorCodeDescriptor *PrivateWriteFailure(const DWORD code) noexcept {
+            return code == ERROR_DISK_FULL || code == ERROR_HANDLE_DISK_FULL || code == ERROR_DISK_QUOTA_EXCEEDED
+                       ? &FileStorageErrors::Capacity
+                       : &IoFailed;
+        }
+
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
-        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes, bool *created = nullptr,
-                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
+        [[nodiscard]] const ErrorCodeDescriptor *AppendPrivateBytes(
+            const std::filesystem::path &path, const std::uint64_t expectedOffset, const std::span<const std::byte> bytes,
+            bool *created = nullptr, const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
             HANDLE handle = CreateFileW(NativeApiPath(path).c_str(), GENERIC_WRITE, 0, nullptr, disposition,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (handle == INVALID_HANDLE_VALUE)
-                return false;
+                return PrivateWriteFailure(GetLastError());
             if (created)
                 *created = true;
             BY_HANDLE_FILE_INFORMATION info{};
@@ -57,10 +65,14 @@ namespace Horo {
             if (ok)
                 ok = SetFilePointerEx(handle, zero, nullptr, FILE_END) != 0;
             std::size_t offset = 0U;
+            const auto *failure = &IoFailed;
             while (ok && offset < bytes.size()) {
                 const auto count = static_cast<DWORD>((std::min)(bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
                 DWORD written{};
-                ok = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) && written == count;
+                const bool wrote = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) != 0;
+                if (!wrote)
+                    failure = PrivateWriteFailure(GetLastError());
+                ok = wrote && written == count;
                 offset += written;
             }
             if (ok && permissions != std::filesystem::perms::unknown) {
@@ -70,23 +82,30 @@ namespace Horo {
                                            : FILE_ATTRIBUTE_NORMAL;
                 ok = SetFileInformationByHandle(handle, FileBasicInfo, &basic, sizeof(basic)) != 0;
             }
-            if (ok)
-                ok = FlushFileBuffers(handle) != 0;
+            if (ok && !FlushFileBuffers(handle)) {
+                failure = PrivateWriteFailure(GetLastError());
+                ok = false;
+            }
             if (!CloseHandle(handle))
                 ok = false;
-            return ok;
+            return ok ? nullptr : failure;
         }
 #else
+        /** @brief Preserves the capacity outcome from a failed POSIX write or durability check. */
+        const ErrorCodeDescriptor *PrivateWriteFailure(const int code) noexcept {
+            return code == ENOSPC || code == EDQUOT ? &FileStorageErrors::Capacity : &IoFailed;
+        }
+
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
-        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes, bool *created = nullptr,
-                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
+        [[nodiscard]] const ErrorCodeDescriptor *AppendPrivateBytes(
+            const std::filesystem::path &path, const std::uint64_t expectedOffset, const std::span<const std::byte> bytes,
+            bool *created = nullptr, const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             if (expectedOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
-                return false;
+                return &IoFailed;
             const int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC | (expectedOffset == 0U ? O_CREAT | O_EXCL : 0);
             const int descriptor = open(path.c_str(), flags, 0600);
             if (descriptor < 0)
-                return false;
+                return PrivateWriteFailure(errno);
             if (created)
                 *created = true;
             struct stat status{};
@@ -95,10 +114,13 @@ namespace Horo {
             if (ok)
                 ok = lseek(descriptor, static_cast<off_t>(expectedOffset), SEEK_SET) == static_cast<off_t>(expectedOffset);
             std::size_t offset = 0U;
+            const auto *failure = &IoFailed;
             while (ok && offset < bytes.size()) {
                 const auto count = (std::min)(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
                 const ssize_t written = write(descriptor, bytes.data() + offset, count);
                 if (written <= 0) {
+                    if (written < 0)
+                        failure = PrivateWriteFailure(errno);
                     ok = false;
                     break;
                 }
@@ -106,11 +128,13 @@ namespace Horo {
             }
             if (ok && permissions != std::filesystem::perms::unknown)
                 ok = fchmod(descriptor, static_cast<mode_t>(permissions) & 07777U) == 0;
-            if (ok)
-                ok = FlushFileDescriptor(descriptor);
+            if (ok && !FlushFileDescriptor(descriptor)) {
+                failure = PrivateWriteFailure(errno);
+                ok = false;
+            }
             if (close(descriptor) != 0)
                 ok = false;
-            return ok;
+            return ok ? nullptr : failure;
         }
 #endif
     }  // namespace
@@ -290,8 +314,8 @@ namespace Horo {
                                                               bool &created, const std::filesystem::perms permissions) {
         if (created || path.empty() || !path.is_absolute() || path.parent_path().empty())
             return Result<void>::Failure(FsError(IoFailed, path));
-        if (!AppendPrivateBytes(path, 0, bytes, &created, permissions))
-            return Result<void>::Failure(FsError(IoFailed, path));
+        if (const auto *failure = AppendPrivateBytes(path, 0, bytes, &created, permissions))
+            return Result<void>::Failure(FsError(*failure, path));
         return SyncDirectory(path.parent_path());
     }
 
@@ -301,8 +325,9 @@ namespace Horo {
         if (path.empty() || path.parent_path().empty() || bytes.empty() ||
             bytes.size() > std::numeric_limits<std::uint64_t>::max() - expectedOffset)
             return Result<void>::Failure(FsError(IoFailed, path));
-        return AppendPrivateBytes(path, expectedOffset, bytes) ? SyncDirectory(path.parent_path())
-                                                               : Result<void>::Failure(FsError(IoFailed, path));
+        if (const auto *failure = AppendPrivateBytes(path, expectedOffset, bytes))
+            return Result<void>::Failure(FsError(*failure, path));
+        return SyncDirectory(path.parent_path());
     }
 
     /** @copydoc DurableFileSystem::CopyDurable */
