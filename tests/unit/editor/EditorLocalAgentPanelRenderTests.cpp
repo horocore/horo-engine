@@ -450,7 +450,9 @@ namespace {
                 ++reads;
                 AgentSceneContactReview review{.object = 301, .completedTick = 405};
                 review.contacts[0] = {507, AgentSceneContactKind::TriggerEnter};
-                review.count = 1;
+                review.contacts[1] = {507, AgentSceneContactKind::TriggerExit};
+                review.contacts[2] = {601, AgentSceneContactKind::ContactEnd};
+                review.count = 3;
                 return std::optional{review};
             };
             context.agentSceneContactsCurrent = [&](const AgentSceneContactReview &review) {
@@ -468,11 +470,15 @@ namespace {
         const auto reviewed = fixture.DrawnText();
         CHECK(reviewed.find("Completed physics tick 405") != std::string::npos);
         CHECK(reviewed.find(contact) != std::string::npos);
+        CHECK(reviewed.find("Trigger exit #507") != std::string::npos);
+        CHECK(reviewed.find("Contact ended #601") != std::string::npos);
         CHECK(reads == 1);
 
         current = false;
         const auto withdrawn = fixture.DrawnText();
         CHECK(withdrawn.find(contact) == std::string::npos);
+        CHECK(withdrawn.find("Trigger exit #507") == std::string::npos);
+        CHECK(withdrawn.find("Contact ended #601") == std::string::npos);
         CHECK(withdrawn.find("A complete physics event review is unavailable") != std::string::npos);
         current = true;
         playing = false;

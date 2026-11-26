@@ -699,6 +699,22 @@ namespace Horo::Editor {
             return review;
         }
 
+        /** @brief Translates the host transition into the editor-facing review kind. */
+        std::optional<AgentSceneContactKind> AgentContactKind(const EditorPlayContactSnapshot::Kind kind) noexcept {
+            using enum EditorPlayContactSnapshot::Kind;
+            switch (kind) {
+                case ContactBegin:
+                    return AgentSceneContactKind::ContactBegin;
+                case ContactEnd:
+                    return AgentSceneContactKind::ContactEnd;
+                case TriggerEnter:
+                    return AgentSceneContactKind::TriggerEnter;
+                case TriggerExit:
+                    return AgentSceneContactKind::TriggerExit;
+            }
+            return std::nullopt;
+        }
+
         /** @brief Translates a complete Physics publication after checking every peer against the authored Scene. */
         std::optional<AgentSceneContactReview> ReviewAgentContactPeers(AgentSceneContactReview review,
                                                                        const EditorPlayContactSnapshot &contacts,
@@ -709,11 +725,10 @@ namespace Horo::Editor {
                 return std::nullopt;
             review.completedTick = contacts.completedTick;
             for (const auto &contact : std::span{contacts.contacts}.first(contacts.count)) {
-                if (ClassifyAgentReference(objects, true, play, {contact.peer.value}) != AgentSceneReferenceState::Available)
+                const auto kind = AgentContactKind(contact.kind);
+                if (!kind || ClassifyAgentReference(objects, true, play, {contact.peer.value}) != AgentSceneReferenceState::Available)
                     return std::nullopt;
-                const auto kind = contact.kind == EditorPlayContactSnapshot::Kind::TriggerEnter ? AgentSceneContactKind::TriggerEnter
-                                                                                                : AgentSceneContactKind::ContactBegin;
-                review.contacts[review.count++] = {contact.peer.value, kind};
+                review.contacts[review.count++] = {contact.peer.value, *kind};
             }
             return review;
         }

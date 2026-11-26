@@ -282,8 +282,8 @@ Ownership rules:
 - Physics, XR interaction, and gameplay own point, grab, contact, throw, and
   trigger mechanics. AIA may adapt those events into spatial evidence but does
   not own the mechanics or gameplay meaning.
-  The on-demand Physics preview reads contact starts and trigger entries for the
-  selected object in one completed Play tick. It filters by the object's
+  The on-demand Physics preview reads contact starts and ends, and trigger
+  entries and exits, for the selected object in one completed Play tick. It filters by the object's
   resident body handles when they fit the Physics filter budget and uses the
   complete tick otherwise. The local panel makes this review available during
   Play without starting speech capture. It displays the tick alongside the

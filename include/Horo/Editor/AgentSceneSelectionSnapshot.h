@@ -137,7 +137,9 @@ namespace Horo::Editor {
     /** @brief Scene-owned interactions that may supply diagnostic context for an explicit selection. */
     enum class AgentSceneContactKind : std::uint8_t {
         ContactBegin,
-        TriggerEnter
+        TriggerEnter,
+        ContactEnd,
+        TriggerExit
     };
 
     /** @brief Complete bounded preview of a selected object's contacts in one published Physics tick. */

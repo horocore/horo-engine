@@ -773,7 +773,23 @@ namespace Horo::Editor {
                 contactsRequested_ = false;
             }
 
-            /** @brief Shows only local, selection-scoped contact starts and the tick that produced them. */
+            /** @brief Maps a Physics transition to the corresponding localized review label. */
+            static const char *ContactTransitionKey(const AgentSceneContactKind kind) noexcept {
+                using enum AgentSceneContactKind;
+                switch (kind) {
+                    case ContactBegin:
+                        return "xr_contacts_contact";
+                    case ContactEnd:
+                        return "xr_contacts_contact_end";
+                    case TriggerEnter:
+                        return "xr_contacts_trigger";
+                    case TriggerExit:
+                        return "xr_contacts_trigger_exit";
+                }
+                return "xr_contacts_unavailable";
+            }
+
+            /** @brief Shows local, selection-scoped transitions and the tick that produced them. */
             void DrawPlayContacts(const EditorGuiContext &context) {
                 if (!readAgentSceneContacts_ || !agentSceneContactsCurrent_ || !canReviewAgentSceneContacts_ ||
                     !canReviewAgentSceneContacts_()) {
@@ -801,13 +817,10 @@ namespace Horo::Editor {
                                 Theme::Muted(), fonts);
                 if (review.count == 0)
                     Ui::WrappedText(width, LocalizedText(locale, "xr_contacts_empty"), Theme::Muted(), fonts);
-                for (const auto &contact : std::span{review.contacts}.first(review.count)) {
-                    const bool trigger = contact.kind == AgentSceneContactKind::TriggerEnter;
+                for (const auto &contact : std::span{review.contacts}.first(review.count))
                     Ui::WrappedText(width,
-                                    LocalizedText(locale, trigger ? "xr_contacts_trigger" : "xr_contacts_contact") + " #" +
-                                        std::to_string(contact.otherObject),
+                                    LocalizedText(locale, ContactTransitionKey(contact.kind)) + " #" + std::to_string(contact.otherObject),
                                     Theme::Text(), fonts);
-                }
             }
 
             std::function<std::optional<AgentSceneContactReview>()> readAgentSceneContacts_;

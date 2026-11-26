@@ -69,12 +69,30 @@ namespace Horo::Application::Internal {
             return found == bindings.end() ? Runtime::SceneObjectId{} : found->object;
         }
 
-        /** @brief Adds incident contact/trigger starts without translating solver semantics into gameplay actions. */
+        /** @brief Projects incident transitions and discards continuous solver updates. */
+        std::optional<Editor::EditorPlayContactSnapshot::Kind> ContactTransition(const Physics::PhysicsEventKind kind) noexcept {
+            using enum Physics::PhysicsEventKind;
+            using Kind = Editor::EditorPlayContactSnapshot::Kind;
+            switch (kind) {
+                case ContactBegin:
+                    return Kind::ContactBegin;
+                case ContactEnd:
+                    return Kind::ContactEnd;
+                case TriggerEnter:
+                    return Kind::TriggerEnter;
+                case TriggerExit:
+                    return Kind::TriggerExit;
+                default:
+                    return std::nullopt;
+            }
+        }
+
+        /** @brief Adds one incident transition without translating it into a gameplay action. */
         bool AppendAgentContact(Editor::EditorPlayContactSnapshot &review, const Runtime::RuntimeSceneView &scene,
                                 const Runtime::SceneObjectId anchor, const std::span<const Physics::PhysicsSceneBodyBinding> bindings,
                                 const Physics::PhysicsEventRecord &record) {
-            using enum Physics::PhysicsEventKind;
-            if (record.kind != ContactBegin && record.kind != TriggerEnter)
+            const auto kind = ContactTransition(record.kind);
+            if (!kind)
                 return true;
             const auto first = ReadContactObject(bindings, record.pair.first.body);
             const auto second = ReadContactObject(bindings, record.pair.second.body);
@@ -83,9 +101,7 @@ namespace Horo::Application::Internal {
             const auto peer = first == anchor ? second : first;
             if (!scene.Find(peer))
                 return false;
-            using Snapshot = Editor::EditorPlayContactSnapshot;
-            const Snapshot::Contact contact{peer,
-                                            record.kind == ContactBegin ? Snapshot::Kind::ContactBegin : Snapshot::Kind::TriggerEnter};
+            const Editor::EditorPlayContactSnapshot::Contact contact{peer, *kind};
             const auto observed = std::span{review.contacts}.first(review.count);
             if (std::ranges::find(observed, contact) != observed.end())
                 return true;

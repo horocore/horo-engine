@@ -240,6 +240,7 @@ namespace {
             "workspace.local_agent.xr_contacts_review",      "workspace.local_agent.xr_contacts_unavailable",
             "workspace.local_agent.xr_contacts_tick",        "workspace.local_agent.xr_contacts_empty",
             "workspace.local_agent.xr_contacts_trigger",     "workspace.local_agent.xr_contacts_contact",
+            "workspace.local_agent.xr_contacts_contact_end", "workspace.local_agent.xr_contacts_trigger_exit",
             "workspace.local_agent.xr_pointing_unavailable", "workspace.local_agent.xr_pointing_empty",
             "workspace.local_agent.xr_reference_stale",      "workspace.local_agent.xr_reference_revision",
             "workspace.local_agent.xr_reference_mounted",    "workspace.local_agent.xr_reference_empty",

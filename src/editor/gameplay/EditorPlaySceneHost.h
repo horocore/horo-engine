@@ -45,11 +45,13 @@ namespace Horo::Editor {
     inline constexpr Runtime::SceneRuntimeId EditorFirstPlayScene{EditorPlaySceneNamespace + 1};
     inline constexpr std::uint64_t EditorPlayAgentInspectionTickSpacing = 4;
 
-    /** @brief Incident event starts from one exact Scene and completed Physics tick. */
+    /** @brief Contact and trigger transitions from one exact Scene and completed Physics tick. */
     struct EditorPlayContactSnapshot final {
         enum class Kind : std::uint8_t {
             ContactBegin,
-            TriggerEnter
+            TriggerEnter,
+            ContactEnd,
+            TriggerExit
         };
 
         struct Contact final {

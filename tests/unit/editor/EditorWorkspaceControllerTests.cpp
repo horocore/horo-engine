@@ -136,8 +136,10 @@ namespace {
             return EditorPlayContactSnapshot{.anchor = object,
                                              .structuralRevision = scene->StructuralRevision(),
                                              .completedTick = 42,
-                                             .contacts = {{{contactPeer, EditorPlayContactSnapshot::Kind::TriggerEnter}}},
-                                             .count = 1};
+                                             .contacts = {{{contactPeer, EditorPlayContactSnapshot::Kind::TriggerEnter},
+                                                           {contactPeer, EditorPlayContactSnapshot::Kind::TriggerExit},
+                                                           {contactPeer, EditorPlayContactSnapshot::Kind::ContactEnd}}},
+                                             .count = 3};
         }
 
         Runtime::SceneObjectId contactPeer{1};
@@ -1000,9 +1002,11 @@ namespace {
         REQUIRE(review);
         CHECK(review->object == selected.value);
         CHECK(review->completedTick == 42);
-        REQUIRE(review->count == 1);
+        REQUIRE(review->count == 3);
         CHECK(review->contacts[0].otherObject == 1);
         CHECK(review->contacts[0].kind == AgentSceneContactKind::TriggerEnter);
+        CHECK(review->contacts[1].kind == AgentSceneContactKind::TriggerExit);
+        CHECK(review->contacts[2].kind == AgentSceneContactKind::ContactEnd);
         CHECK(workspace.AgentSceneContactsCurrent(*review));
         for (const auto peer : {3ULL, 4ULL, 999999ULL}) {
             host.contactPeer = Runtime::SceneObjectId{peer};
