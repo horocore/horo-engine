@@ -17,6 +17,21 @@ namespace Horo::Packages {
                                         "Package lock does not match current portable intent.",
                                         "Resolve and review the current request before cooking."};
 
+        /** @brief Explains every retained dependency edge to a package that cannot be withdrawn directly. */
+        Error ExplainWithdrawalBlock(const ValidatedPackageLockfileV1 &lock, const HoroPackageId &package) {
+            auto error = MakeError(Invalid, "Only a direct package request can be withdrawn.");
+            const auto graph = lock.PreviewRemoval(package);
+            if (graph.HasError())
+                return error;
+            error.diagnostics.reserve(graph.Value().requiredBy.size());
+            for (const auto &dependent : graph.Value().requiredBy) {
+                error.diagnostics.emplace_back(DiagnosticCode{"packages.request.removal_required_by"}, DiagnosticSeverity::Error,
+                                               dependent.package.Value() + " " + dependent.version.ToString() + " requires " + package.Value(),
+                                               SourceLocation{"packages.lock"}, dependent.package.Value());
+            }
+            return error;
+        }
+
         /** @brief Requires an exact shape with explicitly supported optional fields only. */
         bool Fields(const Json &value, const std::initializer_list<std::string_view> required,
                     const std::initializer_list<std::string_view> optional = {}) {
@@ -275,7 +290,7 @@ namespace Horo::Packages {
             return Output::Failure(valid.ErrorValue());
         auto document = Json::parse(current.SerializeCanonical());
         if (document.at("dependencies").erase(package.Value()) == 0)
-            return Output::Failure(MakeError(Invalid, "Only a direct package request can be withdrawn."));
+            return Output::Failure(ExplainWithdrawalBlock(locked, package));
         auto replacement = ValidatedPackageRequest::Parse(document.dump());
         if (replacement.HasError())
             return Output::Failure(replacement.ErrorValue());

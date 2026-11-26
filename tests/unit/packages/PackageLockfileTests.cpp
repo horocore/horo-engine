@@ -1,4 +1,5 @@
 #include "Horo/Packages/PackageLockfile.h"
+#include "Horo/Packages/PackageRequest.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -142,6 +143,32 @@ TEST_CASE("Package removal preview prunes only entries no remaining root can rea
         CHECK(transitive.Value().requiredBy.size() == 2);
         CheckFailure(lock.Value().PreviewRemoval(Id("com.missing")), "packages.lockfile.invalid");
     }
+}
+
+TEST_CASE("Package removal reports each locked dependent of a transitive package", "[packages][lockfile][removal]") {
+    const auto request = ValidatedPackageRequest::Parse(R"({
+        "sources": {"vendor.index": {"kind": "public-registry", "registry": "vendor"}},
+        "dependencies": {"com.game.root": {"source": "vendor.index", "version": "1.2.0"}}
+    })");
+    REQUIRE(request.HasValue());
+    Fixture fixture;
+    fixture.requestHash = request.Value().Digest();
+    const auto lock = fixture.Generate();
+    REQUIRE(lock.HasValue());
+
+    const auto selected = Id("com.shared.data");
+    const auto refused = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
+    CheckFailure(refused, "packages.request.invalid");
+    const auto &diagnostics = refused.ErrorValue().diagnostics;
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].code.Value() == "packages.request.removal_required_by");
+    CHECK(diagnostics[0].message == "com.game.root 1.2.0 requires com.shared.data");
+    CHECK(diagnostics[1].code.Value() == "packages.request.removal_required_by");
+    CHECK(diagnostics[1].message == "com.horo.runtime 2.0.1 requires com.shared.data");
+
+    const auto unknown = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), Id("com.missing"));
+    CheckFailure(unknown, "packages.request.invalid");
+    CHECK(unknown.ErrorValue().diagnostics.empty());
 }
 
 TEST_CASE("Package lock generation binds every resolver selection to exact verified evidence", "[packages][lockfile]") {
