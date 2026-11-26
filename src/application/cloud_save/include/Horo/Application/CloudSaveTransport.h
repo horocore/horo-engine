@@ -156,6 +156,19 @@ namespace Horo::Application {
             const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
             const CancellationToken &cancellation = {}, const CloudSaveQuarantinePolicy *quarantine = nullptr) const;
 
+        /** @brief Produces a display-safe comparison from an exact authenticated download.
+         * @param lifecycle Local catalog authority. @param download Admitted remote selection.
+         * @param completion Terminal observation of that read. @param target Existing local slot consent.
+         * @param expected Exact catalog and cloud evidence captured before transfer.
+         * @param cancellation Observed before and after archive verification.
+         * @return A bounded read-only comparison or a typed rejection.
+         */
+        [[nodiscard]] Result<Runtime::SaveCloudConflictSnapshot> InspectDownload(
+            Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
+            const Runtime::SaveSlotLifecycleTarget &target, const Runtime::SaveCloudRevisionSnapshot &expected,
+            const CancellationToken &cancellation = {}) const;
+
         /** @brief Dispatches an exact durable mutation after checking its binding and payload.
          * @param operation Owning Save operation ID.
          * @param mutation Validated proof from the current binding's durable journal.
@@ -237,6 +250,9 @@ namespace Horo::Application {
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
         /** @brief Checks that a selected revision is still attributed to this exact account binding. */
         [[nodiscard]] bool OwnsDownload(const CloudSaveDownload &download) const noexcept;
+        /** @brief Fences same-slot download work to the selected local profile and cloud scope. */
+        [[nodiscard]] bool OwnsDownloadTarget(const CloudSaveDownload &download, const Runtime::SaveSlotLifecycleTarget &target,
+                                              const Runtime::SaveCloudRevisionSnapshot &expected) const noexcept;
         /** @brief Checks the exact local profile binding captured by this transport. */
         [[nodiscard]] bool OwnsAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept;
         /** @brief Requires an intent proof loaded or stored under the current local binding. */

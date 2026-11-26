@@ -883,6 +883,8 @@ namespace Horo::Runtime {
                   "[unit][save][cloud-transport][download]") {
             SaveSlotLifecycleTest::Fixture fixture;
             fixture.Import(10);
+            const auto predecessor = fixture.ExportBytes(10);
+            fixture.Import(10);
             fixture.Import(11);
             const auto original = fixture.ExportBytes(10);
             const auto target = fixture.Target(10);
@@ -915,7 +917,7 @@ namespace Horo::Runtime {
             const auto &handle = download.Value().Request().handle;
             REQUIRE(backend->requests.MarkRunning(handle).HasValue());
             const auto subject = *session.Subject();
-            const auto complete = [&](const std::vector<std::byte> &payload, const Application::CloudSaveQuarantinePolicy *policy = nullptr) {
+            const auto observe = [&](const std::vector<std::byte> &payload) {
                 auto bytes = Cloud::CloudBlobOwnedBytes::Copy(payload);
                 REQUIRE(bytes.HasValue());
                 const Cloud::CloudObjectHead head{backend->lastCloudRead->key, revision.Value(), payload.size(), ComputeSha256(payload)};
@@ -923,7 +925,10 @@ namespace Horo::Runtime {
                             Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), head, std::move(bytes).Value()}).HasValue());
                 const auto snapshot = backend->requests.Query(handle);
                 REQUIRE(snapshot.HasValue());
-                return transport.ApplyDownload(*fixture.owner, download.Value(), snapshot.Value(), target, expected.Value(), {}, policy);
+                return snapshot.Value();
+            };
+            const auto complete = [&](const std::vector<std::byte> &payload, const Application::CloudSaveQuarantinePolicy *policy = nullptr) {
+                return transport.ApplyDownload(*fixture.owner, download.Value(), observe(payload), target, expected.Value(), {}, policy);
             };
             const auto checkPublished = [&] {
                 fixture.Reopen();
@@ -947,6 +952,34 @@ namespace Horo::Runtime {
                 REQUIRE(applied.Value().entry);
                 CHECK(applied.Value().entry->publication.generation == header.slotGeneration);
                 checkPublished();
+            }
+            SECTION("Inspection sees the local parent without changing either publication") {
+                const auto snapshot = observe(predecessor);
+                const auto compared = transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value());
+                REQUIRE(compared.HasValue());
+                CHECK(compared.Value().slot == target.address.slot);
+                CHECK(compared.Value().localGeneration == target.generation);
+                CHECK(compared.Value().remoteGeneration == archive.Header().parentGeneration);
+                CHECK(compared.Value().catalogRevision == expected.Value().Index().revision);
+                CHECK(compared.Value().cloudRevision == expected.Value().Metadata().revision);
+                CHECK(compared.Value().relation == SaveCloudHeadRelation::LocalAhead);
+                CHECK(compared.Value().equivalentGameplay);
+                CHECK(fixture.ExportBytes(10) == original);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+                REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
+                Cloud::RequireError(transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value()),
+                                    SaveErrors::CloudMetadataStale);
+            }
+            SECTION("Inspection distinguishes equivalent gameplay from a shared publication") {
+                auto sibling = header;
+                sibling.parentGeneration = archive.Header().parentGeneration;
+                ++sibling.capturedAtUnixMilliseconds;
+                const auto snapshot = observe(SaveSlotLifecycleTest::RewriteHeader(archive, sibling));
+                const auto compared = transport.InspectDownload(*fixture.owner, download.Value(), snapshot, target, expected.Value());
+                REQUIRE(compared.HasValue());
+                CHECK(compared.Value().relation == SaveCloudHeadRelation::EquivalentState);
+                CHECK(compared.Value().equivalentGameplay);
+                CHECK(fixture.ExportBytes(10) == original);
             }
             SECTION("A divergent archive leaves both observations intact") {
                 auto divergent = header;

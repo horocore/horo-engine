@@ -59,6 +59,17 @@ namespace Horo::Runtime {
      */
     [[nodiscard]] SaveCloudHeadRelation CompareSaveCloudHeads(const SaveCloudHead &local, const SaveCloudHead &remote) noexcept;
 
+    /** @brief Display-safe result for two verified saves at an exact catalog revision. */
+    struct SaveCloudConflictSnapshot final {
+        SaveGameSlotId slot;
+        SlotGenerationId localGeneration;
+        SlotGenerationId remoteGeneration;
+        std::uint64_t catalogRevision{};
+        std::uint64_t cloudRevision{};
+        SaveCloudHeadRelation relation{SaveCloudHeadRelation::Unproven};
+        bool equivalentGameplay{};
+    };
+
     struct SaveCloudProviderIdentityTag;
     struct SaveCloudAccountIdentityTag;
     struct SaveCloudMutationIdentityTag;

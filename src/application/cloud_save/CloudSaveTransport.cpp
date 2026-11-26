@@ -316,6 +316,13 @@ namespace Horo::Application {
                download.Request().bindingRevision == bindingRevision_;
     }
 
+    /** @copydoc CloudSaveTransport::OwnsDownloadTarget */
+    bool CloudSaveTransport::OwnsDownloadTarget(const CloudSaveDownload &download, const Runtime::SaveSlotLifecycleTarget &target,
+                                                 const Runtime::SaveCloudRevisionSnapshot &expected) const noexcept {
+        return OwnsDownload(download) && OwnsAccess(target.address.namespaceAccess) && expected.Metadata().scope == scope_ &&
+               target.address.slot == download.slot_;
+    }
+
     /** @copydoc CloudSaveTransport::OwnsAccess */
     bool CloudSaveTransport::OwnsAccess(const Runtime::SaveNamespaceAccessRequest &access) const noexcept {
         return access.expected == scope_.localNamespace && access.expectedRevision == bindingRevision_;
@@ -369,8 +376,7 @@ namespace Horo::Application {
         const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation,
         const CloudSaveQuarantinePolicy *quarantine) const {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
-        if (!OwnsDownload(download) || !OwnsAccess(target.address.namespaceAccess) || expected.Metadata().scope != scope_ ||
-            target.address.slot != download.slot_)
+        if (!OwnsDownloadTarget(download, target, expected))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         if (cancellation.IsCancellationRequested())
             return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
@@ -388,6 +394,26 @@ namespace Horo::Application {
                 applied.ErrorValue().domain.Value() == rejection.domain.Value())
                 return FinishDownload(std::move(applied), *read.Value(), journalPartition_, quarantine, cancellation);
             return applied;
+        } catch (const std::bad_alloc &) {
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
+        }
+    }
+
+    /** @copydoc CloudSaveTransport::InspectDownload */
+    Result<Runtime::SaveCloudConflictSnapshot> CloudSaveTransport::InspectDownload(
+        Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+        const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const Runtime::SaveSlotLifecycleTarget &target,
+        const Runtime::SaveCloudRevisionSnapshot &expected, const CancellationToken &cancellation) const {
+        using Response = Result<Runtime::SaveCloudConflictSnapshot>;
+        if (!OwnsDownloadTarget(download, target, expected))
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        if (cancellation.IsCancellationRequested())
+            return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
+        const auto read = CheckDownloadRead(*frontend_, download.Request(), completion, download.read_, download.revision_);
+        if (read.HasError())
+            return Response::Failure(read.ErrorValue());
+        try {
+            return lifecycle.InspectCloudDownload(target, expected, StageDownload(*read.Value()), cancellation);
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }

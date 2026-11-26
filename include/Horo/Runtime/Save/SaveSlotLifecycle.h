@@ -251,6 +251,16 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
             const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
             SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {});
+
+        /** @brief Inspects exact local and remote archives without publishing or retiring either one.
+         * @param target Existing selected local slot and binding. @param expected Pair selected before transfer.
+         * @param archive Complete remote bytes verified by the local Save authority.
+         * @param cancellation Observed before and after validation.
+         * @return A bounded, display-safe comparison or typed validation, scope or storage failure.
+         */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownload(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {}) const;
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.
@@ -357,6 +367,10 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendantLocked(
             Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
             SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation);
+        /** @brief Reads and compares two exact archives while the local catalog lease remains held. */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownloadLocked(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &current, const ImmutableSaveArchive &archive,
+            const CancellationToken &cancellation) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */
         [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
                                                         bool retained) const;

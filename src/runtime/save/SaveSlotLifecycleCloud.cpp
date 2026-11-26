@@ -35,10 +35,22 @@ namespace Horo::Runtime {
             return left.schemaVersion == right.schemaVersion && left.revision == right.revision && left.entries == right.entries;
         }
 
+        /** @brief Fences cloud work to the complete catalog and sidecar selected by its owner. */
+        bool SamePair(const SaveCloudRevisionSnapshot &current, const SaveCloudRevisionSnapshot &expected) {
+            return SameIndex(current.Index(), expected.Index()) && current.Metadata() == expected.Metadata();
+        }
+
+        /** @brief Projects verified archive facts without exposing strings or participant bytes. */
+        SaveCloudPublicationHead CloudHead(const ValidatedSaveArchive &archive) noexcept {
+            const auto &header = archive.Header();
+            return {header.slot, header.slotGeneration, header.parentGeneration, archive.Integrity().archiveContent,
+                    archive.Manifest().canonicalState};
+        }
+
         /** @brief Validates the caller's exact prior pair and one in-place cloud revision step. */
         bool CanPublish(const SaveCloudRevisionSnapshot &current, const SaveCloudRevisionSnapshot &expected,
                         const SaveCloudRevisionSnapshot &candidate) {
-            if (!SameIndex(current.Index(), expected.Index()) || current.Metadata() != expected.Metadata() ||
+            if (!SamePair(current, expected) ||
                 !SameIndex(current.Index(), candidate.Index()) || candidate.Metadata().scope != current.Metadata().scope)
                 return false;
             if (candidate.Metadata() == current.Metadata())
@@ -60,9 +72,7 @@ namespace Horo::Runtime {
             if (header.slot != local.slot)
                 return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveHeaderInvalid)));
             const SaveCloudPublicationHead localHead{local.slot, local.generation, {}, local.archiveContent, local.canonicalState};
-            const SaveCloudPublicationHead remoteHead{header.slot, header.slotGeneration, header.parentGeneration,
-                                                      incoming.Integrity().archiveContent, incoming.Manifest().canonicalState};
-            const auto relation = CompareSaveCloudHeads(localHead, remoteHead);
+            const auto relation = CompareSaveCloudHeads(localHead, CloudHead(incoming));
             if (relation == SaveCloudHeadRelation::IntegrityMismatch)
                 return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveContentHashMismatch)));
             if (relation != SaveCloudHeadRelation::RemoteAhead)
@@ -167,6 +177,75 @@ namespace Horo::Runtime {
         }
     }
 
+    /** @copydoc SaveSlotLifecycle::InspectCloudDownload */
+    Result<SaveCloudConflictSnapshot> SaveSlotLifecycle::InspectCloudDownload(
+        const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, const ImmutableSaveArchive &archive,
+        const CancellationToken &cancellation) const {
+        using Response = Result<SaveCloudConflictSnapshot>;
+        if (!state_ || !CloudAllowed(state_->policy))
+            return Response::Failure(MakeError(SaveErrors::StoragePermissionDenied));
+        const auto &scope = expected.Metadata().scope;
+        if (scope.localNamespace != target.address.namespaceAccess.expected || !scope.IsValid() || !target.generation)
+            return Response::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
+        const auto limit = state_->policy.archiveLimits.maximumArchiveBytes;
+        if (!archive.bytes || archive.bytes->empty() || archive.bytes->size() > limit)
+            return Response::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        if (const auto pending = CheckCancellation(cancellation); pending.HasError())
+            return Response::Failure(pending.ErrorValue());
+        try {
+            Operation operation{*state_};
+            if (const auto leased = BeginRetention(operation, target.address.namespaceAccess); leased.HasError())
+                return Response::Failure(leased.ErrorValue());
+            const auto pair = ReadPair(operation.catalog, scope);
+            if (pair.HasError())
+                return Response::Failure(pair.ErrorValue());
+            if (!SamePair(pair.Value(), expected))
+                return Response::Failure(MakeError(SaveErrors::CloudMetadataStale));
+            if (const auto checked = CheckRetentionTarget(operation, target, false); checked.HasError())
+                return Response::Failure(checked.ErrorValue());
+            return InspectCloudDownloadLocked(target, pair.Value(), archive, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Response::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
+        }
+    }
+
+    /** @copydoc SaveSlotLifecycle::InspectCloudDownloadLocked */
+    Result<SaveCloudConflictSnapshot> SaveSlotLifecycle::InspectCloudDownloadLocked(
+        const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &current, const ImmutableSaveArchive &archive,
+        const CancellationToken &cancellation) const {
+        using Response = Result<SaveCloudConflictSnapshot>;
+        const auto &policy = state_->policy;
+        const auto entry = std::ranges::find_if(current.Index().entries, [&target](const SaveSlotCatalogEntry &value) {
+            return value.publication.slot == target.address.slot;
+        });
+        if (entry == current.Index().entries.end())
+            return Response::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+        auto bytes = state_->storage.ReadLifecycleGeneration(*target.generation, policy.archiveLimits.maximumArchiveBytes);
+        if (bytes.HasError())
+            return Response::Failure(bytes.ErrorValue());
+        const auto local = Admit(std::move(bytes).Value(), policy.destination, policy, *state_->host);
+        if (local.HasError())
+            return Response::Failure(local.ErrorValue());
+        if (const auto matched = Matches(*entry, local.Value()); matched.HasError())
+            return Response::Failure(matched.ErrorValue());
+        const auto remote = Admit(*archive.bytes, policy.destination, policy, *state_->host);
+        if (remote.HasError())
+            return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, remote.ErrorValue()));
+        const auto localHead = CloudHead(local.Value());
+        const auto remoteHead = CloudHead(remote.Value());
+        if (localHead.slot != remoteHead.slot)
+            return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveHeaderInvalid)));
+        if (const auto pending = CheckCancellation(cancellation); pending.HasError())
+            return Response::Failure(pending.ErrorValue());
+        return Response::Success({.slot = localHead.slot,
+                                  .localGeneration = localHead.generation,
+                                  .remoteGeneration = remoteHead.generation,
+                                  .catalogRevision = current.Index().revision,
+                                  .cloudRevision = current.Metadata().revision,
+                                  .relation = CompareSaveCloudHeads(localHead, remoteHead),
+                                  .equivalentGameplay = localHead.state == remoteHead.state});
+    }
+
     /** @copydoc SaveSlotLifecycle::ApplyCloudDescendantLocked */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ApplyCloudDescendantLocked(
         Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
@@ -177,7 +256,7 @@ namespace Horo::Runtime {
         if (current.HasError())
             return Response::Failure(current.ErrorValue());
         const auto &prior = current.Value().Metadata();
-        if (!CanPublish(current.Value(), expected, current.Value()) || prior.revision == std::numeric_limits<std::uint64_t>::max())
+        if (!SamePair(current.Value(), expected) || prior.revision == std::numeric_limits<std::uint64_t>::max())
             return Response::Failure(MakeError(SaveErrors::CloudMetadataStale));
         const auto local = std::ranges::find(prior.records, target.address.slot, &SaveCloudGenerationRecord::slot);
         if (local == prior.records.end() || !CanReplaceCloudHead(*local, object))
