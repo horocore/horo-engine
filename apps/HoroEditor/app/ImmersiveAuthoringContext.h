@@ -104,6 +104,12 @@ namespace Horo::Editor {
         /** @brief Reports terminal status, including cancellation or stale scope after inference. */
         [[nodiscard]] Agent::AgentTurnStatus Status() const noexcept;
 
+        /** @brief Returns a provider failure class without exposing a partial reply.
+         * @param current Editor-owned context at presentation time.
+         * @return The failure class only while the original request authority remains current.
+         */
+        [[nodiscard]] std::optional<Agent::ModelErrorCode> ProviderFailure(const ImmersivePlanningContext &current) const noexcept;
+
         /** @brief Borrows the validated draft and effects for the exact current authoring generation.
          * @param current Editor-owned context at presentation time.
          * @param inspectTargets Current workspace admission on the owner lane, required for scoped tools.
@@ -118,6 +124,9 @@ namespace Horo::Editor {
         friend class ImmersiveAgentRequest;
         ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
                             CancellationToken projectLifetime = {}, std::shared_ptr<const Agent::McpPlanCatalog> catalog = {});
+
+        /** @brief Checks workspace, project and catalog authority for this review. */
+        [[nodiscard]] bool HasCurrentAuthority() const noexcept;
 
         ImmersivePlanningContext context_;
         Agent::AgentTurnPlan plan_;

@@ -107,6 +107,11 @@ namespace Horo::Editor {
         : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), projectLifetime_(std::move(projectLifetime)),
           catalog_(std::move(catalog)) {}
 
+    /** @copydoc ImmersivePlanReview::HasCurrentAuthority */
+    bool ImmersivePlanReview::HasCurrentAuthority() const noexcept {
+        return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && (!catalog_ || catalog_->IsCurrent());
+    }
+
     /** @copydoc ImmersivePlanReview::Status */
     Agent::AgentTurnStatus ImmersivePlanReview::Status() const noexcept {
         using enum Agent::AgentTurnStatus;
@@ -114,8 +119,15 @@ namespace Horo::Editor {
             return plan_.status;
         if (stop_.stop_requested())
             return Cancelled;
-        const bool current = context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && (!catalog_ || catalog_->IsCurrent());
-        return current ? Completed : ContextDenied;
+        return HasCurrentAuthority() ? Completed : ContextDenied;
+    }
+
+    /** @copydoc ImmersivePlanReview::ProviderFailure */
+    std::optional<Agent::ModelErrorCode> ImmersivePlanReview::ProviderFailure(const ImmersivePlanningContext &current) const noexcept {
+        if (plan_.status != Agent::AgentTurnStatus::ProviderFailed || !context_.SharesGeneration(current) || stop_.stop_requested() ||
+            !HasCurrentAuthority())
+            return std::nullopt;
+        return plan_.providerError;
     }
 
     /** @copydoc ImmersivePlanReview::Read */

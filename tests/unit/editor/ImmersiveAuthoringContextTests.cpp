@@ -11,6 +11,7 @@ namespace Horo::Editor {
             std::function<void()> duringInference;
             std::size_t calls{};
             std::optional<Agent::ModelToolIntent> tool;
+            std::optional<Agent::ModelErrorCode> failure;
             std::vector<Agent::ModelTool> advertised;
 
             Agent::ProviderDiscovery Discover(std::stop_token) override {
@@ -24,7 +25,11 @@ namespace Horo::Editor {
                     duringInference();
                 if (tool && !sink({.kind = Agent::ModelEventKind::ToolIntent, .tool = *tool}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
-                if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}) || !sink({.kind = Agent::ModelEventKind::Completed}))
+                if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}))
+                    return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
+                if (failure)
+                    return {Agent::ModelError{*failure, "Fixture failure", std::nullopt}};
+                if (!sink({.kind = Agent::ModelEventKind::Completed}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 return {};
             }
@@ -327,6 +332,40 @@ namespace Horo::Editor {
             stop.request_stop();
             CHECK(review.Status() == Cancelled);
             CHECK_FALSE(review.Read(*context));
+        }
+
+        TEST_CASE("Immersive planning reports a scoped rate limit without retaining a draft", "[agent][immersive][turn][plan]") {
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(Opening(), {});
+            REQUIRE(context);
+            auto request = owner.CapturePlan(*context, Prompt());
+            REQUIRE(request);
+            PlanningModel model;
+            model.failure = Agent::ModelErrorCode::RateLimited;
+            std::stop_source stop;
+            const auto review = request->Plan(model, 1, {}, [](const auto &) {
+                return Agent::AgentPlanToolInspection{Agent::AgentTurnStatus::ToolDenied};
+            }, stop.get_token());
+
+            CHECK(review.Status() == Agent::AgentTurnStatus::ProviderFailed);
+            CHECK(review.ProviderFailure(*context) == Agent::ModelErrorCode::RateLimited);
+            CHECK_FALSE(review.Read(*context));
+            CHECK(model.calls == 1);
+
+            SECTION("another owner cannot read the reason") {
+                ImmersiveAuthoringContext other;
+                const auto foreign = other.Publish(Opening(), {});
+                REQUIRE(foreign);
+                CHECK_FALSE(review.ProviderFailure(*foreign));
+            }
+            SECTION("the original scope is revoked") {
+                owner.Revoke();
+                CHECK_FALSE(review.ProviderFailure(*context));
+            }
+            SECTION("the worker is cancelled before presentation") {
+                stop.request_stop();
+                CHECK_FALSE(review.ProviderFailure(*context));
+            }
         }
 
         TEST_CASE("Immersive planning rejects object targets from a different scene revision", "[agent][immersive][turn][plan]") {
