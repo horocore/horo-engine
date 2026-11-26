@@ -181,6 +181,24 @@ namespace Horo::Editor {
             CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Final).empty());
         }
 
+        TEST_CASE("Capture withdrawal invalidates the displayed draft before the worker reply is polled", "[agent][immersive][speech]") {
+            SpeechWorkerFixture fixture;
+            fixture.Start();
+            const std::array<Audio::AudioSample, 1> pcm{0.25F};
+            const Capture::AudioCapturedBlock first{.start = {5, 1'000'000}, .firstFrame = 0, .sequence = 1, .frames = 1};
+            REQUIRE(fixture.worker.Submit(first, pcm) == Accepted);
+            const auto draft = WaitForUpdate(fixture.worker);
+            REQUIRE(draft.evidence);
+            REQUIRE(draft.evidence->PreviewText(SpeechHypothesisKind::Partial) == "First block");
+
+            fixture.capture.request_stop();
+            CheckRevokedDraft(draft);
+            CHECK_FALSE(fixture.worker.OwnsEvidence(*draft.evidence));
+            const auto completed = WaitForUpdate(fixture.worker);
+            CHECK(completed.status == Cancelled);
+            CHECK_FALSE(completed.evidence);
+        }
+
         TEST_CASE("Speech worker cancels when live PCM misses its original source sequence", "[agent][immersive][speech]") {
             SpeechWorkerFixture fixture;
             fixture.Start();

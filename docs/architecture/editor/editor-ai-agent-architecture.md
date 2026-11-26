@@ -178,8 +178,10 @@ Ownership rules:
   from test and recording purposes. Reads use the exact Audio grant and report
   interruption instead of delivering queued PCM after a drop. Explicit sealing
   detaches the device before handing the last PCM blocks to the worker. The
-  editor rechecks the lease after copying live PCM and after detaching the tail,
-  before either can reach the worker. Project replacement and cancellation
+  editor rechecks the lease after every live read, including an empty read,
+  and after detaching the tail. The microphone owner also revalidates native
+  permission on its own tick, independently of the listening panel.
+  Project replacement and cancellation
   revoke the lease even after detachment.
 - The speech worker receives live PCM through a bounded single-producer queue.
   After sealing, it consumes the detached tail after the live blocks and then

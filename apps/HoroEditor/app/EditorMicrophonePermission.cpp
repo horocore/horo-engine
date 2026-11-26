@@ -483,13 +483,13 @@ namespace Horo::Editor {
             CancelSpeechCapture(generation);
             return Output::Failure(MakeError(Audio::AudioErrors::SourceInvalid));
         }
-        if (value.status != Copied)
-            return Output::Success(value.status);
         if (const auto allowed = ReconcileSpeechLease(generation, foreground); allowed.HasError()) {
-            Security::SecureZero(std::as_writable_bytes(pcm));
+            if (value.status == Copied)
+                Security::SecureZero(std::as_writable_bytes(pcm));
             return Output::Failure(allowed.ErrorValue());
         }
-        block = candidate;
+        if (value.status == Copied)
+            block = candidate;
         return Output::Success(value.status);
     }
 
@@ -589,10 +589,8 @@ namespace Horo::Editor {
         try {
             check_->PollPublication();
             if (check_->speech) {
-                if (!check_->speech->context.IsCurrent())
-                    check_->Stop();
-                else if (check_->SpeechExpired(CaptureCheck::Clock::now()))
-                    check_->ExpireSpeech();
+                // This tick's foreground flag belongs to Audio Settings. Play owns its own focus fence.
+                static_cast<void>(ReconcileSpeechLease(check_->generation, true));
             } else if (check_->scanning || check_->pending || check_->grant) {
                 check_->Advance(foreground, CaptureCheck::Clock::now());
             }
