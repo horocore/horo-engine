@@ -1347,6 +1347,20 @@ namespace {
                    diagnostic.location.source == registration.descriptorPath &&
                    diagnostic.path == "com.horo.application-fixture.native";
         }));
+        const Error captureError{ErrorCode{"fixture.registry.capture_failed"}, ErrorDomainId{"fixture.registry"}};
+        sources.registrationFailure = &captureError;
+        const auto failedCapture = PublishPackageProjectRemoval(policy, expected.Value(), fixture.graph.package, fixture.files, sources);
+        REQUIRE(failedCapture.HasError());
+        const auto &failure = failedCapture.ErrorValue();
+        CHECK(failure.code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        CHECK(std::ranges::any_of(failure.diagnostics, [&registration](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.lifecycle.removal_module_owner_required" &&
+                   diagnostic.location.source == registration.descriptorPath;
+        }));
+        CHECK(std::ranges::any_of(failure.diagnostics, [&registration](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.runtime_registration_unavailable" &&
+                   diagnostic.location.source == registration.descriptorPath && diagnostic.path == registration.moduleId;
+        }));
         CHECK(fixture.Read("packages.json") == oldRequest);
         CHECK(fixture.Read("packages.lock") == oldLock);
     }

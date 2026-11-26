@@ -88,6 +88,8 @@ namespace {
                                                  "7/" + std::to_string(attachment));
                     references.emplace_back(DiagnosticCode{"packages.host.decision_subplan_missing"}, DiagnosticSeverity::Error,
                                              "770001", SourceLocation{"Assets/Guard.decision.json"}, "920003");
+                    references.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unavailable"}, DiagnosticSeverity::Error,
+                                             "com.horo.provider", SourceLocation{"extensions/ai/extension.json"}, "gameplay.ai");
                     return Result<void>::Failure(Error{ErrorCode{"packages.host.behavior_in_use"}, ErrorDomainId{"packages.host"},
                                                        ErrorSeverity::Error, "", std::move(references)});
                 });
@@ -391,7 +393,7 @@ namespace {
             IM_CHECK(AwaitTerminal(*ctx, fixture, PackageOperationKind::Remove));
             IM_CHECK(fixture.operation->outcome == PackageOperationOutcome::Failed);
             IM_CHECK(fixture.operation->diagnostic.has_value());
-            IM_CHECK_EQ(fixture.operation->diagnostic->diagnostics.size(), 33U);
+            IM_CHECK_EQ(fixture.operation->diagnostic->diagnostics.size(), 34U);
             ctx->Yield();
             IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
             IM_CHECK(visibleText.find("Assets/Guard.decision.json") == std::string::npos);
@@ -402,6 +404,10 @@ namespace {
             IM_CHECK(visibleText.find("Assets/Guard.decision.json") != std::string::npos);
             IM_CHECK(visibleText.find("920003") != std::string::npos);
             IM_CHECK(visibleText.find("770001") != std::string::npos);
+            IM_CHECK(visibleText.find("Runtime module ownership needs verification") != std::string::npos);
+            IM_CHECK(visibleText.find("extensions/ai/extension.json") != std::string::npos);
+            IM_CHECK(visibleText.find("gameplay.ai") != std::string::npos);
+            IM_CHECK(visibleText.find("com.horo.provider") != std::string::npos);
             Click(*ctx, "Previous references");
             ctx->Yield();
             IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);

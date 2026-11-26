@@ -525,9 +525,14 @@ namespace Horo::Application::Internal {
             return roles;
         }
 
-        /** @brief Identifies an exact locked role with missing or insufficient registration evidence. */
-        void ObserveRuntimeRole(const PackageRemovalSources &sources, const Packages::LockedPackage &locked,
-                                const Packages::PackageRuntimeRoleDeclaration &role, std::vector<Diagnostic> &blockers) {
+        /** @brief Reports missing, unavailable or insufficient registration evidence for an exact locked role. */
+        void AppendRuntimeRoleBlocker(const PackageRemovalSources &sources, const Packages::LockedPackage &locked,
+                                      const Packages::PackageRuntimeRoleDeclaration &role, std::vector<Diagnostic> &blockers) {
+            if (sources.registrationFailure) {
+                blockers.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unavailable"}, DiagnosticSeverity::Error,
+                                      locked.package.Value(), SourceLocation{role.descriptor.Value()}, role.moduleId);
+                return;
+            }
             const auto observed = std::ranges::find_if(sources.registrations, [&](const auto &entry) {
                 return MatchesLockedArtifact(entry, locked) && entry.moduleId == role.moduleId &&
                        entry.descriptorPath == role.descriptor.Value();
@@ -556,13 +561,11 @@ namespace Horo::Application::Internal {
                 incomplete.emplace(std::move(declared).ErrorValue());
             const auto &roles = incomplete ? verifiedOnFailure : declared.Value();
             if (!incomplete && !roles.empty() && sources.registrationFailure)
-                return Result<void>::Failure(WithCause(
-                    ReferenceError("packages.host.runtime_registration_unavailable", locked.package.Value()), *sources.registrationFailure));
-            if (!sources.registrationFailure) {
-                auto &diagnostics = incomplete ? incomplete->diagnostics : blockers;
-                for (const auto &role : roles)
-                    ObserveRuntimeRole(sources, locked, role, diagnostics);
-            }
+                incomplete.emplace(WithCause(ReferenceError("packages.host.runtime_registration_unavailable", locked.package.Value()),
+                                             *sources.registrationFailure));
+            auto &diagnostics = incomplete ? incomplete->diagnostics : blockers;
+            for (const auto &role : roles)
+                AppendRuntimeRoleBlocker(sources, locked, role, diagnostics);
             if (incomplete)
                 return Result<void>::Failure(std::move(*incomplete));
             return Result<void>::Success();
