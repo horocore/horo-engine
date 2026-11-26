@@ -236,6 +236,33 @@ namespace Horo::Editor {
             CHECK_FALSE(completed.evidence);
         }
 
+        TEST_CASE("Retired authoring context refuses live PCM and the detached tail", "[agent][immersive][speech]") {
+            SpeechWorkerFixture fixture;
+            fixture.Start();
+            const std::array<Audio::AudioSample, 1> firstPcm{0.25F};
+            const Capture::AudioCapturedBlock first{.start = {5, 1'000'000}, .firstFrame = 0, .sequence = 1, .frames = 1};
+            REQUIRE(fixture.worker.Submit(first, firstPcm) == Accepted);
+            const auto draft = WaitForUpdate(fixture.worker);
+            REQUIRE(draft.evidence);
+
+            const std::array<Audio::AudioSample, 1> secondPcm{0.5F};
+            const Capture::AudioCapturedBlock second{.start = {5, 1'020'833}, .firstFrame = 1, .sequence = 2, .frames = 1};
+            auto detached = Capture::AudioCaptureBuffer::Create(fixture.source);
+            REQUIRE(detached.HasValue());
+            auto tail = std::move(detached).Value();
+            REQUIRE(tail.TryWrite(second.start, second.firstFrame, second.frames, secondPcm) == Capture::AudioCaptureWrite::Accepted);
+
+            fixture.owner.Revoke();
+            REQUIRE_FALSE(fixture.capture.stop_requested());
+            CHECK(fixture.worker.Submit(second, secondPcm) == StaleContext);
+            CHECK(fixture.worker.Seal(std::move(tail)) == StaleContext);
+            CheckRevokedDraft(draft);
+            CHECK_FALSE(fixture.worker.ReadProgress());
+            const auto completed = WaitForUpdate(fixture.worker);
+            CHECK(completed.status == StaleContext);
+            CHECK_FALSE(completed.evidence);
+        }
+
         TEST_CASE("Replacing the speech provider retires old evidence and requires fresh sealed capture", "[agent][immersive][speech]") {
             SpeechWorkerFixture fixture;
             const auto finishFreshCapture = [&] {

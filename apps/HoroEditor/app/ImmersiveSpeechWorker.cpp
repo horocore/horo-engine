@@ -68,6 +68,13 @@ namespace Horo::Editor {
         State(Capture::AudioCaptureBuffer queue, const std::stop_token captureRevoked, const ImmersivePlanningContext &scope)
             : live(std::move(queue)), revoke(captureRevoked, RevokeWorker{cancel}), context(scope) {}
 
+        /** @brief Checks both microphone and authoring lifetimes before accepting more input on the control lane. */
+        [[nodiscard]] SpeechTranscriptionStatus CaptureAdmission() const noexcept {
+            if (cancel.stop_requested())
+                return Cancelled;
+            return context.IsCurrent() ? Accepted : StaleContext;
+        }
+
         /** @brief Scrubs the block after each synchronous provider operation. */
         SpeechTranscriptionStatus Drain(Capture::AudioCaptureBuffer &source, ImmersiveSpeechTranscription &stream,
                                         PcmScratch &scratch, const std::stop_token stop) {
@@ -198,8 +205,8 @@ namespace Horo::Editor {
                                                             const std::span<const Audio::AudioSample> pcm) noexcept {
         if (!state_ || !Busy() || state_->sealed.load())
             return Closed;
-        if (state_->cancel.stop_requested())
-            return Cancelled;
+        if (const auto admission = state_->CaptureAdmission(); admission != Accepted)
+            return admission;
         const bool continuous =
             block.sequence == state_->liveSequence + 1 && block.droppedFramesBefore == 0 && block.missingSourceFramesBefore == 0;
         if (!continuous ||
@@ -215,8 +222,8 @@ namespace Horo::Editor {
     SpeechTranscriptionStatus ImmersiveSpeechWorker::Seal(Capture::AudioCaptureBuffer tail) noexcept {
         if (!state_ || !Busy() || state_->sealed.load())
             return Closed;
-        if (state_->cancel.stop_requested())
-            return Cancelled;
+        if (const auto admission = state_->CaptureAdmission(); admission != Accepted)
+            return admission;
         const auto *source = tail.Descriptor();
         if (!source || !SameSource(*state_->live.Descriptor(), *source) || tail.DroppedFrames() != 0) {
             Cancel();
