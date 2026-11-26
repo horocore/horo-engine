@@ -335,7 +335,8 @@ class AndroidDeployTests(unittest.TestCase):
         status, report, _ = self.execute({
             ("devices", "-l"): f"List of devices attached\n{serial} device usb:1-2 transport_id:{TRANSPORT}",
             LOGCAT: log_line(OPENXR),
-        }, ("--host", "linux-x64", "--connection", "usb", "--runtime", "openxr"), name, serial=serial)
+        }, ("--host", "linux-x64", "--connection", "usb", "--runtime", "openxr", "--expect-runtime-version", "1.1.63"), name,
+            serial=serial)
         self.assertEqual(status, 0)
         receipt = project.canonical_json(report)
         declaration = validate_android_preflight({

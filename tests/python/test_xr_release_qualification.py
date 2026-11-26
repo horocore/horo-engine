@@ -253,11 +253,14 @@ def android_receipt(row, evidence):
     }
 
 
-def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(release):
+@pytest.mark.parametrize("pin_version", [False, True])
+def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(release, pin_version):
     matrix, evidence = release
     row = matrix["tuples"][0]
     capture_android_smoke(row, evidence)
     receipt = android_receipt(row, evidence)
+    if pin_version:
+        receipt["qualification"]["runtime"]["expectedVersion"] = {"major": 1, "minor": 2, "patch": 3}
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
     result = run_matrix(release)
     assert result.returncode == 0, result.stderr
@@ -303,7 +306,7 @@ def test_android_discovery_accepts_the_redacted_fields_emitted_by_deployment(rel
                                declaredRenderer="none", abis=["arm64-v8a"],
                                expectedApkSha256=receipt["artifact"]["apkSha256"])
     receipt["device"].update(androidApi=34, expectedBuildSha256=receipt["device"]["buildSha256"])
-    receipt["qualification"]["runtime"]["expectedVersion"] = "1.2.3"
+    receipt["qualification"]["runtime"]["expectedVersion"] = dict(receipt["observed"]["openxr"]["runtimeVersion"])
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
     result = run_matrix(release)
     assert result.returncode == 0, result.stderr
@@ -360,6 +363,24 @@ def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_t
     result = run_matrix(release)
     assert result.returncode == 1
     assert "different runtime version" in result.stderr
+
+
+@pytest.mark.parametrize(("expected", "message"), [
+    ({"major": 1, "minor": 2, "patch": 4}, "expected a different runtime version"),
+    ({"major": True, "minor": 2, "patch": 3}, "Invalid Android OpenXR runtime version"),
+    ({"major": 1, "minor": 2, "patch": 2**32}, "Invalid Android OpenXR runtime version"),
+    ("1.2.3", "Unexpected fields in Android OpenXR runtime version"),
+])
+def test_android_discovery_rejects_an_invalid_runtime_pin(release, expected, message):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    receipt["qualification"]["runtime"]["expectedVersion"] = expected
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert message in result.stderr
 
 
 def test_android_preflight_does_not_apply_to_pcvr(release):

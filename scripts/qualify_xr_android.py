@@ -31,6 +31,15 @@ def is_json_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def android_runtime_version(value: object) -> str:
+    """Normalize the deployer's exact OpenXR version fields for comparison with a release tuple."""
+    version = fields(value, {"major", "minor", "patch"}, "Android OpenXR runtime version")
+    parts = (version["major"], version["minor"], version["patch"])
+    require(all(is_json_integer(part) and low <= part < high for part, low, high in
+                zip(parts, (1, 0, 0), (2**16, 2**16, 2**32))), "Invalid Android OpenXR runtime version")
+    return ".".join(map(str, parts))
+
+
 def validate_android_preflight(value: object) -> dict:
     """Read an independently selected diagnostic package and Android target."""
     expected = fields(value, ANDROID_PREFLIGHT_FIELDS, "Android preflight declaration")
@@ -79,7 +88,9 @@ def check_android_target(receipt: dict, expected: dict, runtime_version: str) ->
     runtime = receipt_fields(target["runtime"], {"requested", "selection", "status"}, {"expectedVersion"}, "Android preflight runtime")
     require((runtime.get("requested"), runtime.get("selection"), runtime.get("status")) ==
             ("openxr", "system-default", "cold_system_discovered"), "Expected completed Android OpenXR discovery")
-    require(runtime.get("expectedVersion", runtime_version) == runtime_version, "Android preflight expected a different runtime version")
+    if "expectedVersion" in runtime:
+        require(android_runtime_version(runtime["expectedVersion"]) == runtime_version,
+                "Android preflight expected a different runtime version")
     device = receipt_fields(receipt.get("device"), {"buildSha256", "abi"}, {"androidApi", "expectedBuildSha256"}, "Android preflight device")
     require(device["buildSha256"] == expected["deviceBuildSha256"],
             "Android preflight uses a different system build")
@@ -98,12 +109,8 @@ def check_android_discovery(value: object, expected_version: str, abi: str) -> N
     require(openxr["stage"] == "discovered" and is_json_integer(openxr["result"]) and openxr["result"] == 0,
             "Expected successful Android OpenXR discovery")
     require(openxr["abi"] == abi, "Android preflight uses a different runtime ABI")
-    version = fields(openxr["runtimeVersion"], {"major", "minor", "patch"}, "Android OpenXR runtime version")
-    parts = (version["major"], version["minor"], version["patch"])
-    require(all(is_json_integer(part) and low <= part < high for part, low, high in
-                zip(parts, (1, 0, 0), (2**16, 2**16, 2**32))), "Invalid Android OpenXR runtime version")
-    version_string = ".".join(map(str, parts))
-    require(version_string == expected_version, "Android preflight uses a different runtime version")
+    require(android_runtime_version(openxr["runtimeVersion"]) == expected_version,
+            "Android preflight uses a different runtime version")
 
 
 def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str) -> None:

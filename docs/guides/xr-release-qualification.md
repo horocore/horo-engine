@@ -115,6 +115,8 @@ for the physical run, the diagnostic `profile`, and `adbConnection` (`usb`
 or `tcpip`). Store the diagnostic APK and receipt in the same evidence
 directory as the physical record. The checker verifies the source revision,
 package and device build, connection, runtime version and process retirement.
+When deployment uses `--expect-runtime-version`, the checker verifies both the
+selected version and the observed version against the physical run's tuple.
 Android deployment also checks that the foreground user is consistent before
 installation, launch, and evidence publication. A user switch invalidates the
 run. The receipt omits the Android user number.
