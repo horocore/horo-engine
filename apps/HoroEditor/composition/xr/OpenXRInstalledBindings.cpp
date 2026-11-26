@@ -170,7 +170,14 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Selects a declared digital controller action without creating a registration. */
+        /** @brief Tests whether the signed document declares the required pose for the controller role. */
+        bool HasControllerPose(const OpenXRApplicationBindings &bindings, XR::XRTrackedDeviceRole role, XR::XRTrackedPoseKind kind) {
+            return std::ranges::any_of(bindings.poses, [=](const OpenXRApplicationPose &pose) {
+                return pose.role == role && pose.kind == kind;
+            });
+        }
+
+        /** @brief Selects a declared digital controller action with a matching aim pose. */
         Result<void> WorldUiPointer(const Json &root, OpenXRApplicationBindings &output) {
             const auto entry = root.find("worldUiPointer");
             if (entry == root.end())
@@ -183,7 +190,8 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(InvalidBindings());
             const Input::ActionId action{entry->at("action").get<std::string>()};
             const auto declaration = std::ranges::find(output.schema.actions, action, &XR::XRActionDeclaration::action);
-            if (declaration == output.schema.actions.end() || declaration->valueType != Input::ActionValueType::Digital)
+            if (declaration == output.schema.actions.end() || declaration->valueType != Input::ActionValueType::Digital ||
+                !HasControllerPose(output, declaration->role, XR::XRTrackedPoseKind::Aim))
                 return Result<void>::Failure(InvalidBindings());
             output.worldUiPointer.emplace(action, declaration->role, limit);
             return Result<void>::Success();
@@ -226,13 +234,6 @@ namespace Horo::Application::Internal {
             return Outcome::Success({*action, *angle, *engage, *release});
         }
 
-        /** @brief Tests whether the signed document declares the required controller pose. */
-        bool HasLocomotionPose(const OpenXRApplicationBindings &bindings, XR::XRTrackedDeviceRole role, XR::XRTrackedPoseKind kind) {
-            return std::ranges::any_of(bindings.poses, [=](const OpenXRApplicationPose &pose) {
-                return pose.role == role && pose.kind == kind;
-            });
-        }
-
         using TranslationOutcome = Result<OpenXRTranslationBinding>;
 
         /** @brief Validates the exact digital teleport action and its bounded aim ray. */
@@ -245,7 +246,7 @@ namespace Horo::Application::Internal {
             if (!action || !distance || *distance <= 0.0F || *distance > 100.0F)
                 return Outcome::Failure(InvalidBindings());
             const auto declaration = std::ranges::find(bindings.schema.actions, *action, &XR::XRActionDeclaration::action);
-            if (!HasLocomotionPose(bindings, declaration->role, XR::XRTrackedPoseKind::Aim))
+            if (!HasControllerPose(bindings, declaration->role, XR::XRTrackedPoseKind::Aim))
                 return Outcome::Failure(InvalidBindings());
             return Outcome::Success({*action, declaration->role, *distance});
         }
@@ -268,8 +269,8 @@ namespace Horo::Application::Internal {
             const auto gain = LocomotionNumber(entry.at("gain"));
             const auto &gap = entry.at("maximumTrackingGapMilliseconds");
             if (!gain || *gain <= 0.0F || !Number(gap, 1'000) ||
-                !HasLocomotionPose(bindings, XR::XRTrackedDeviceRole::LeftController, XR::XRTrackedPoseKind::Grip) ||
-                !HasLocomotionPose(bindings, XR::XRTrackedDeviceRole::RightController, XR::XRTrackedPoseKind::Grip))
+                !HasControllerPose(bindings, XR::XRTrackedDeviceRole::LeftController, XR::XRTrackedPoseKind::Grip) ||
+                !HasControllerPose(bindings, XR::XRTrackedDeviceRole::RightController, XR::XRTrackedPoseKind::Grip))
                 return TranslationOutcome::Failure(InvalidBindings());
             return TranslationOutcome::Success(OpenXRArmSwingBinding{*gain, gap.get<std::int64_t>() * 1'000'000});
         }

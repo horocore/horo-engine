@@ -172,6 +172,49 @@ namespace Horo::Editor::Tests {
         }
     }
 
+    TEST_CASE("Installed XR World UI pointer requires an authored aim pose for the selected controller",
+              "[xr][host][bootstrap][install][world-ui]") {
+        using XR::XRTrackedDeviceRole;
+        using XR::XRTrackedPoseKind;
+        auto root = nlohmann::json::parse(InstalledProductFixture::BindingDocument());
+        const auto &action = root["actions"].front();
+        const auto role = action["role"].get<XRTrackedDeviceRole>();
+        REQUIRE(role == XRTrackedDeviceRole::LeftController);
+        root["worldUiPointer"] = {{"action", action["id"]}, {"maximumDistanceMeters", 6.0F}};
+        root["poses"].push_back({{"profile", 1},
+                                 {"set", action["set"]},
+                                 {"role", role},
+                                 {"kind", XRTrackedPoseKind::Aim},
+                                 {"path", "/user/hand/left/input/aim/pose"},
+                                 {"label", "Aim"}});
+        bool valid = true;
+        SECTION("matching aim pose") {}
+        SECTION("absent aim pose") {
+            root["poses"].clear();
+            valid = false;
+        }
+        SECTION("grip pose on the selected controller") {
+            root["poses"][0]["kind"] = XRTrackedPoseKind::Grip;
+            root["poses"][0]["path"] = "/user/hand/left/input/grip/pose";
+            valid = false;
+        }
+        SECTION("aim pose on the opposite controller") {
+            root["poses"][0]["role"] = XRTrackedDeviceRole::RightController;
+            root["poses"][0]["path"] = "/user/hand/right/input/aim/pose";
+            valid = false;
+        }
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, root.dump()};
+        const auto candidate = fixture.Candidate();
+        const auto parsed =
+            Application::Internal::ReadInstalledOpenXRBindings(candidate.component,
+                                                               RequireValue(Packages::PackagePath::Parse("runtime/xr/bindings.json")));
+        REQUIRE(parsed.HasValue() == valid);
+        if (valid) {
+            REQUIRE(parsed.Value()->worldUiPointer.has_value());
+            CHECK(parsed.Value()->worldUiPointer->role == role);
+        }
+    }
+
     TEST_CASE("Installed XR bindings retain only bounded explicitly signed baseline haptic metadata",
               "[xr][host][bootstrap][install][haptics]") {
         using Horo::XR::XRTrackedDeviceRole;
