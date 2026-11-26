@@ -18,7 +18,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotLifecycle::ExecuteLocked */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                     const CancellationToken &cancellation, ExportCapture *capture) {
+                                                                     const CancellationToken &cancellation, ArchiveTransfer *capture) {
         auto &catalog = operation.catalog;
         std::vector<std::byte> bytes;
         const auto ownerLimit = state_->policy.archiveLimits.maximumArchiveBytes;
@@ -26,6 +26,13 @@ namespace Horo::Runtime {
         auto admitted = AcquireArchive(operation, request, bytes, maximumBytes);
         if (admitted.HasError())
             return Result<SaveSlotLifecycleResult>::Failure(admitted.ErrorValue());
+        if (capture && capture->sourceSlot) {
+            const auto &header = admitted.Value().Header();
+            const auto &destination = state_->policy.destination;
+            if (header.slot != *capture->sourceSlot || header.product != destination.name.product ||
+                header.environment != destination.name.environment || header.profile != destination.profile)
+                return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
+        }
         if (request.kind == SaveSlotLifecycleKind::Export) {
             if (auto cancelled = CheckCancellation(cancellation); cancelled.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(cancelled.ErrorValue());

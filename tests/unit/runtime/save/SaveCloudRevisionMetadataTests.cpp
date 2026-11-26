@@ -616,6 +616,120 @@ namespace Horo::Runtime {
             CHECK(stored.Value().Metadata().records.front().lastConfirmed == initial.Value().mutation.Intent().mutation);
         }
 
+        TEST_CASE("A selected cloud archive imports through the local catalog transaction",
+                  "[unit][save][cloud-transport][download]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            const auto existing = fixture.Import(10);
+            const auto payload = fixture.ExportBytes(10);
+            const auto before = fixture.Index();
+            const Application::CloudSaveImportTarget target{fixture.Target(12), 0, {"Downloaded"}};
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session, payload.size() + 128);
+            const auto transport = BoundTransport(frontend, session, scope);
+            const auto revision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{3}});
+            REQUIRE(revision.HasValue());
+            const auto remoteSlot = existing.entry->publication.slot;
+            const auto download = transport.DownloadForImport(31, remoteSlot, revision.Value(), payload.size() + 128);
+            REQUIRE(download.HasValue());
+            REQUIRE(backend->lastCloudRead);
+            const auto &handle = download.Value().Request().handle;
+            REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+            const auto subject = *session.Subject();
+            const auto complete = [&](const std::vector<std::byte> &archive, const Cloud::ProviderObjectRevision &observed) {
+                const auto bytes = Cloud::CloudBlobOwnedBytes::Copy(archive);
+                REQUIRE(bytes.HasValue());
+                const Cloud::CloudObjectHead head{backend->lastCloudRead->key, observed, archive.size(), ComputeSha256(archive)};
+                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                            Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), head, bytes.Value()}).HasValue());
+                auto snapshot = backend->requests.Query(handle);
+                REQUIRE(snapshot.HasValue());
+                return std::move(snapshot).Value();
+            };
+
+            SECTION("The approved revision creates a new generation in an absent slot") {
+                std::optional<SaveSlotLifecycleResult> published;
+                auto watched = transport.OnComplete(download.Value().Request(), [&](const OperationId operation, const auto &snapshot) {
+                    CHECK(operation == 31);
+                    auto result = transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target);
+                    REQUIRE(result.HasValue());
+                    published = std::move(result).Value();
+                });
+                REQUIRE(watched.HasValue());
+                const auto snapshot = complete(payload, revision.Value());
+                CHECK_FALSE(published);
+                CHECK(backend->requests.DispatchCompletions() == 1);
+                REQUIRE(published);
+                REQUIRE(published->entry);
+                CHECK(published->entry->publication.slot == target.destination.address.slot);
+                CHECK(published->entry->publication.generation != existing.entry->publication.generation);
+                fixture.Reopen();
+                const auto after = fixture.Index();
+                REQUIRE(after.entries.size() == 2);
+                CHECK(after.entries.front() == before.entries.front());
+                CHECK(after.entries.back() == *published->entry);
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target),
+                                    SaveErrors::CloudMetadataStale);
+            }
+            SECTION("An updated remote revision cannot replace the selected one") {
+                const auto other = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{4}});
+                REQUIRE(other.HasValue());
+                const auto snapshot = complete(payload, other.Value());
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target),
+                                    Cloud::CloudObjectErrors::RevisionChanged);
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("A valid archive belonging to a different slot remains isolated") {
+                const auto archive = SaveSlotLifecycleTest::ReadOwned(payload);
+                auto header = archive.Header();
+                header.slot = Id<SaveGameSlotId>(11);
+                const auto wrongSlot = SaveSlotLifecycleTest::RewriteHeader(archive, header);
+                const auto snapshot = complete(wrongSlot, revision.Value());
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target),
+                                    SaveErrors::StoragePermissionDenied);
+                CHECK(std::ranges::equal(snapshot.terminal->Value()->bytes.Bytes(), wrongSlot));
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("An explicitly configured import source cannot change the cloud profile") {
+                fixture.owner.reset();
+                auto foreign = fixture.policy.destination;
+                foreign.profile = Id<GameProfileId>(90);
+                foreign.name.owner = UserProfileOwner{foreign.user, foreign.profile};
+                fixture.policy.importSources.push_back(foreign);
+                fixture.Open();
+                const auto archive = SaveSlotLifecycleTest::ReadOwned(payload);
+                auto header = archive.Header();
+                header.profile = foreign.profile;
+                const auto snapshot = complete(SaveSlotLifecycleTest::RewriteHeader(archive, header), revision.Value());
+                auto foreignTarget = target;
+                foreignTarget.sourceScope = 1;
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, foreignTarget),
+                                    SaveErrors::StoragePermissionDenied);
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("Cancellation and occupied destinations leave the catalog intact") {
+                const auto snapshot = complete(payload, revision.Value());
+                CancellationSource stop;
+                stop.RequestCancellation();
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target, stop.Token()),
+                                    SaveErrors::OperationCancelled);
+                const Application::CloudSaveImportTarget occupied{fixture.Target(10), 0, {"Downloaded"}};
+                Cloud::RequireError(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, occupied),
+                                    SaveErrors::StoragePermissionDenied);
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("Invalid archive bytes remain available to the operation and never enter the catalog") {
+                auto damaged = payload;
+                damaged.front() ^= std::byte{1};
+                const auto snapshot = complete(damaged, revision.Value());
+                CHECK(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target).HasError());
+                CHECK(std::ranges::equal(snapshot.terminal->Value()->bytes.Bytes(), damaged));
+                CHECK(fixture.Index().entries == before.entries);
+            }
+        }
+
         TEST_CASE("Cloud catalog publication preserves exact pairing across reload and local slot changes",
                   "[unit][save][cloud-transport][catalog]") {
             SaveSlotLifecycleTest::Fixture fixture;

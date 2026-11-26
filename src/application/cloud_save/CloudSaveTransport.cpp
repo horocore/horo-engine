@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <string_view>
@@ -104,7 +105,41 @@ namespace Horo::Application {
                 return Response::Failure(owned.ErrorValue());
             return Response::Success({.mutation = mutation, .bytes = std::move(owned).Value()});
         }
+
+        /** @brief Requires a terminal observation from the exact admitted read. */
+        Result<void> CheckReadObservation(const PlatformRequestHandle<CloudBlobReadResult> &handle,
+                                          const PlatformRequestSnapshot<CloudBlobReadResult> &completion) {
+            if (!handle.IsValid() || completion.id != handle.Id() || completion.generation != handle.Generation())
+                return Result<void>::Failure(MakeError(RequestErrors::Stale));
+            if (!completion.terminal || !IsTerminal(completion.state))
+                return Result<void>::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks a complete download against the exact revision and address approved for import. */
+        Result<const CloudBlobReadResult *> CheckImportRead(
+            const CloudSaveRequest<CloudBlobReadResult> &admission, const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
+            const CloudBlobReadRequest &request, const ProviderObjectRevision &revision) {
+            using Response = Result<const CloudBlobReadResult *>;
+            if (const auto observed = CheckReadObservation(admission.handle, completion); observed.HasError())
+                return Response::Failure(observed.ErrorValue());
+            if (const auto *error = completion.terminal->ErrorValue())
+                return Response::Failure(*error);
+            const auto *read = completion.terminal->Value();
+            if (!read || completion.state != PlatformRequestState::Succeeded)
+                return Response::Failure(MakeError(CloudObjectErrors::InvalidProviderResponse));
+            if (read->head.revision != revision)
+                return Response::Failure(MakeError(CloudObjectErrors::RevisionChanged));
+            if (const auto valid = ValidateCloudBlobReadCompletion(*read, request, request.subject); valid.HasError())
+                return Response::Failure(valid.ErrorValue());
+            return Response::Success(read);
+        }
     }
+
+    CloudSaveDownload::CloudSaveDownload(const Sha256Digest partition, const Runtime::SaveGameSlotId slot,
+                                         ProviderObjectRevision revision, CloudBlobReadRequest read,
+                                         CloudSaveRequest<CloudBlobReadResult> admission)
+        : partition_(partition), slot_(slot), revision_(std::move(revision)), read_(std::move(read)), admission_(std::move(admission)) {}
 
     CloudSaveUploadProbe::CloudSaveUploadProbe(CloudSaveDurableMutation mutation, const PlatformSubjectHandle subject,
                                                const std::uint64_t maximumBytes, CloudSaveRequest<CloudBlobReadResult> request)
@@ -168,6 +203,63 @@ namespace Horo::Application {
             return frontend_->ReadCloudObject(
                 CloudBlobReadRequest{.subject = subject_, .key = std::move(key).Value(), .maximumBytes = maximumBytes});
         });
+    }
+
+    /** @copydoc CloudSaveTransport::DownloadForImport */
+    Result<CloudSaveDownload> CloudSaveTransport::DownloadForImport(const OperationId operation,
+                                                                    const Runtime::SaveGameSlotId slot,
+                                                                    ProviderObjectRevision revision,
+                                                                    const std::uint64_t maximumBytes) const {
+        using Response = Result<CloudSaveDownload>;
+        if (!revision.IsValid())
+            return Response::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+        auto key = Key(slot);
+        if (key.HasError())
+            return Response::Failure(key.ErrorValue());
+        CloudBlobReadRequest read{subject_, std::move(key).Value(), maximumBytes};
+        auto admission = Admit<CloudBlobReadResult>(operation, [&] { return frontend_->ReadCloudObject(read); });
+        if (admission.HasError())
+            return Response::Failure(admission.ErrorValue());
+        return Response::Success(
+            CloudSaveDownload{journalPartition_, slot, std::move(revision), std::move(read), std::move(admission).Value()});
+    }
+
+    /** @copydoc CloudSaveTransport::ImportDownload */
+    Result<Runtime::SaveSlotLifecycleResult> CloudSaveTransport::ImportDownload(
+        Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+        const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const CloudSaveImportTarget &target,
+        const CancellationToken &cancellation) const {
+        using Response = Result<Runtime::SaveSlotLifecycleResult>;
+        const auto &destination = target.destination;
+        const auto &access = destination.address.namespaceAccess;
+        if (!frontend_->IsOpen() || download.partition_ != journalPartition_ || download.read_.subject != subject_ ||
+            access.expected != scope_.localNamespace)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        if (destination.generation || destination.address.slot == download.slot_)
+            return Response::Failure(MakeError(Runtime::SaveErrors::StoragePermissionDenied));
+        if (cancellation.IsCancellationRequested())
+            return Response::Failure(MakeError(Runtime::SaveErrors::OperationCancelled));
+        const auto read = CheckImportRead(download.Request(), completion, download.read_, download.revision_);
+        if (read.HasError())
+            return Response::Failure(read.ErrorValue());
+        const auto current = lifecycle.ReadCloudRevision(access, scope_);
+        if (current.HasError())
+            return Response::Failure(current.ErrorValue());
+        if (current.Value().Index().revision != destination.catalogRevision)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+
+        try {
+            const auto bytes = read.Value()->bytes.Bytes();
+            const auto staged = std::make_shared<const std::vector<std::byte>>(bytes.begin(), bytes.end());
+            return lifecycle.ImportVerified({.kind = Runtime::SaveSlotLifecycleKind::Import,
+                                             .source = destination,
+                                             .imported = {staged},
+                                             .importSource = target.sourceScope,
+                                             .display = target.display},
+                                            download.slot_, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
+        }
     }
 
     /** @copydoc CloudSaveTransport::DispatchMutation */
@@ -270,11 +362,10 @@ namespace Horo::Application {
     Result<std::optional<CloudMutationResult>> CloudSaveTransport::ObserveUpload(
         const CloudSaveUploadProbe &probe, const PlatformRequestSnapshot<CloudBlobReadResult> &completion) const {
         using Response = Result<std::optional<CloudMutationResult>>;
-        const auto &handle = probe.Request().handle;
-        if (probe.subject_ != subject_ || completion.id != handle.Id() || completion.generation != handle.Generation())
+        if (probe.subject_ != subject_)
             return Response::Failure(MakeError(RequestErrors::Stale));
-        if (!completion.terminal || !IsTerminal(completion.state))
-            return Response::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+        if (const auto observed = CheckReadObservation(probe.Request().handle, completion); observed.HasError())
+            return Response::Failure(observed.ErrorValue());
 
         const auto &mutation = probe.mutation_;
         const auto &intent = mutation.intent_;

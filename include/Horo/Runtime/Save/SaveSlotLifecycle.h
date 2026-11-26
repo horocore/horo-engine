@@ -214,6 +214,15 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<SaveSlotVerifiedExport> ExportVerified(const SaveSlotLifecycleTarget &target, std::size_t maximumBytes,
                                                                    const CancellationToken &cancellation = {});
+        /** @brief Imports a verified source slot within the destination's product, environment and profile.
+         * @param request Standard Import command with immutable staged bytes and exact destination consent.
+         * @param requiredSourceSlot Slot from the authorized source address.
+         * @param cancellation Observed until the normal manifest commit gate.
+         * @return Durable import result or typed validation, authorization or publication failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ImportVerified(const SaveSlotLifecycleRequest &request,
+                                                                     SaveGameSlotId requiredSourceSlot,
+                                                                     const CancellationToken &cancellation = {});
         /** @brief Reads the selected catalog and cloud metadata together under the namespace lease.
          * @param access Exact local binding. @param scope Authenticated coordinator's provider/account binding.
          * @return Validated pair, derived all-unknown evidence for a legacy catalog, or a typed failure.
@@ -319,16 +328,17 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PublishPrepared(const std::optional<SaveStorageWrite> &prepared, std::span<const std::byte> catalog,
                                                    const CancellationToken &cancellation) const;
         /** @brief Caller-owned capture state used only by the bounded export path. */
-        struct ExportCapture final {
+        struct ArchiveTransfer final {
             std::size_t maximumBytes;
             std::optional<SlotGenerationId> parent;
+            std::optional<SaveGameSlotId> sourceSlot;
         };
-        /** @brief Executes a command with optional bounded export capture under the existing lifecycle authority. */
+        /** @brief Executes a command with optional archive transfer constraints under the existing lifecycle authority. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteWithCapture(const SaveSlotLifecycleRequest &request,
-                                                                         const CancellationToken &cancellation, ExportCapture *capture);
+                                                                         const CancellationToken &cancellation, ArchiveTransfer *capture);
         /** @brief Executes a validated command while holding namespace and operation leases. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                    const CancellationToken &cancellation, ExportCapture *capture);
+                                                                    const CancellationToken &cancellation, ArchiveTransfer *capture);
         /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
         [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */

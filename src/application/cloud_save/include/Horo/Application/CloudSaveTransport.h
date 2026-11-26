@@ -23,6 +23,31 @@ namespace Horo::Application {
         PlatformServices::PlatformRequestHandle<T> handle; /**< Frontend-issued cancellation and completion identity. */
     };
 
+    /** @brief An exact cloud revision selected for explicit import into a new local slot. */
+    class CloudSaveDownload final {
+    public:
+        /** @brief Returns the correlation and observation identity for the owning Save operation. */
+        [[nodiscard]] const CloudSaveRequest<PlatformServices::CloudBlobReadResult> &Request() const noexcept { return admission_; }
+
+    private:
+        friend class CloudSaveTransport;
+        CloudSaveDownload(Sha256Digest partition, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision revision,
+                          PlatformServices::CloudBlobReadRequest read,
+                          CloudSaveRequest<PlatformServices::CloudBlobReadResult> admission);
+        Sha256Digest partition_;
+        Runtime::SaveGameSlotId slot_;
+        PlatformServices::ProviderObjectRevision revision_;
+        PlatformServices::CloudBlobReadRequest read_;
+        CloudSaveRequest<PlatformServices::CloudBlobReadResult> admission_;
+    };
+
+    /** @brief An absent destination slot and its host-authorized archive source. */
+    struct CloudSaveImportTarget final {
+        Runtime::SaveSlotLifecycleTarget destination;
+        std::size_t sourceScope; /**< Index of a host-owned import policy entry. */
+        Runtime::SaveSlotDisplayMetadata display;
+    };
+
     /** @brief A bounded read admitted for one immutable, uncertain upload intent. */
     class CloudSaveUploadProbe final {
     public:
@@ -80,6 +105,27 @@ namespace Horo::Application {
          */
         [[nodiscard]] Result<CloudSaveRequest<PlatformServices::CloudBlobReadResult>> Read(
             OperationId operation, Runtime::SaveGameSlotId slot, std::uint64_t maximumBytes) const;
+
+        /** @brief Starts a bounded read for an explicitly selected remote revision.
+         * @param operation Owning Save operation. @param slot Remote logical slot.
+         * @param revision Exact selected remote revision. @param maximumBytes Caller-imposed complete read bound.
+         * @return A download retaining the selection and exact request, or a typed admission failure.
+         */
+        [[nodiscard]] Result<CloudSaveDownload> DownloadForImport(
+            OperationId operation, Runtime::SaveGameSlotId slot, PlatformServices::ProviderObjectRevision revision,
+            std::uint64_t maximumBytes) const;
+
+        /** @brief Validates the received archive and durably imports it into a distinct absent slot.
+         * @param lifecycle Local catalog authority. @param download Admitted remote selection.
+         * @param completion Terminal observation of that exact read. @param target Approved destination and source scope.
+         * @param cancellation Observed until local manifest publication.
+         * @return Normal local import result or a typed rejection. The caller retains immutable received evidence.
+         * @details Runs on the serialized storage lane under the live frontend binding.
+         */
+        [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> ImportDownload(
+            Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
+            const CloudSaveImportTarget &target, const CancellationToken &cancellation = {}) const;
 
         /** @brief Dispatches an exact durable mutation after checking its binding and payload.
          * @param operation Owning Save operation ID.

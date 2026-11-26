@@ -178,7 +178,7 @@ namespace Horo::Runtime {
                                                                     const CancellationToken &cancellation) {
         if (maximumBytes == 0 || !target.generation)
             return Result<SaveSlotVerifiedExport>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
-        ExportCapture capture{.maximumBytes = maximumBytes};
+        ArchiveTransfer capture{.maximumBytes = maximumBytes};
         auto snapshot = ExecuteWithCapture({.kind = SaveSlotLifecycleKind::Export, .source = target}, cancellation, &capture);
         if (snapshot.HasError())
             return Result<SaveSlotVerifiedExport>::Failure(snapshot.ErrorValue());
@@ -187,9 +187,19 @@ namespace Horo::Runtime {
             {.entry = std::move(*exported.entry), .archive = std::move(exported.exported), .parent = capture.parent});
     }
 
+    /** @copydoc SaveSlotLifecycle::ImportVerified */
+    Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ImportVerified(const SaveSlotLifecycleRequest &request,
+                                                                     const SaveGameSlotId requiredSourceSlot,
+                                                                     const CancellationToken &cancellation) {
+        if (request.kind != SaveSlotLifecycleKind::Import || !requiredSourceSlot.IsValid())
+            return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        ArchiveTransfer transfer{.maximumBytes = std::numeric_limits<std::size_t>::max(), .sourceSlot = requiredSourceSlot};
+        return ExecuteWithCapture(request, cancellation, &transfer);
+    }
+
     /** @copydoc SaveSlotLifecycle::ExecuteWithCapture */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteWithCapture(const SaveSlotLifecycleRequest &request,
-                                                                         const CancellationToken &cancellation, ExportCapture *capture) {
+                                                                         const CancellationToken &cancellation, ArchiveTransfer *capture) {
         if (!state_)
             return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         try {
