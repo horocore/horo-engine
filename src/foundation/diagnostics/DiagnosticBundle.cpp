@@ -112,13 +112,28 @@ namespace Horo::Diagnostics {
                    (value[2] == '/' || value[2] == '\\');
         }
 
+        /** @brief Compares diagnostic path markers to a lowercase ASCII literal. */
+        [[nodiscard]] bool EqualsAsciiLower(const std::string_view value, const std::string_view lower) noexcept {
+            return std::ranges::equal(value, lower, [](const char actual, const char expected) {
+                return actual == expected || (actual >= 'A' && actual <= 'Z' && actual - 'A' + 'a' == expected);
+            });
+        }
+
+        /** @brief Matches compact labels that can prefix a forward-slash network path. */
+        [[nodiscard]] bool EndsWithLocalPathLabel(const std::string_view prefix) noexcept {
+            constexpr std::array<std::string_view, 2> labels{"path", "source"};
+            return std::ranges::any_of(labels, [prefix](const std::string_view label) {
+                return prefix.size() >= label.size() && EqualsAsciiLower(prefix.substr(prefix.size() - label.size()), label);
+            });
+        }
+
         /** @brief Recognizes compact diagnostic labels while preserving URI authority separators. */
         [[nodiscard]] bool IsPathBoundary(const std::string_view value, const std::size_t index) noexcept {
             if (index == 0)
                 return true;
             const auto previous = value[index - 1];
             if (previous == ':')
-                return !value.substr(index).starts_with("//");
+                return !value.substr(index).starts_with("//") || EndsWithLocalPathLabel(value.substr(0, index - 1));
             return std::isspace(static_cast<unsigned char>(previous)) || previous == '=' || previous == '"' || previous == '\'' ||
                    previous == '(' || previous == '[';
         }
@@ -126,9 +141,7 @@ namespace Horo::Diagnostics {
         /** @brief Recognizes local file URIs independently of the case of their ASCII scheme. */
         [[nodiscard]] bool StartsWithFileUri(const std::string_view value) noexcept {
             constexpr std::string_view scheme = "file:/";
-            return value.size() >= scheme.size() && std::ranges::equal(value.substr(0, scheme.size()), scheme, [](char actual, char lower) {
-                return actual == lower || (actual >= 'A' && actual <= 'Z' && actual - 'A' + 'a' == lower);
-            });
+            return EqualsAsciiLower(value.substr(0, scheme.size()), scheme);
         }
 
         /** @brief Finds the first local path without treating the tail of a non-file URI scheme as a drive. */

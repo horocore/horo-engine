@@ -794,9 +794,11 @@ TEST_CASE("Support bundles withhold complete local paths from crash text and rec
         output << R"({"records":[)"
                << R"json({"message":"posix-diagnostic at (/home/Private Player/private-slot)"},)json"
                << R"({"message":"compact-diagnostic path:/home/Another Player/compact-slot"},)"
+               << R"({"message":"share-diagnostic Path://private-server/private-share/private-save"},)"
                << R"({"message":"windows-diagnostic at:C:\\Users\\Private Profile\\secret-slot"},)"
                << R"({"message":"uri-diagnostic at FiLe:///home/Other%20Player/local-slot"},)"
                << R"({"source:/home/private-compact-key":{"message":"private-compact-indexed-row"}},)"
+               << R"({"source://private-server/private-key":{"message":"private-network-indexed-row"}},)"
                << R"({"file:///home/private-uri-key":{"message":"private-indexed-row"}},)"
                << R"({"message":"unrelated-diagnostic at https://example.invalid/diagnostics"}]})" << '\n';
         REQUIRE(output.good());
@@ -808,10 +810,11 @@ TEST_CASE("Support bundles withhold complete local paths from crash text and rec
     const auto archive = Read(bundled.Value().outputPath);
     for (const std::string_view withheld : {"Private Player", "Player/private-slot", "Another Player", "compact-slot", "Profile",
                                            "secret-slot", "Other%20Player", "local-slot", "private-uri-key", "private-indexed-row",
-                                           "private-compact-key", "private-compact-indexed-row"})
+                                           "private-compact-key", "private-compact-indexed-row", "private-server", "private-share",
+                                           "private-network-indexed-row"})
         CHECK(archive.find(withheld) == std::string::npos);
-    for (const std::string_view retained : {"posix-diagnostic", "compact-diagnostic", "windows-diagnostic", "uri-diagnostic",
-                                           "https://example.invalid/diagnostics", "[REDACTED_PATH]"})
+    for (const std::string_view retained : {"posix-diagnostic", "compact-diagnostic", "share-diagnostic", "windows-diagnostic",
+                                           "uri-diagnostic", "https://example.invalid/diagnostics", "[REDACTED_PATH]"})
         CHECK(archive.find(retained) != std::string::npos);
 }
 
@@ -819,7 +822,7 @@ TEST_CASE("Support bundle manifest rejects metadata indexed by a local path", "[
     Session session;
     REQUIRE(session.host);
     const auto output = session.directory / "bundle.zip";
-    const auto *key = GENERATE("file:///home/private-save-slot", "source:/home/private-save-slot");
+    const auto *key = GENERATE("file:///home/private-save-slot", "source:/home/private-save-slot", "source://private-server/private-share");
     const auto result = session.host->GenerateDiagnosticBundle({.outputPath = output, .metadata = {{key, "failed"}}});
     REQUIRE(result.HasError());
     CHECK_FALSE(std::filesystem::exists(output));
