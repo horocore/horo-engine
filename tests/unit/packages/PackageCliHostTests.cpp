@@ -742,8 +742,16 @@ namespace {
         const auto revisions = WriteBehaviorMigrationSources(fixture, oldType);
         const bool applies = GENERATE(true, false);
         const bool unreadable = GENERATE(true, false);
+        const bool degraded = GENERATE(true, false);
         if (unreadable)
             fixture.WriteScene("Unreadable.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "{");
+        if (degraded) {
+            const auto unrelated = fixture.project.Path() / "Assets/Unrelated.horoasset";
+            std::ofstream{unrelated} << "{}";
+            auto sidecar = unrelated;
+            sidecar += ".horo";
+            std::ofstream{sidecar} << "{";
+        }
         const auto source = applies ? fixture.graph.archive.Digest() : Sha256Digest{};
         const nlohmann::json transition{{"fromVersion", "1.0.0"}, {"fromArtifactSha256", FormatSha256(source)},
                                        {"renames", {{{"from", oldType}, {"to", newType}}}}};
@@ -773,7 +781,11 @@ namespace {
         InInvocation([&](CliExecutionContext &context) {
             const auto result = preview.adapter->Execute(command, context);
             REQUIRE(result.HasError());
-            CheckBehaviorMigrationDiagnostics(result.ErrorValue(), revisions, applies, unreadable);
+            const auto &error = result.ErrorValue();
+            CheckBehaviorMigrationDiagnostics(error, revisions, applies, unreadable);
+            CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
+                return diagnostic.severity == DiagnosticSeverity::Error && diagnostic.path == "Assets/Unrelated.horoasset.horo";
+            }) == (applies && degraded));
         });
     }
 

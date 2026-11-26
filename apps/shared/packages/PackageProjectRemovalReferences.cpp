@@ -52,13 +52,7 @@ namespace Horo::Application::Internal {
         /** @brief Reports inventory failures alongside importer claims from records admitted by the registry. */
         Error IncompleteImporterInventory(const Assets::AssetRegistryCandidate &candidate,
                                           std::vector<PackageImporterReference> references) {
-            Error error{ErrorCode{"packages.host.asset_inventory_incomplete"}, ErrorDomainId{"packages.host"}};
-            if (!candidate.diagnostics.empty())
-                error = WithCause(std::move(error), candidate.diagnostics.front().error);
-            for (const auto &diagnostic : candidate.diagnostics)
-                error.diagnostics.emplace_back(DiagnosticCode{diagnostic.error.code.Value()}, DiagnosticSeverity::Error,
-                                               diagnostic.error.message, SourceLocation{"packages.host"},
-                                               diagnostic.projectPath.value_or(""));
+            auto error = MakeIncompletePackageInventoryError(candidate);
             std::set<std::string_view> admittedPaths;
             for (const auto &record : candidate.records)
                 admittedPaths.insert(record.sourcePath.String());
@@ -69,6 +63,17 @@ namespace Horo::Application::Internal {
             return error;
         }
     }  // namespace
+
+    /** @copydoc MakeIncompletePackageInventoryError */
+    Error MakeIncompletePackageInventoryError(const Assets::AssetRegistryCandidate &inventory) {
+        Error error{ErrorCode{"packages.host.asset_inventory_incomplete"}, ErrorDomainId{"packages.host"}};
+        if (!inventory.diagnostics.empty())
+            error = WithCause(std::move(error), inventory.diagnostics.front().error);
+        for (const auto &diagnostic : inventory.diagnostics)
+            error.diagnostics.emplace_back(DiagnosticCode{diagnostic.error.code.Value()}, DiagnosticSeverity::Error,
+                                           diagnostic.error.message, SourceLocation{"packages.host"}, diagnostic.projectPath.value_or(""));
+        return error;
+    }
 
     /** @copydoc InspectPackageRemovalImporters */
     Result<std::vector<PackageImporterReference>> InspectPackageRemovalImporters(const Assets::IAssetRegistrySource &assets,

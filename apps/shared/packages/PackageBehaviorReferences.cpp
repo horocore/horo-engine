@@ -5,6 +5,7 @@
 #include "Horo/Packages/PackageMigration.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
+#include "PackageProjectSession.h"
 
 #include <algorithm>
 #include <array>
@@ -731,33 +732,19 @@ namespace Horo::Application::Internal {
         return Inspection::Success(std::move(references));
     }
 
-    /** @brief Scans saved sources against either observed registrations or inert preview claims. */
-    static Result<SavedReferenceScan> ScanSavedReferences(const Assets::IAssetRegistrySource &assets,
-                                                          const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
-                                                          const SavedReferenceOwners &owners,
-                                                          const Assets::AssetRegistryCandidate *reviewed = nullptr) {
+    /** @brief Scans admitted sources and restricts catalog lookups to complete inventories. */
+    static Result<SavedReferenceScan> ScanSavedReferences(const Platform::IProjectReadFiles &files,
+                                                          Platform::ProjectReadContext context, const SavedReferenceOwners &owners,
+                                                          const Assets::AssetRegistryCandidate &inventory) {
         using Inspection = Result<SavedReferenceScan>;
         if (owners.Empty())
             return Inspection::Success({});
         context.deadline =
             std::min(context.deadline, std::chrono::steady_clock::now() + Platform::ProjectSourceReadLimits{}.maximumDuration);
-        if (!reviewed) {
-            const auto candidate = Assets::PrepareAssetRegistryCandidate(assets);
-            if (candidate.HasError())
-                return Inspection::Failure(candidate.ErrorValue());
-            if (candidate.Value().status != Assets::AssetRegistryBuildStatus::Complete)
-                return Inspection::Failure(ReferenceError("packages.host.asset_inventory_incomplete"));
-            return InspectAssets(files, context, candidate.Value().records, {owners, {}});
-        }
-        const bool complete = reviewed->status == Assets::AssetRegistryBuildStatus::Complete;
-        const std::span<const Assets::AssetRecord> records = reviewed->records;
+        const bool complete = inventory.status == Assets::AssetRegistryBuildStatus::Complete;
+        const std::span<const Assets::AssetRecord> records = inventory.records;
         const auto catalog = complete ? records : std::span<const Assets::AssetRecord>{};
-        auto scan = InspectAssets(files, context, records, {owners, catalog});
-        if (scan.HasError() || complete)
-            return scan;
-        auto partial = std::move(scan).Value();
-        partial.failures.MarkInventoryIncomplete();
-        return Inspection::Success(std::move(partial));
+        return InspectAssets(files, context, records, {owners, catalog});
     }
 
     /** @copydoc InspectPackageScenePrefabReferences */
@@ -769,10 +756,12 @@ namespace Horo::Application::Internal {
         const auto owners = IndexOwners(sources.registrations, lock, removal);
         if (owners.HasError())
             return Inspection::Failure(owners.ErrorValue());
-        auto inspected = ScanSavedReferences(sources.assets, sources.files, sources.context, owners.Value(), &inventory);
+        auto inspected = ScanSavedReferences(sources.files, sources.context, owners.Value(), inventory);
         if (inspected.HasError())
             return Inspection::Failure(inspected.ErrorValue());
         auto scan = std::move(inspected).Value();
+        if (!owners.Value().Empty() && inventory.status != Assets::AssetRegistryBuildStatus::Complete)
+            scan.failures.MarkInventoryIncomplete();
         std::vector<Diagnostic> diagnostics;
         diagnostics.reserve(scan.behaviors.size() + scan.senses.size() + scan.components.size() + scan.composition.size());
         for (const auto &reference : scan.behaviors)
@@ -796,7 +785,15 @@ namespace Horo::Application::Internal {
             assertedOwners.behaviors[claim.previous].insert(claim.package);
             targets.emplace(std::pair{claim.package, claim.previous}, &claim.candidate);
         }
-        auto matches = ScanSavedReferences(assets, files, std::move(context), assertedOwners);
+        if (assertedOwners.Empty())
+            return Inspection::Success({});
+        const auto captured = Assets::PrepareAssetRegistryCandidate(assets);
+        if (captured.HasError())
+            return Inspection::Failure(captured.ErrorValue());
+        const auto &inventory = captured.Value();
+        if (inventory.status == Assets::AssetRegistryBuildStatus::Failed)
+            return Inspection::Failure(MakeIncompletePackageInventoryError(inventory));
+        auto matches = ScanSavedReferences(files, std::move(context), assertedOwners, inventory);
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
         auto scan = std::move(matches).Value();
@@ -809,6 +806,12 @@ namespace Horo::Application::Internal {
             diagnostics.emplace_back(DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
                                      std::move(message), SourceLocation{"packages.host"}, match.assetPath);
         }
-        return std::move(scan.failures).Finish(std::move(diagnostics));
+        auto reviewed = std::move(scan.failures).Finish(std::move(diagnostics));
+        if (inventory.status == Assets::AssetRegistryBuildStatus::Complete)
+            return reviewed;
+        auto partial = MakeIncompletePackageInventoryError(inventory);
+        auto &findings = reviewed.HasError() ? reviewed.ErrorValue().diagnostics : reviewed.Value();
+        std::ranges::move(findings, std::back_inserter(partial.diagnostics));
+        return Inspection::Failure(std::move(partial));
     }
 }  // namespace Horo::Application::Internal

@@ -168,6 +168,12 @@ namespace Horo::Application::Internal {
     /** @brief Adds one canonical removal diagnostic for every confirmed saved importer reference. */
     void AppendPackageImporterDiagnostics(std::vector<Diagnostic> &diagnostics, std::span<const PackageImporterReference> references);
 
+    /** @brief Reports asset inventory failures with their project-relative paths.
+     * @param inventory The incomplete candidate from the project asset source.
+     * @return A typed failure containing the inventory diagnostics.
+     */
+    [[nodiscard]] Error MakeIncompletePackageInventoryError(const Assets::AssetRegistryCandidate &inventory);
+
     /** @brief Publishes an approved removal and retains the prior metadata pair for explicit rollback.
      * @param policy Host project/platform policy. @param expected Exact approved request and lock snapshot.
      * @param package Direct request to withdraw. @param files Host filesystem authority.
