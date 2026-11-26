@@ -245,15 +245,14 @@ namespace Horo::AI {
             Result<std::optional<AiTaskState>> StepModel(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                          DecisionStepTrace *trace) {
                 const auto modelWork = ModelWork(*model_);
-                const auto total = graphWork_ + modelWork;
-                if (!budget.Consume(total))
-                    return Result<std::optional<AiTaskState>>::Success(std::nullopt);
-                AiWorkBudget graphBudget{graphWork_};
+                if (budget.Remaining() < graphWork_ + modelWork)
+                    return StepGraph(input, budget, trace);
+                static_cast<void>(budget.Consume(modelWork));
                 const auto &model = *model_->model;
                 std::array<LocalPolicyFeature, LocalLearnedPolicy::MaximumFeatures> features{};
                 const auto output = std::span{features}.first(model_->featureKeys.size());
                 if (!CaptureModelFeatures(*model_, input.blackboard, output))
-                    return StepGraph(input, graphBudget, trace);
+                    return StepGraph(input, budget, trace);
                 AiWorkBudget inferenceBudget{model.RequiredWork()};
                 const LocalPolicyUtilityInput policy{model,
                                                      model_->tasks,
@@ -263,7 +262,7 @@ namespace Horo::AI {
                                                      model.TensorSchemaVersion(),
                                                      input.blackboard.CapturedRevision(),
                                                      inferenceBudget};
-                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy, trace, &providerFailure_);
+                return decision_->StepBudgetedWithLocalPolicy(input, budget, policy, trace, &providerFailure_);
             }
 
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;

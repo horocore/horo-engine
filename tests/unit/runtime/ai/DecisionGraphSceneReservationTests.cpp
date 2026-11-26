@@ -1825,17 +1825,23 @@ namespace Horo::AI {
         }
 
         /** @brief Builds the two-option plan and gives the learned task an optional eligibility requirement. */
-        auto BuildUtilityPolicyPlan(Fixture &fixture, TaskId learned, bool eligible) {
+        auto BuildUtilityPolicyPlan(Fixture &fixture, TaskId learned, bool eligible, BlackboardKeyId feature = {}) {
             auto source = UtilitySource();
             auto &utility = std::get<UtilityDecisionSource>(source.body);
             const auto scalar = utility.requirements.front().key;
             const auto absent = MakeIdentity<BlackboardKeyId>(102);
-            const std::array keys{BlackboardKeyDescriptor{.key = scalar,
+            std::vector keys{BlackboardKeyDescriptor{.key = scalar,
                                                           .kind = BlackboardValueKind::Scalar,
                                                           .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}},
                                   BlackboardKeyDescriptor{.key = absent,
                                                           .kind = BlackboardValueKind::Scalar,
                                                           .presence = BlackboardKeyPresence::Optional}};
+            if (feature.IsValid()) {
+                source.executionTask = MakeIdentity<TaskId>(9000);
+                keys.push_back({.key = feature,
+                                .kind = BlackboardValueKind::SignedInteger,
+                                .defaultValue = BlackboardValue{BlackboardScalarValue{std::int64_t{12}}}});
+            }
             auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
             REQUIRE(schema.HasValue());
             fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
@@ -1950,6 +1956,51 @@ namespace Horo::AI {
             CheckUtilityPolicySteps(step, fixture.probe, choice == "preferred" ? learned : fallback, modelBudget);
             if (choice == "scheduler work")
                 CHECK(schedulerBudget.Remaining() == 3);
+        }
+
+        TEST_CASE("Scene Utility falls back when only the graph fits the remaining work allowance",
+                  "[ai][decision_reservation][local-policy]") {
+            const auto graphFits = GENERATE(true, false);
+            Fixture fixture;
+            const auto learned = MakeIdentity<TaskId>(5003);
+            const auto feature = MakeIdentity<BlackboardKeyId>(104);
+            const auto [plan, fallback] = BuildUtilityPolicyPlan(fixture, learned, true, feature);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            auto next = scene.agent;
+            next.agent.agent = MakeIdentity<AgentId>(2);
+            ++next.owner.entity.index;
+
+            auto [model, tasks] = CookUtilityPolicy(learned);
+            const auto graphWork = plan->MaximumDecisionWorkUnits().value();
+            const auto modelWork = model.RequiredWork() + std::bit_width(MaximumBlackboardKeys);
+            const auto binding = std::make_shared<const AiSceneLocalPolicyBinding>(
+                AiSceneLocalPolicyBinding{std::make_shared<const LocalLearnedPolicy>(std::move(model)), tasks, {feature}});
+            const auto policies =
+                std::make_shared<const AiSceneLocalPolicyCatalog>(AiSceneLocalPolicyCatalog{{scene.descriptor.controller, binding}});
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = runtime.PrepareScene(scene.binding, std::array{scene.agent, next}, std::array{scene.descriptor});
+            REQUIRE(publication.HasValue());
+            REQUIRE(publication.Value()->ValidatePublication().HasValue());
+            publication.Value()->Publish();
+            const auto globalWork = graphWork + modelWork + (graphFits ? graphWork : graphWork - 1);
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint(
+                               {.jobs = jobs,
+                                .scheduler = {.workUnitsPerTick = globalWork, .mode = AiSchedulingMode::BestEffort},
+                                .agent = {.workUnitsPerTick = graphWork + modelWork},
+                                .timing = AiCookedDecisionTiming::BestEffortReactive,
+                                .localPolicies = policies}).HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto tick = scheduler->EvaluateAtDecision(1);
+            REQUIRE(tick.HasValue());
+            CHECK(tick.Value().failed == 0);
+            CHECK(tick.Value().exhausted == (graphFits ? 0 : 1));
+            REQUIRE(fixture.probe.calls.size() == (graphFits ? 2 : 1));
+            CHECK(fixture.probe.calls.front() == "start:" + std::to_string(learned.Value()));
+            if (graphFits)
+                CHECK(fixture.probe.calls.back() == "start:" + std::to_string(fallback.Value()));
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
         }
 
         TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",

@@ -2953,7 +2953,9 @@ retains its existing task lifecycle. Fixed-tick Scene execution binds explicit
 signed-integer Blackboard keys in feature order. Invalid or missing values
 leave selection with Utility scoring. The scheduler admits the combined bound
 for feature reads, inference, Utility scoring and the selected task before
-executing the slice. Task callback errors from either selection path preserve
+executing the model path. A best-effort slice that can afford the cooked graph
+but lacks inference work runs the authored Utility selection. A slice that
+cannot afford the graph yields before task execution. Task callback errors from either selection path preserve
 their original error code and graph node in scheduler diagnostics while the
 operation is live.
 
