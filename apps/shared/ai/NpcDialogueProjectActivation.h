@@ -20,10 +20,11 @@ namespace Horo::App {
     class NpcDialogueProjectActivation final {
     public:
         /** @brief Reads the canonical project AI profile and admits only project/host-shared fields.
+         * A rejected remote approval or endpoint leaves the authored fallback available offline.
          * @param projectRoot Authorized root from which the activation captures the exact project source.
          * @param generation Current host provider activation generation.
          * @param approval Explicit host grant, or null to activate offline without a provider.
-         * @return No value when dialogue is absent, an offline/online activation, or a typed invalid configuration error.
+         * @return No value when dialogue is absent, an offline/online activation, or a typed project or generation error.
          */
         [[nodiscard]] static Result<std::optional<NpcDialogueProjectActivation>> Create(
             const std::filesystem::path &projectRoot, std::uint64_t generation, const NpcDialogueEndpointApproval *approval);

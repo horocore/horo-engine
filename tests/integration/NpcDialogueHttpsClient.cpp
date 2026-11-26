@@ -292,11 +292,17 @@ namespace {
             approval.projectSource.bytes[0] ^= 1;
         if (mode == "other-route")
             approval.endpoint.route.destination = NpcDialogueDestinationId::Create(3).Value();
+        if (mode == "invalid-endpoint")
+            approval.endpoint.endpoint += "?unapproved=1";
+        if (mode == "invalid-approval-fields")
+            approval.fields.push_back(approval.fields.back());
         const bool offline = mode == "offline" || mode == "retired" || mode == "offline-replaced-grant";
         const auto &projectRoot = mode == "copied-project" ? copiedRoot : approvedRoot;
         const auto activation = App::NpcDialogueProjectActivation::Create(projectRoot, 1, offline ? nullptr : &approval);
         if (activation.HasError() || !activation.Value())
             return 13;
+        if ((mode == "invalid-endpoint" || mode == "invalid-approval-fields") && activation.Value()->Binding())
+            return 20;
         return RunScene(*activation.Value(), mode);
     }
 }  // namespace

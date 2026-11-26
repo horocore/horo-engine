@@ -67,7 +67,7 @@ def run_client(client: Path, endpoint: str, ca_bundle: str, mode: str) -> None:
 def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> None:
     endpoint = f"https://127.0.0.1:{server.server_port}/dialogue"
     offline = ("untrusted", "offline", "offline-replaced-grant", "retired", "queued-retire", "disabled-agent", "different-agent", "missing-trigger",
-               "stale-grant", "other-route", "copied-project")
+               "stale-grant", "other-route", "copied-project", "invalid-endpoint", "invalid-approval-fields")
     modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout",
              "disable-before-drain", "cancel-before-drain", "disable-after-drain", "cancel-after-drain",
              "grant-before-drain", "grant-after-drain", "unused-grant-before-drain",
