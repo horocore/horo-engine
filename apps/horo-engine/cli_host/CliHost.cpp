@@ -158,7 +158,8 @@ namespace Horo::Application::Internal {
                                                  .identity = std::move(identity),
                                                  .summaries = {&Runtime::SummarizeSaveTelemetry},
                                                  .summaryOnlyNamespaces = {std::string{Runtime::SaveTelemetryDiagnosticNamespace},
-                                                                           std::string{Runtime::SaveDiagnosticErrorDomain}}});
+                                                                           std::string{Runtime::SaveDiagnosticErrorDomain},
+                                                                           std::string{Runtime::SaveDiagnosticCodeNamespace}}});
             if (!session.observability)
                 return Result<void>::Failure(MakeError(CliErrors::HostFailure));
             auto saveTelemetry = Runtime::SaveTelemetryRegistration::Create();

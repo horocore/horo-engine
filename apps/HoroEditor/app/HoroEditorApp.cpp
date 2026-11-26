@@ -671,6 +671,7 @@ namespace Horo::Editor {
             hostConfiguration.summaries.push_back(&Runtime::SummarizeSaveTelemetry);
             hostConfiguration.summaryOnlyNamespaces.emplace_back(Runtime::SaveTelemetryDiagnosticNamespace);
             hostConfiguration.summaryOnlyNamespaces.emplace_back(Runtime::SaveDiagnosticErrorDomain);
+            hostConfiguration.summaryOnlyNamespaces.emplace_back(Runtime::SaveDiagnosticCodeNamespace);
             auto session = Application::HostObservabilitySession::Start(std::move(hostConfiguration));
             if (session == nullptr)
                 std::fprintf(stderr, "[Observability] local runtime initialization failed; emergency logging remains available\n");

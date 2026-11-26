@@ -33,7 +33,7 @@ namespace Horo::Diagnostics {
         std::size_t maxEntries{256};                               /**< Maximum allowlisted source records. */
         std::size_t maxMetadataEntries{64};                        /**< Maximum caller-vetted metadata records. */
         std::vector<std::string>
-            summaryOnlyNamespaces; /**< At most eight category, subsystem or error-domain roots withheld from redacted entries. */
+            summaryOnlyNamespaces; /**< At most eight category, subsystem, error-domain or code roots withheld from redacted entries. */
     };
 
     /** @brief Summary of a successfully committed diagnostic ZIP bundle. */

@@ -22,6 +22,8 @@
 namespace Horo::Runtime {
     /** @brief Save error domain withheld from raw support-bundle entries. */
     inline constexpr std::string_view SaveDiagnosticErrorDomain{"horo.save"};
+    /** @brief Save diagnostic code namespace used even when a flattened record omits its error domain. */
+    inline constexpr std::string_view SaveDiagnosticCodeNamespace{"save"};
 
     inline constexpr std::size_t MaximumSaveDiagnosticContextEntries = 8;
     inline constexpr std::size_t MaximumSaveDiagnosticCauseDepth = 4;

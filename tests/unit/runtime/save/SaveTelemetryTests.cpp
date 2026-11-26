@@ -73,7 +73,8 @@ namespace {
                          .echoToStderr = false,
                          .captureProcessFaults = captureProcessFaults},
              .summaries = {&SummarizeSaveTelemetry},
-             .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain}}});
+             .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain},
+                                       std::string{SaveDiagnosticCodeNamespace}}});
     }
 
     class Session final {
@@ -616,6 +617,14 @@ TEST_CASE("Support bundles withhold diagnostic records that embed a private Save
                  "fields":{"detail":{"error":{"domain":"horo.save","message":"private-display"}}}},
                 {"domain":"horo.scene","message":"unrelated-diagnostic",
                  "cause":{"domain":"horo.platform","message":"unrelated-cause"}}
+            ]})";
+        }
+        SECTION("A flattened diagnostic identifies its Save namespace only through the error code") {
+            entry = "crash/report.json";
+            output << R"({"records":[
+                {"domain":"horo.scene","message":"private-message-copy",
+                 "diagnostics":[{"code":"save.archive.chunk_hash_mismatch","message":"private-display"}]},
+                {"code":"saver.archive.changed","message":"unrelated-diagnostic"}
             ]})";
         }
         REQUIRE(output.good());

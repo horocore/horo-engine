@@ -1906,8 +1906,9 @@ closed Save failure taxonomy. The CLI terminal bundle result displays the same
 included and excluded Save categories as the archive manifest. Failed or
 cancelled rows with missing or invalid category evidence contribute to the
 unclassified count.
-Editor and CLI bundles withhold both the Save telemetry namespace and the Save
-error domain from their raw JSON evidence. A Save error in a nested cause or
+Editor and CLI bundles withhold the Save telemetry namespace, error domain, and
+diagnostic code namespace from raw JSON evidence. The code namespace also
+identifies flattened diagnostics that omit the domain. A Save error in a nested cause or
 a flattened causal list suppresses each wrapping causal record, since wrappers
 can copy private text or fields. An object or array that directly mixes text,
 numbers, or booleans with a private descendant is withheld even without a
