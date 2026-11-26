@@ -110,7 +110,7 @@ namespace Horo::XR::OpenXRInternal {
         XRFrameId frame;
         XRPassthroughScope scope;
         std::optional<XRPoseSample> referenceToWorld{}; /**< Same prediction's native-reference calibration, when eyes use that space. */
-        NativePassthroughAuthorization authorization; /**< Rechecked after the final native session borrow. */
+        NativePassthroughAuthorization authorization; /**< Checked before submission and after an accepted native frame end. */
     };
 
     /** @brief Explicit normalized depth range and matching metric clip planes used to render every submitted view. */

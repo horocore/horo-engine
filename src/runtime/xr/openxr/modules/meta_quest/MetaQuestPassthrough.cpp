@@ -352,8 +352,8 @@ namespace Horo::XR::OpenXRInternal {
         combined.layerCount = static_cast<std::uint32_t>(layers.size());
         combined.layers = layers.data();
         const auto result = dispatch(session, &combined);
-        // Revocation during the borrowed dispatch invalidates the grant immediately. Pause the provider as soon as the borrow returns.
-        if (result != XR_SUCCESS || !passthrough_.admitted)
+        // A submitted frame still completes while its authorization is withdrawn for subsequent frames.
+        if (result != XR_SUCCESS || !authorization.allows(authorization.context, scope) || !passthrough_.admitted)
             RevokePassthrough();
         return Outcome::Success(result);
     }

@@ -1445,6 +1445,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool revokeOnStatusRead = false;
         bool revokeBeforeSubmit = false;
         bool revokeAtLastCheck = false;
+        bool revokeDuringSubmit = false;
         bool revokeDuringBind = false;
         bool revokeBeforeCreate = false;
         bool denyNative = false;
@@ -1490,6 +1491,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("late platform denial ends the prepared alpha frame without layers") {
             revokeAtLastCheck = true;
+        }
+        SECTION("platform denial during frame end withdraws the grant without ending the same frame again") {
+            revokeDuringSubmit = true;
         }
         SECTION("Setup revokes its live operator consent before compositor submission") {
             revokeOperatorInFlight = true;
@@ -1608,17 +1612,23 @@ namespace Horo::Tests::OpenXRApplication {
         const auto readsBeforeSubmit = permission->reads;
         if (revokeAtLastCheck)
             permission->denyAtRead = readsBeforeSubmit + 2;
+        if (revokeDuringSubmit)
+            fixture.script.frames.onEnd = [permission] { permission->permitted = false; };
         fixture.vulkan->native.commandState.state.Complete();
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.frames.ends == 1);
-        if (revokeBeforeSubmit || revokeAtLastCheck) {
+        if (revokeDuringSubmit) {
+            fixture.script.frames.onEnd = {};
+            permission->permitted = true;
+        }
+        if (revokeBeforeSubmit || revokeAtLastCheck || revokeDuringSubmit) {
             CHECK_FALSE(native.running);
             CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
         }
         const bool composed = active && !revokeInFlight && !revokeOnStatusRead && !revokeDuringBind && !revokeOperatorInFlight &&
                               !revokeBeforeSubmit && !revokeAtLastCheck;
         if (composed || revokeBeforeSubmit || revokeAtLastCheck)
-            CHECK(permission->reads == readsBeforeSubmit + (revokeBeforeSubmit ? 1U : 2U));
+            CHECK(permission->reads == readsBeforeSubmit + (composed ? 3U : (revokeBeforeSubmit ? 1U : 2U)));
         const auto expectedLayers = revokeAtLastCheck ? 0U : (composed ? 2U : 1U);
         CHECK(fixture.script.frames.layers == expectedLayers);
         CHECK(fixture.script.frames.projectionFlags ==

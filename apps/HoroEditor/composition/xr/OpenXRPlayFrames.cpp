@@ -1303,7 +1303,7 @@ namespace Horo::Application::Internal {
                 }};
                 auto ended = compositor.EndPassthroughProjection(
                     frame, *plan, targets, {frame, passthrough->scope, passthrough->referenceToWorld, authorization});
-                if (!consent.withdrawn)
+                if (ended.HasValue() || !consent.withdrawn)
                     return ended;
                 if (auto aborted = host.AbortRenderFrame(); aborted.HasError())
                     return aborted;

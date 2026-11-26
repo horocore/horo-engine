@@ -98,6 +98,24 @@ namespace Horo::Tests::OpenXR {
                 CHECK_FALSE(f.passthrough.liveFeature);
                 RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
             }
+            SECTION("platform denial during submission cannot revive the grant when permission returns") {
+                bool permitted = true;
+                auto liveReceipt = receipt;
+                liveReceipt.authorization = {&permitted, [](void *context, const XRPassthroughScope &) {
+                                                 return *static_cast<const bool *>(context);
+                                             }};
+                f.script.onEnd = [&] { permitted = false; };
+                REQUIRE(f.compositor.EndPassthroughProjection(frame, plan, targets, liveReceipt).HasValue());
+                f.script.onEnd = {};
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+                CHECK(f.script.ends == 1);
+                permitted = true;
+                CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
+                CHECK_FALSE(f.passthrough.running);
+                CHECK(f.passthrough.pauses == 1);
+                REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
+            }
             SECTION("foreign frame and World origin leave the transaction available for abort") {
                 auto wrong = receipt;
                 wrong.frame = {};
