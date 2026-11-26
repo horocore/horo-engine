@@ -662,10 +662,25 @@ class AndroidDeployTests(unittest.TestCase):
                     self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_transport_changed"})
                 self.assertNotIn("private-foreign-device", json.dumps(report))
 
+    def test_openxr_does_not_stop_a_process_when_transport_changes_during_cleanup(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        stop = ("shell", "am", "force-stop", "--user", "10", profile["applicationId"])
+        status, report, commands = self.execute({
+            LOGCAT: log_line(OPENXR),
+            ("get-serialno",): [SERIAL] * 5 + ["private-replacement-device"],
+        }, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_stop_unconfirmed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_transport_changed"})
+        self.assertNotIn(stop, commands)
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+        self.assertNotIn("private-replacement-device", json.dumps(report))
+
     def test_openxr_discards_discovery_when_transport_changes_before_publication(self):
         status, report, _ = self.execute({
             LOGCAT: log_line(OPENXR),
-            ("get-serialno",): [SERIAL] * 5 + ["private-foreign-device"],
+            ("get-serialno",): [SERIAL] * 6 + ["private-foreign-device"],
         }, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "device_transport_changed"))
         self.assertNotIn("observed", report)

@@ -1846,6 +1846,7 @@ class AndroidPackageLaunch:
                 self.recover_process(device, uid)
             elif uid != self.process.uid or deployed_process(device, self.application, uid) != self.process:
                 raise AndroidDeployError("application_process_changed")
+            device.require_identity()
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
                 raise AndroidDeployError("application_stop_unconfirmed")

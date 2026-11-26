@@ -124,6 +124,9 @@ capture session display modes, refresh rates and view extents for its own tuple.
 Android deployment also checks that the foreground user is consistent before
 installation, launch, and evidence publication. A user switch invalidates the
 run. The receipt omits the Android user number.
+Cleanup rechecks the selected ADB transport immediately before stopping the
+attributed process. A transport mismatch prevents the stop request and the
+deployment receipt stays partial.
 The physical smoke record must contain `provenance.androidDeviceBuildSha256`
 from the observed Android system build. It must match the row's
 `deviceBuildSha256` and the discovery receipt. Legacy smoke records remain
