@@ -1,5 +1,6 @@
 """Verify a support bundle produced by a fresh host after an interrupted Save session."""
 
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -25,8 +26,8 @@ def run_probe(binary: Path, directory: Path, phase: str, expected_exit: int) -> 
         raise RuntimeError(f"{phase}: expected exit {expected_exit}, got {completed.returncode}\n{output}")
 
 
-def check_restart(binary: Path, directory: Path) -> None:
-    run_probe(binary, directory, "interrupt", 73)
+def check_restart(binary: Path, directory: Path, native_fault: bool = False) -> None:
+    run_probe(binary, directory, "fault" if native_fault else "interrupt", 74 if native_fault else 73)
     previous = json.loads((directory / "save.session.json").read_bytes())
     if (directory / "save.shutdown.json").exists() or "interruptedSessionId" in previous:
         raise RuntimeError("The first process unexpectedly recorded a clean or prior session")
@@ -41,6 +42,14 @@ def check_restart(binary: Path, directory: Path) -> None:
             raise RuntimeError("The bundle did not associate the interrupted session with the new session")
         if current["previousCleanShutdown"] is not False:
             raise RuntimeError("The bundle reports a clean shutdown after interruption")
+        fault = current.get("interruptedFault")
+        if native_fault:
+            if not fault or fault["class"] != "windows-exception" or fault["code"] != 0xE0420145:
+                raise RuntimeError("The bundle lost the native exception classification")
+            if len(fault["id"]) != 32 or fault["thread"] <= 0:
+                raise RuntimeError("The native exception marker lacks its independent identity or thread")
+        elif fault is not None:
+            raise RuntimeError("An interrupted process without a recorded fault was misclassified")
         if b"interrupted-control-log" not in bundle.read("logs/save.jsonl"):
             raise RuntimeError("The bundle lost the preceding session's unrelated log")
         if any(private_marker in bundle.read(name) for name in bundle.namelist()):
@@ -50,8 +59,10 @@ def check_restart(binary: Path, directory: Path) -> None:
     run_probe(binary, directory, "export", 0)
     with ZipFile(directory / "bundle.zip") as bundle:
         clean = json.loads(bundle.read("metadata/session.json"))
-        if clean["previousCleanShutdown"] is not True or "interruptedSessionId" in clean:
+        if clean["previousCleanShutdown"] is not True or "interruptedSessionId" in clean or "interruptedFault" in clean:
             raise RuntimeError("The bundle confused a later clean shutdown with the earlier interruption")
+    if any(directory.glob("save.fault-*.bin")):
+        raise RuntimeError("A consumed or clean session left its staging marker behind")
 
 
 def check_invalid_marker(binary: Path, directory: Path) -> None:
@@ -74,8 +85,11 @@ def main() -> None:
     if binary.stem != "HoroRuntimeSaveTelemetryTests" or binary.parent != output_dir:
         raise ValueError("Expected the Save telemetry test executable in its configured output directory")
     with TemporaryDirectory(prefix="horo-save-observability-") as root:
-        for check in (check_restart, check_invalid_marker):
-            directory = Path(root) / check.__name__
+        checks = {"interrupt": check_restart, "invalid_marker": check_invalid_marker}
+        if sys.platform == "win32":
+            checks["native_fault"] = partial(check_restart, native_fault=True)
+        for name, check in checks.items():
+            directory = Path(root) / name
             directory.mkdir()
             (directory / "save-observability-fixture").touch(exist_ok=False)
             check(binary, directory)

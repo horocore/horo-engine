@@ -5,6 +5,7 @@
 #include "Horo/Foundation/Diagnostics/OperationHistory.h"
 #include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
+#include "ProcessFaultMarker.h"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,7 @@ namespace Horo::Log {
             std::mutex lifecycleMutex;
             std::shared_ptr<StructuredLogStore> store;
             std::filesystem::path shutdownMarkerPath;
+            std::filesystem::path faultMarkerPath;
             std::string sessionId;
             bool writeSessionMarkers{};
             std::atomic<std::uint64_t> sessionSequence{};
@@ -250,9 +252,22 @@ namespace Horo::Log {
             return std::format("{}-{}-{}", timestamp, ProcessId(), State().sessionSequence.fetch_add(1));
         }
 
+        /** @brief Locates the private staging artifact associated with one validated session. */
+        std::filesystem::path FaultMarkerPath(const LoggerConfiguration &configuration, const std::string_view sessionId) {
+            return configuration.logDirectory / std::format("{}.fault-{}.bin", configuration.baseName, sessionId);
+        }
+
+        /** @brief Writes only the scalar identity and classification recovered from a completed native marker. */
+        void AppendInterruptedFault(std::string &content, const Internal::ProcessFault &fault) {
+            content += std::format(
+                R"(,"interruptedFault":{{"id":"{:08x}{:08x}{:08x}{:08x}","class":"windows-exception","code":{},"thread":{}}})",
+                fault.id[0], fault.id[1], fault.id[2], fault.id[3], fault.code, fault.thread);
+        }
+
         /** @brief Writes immutable current-session identity without private machine data. */
         bool WriteSessionMarker(const LoggerConfiguration &configuration, const std::string_view sessionId,
-                                const std::optional<std::string> &previousSessionId, const bool previousCleanShutdown) {
+                                const std::optional<std::string> &previousSessionId, const bool previousCleanShutdown,
+                                const std::optional<Internal::ProcessFault> &fault) {
             std::string content;
             content.reserve(configuration.hostName.size() + configuration.hostVersion.size() + sessionId.size() + 192U);
             content += R"({"schemaVersion":1,"sessionId":")";
@@ -270,6 +285,8 @@ namespace Horo::Log {
                 content += R"(,"interruptedSessionId":")";
                 AppendJsonEscaped(content, *previousSessionId);
                 content += '"';
+                if (fault)
+                    AppendInterruptedFault(content, *fault);
             }
             content += "}\n";
             return WriteMarkerAtomically(configuration.logDirectory / (configuration.baseName + ".session.json"), content);
@@ -688,11 +705,24 @@ namespace Horo::Log {
         const std::optional<std::string> previousSessionId = ReadMarkerSessionId(sessionMarkerPath);
         const std::optional<std::string> cleanSessionId = ReadMarkerSessionId(shutdownMarkerPath);
         const bool previousCleanShutdown = previousSessionId.has_value() && cleanSessionId == previousSessionId;
+        const bool captureFaults = resolved.writeSessionMarkers && resolved.captureProcessFaults;
+        std::filesystem::path priorFaultPath;
+        if (captureFaults && previousSessionId)
+            priorFaultPath = FaultMarkerPath(resolved, *previousSessionId);
+        const auto fault = !priorFaultPath.empty() && !previousCleanShutdown ? Internal::ReadProcessFault(priorFaultPath) : std::nullopt;
+
         const std::string sessionId = CreateSessionId();
-        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousSessionId, previousCleanShutdown)) {
+        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousSessionId, previousCleanShutdown, fault)) {
             static_cast<void>(Telemetry::Runtime::Shutdown());
             std::fprintf(stderr, "[Logger] failed to persist session identity\n");
             return false;
+        }
+        if (!priorFaultPath.empty())
+            Internal::DiscardProcessFaultMarker(priorFaultPath);
+        if (captureFaults) {
+            auto path = FaultMarkerPath(resolved, sessionId);
+            if (Internal::ArmProcessFaultMarker(path))
+                state.faultMarkerPath = std::move(path);
         }
 
         state.level.store(ParseEnvironmentLevel(state.level.load()));
@@ -718,10 +748,12 @@ namespace Horo::Log {
         if (state.ownsRuntime.exchange(false)) {
             static_cast<void>(EmitLog("observability.shutdown", Level::Info, "Observability runtime stopping", {}, {}));
             const bool clean = Telemetry::Runtime::Shutdown();
-            if (clean && state.writeSessionMarkers && !WriteShutdownMarker(state.shutdownMarkerPath, state.sessionId))
+            const bool noFault = state.faultMarkerPath.empty() || Internal::DisarmProcessFaultMarker(state.faultMarkerPath);
+            if (clean && noFault && state.writeSessionMarkers && !WriteShutdownMarker(state.shutdownMarkerPath, state.sessionId))
                 std::fprintf(stderr, "[Logger] failed to persist clean-shutdown marker\n");
         }
         state.shutdownMarkerPath.clear();
+        state.faultMarkerPath.clear();
         state.sessionId.clear();
         state.writeSessionMarkers = false;
         state.SetStore({});

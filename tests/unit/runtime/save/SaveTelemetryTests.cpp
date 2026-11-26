@@ -24,6 +24,8 @@
 #include <type_traits>
 
 #if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <io.h>
 #else
 #include <unistd.h>
@@ -58,7 +60,8 @@ namespace {
 
     /** @brief Starts the host with the Save export policy used by the product entry points. */
     std::unique_ptr<Application::HostObservabilitySession> StartSaveHost(const std::filesystem::path &directory,
-                                                                        const bool includeSave = true) {
+                                                                        const bool includeSave = true,
+                                                                        const bool captureProcessFaults = false) {
         return Application::HostObservabilitySession::Start(
             {.logging = {.logDirectory = directory,
                          .baseName = "save",
@@ -66,7 +69,8 @@ namespace {
                          .subsystemPrefixes = includeSave ? std::vector<std::string>{} : std::vector<std::string>{"other"},
                          .metricCollectionLevel =
                              includeSave ? Telemetry::MetricCollectionLevel::Core : Telemetry::MetricCollectionLevel::Off,
-                         .echoToStderr = false},
+                         .echoToStderr = false,
+                         .captureProcessFaults = captureProcessFaults},
              .summaries = {&SummarizeSaveTelemetry},
              .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain}}});
     }
@@ -415,17 +419,32 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
 TEST_CASE("Save diagnostics across an interrupted host and restart", "[.][save-observability-process]") {
     const auto *mode = std::getenv("HORO_SAVE_OBSERVABILITY_PHASE");
     REQUIRE(mode);
+    const std::string_view phase{mode};
     const auto directory = std::filesystem::current_path();
     REQUIRE(std::filesystem::is_regular_file(directory / "save-observability-fixture"));
-    const auto host = StartSaveHost(directory);
+#if defined(_WIN32)
+    if (phase == "fault") {
+        SetUnhandledExceptionFilter(+[](EXCEPTION_POINTERS *) -> LONG {
+            TerminateProcess(GetCurrentProcess(), 74);
+            return EXCEPTION_CONTINUE_SEARCH;
+        });
+    }
+#endif
+    const auto host = StartSaveHost(directory, true, true);
     REQUIRE(host);
-    if (std::string_view{mode} == "interrupt") {
+    if (phase == "interrupt" || phase == "fault") {
         REQUIRE(PublishLog("runtime.save.legacy", "private-interrupted-save-value"));
         REQUIRE(PublishLog("runtime.scene", "interrupted-control-log"));
         REQUIRE(Log::Logger::Flush());
+#if defined(_WIN32)
+        if (phase == "fault") {
+            RaiseException(0xE0420145U, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+            FAIL("The native fault unexpectedly returned");
+        }
+#endif
         std::_Exit(73);
     }
-    REQUIRE(std::string_view{mode} == "export");
+    REQUIRE(phase == "export");
     REQUIRE(host->GenerateDiagnosticBundle({.outputPath = directory / "bundle.zip"}).HasValue());
 }
 

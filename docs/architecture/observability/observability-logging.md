@@ -1196,6 +1196,16 @@ shutdown marker, the current session metadata includes `interruptedSessionId`.
 Support bundles can correlate this identifier with retained startup records.
 The identifier alone classifies an interruption and leaves its cause unknown.
 
+Host executables opt in through `LoggerConfiguration::captureProcessFaults`.
+On Windows this prepares one small local marker per session and adds a
+top-level exception filter while the logger is active. The filter writes the
+exception code and thread ID, then delegates to the preceding filter or normal
+Windows exception handling. The next startup associates a complete marker with
+the interrupted session and exposes its random ID, class, code and thread as
+`interruptedFault` in the current session metadata. A clean shutdown removes
+unused staging. The marker contains no exception parameters, memory dump or
+user data. Hosts without native capture still report unclean shutdowns.
+
 [ADR-048](../../adr/048-gpu-crash-and-device-loss-diagnostic-bundles.md) extends
 this two-phase model for renderer incidents without weakening it. A process fault
 adds only preallocated scalar renderer/device/frame context to the marker. A live

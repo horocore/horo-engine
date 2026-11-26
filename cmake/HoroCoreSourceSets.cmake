@@ -26,6 +26,7 @@ set(HORO_FOUNDATION_SOURCES
     foundation/text/String.cpp
     foundation/text/Utf8.cpp
     foundation/logging/Logger.cpp
+    foundation/logging/ProcessFaultMarker.cpp
     foundation/logging/LogContext.cpp
     foundation/logging/StructuredLogStore.cpp
     foundation/telemetry/Telemetry.cpp
