@@ -108,25 +108,29 @@ namespace {
         return publication;
     }
 
-    /** @brief Cancels a queued remote turn before the I/O worker can send any request. */
+    /** @brief Releases the I/O worker after retirement and before the next presentation poll. */
     int RunQueuedRetirement(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
-                            const NpcDialogueGrant &grant, NpcDialogueTriggerId trigger, bool disableAgent) {
+                            const NpcDialogueGrant &grant, NpcDialogueTriggerId trigger, std::string_view mode) {
         const auto deadline = std::chrono::steady_clock::now() + 5s;
         std::promise<void> release;
         if (HoldIo(jobs, release).HasError())
             return 11;
         if (scene.Start(owner, trigger, grant, 1, 10, deadline, {}).HasError())
             return 7;
-        if (disableAgent) {
-            if (runtime.DisableAtSafePoint(owner).HasError() || scene.Pump(grant, 2) ||
-                scene.Start(owner, trigger, grant, 2, 10, deadline, {}).HasValue())
+        if (mode == "disabled-agent") {
+            if (runtime.DisableAtSafePoint(owner).HasError())
                 return 14;
+        } else if (mode == "queued-scene-shutdown") {
+            runtime.BeginShutdown();
         } else {
             scene.Retire();
         }
         release.set_value();
         jobs.Shutdown(ShutdownPolicy::Drain);
-        return CheckTimeline(scene, grant, true, 0) ? 0 : 10;
+        return !scene.Pump(grant, 2) && scene.Start(owner, trigger, grant, 2, 10, deadline, {}).HasError() &&
+                       CheckTimeline(scene, grant, true, 0)
+                   ? 0
+                   : 10;
     }
 
     /** @brief Applies the selected owner change before or after the HUD takes the cue. */
@@ -210,8 +214,8 @@ namespace {
         if (mode == "different-agent" || mode == "missing-trigger")
             return RunRejectedTrigger(scene, owner, grant, mode);
         const auto trigger = NpcDialogueTriggerId::Create(AuthoredTrigger).Value();
-        if (mode == "queued-retire" || mode == "disabled-agent")
-            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode == "disabled-agent");
+        if (mode == "queued-retire" || mode == "disabled-agent" || mode == "queued-scene-shutdown")
+            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode);
         return RunTurn(scene, runtime, owner, grant, trigger, mode);
     }
 

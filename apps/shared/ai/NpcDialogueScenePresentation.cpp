@@ -1,4 +1,5 @@
 #include "NpcDialogueScenePresentation.h"
+#include "Horo/AI/AIRuntimeCapability.h"
 
 #include <algorithm>
 #include <limits>
@@ -121,6 +122,10 @@ namespace Horo::App {
             return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
         if (!CanStartTurn())
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+        const auto lifetime = runtime_->CapabilityAtSafePoint().CaptureAgentLifetime(agent);
+        if (lifetime.HasError())
+            return Result<void>::Failure(lifetime.ErrorValue());
+        auto turnCancellation = CancellationToken::AnyOf(cancellation, lifetime.Value());
         const AI::NpcDialogueRequestIdentity request{agent, grant.providerGeneration, lastTurn_ + 1};
         auto captured = AI::NpcDialogueTurn::Capture(request, grant.route, grant, binding->facts, std::span{cues_}.first(count_), fallback_,
                                                       deadlineTick);
@@ -130,11 +135,11 @@ namespace Horo::App {
         lastTurn_ = request.turn;
         request_ = request;
         subject_ = binding->agent;
-        cancellation_ = cancellation;
+        cancellation_ = std::move(turnCancellation);
         if (provider_) {
-            if (const auto projection = turn.Context(request, grant, tick, cancellation)) {
+            if (const auto projection = turn.Context(request, grant, tick, cancellation_)) {
                 ProviderDisclosure disclosure{grant, *projection};
-                auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation);
+                auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation_);
                 if (job.HasValue()) {
                     pendingDisclosure_.emplace(std::move(disclosure));
                     pending_.emplace<AI::NpcDialogueJob>(std::move(job).Value());
@@ -156,16 +161,10 @@ namespace Horo::App {
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (!queue_ || !SceneIsCurrent())
             return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
-        const auto snapshot = runtime_->Snapshot();
-        if (snapshot.HasError())
-            return Result<void>::Failure(snapshot.ErrorValue());
-        const auto agents = snapshot.Value().Agents();
-        const auto agent = std::ranges::find_if(agents, [subject = binding->agent](const auto &record) {
-            return record.agent.agent == subject && record.state == AI::AiAgentActivationState::Active;
-        });
-        if (agent == agents.end())
-            return Result<void>::Failure(MakeError(AI::AIErrors::HandleInvalid));
-        return Start(agent->handle, trigger, grant, tick, deadlineTick, deadline, cancellation);
+        const auto agent = runtime_->CapabilityAtSafePoint().ResolveAgent(binding->agent);
+        if (agent.HasError())
+            return Result<void>::Failure(agent.ErrorValue());
+        return Start(agent.Value(), trigger, grant, tick, deadlineTick, deadline, cancellation);
     }
 
     /** @copydoc NpcDialogueScenePresentation::Pump */

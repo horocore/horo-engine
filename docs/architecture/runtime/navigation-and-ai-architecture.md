@@ -2381,7 +2381,10 @@ The Scene presentation channel owns one in-flight turn and an immutable mapping
 from cue IDs to the semantic caption catalog. It accepts increasing turn IDs
 for its exact Scene incarnation, follows the latest agent identity on each
 presentation update, and drains through the standard HUD caption timeline.
-Scene retirement cancels pending work and drops undelivered captions. Delivery
+Scene retirement cancels pending work and drops undelivered captions. The
+worker observes the captured NPC lifetime as well as the caller's cancellation.
+Disabling the NPC or retiring its Scene therefore cancels queued I/O before
+the next presentation poll. Delivery
 also checks the exact NPC generation and turn cancellation before admitting the
 queued cue to the HUD timeline. The HUD
 owner resets the old caption session when switching Scenes.
