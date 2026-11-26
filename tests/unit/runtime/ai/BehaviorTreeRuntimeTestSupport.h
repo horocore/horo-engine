@@ -58,6 +58,7 @@ namespace Horo::AI::BehaviorTreeTestSupport {
         CancellationSource *cancellation{};
         std::atomic_bool *withdrawOnStart{};
         std::atomic_bool *withdrawOnResume{};
+        AiTaskContinuation *captureContinuation{};
         bool invalidOutput{};
 
         Probe() {
@@ -82,6 +83,8 @@ namespace Horo::AI::BehaviorTreeTestSupport {
             const auto id = context.node.Value();
             ++probe_->starts[id];
             probe_->handles[id] = operation.task;
+            if (probe_->captureContinuation)
+                *probe_->captureContinuation = context.continuation;
             probe_->order[probe_->orderCount++] = id;
             if (probe_->withdrawOnStart)
                 probe_->withdrawOnStart->store(false);

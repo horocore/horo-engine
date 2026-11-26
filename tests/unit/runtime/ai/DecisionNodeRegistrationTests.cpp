@@ -182,6 +182,46 @@ namespace Horo::AI {
             CHECK(fixture.probe->cleanups[1] == 1);
         }
 
+        TEST_CASE("A queued decision completion rechecks the provider that admitted the task", "[ai][decision-node]") {
+            using enum AiTaskState;
+            AiTaskContinuation continuation;
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            fixture.probe->captureContinuation = &continuation;
+            fixture.probe->outcome[1] = Running;
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            const auto registration = Registration(fixture.probe);
+            const auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            const auto plan = fixture.Plan();
+            auto executor = generation->CreateExecutor(generation, *plan, {});
+            REQUIRE(executor.HasValue());
+            const BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            auto created = BehaviorTreeInstance::Create(plan, binding, std::move(executor).Value());
+            REQUIRE(created.HasValue());
+            auto tree = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*tree, 1) == Running);
+            AiTaskTerminalResult success{.state = Succeeded};
+            const auto published = continuation.PublishTerminal(success);
+            REQUIRE(published.HasValue());
+            REQUIRE(published.Value() == AiTaskPublicationDisposition::Accepted);
+
+            auto expected = Succeeded;
+            SECTION("the provider remains admitted") {}
+            SECTION("revocation wins over the previously queued success") {
+                admission->store(false);
+                expected = Cancelled;
+            }
+            CHECK(fixture.Evaluate(*tree, 2) == expected);
+            REQUIRE(fixture.probe->terminals[1]);
+            CHECK(fixture.probe->terminals[1]->state == expected);
+            CHECK(fixture.probe->resumes[1] == 0);
+            CHECK(fixture.probe->aborts[1] == (expected == Cancelled ? 1U : 0U));
+            tree->Shutdown();
+            CHECK(fixture.probe->cleanups[1] == 1);
+            CHECK_FALSE(continuation.IsCurrent());
+        }
+
         TEST_CASE("Bound decision executor replacement prepares new node callbacks before cancelling the old tree", "[ai][decision-node]") {
             using enum BehaviorTreeOperation;
             using enum AiTaskState;

@@ -1,4 +1,5 @@
 #include "Horo/AI/AITaskContinuation.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 
 #include "AITaskMailbox.h"
 
@@ -47,6 +48,11 @@ namespace Horo::AI {
         return mailbox_ && !operation_.IsCancellationRequested() && mailbox_->IsCurrent(slot_, operation_.task);
     }
 
+    /** @copydoc AiTaskContinuation::BindProvider */
+    bool AiTaskContinuation::BindProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) const noexcept {
+        return !mailbox_ || mailbox_->BindProvider(slot_, operation_.task, provider);
+    }
+
     namespace Detail {
         /** @copydoc AiTaskMailbox::AiTaskMailbox */
         std::uint64_t AiTaskMailbox::StorageBytes(std::size_t capacity) noexcept {
@@ -62,12 +68,24 @@ namespace Horo::AI {
                 return Result<AiTaskContinuation>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
             } else {
                 record.task = operation.task;
+                record.provider.reset();
                 record.pending = {};
                 record.pendingGeneration.store(0);
                 record.published = false;
                 record.generation.store(operation.task.slot.generation);
                 return Result<AiTaskContinuation>::Success(AiTaskContinuation(shared_from_this(), slot, operation));
             }
+        }
+
+        /** @copydoc AiTaskMailbox::BindProvider */
+        bool AiTaskMailbox::BindProvider(const std::size_t slot, const TaskHandle task,
+                                         const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept {
+            auto &record = slots_[slot];
+            const std::unique_lock lock(record.mutex, std::try_to_lock);
+            if (!lock.owns_lock() || record.task != task || !IsCurrent(slot, task) || !provider || !provider->CanAdmit())
+                return false;
+            record.provider = provider;
+            return true;
         }
 
         /** @copydoc AiTaskMailbox::Take */
@@ -77,7 +95,14 @@ namespace Horo::AI {
             if (!lock.owns_lock() || record.task != task || !IsCurrent(slot, task))
                 return {};
             record.pendingGeneration.store(0);
-            return std::exchange(record.pending, {});
+            auto pending = std::exchange(record.pending, {});
+            if (record.provider) {
+                const auto provider = record.provider->lock();
+                if (!provider || !provider->CanAdmit())
+                    return Pending{AiTaskTerminalResult{.state = AiTaskState::Cancelled,
+                                                        .cancellationReason = AiTaskCancellationReason::AgentGenerationRetired}};
+            }
+            return pending;
         }
 
         /** @copydoc AiTaskMailbox::HasPending */

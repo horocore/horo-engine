@@ -24,6 +24,9 @@ namespace Horo::AI::Detail {
         [[nodiscard]] static std::uint64_t StorageBytes(std::size_t capacity) noexcept;
         /** @brief Rebinds an exclusively owner-reserved slot to a fresh task generation. */
         [[nodiscard]] Result<AiTaskContinuation> Bind(std::size_t slot, const AiTaskOperationContext &operation);
+        /** @brief Records exact provider authority without extending its lifetime past tree retirement. */
+        [[nodiscard]] bool BindProvider(std::size_t slot, TaskHandle task,
+                                        const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept;
         /** @brief Takes one pending candidate and wake without waiting for a producer. */
         [[nodiscard]] Pending Take(std::size_t slot, TaskHandle task);
         /** @brief Checks whether the owner can attempt to take a current event or terminal result. */
@@ -41,6 +44,7 @@ namespace Horo::AI::Detail {
             std::atomic<std::uint32_t> generation{};
             std::atomic<std::uint32_t> pendingGeneration{};
             TaskHandle task;
+            std::optional<std::weak_ptr<const DecisionNodeGeneration>> provider;
             Pending pending;
             bool published{};
         };

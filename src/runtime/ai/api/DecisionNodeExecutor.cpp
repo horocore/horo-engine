@@ -166,6 +166,8 @@ namespace Horo::AI {
             auto *node = Find(context.node, DecisionNodeRole::Task);
             if (!node || node->operation)
                 return Failure<AiTaskState>(AIErrors::TaskTransitionInvalid);
+            if (!context.continuation.BindProvider(generation_))
+                return Result<AiTaskState>::Success(AiTaskState::Cancelled);
             CallbackScope scope(invoking_);
             node->operation = operation;
             node->aborted = false;

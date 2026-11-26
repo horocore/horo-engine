@@ -61,6 +61,9 @@ unauthorized proposals yield distinct typed outcomes. Neither late completion
 nor a retried callback can apply a second intent. Teardown revokes admission,
 cancels owned requests, and drains or retires their provider leases before code
 or model data is unloaded.
+The decision mailbox rechecks a registered task provider when consuming its
+queued completion. Provider retirement invalidates a queued success even when
+the result was submitted before revocation.
 
 ### Deterministic and adaptive execution
 
