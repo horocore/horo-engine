@@ -156,13 +156,21 @@ namespace Horo::Editor {
                                                                             std::function<bool()> authorized,
                                                                             std::span<const AgentSceneLightUpdate> lights) {
         using Output = Result<std::uint64_t>;
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(RejectReview(SceneTransactionFailure::Cancelled));
         ReconcileAgentSceneReview();
         if (updates.size() > MaximumProposalObjects || renames.size() > MaximumProposalObjects - updates.size() ||
             lights.size() > MaximumProposalObjects - updates.size() - renames.size() ||
             (updates.empty() && renames.empty() && lights.empty()))
             return Output::Failure(RejectReview(SceneTransactionFailure::Invalid));
-        if (authorized && !authorized())
-            return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
+        if (authorized) {
+            auto check = std::make_shared<AgentSceneAuthorityCheck>(AgentSceneAuthorityCheck{std::move(authorized)});
+            if (!check->Run())
+                return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
+            authorized = [check = std::move(check)] { return check->Run(); };
+        }
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(RejectReview(SceneTransactionFailure::Cancelled));
         const auto current = InspectSceneRevision();
         if (current.HasError() || current.Value() != revision || !CanReviewAgentSceneEdits())
             return Output::Failure(RejectReview(SceneTransactionFailure::Stale));
@@ -170,10 +178,6 @@ namespace Horo::Editor {
             m_agentSceneReviewSerial == std::numeric_limits<std::uint64_t>::max() ||
             revision.epoch == std::numeric_limits<std::uint64_t>::max())
             return Output::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
-        if (authorized) {
-            auto check = std::make_shared<AgentSceneAuthorityCheck>(AgentSceneAuthorityCheck{std::move(authorized)});
-            authorized = [check = std::move(check)] { return check->Run(); };
-        }
         CancellationSource lifetime{cancellation};
         const SceneTransactionContext context{{m_workspaceSession, revision.epoch + 1},
                                               revision.revision,
@@ -279,7 +283,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::IsAgentSceneReviewCurrent */
     bool EditorWorkspaceController::IsAgentSceneReviewCurrent(const std::uint64_t review) const {
-        if (!m_agentSceneReview || m_agentSceneReview->id != review)
+        if (!m_agentSceneReview || m_agentSceneReview->id != review || m_agentSceneReview->context.cancellation.IsCancellationRequested())
             return false;
         const auto authorized = m_agentSceneReview->authorized;
         if ((authorized && !authorized()) || !m_agentSceneReview || m_agentSceneReview->id != review)

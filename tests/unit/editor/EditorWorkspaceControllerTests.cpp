@@ -29,6 +29,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -476,9 +477,28 @@ namespace {
         const std::array duplicate{renames.front(), renames.front()};
         CHECK(controller.PreviewAgentSceneEdits(revision, updates, duplicate, proposal.Token()).HasError());
         CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        const auto denied = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token(), []() -> bool {
+            throw std::runtime_error("fixture authorization failure");
+        });
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Unauthorized).code.Value());
+        CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        CHECK(origin() == baseline);
+
+        CancellationSource abandoned;
+        abandoned.RequestCancellation();
+        const auto cancelled = controller.PreviewAgentSceneEdits(revision, updates, renames, abandoned.Token(), [] {
+            FAIL_CHECK("Cancelled proposals must not ask for authorization");
+            return true;
+        });
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Cancelled).code.Value());
+        CHECK_FALSE(controller.ViewModel().agentSceneReview);
         std::optional<std::uint64_t> replaceOnAuthorityCheck;
         std::optional<std::uint64_t> replacementReview;
+        unsigned authorizationChecks{};
         const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token(), [&] {
+            ++authorizationChecks;
             if (const auto previous = std::exchange(replaceOnAuthorityCheck, std::nullopt)) {
                 REQUIRE(controller.CancelAgentSceneReview(*previous));
                 const std::array replacement{AgentSceneObjectRename{object.id.value, "Replacement review"}};
@@ -553,12 +573,14 @@ namespace {
         }
         SECTION("approval of a cancelled proposal reports withdrawal once") {
             proposal.RequestCancellation();
+            const auto previousChecks = authorizationChecks;
             EditorWorkspaceViewCommandData approval;
             approval.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
             approval.agentSceneReviewDecision = {preview.Value(), true};
             controller.ProcessCommand(approval);
             CHECK(origin() == baseline);
             CHECK(withdrawn == 1);
+            CHECK(authorizationChecks == previousChecks);
             CHECK(events.empty());
         }
         SECTION("a lost runtime scene cannot leave the retired preview visible") {
