@@ -529,11 +529,32 @@ namespace Horo::Editor {
             }
 
             /** @brief Presents distinct owner permission requests without opening capture. */
-            void DrawListeningPermissions(const ILocalizationService &locale) {
-                if (listening_->NeedsMicrophonePermission() && Button(locale, "xr_listening_microphone_permission", true))
+            void DrawListeningPermissions(const ILocalizationService &locale, const EditorImmersiveListening::StartAvailability &availability) {
+                if (availability.requestMicrophone && Button(locale, "xr_listening_microphone_permission", true))
                     listening_->RequestMicrophone();
-                if (listening_->NeedsSpeechPermission() && Button(locale, "xr_listening_speech_permission", true))
+                if (availability.requestSpeech && Button(locale, "xr_listening_speech_permission", true))
                     listening_->RequestSpeech();
+            }
+
+            /** @brief Explains why the current capture action is unavailable. */
+            static const char *ListeningBlockerKey(const EditorImmersiveListening::StartAvailability::Blocker blocker) noexcept {
+                using enum EditorImmersiveListening::StartAvailability::Blocker;
+                switch (blocker) {
+                    case PermissionPending:
+                        return "xr_listening_permission_pending";
+                    case PermissionDenied:
+                        return "xr_listening_permission_denied";
+                    case PermissionUnavailable:
+                        return "xr_listening_permission_unavailable";
+                    case InputBusy:
+                        return "xr_listening_input_busy";
+                    case PlayUnavailable:
+                        return "xr_listening_play_unavailable";
+                    case None:
+                    case PermissionRequired:
+                        return nullptr;
+                }
+                return nullptr;
             }
 
             /** @brief Presents explicit discovery and selected input controls. */
@@ -541,13 +562,24 @@ namespace Horo::Editor {
                 const auto &locale = context.localization;
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "xr_listening_privacy"), Theme::Muted(),
                                 context.theme.fonts);
-                DrawListeningPermissions(locale);
+                const auto availability = listening_->ReadStartAvailability();
+                DrawListeningPermissions(locale, availability);
                 if (Button(locale, "xr_listening_refresh", true)) {
                     ResetListeningInput();
                     listening_->RefreshInputs();
                 }
                 DrawListeningInput(context);
-                const bool ready = listeningDevice_.has_value() && captureSceneSelection_ && listening_->CanListen();
+                using enum EditorImmersiveListening::StartAvailability::Blocker;
+                const auto *blocker = ListeningBlockerKey(availability.blocker);
+                if (availability.blocker == None) {
+                    if (!captureSceneSelection_)
+                        blocker = ListeningBlockerKey(PlayUnavailable);
+                    else if (!listeningDevice_)
+                        blocker = "xr_listening_select_input";
+                }
+                if (blocker)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, blocker), Theme::Text(), context.theme.fonts);
+                const bool ready = availability.blocker == None && listeningDevice_ && captureSceneSelection_;
                 if (Button(locale, "xr_listening_start", ready))
                     StartListening(context.settings.settings.languageTag);
                 if (listeningBudgetFailure_)

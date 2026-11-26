@@ -53,9 +53,25 @@ namespace Horo::Editor {
             AgentSceneReferenceSource source) const;
         /** @brief Borrows a fresh plane publication before returning any captured surface coordinates. */
         [[nodiscard]] std::optional<ImmersiveSurfaceHits> ReviewSurfaces() const;
-        [[nodiscard]] bool CanListen();
-        [[nodiscard]] bool NeedsMicrophonePermission();
-        [[nodiscard]] bool NeedsSpeechPermission() const noexcept;
+        /** @brief Current consent and host readiness for the explicit listening controls. */
+        struct StartAvailability final {
+            enum class Blocker : std::uint8_t {
+                None,
+                PermissionRequired,
+                PermissionPending,
+                PermissionDenied,
+                PermissionUnavailable,
+                InputBusy,
+                PlayUnavailable
+            };
+
+            Blocker blocker;
+            bool requestMicrophone{};
+            bool requestSpeech{};
+        };
+
+        /** @brief Reads the current gate without prompting or beginning microphone capture. */
+        [[nodiscard]] StartAvailability ReadStartAvailability();
         [[nodiscard]] std::span<const std::string> Inputs() const noexcept;
         [[nodiscard]] std::optional<Audio::AudioCaptureDeviceId> InputAt(std::size_t index) const noexcept;
 

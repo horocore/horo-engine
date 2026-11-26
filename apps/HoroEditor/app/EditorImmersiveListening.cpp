@@ -121,17 +121,26 @@ namespace Horo::Editor {
         return CollectImmersiveSurfaceHits(preview_->Spatial(), current->interaction.scene.value, planes.Value());
     }
 
-    bool EditorImmersiveListening::CanListen() {
-        return microphone_.CanRecord() && microphone_.Status() == EditorMicrophonePermissionStatus::Granted &&
-               ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Granted && xr_.ReadListeningScope(player_).has_value();
-    }
-
-    bool EditorImmersiveListening::NeedsMicrophonePermission() {
-        return microphone_.Status() == EditorMicrophonePermissionStatus::Required;
-    }
-
-    bool EditorImmersiveListening::NeedsSpeechPermission() const noexcept {
-        return ObserveMacSpeechAuthorization() == MacSpeechAuthorization::Required;
+    /** @copydoc EditorImmersiveListening::ReadStartAvailability */
+    EditorImmersiveListening::StartAvailability EditorImmersiveListening::ReadStartAvailability() {
+        using Microphone = EditorMicrophonePermissionStatus;
+        using Speech = MacSpeechAuthorization;
+        using enum StartAvailability::Blocker;
+        const auto microphone = microphone_.Status();
+        const auto speech = ObserveMacSpeechAuthorization();
+        if (microphone == Microphone::Denied || speech == Speech::Denied)
+            return {PermissionDenied};
+        if (microphone == Microphone::Unavailable || speech == Speech::Unavailable)
+            return {PermissionUnavailable};
+        if (microphone == Microphone::Pending || speech == Speech::Pending)
+            return {PermissionPending};
+        if (microphone == Microphone::Required || speech == Speech::Required)
+            return {PermissionRequired, microphone == Microphone::Required, speech == Speech::Required};
+        if (!microphone_.CanRecord())
+            return {InputBusy};
+        if (!xr_.ReadListeningScope(player_))
+            return {PlayUnavailable};
+        return {None};
     }
 
     std::span<const std::string> EditorImmersiveListening::Inputs() const noexcept {
