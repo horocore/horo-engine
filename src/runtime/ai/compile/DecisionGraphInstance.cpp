@@ -459,12 +459,20 @@ namespace Horo::AI {
         return StepBudgeted(input, budget, nullptr);
     }
 
+    /** @copydoc DecisionGraphInstance::StepBudgetedWithLocalPolicy */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedWithLocalPolicy(const DecisionGraphStepInput &input,
                                                                                           AiWorkBudget &budget,
                                                                                           const LocalPolicyUtilityInput &policy,
                                                                                           DecisionStepTrace *trace) {
+        return StepBudgetedWithLocalPolicy(input, budget, policy, trace, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgetedWithLocalPolicy */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedWithLocalPolicy(
+        const DecisionGraphStepInput &input, AiWorkBudget &budget, const LocalPolicyUtilityInput &policy,
+        DecisionStepTrace *trace, std::optional<DecisionProviderFailure> *providerFailure) {
         const auto *admitted = &policy.work == &budget ? nullptr : &policy;
-        return StepBudgetedImpl(input, budget, trace, nullptr, admitted);
+        return StepBudgetedImpl(input, budget, trace, providerFailure, admitted);
     }
 
     /** @copydoc DecisionGraphInstance::StepBudgeted */

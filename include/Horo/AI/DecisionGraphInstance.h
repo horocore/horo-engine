@@ -116,6 +116,17 @@ namespace Horo::AI {
                                                                                      AiWorkBudget &budget,
                                                                                      const LocalPolicyUtilityInput &policy,
                                                                                      DecisionStepTrace *trace = nullptr);
+        /** @brief Advances a root Utility slice with optional model preference and task diagnostics.
+         * @param input Exact committed observation for the requested tick.
+         * @param budget Scheduler-owned allowance for the current slice.
+         * @param policy Model proposal input and independent inference allowance.
+         * @param trace Optional caller-reserved decision evidence.
+         * @param providerFailure Optional advisory destination for the first live task callback error.
+         * @return The same scheduler slice outcome as the overload without task diagnostics.
+         */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedWithLocalPolicy(
+            const DecisionGraphStepInput &input, AiWorkBudget &budget, const LocalPolicyUtilityInput &policy,
+            DecisionStepTrace *trace, std::optional<DecisionProviderFailure> *providerFailure);
         /** @brief Advances a budgeted step and optionally reports the first raw task callback error.
          * @param input Exact committed observation for the requested tick.
          * @param budget Scheduler-owned allowance for the current slice.

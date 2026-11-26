@@ -1955,7 +1955,9 @@ namespace Horo::AI {
         TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",
                   "[ai][decision_reservation][local-policy]") {
             const bool outOfRange = GENERATE(false, true);
-            const bool discardFromProvider = GENERATE(false, true);
+            enum class Callback { Normal, DiscardTrace, Fail };
+            const auto callback = GENERATE(Callback::Normal, Callback::DiscardTrace, Callback::Fail);
+            const bool discardFromProvider = callback == Callback::DiscardTrace;
             Fixture fixture;
             auto source = UtilitySource();
             source.executionTask = MakeIdentity<TaskId>(9000);
@@ -2019,6 +2021,26 @@ namespace Horo::AI {
             const auto expected = outOfRange ? fallback : learned;
             TestSupport::ExpectError(runtime.ArmDecisionReplayAtSafePoint(agent, 1), AIErrors::DecisionAssetActivationInvalid);
             REQUIRE(runtime.ArmDecisionTraceAtSafePoint(agent, 1).HasValue());
+            if (callback == Callback::Fail) {
+                const auto error = MakeError(AIErrors::CapabilityUnavailable, "Fixture Utility task callback failed.");
+                fixture.probe.startOutcome = Result<AiTaskState>::Failure(error);
+                const auto evaluated = scheduler->EvaluateAtDecision(1);
+                REQUIRE(evaluated.HasValue());
+                CHECK_FALSE(evaluated.Value().firstFailure);
+                REQUIRE(evaluated.Value().firstAdvisoryFailure);
+                REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+                const auto diagnostic = runtime.ReadDecisionFailureAtSafePoint(live.Value()->View());
+                REQUIRE(diagnostic.HasValue());
+                REQUIRE(diagnostic.Value());
+                CHECK(diagnostic.Value()->origin.asset == plan->Root());
+                CHECK(diagnostic.Value()->origin.node == (outOfRange ? Node(2) : Node(3)));
+                CHECK(diagnostic.Value()->error.code.Value() == error.code.Value());
+                CHECK(diagnostic.Value()->error.message == error.message);
+                REQUIRE_FALSE(fixture.probe.calls.empty());
+                CHECK(fixture.probe.calls.front() == "start:" + std::to_string(expected.Value()));
+                CHECK(fixture.probe.cleanups == 1);
+                return;
+            }
             if (discardFromProvider)
                 fixture.probe.onStart = [&] {
                     runtime.DiscardDecisionReplayAtSafePoint(agent, 1);

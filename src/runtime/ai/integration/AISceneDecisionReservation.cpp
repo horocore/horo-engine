@@ -263,7 +263,7 @@ namespace Horo::AI {
                                                      model.TensorSchemaVersion(),
                                                      input.blackboard.CapturedRevision(),
                                                      inferenceBudget};
-                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy, trace);
+                return decision_->StepBudgetedWithLocalPolicy(input, graphBudget, policy, trace, &providerFailure_);
             }
 
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
