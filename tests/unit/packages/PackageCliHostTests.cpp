@@ -921,18 +921,32 @@ namespace {
     }
 
     /** @brief Writes distinct Scene and Prefab snapshots that use the same legacy behavior. */
-    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType) {
+    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType, bool unresolvedLinks) {
+        constexpr auto sceneId = "10213243-5465-7687-98a9-bacbdcedfe0e";
+        constexpr auto prefabId = "10213243-5465-7687-98a9-bacbdcedfe0f";
+        constexpr auto missingId = "10213243-5465-7687-98a9-bacbdcedfe11";
         const Gameplay::BehaviorComponent behavior{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(),
                                                     .enabled = false};
         SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
         object.components.behaviors = {behavior};
-        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}});
-        fixture.WriteScene("Migration.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0e", scene);
-        constexpr auto prefabId = "10213243-5465-7687-98a9-bacbdcedfe0f";
-        const auto prefab = Prefab::PrefabDocument::Create(
-            {.projectVersion = ParseHoroVersion("1.2.3").Value(), .assetId = Assets::AssetId::Parse(prefabId).Value(),
-             .objects = {{.name = "Prefab Root", .behaviors = {behavior}}}},
-            Prefab::PrefabLimitProfile::Create({}).Value());
+        const SceneSource::SceneChildReference child{{1}, Assets::AssetId::Parse(missingId).Value()};
+        const auto children = unresolvedLinks ? std::span{&child, 1} : std::span<const SceneSource::SceneChildReference>{};
+        const auto scene = SceneSource::EncodeSceneSource({.objects = std::span{&object, 1}, .childScenes = children});
+        fixture.WriteScene("Migration.horoasset", sceneId, scene);
+        const auto version = ParseHoroVersion("1.2.3").Value();
+        const auto digest = ComputeSha256(std::as_bytes(std::span{scene}));
+        Prefab::PrefabDocumentData data{.projectVersion = version,
+                                        .assetId = Assets::AssetId::Parse(prefabId).Value(),
+                                        .objects = {{.name = "Prefab Root", .behaviors = {behavior}}}};
+        if (unresolvedLinks) {
+            const auto source = Assets::AssetId::Parse(sceneId).Value();
+            data.referencedAssets.push_back(source);
+            const Prefab::NestedPrefabPlacement nested{.placementLocalId = {8},
+                                                       .sourcePrefab = Prefab::PrefabAssetReference::Create(source).Value(),
+                                                       .authoredAgainst = {.projectVersion = version, .contentDigest = digest}};
+            data.composition = Prefab::PrefabComposition{.nestedPlacements = {nested}};
+        }
+        const auto prefab = Prefab::PrefabDocument::Create(std::move(data), Prefab::PrefabLimitProfile::Create({}).Value());
         REQUIRE(prefab.HasValue());
         const auto serialized = prefab.Value().SerializeCanonical();
         REQUIRE(serialized.HasValue());
@@ -969,10 +983,11 @@ namespace {
         NativeProject fixture;
         constexpr std::string_view oldType = "game.tests.legacy_behavior";
         constexpr std::string_view newType = "game.tests.current_behavior";
-        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType);
         const bool applies = GENERATE(true, false);
         const bool unreadable = GENERATE(true, false);
         const bool degraded = GENERATE(true, false);
+        const bool unresolvedLinks = GENERATE(true, false);
+        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType, unresolvedLinks);
         if (unreadable)
             fixture.WriteScene("Unreadable.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "{");
         if (degraded) {
@@ -1013,6 +1028,17 @@ namespace {
             REQUIRE(result.HasError());
             const auto &error = result.ErrorValue();
             CheckBehaviorMigrationDiagnostics(error, revisions, applies, unreadable);
+            const auto hasCompositionFinding = [&](std::string_view code, std::string_view source, std::string_view asset) {
+                return std::ranges::any_of(error.diagnostics, [&](const auto &diagnostic) {
+                    return diagnostic.code.Value() == code && diagnostic.severity == DiagnosticSeverity::Error &&
+                           diagnostic.location.source == source && diagnostic.path == asset;
+                });
+            };
+            const bool expectLinkFindings = applies && !degraded && unresolvedLinks;
+            CHECK(hasCompositionFinding("packages.host.composition_reference_missing", "Assets/Migration.horoasset",
+                                        "10213243-5465-7687-98a9-bacbdcedfe11") == expectLinkFindings);
+            CHECK(hasCompositionFinding("packages.host.composition_reference_type_mismatch", "Assets/Migration.prefab",
+                                        "10213243-5465-7687-98a9-bacbdcedfe0e") == expectLinkFindings);
             CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
                 return diagnostic.severity == DiagnosticSeverity::Error && diagnostic.path == "Assets/Unrelated.horoasset.horo";
             }) == (applies && degraded));

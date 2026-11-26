@@ -411,6 +411,8 @@ The review continues across independent entries up to the diagnostic limit.
 Behavior rename previews identify each matching attachment with the SHA-256
 of its saved Scene or Prefab bytes. Unreadable sources block the review and
 appear alongside findings from readable sources within the diagnostic limit.
+With a complete asset inventory, the preview also reports missing and
+wrong-type child Scene and Prefab sources alongside the confirmed attachments.
 
 `horo-engine package apply-update` takes the same project and candidate options,
 plus `--approve` with the preview fingerprint and `--package-cache-root` with the

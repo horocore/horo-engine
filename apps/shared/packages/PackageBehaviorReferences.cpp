@@ -812,8 +812,10 @@ namespace Horo::Application::Internal {
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
         auto scan = std::move(matches).Value();
+        const bool unresolvedComposition = !scan.composition.empty();
         std::vector<Diagnostic> diagnostics;
-        for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit)) {
+        std::ranges::move(scan.composition | std::views::take(diagnosticLimit), std::back_inserter(diagnostics));
+        for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit - diagnostics.size())) {
             const auto *target = targets.at({match.package, match.type});
             const auto &revision = scan.behaviorSourceRevisions.at(match.assetPath);
             auto message = match.package.Value() + " [source sha256:" + revision + "]: " + match.type.Value() + " -> " + target->Value() +
@@ -822,8 +824,14 @@ namespace Horo::Application::Internal {
                                      std::move(message), SourceLocation{"packages.host"}, match.assetPath);
         }
         auto reviewed = std::move(scan.failures).Finish(std::move(diagnostics));
-        if (inventory.status == Assets::AssetRegistryBuildStatus::Complete)
+        if (inventory.status == Assets::AssetRegistryBuildStatus::Complete) {
+            if (unresolvedComposition && reviewed.HasValue()) {
+                auto incomplete = ReferenceError("packages.host.saved_composition_incomplete");
+                incomplete.diagnostics = std::move(reviewed).Value();
+                return Inspection::Failure(std::move(incomplete));
+            }
             return reviewed;
+        }
         auto partial = MakeIncompletePackageInventoryError(inventory);
         auto &findings = reviewed.HasError() ? reviewed.ErrorValue().diagnostics : reviewed.Value();
         std::ranges::move(findings, std::back_inserter(partial.diagnostics));
