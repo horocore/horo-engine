@@ -230,6 +230,31 @@ def test_export_preserves_existing_files_at_the_destination(tmp_path, export, na
     assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
 
 
+def test_artifact_replaced_before_open_is_rejected_even_when_the_bytes_match(tmp_path, export, monkeypatch):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    contents = b"approved provider bytes"
+    digest = hashlib.sha256(contents).hexdigest()
+    approval["qualification"]["provider"]["sha256"] = digest
+    provider = artifacts / digest
+    provider.write_bytes(contents)
+    replacement = artifacts / "replacement"
+    replacement.write_bytes(contents)
+    open_file = os.open
+
+    def replace_before_open(name, flags):
+        if Path(name) == provider:
+            replacement.replace(provider)
+        return open_file(name, flags)
+
+    monkeypatch.setattr(evaluation.os, "open", replace_before_open)
+    status, result = export(data, approval, "--qualification-artifacts", str(artifacts))
+    assert status == 1 and not result.out
+    assert result.err == "Qualification provider artifact changed before reading\n"
+
+
 def test_publishing_never_replaces_a_concurrent_destination(tmp_path, export, monkeypatch):
     data = json.dumps(frame(3, 2)).encode()
     destination = tmp_path / "evaluation.json"
@@ -391,6 +416,29 @@ def test_read_retained_requires_the_original_replay_argument(monkeypatch, capsys
     result = capsys.readouterr()
     assert exit_status.value.code == 2
     assert not result.out and "--read-retained requires --source-replay" in result.err
+
+
+def test_retained_metadata_verification_rechecks_expiry_at_completion(tmp_path, export, monkeypatch, capsys):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    manifest = tmp_path / "manifest.json"
+    status, result = export(data, approval, "--output", str(manifest))
+    assert status == 0, result.err
+    expiry = datetime.fromisoformat(approval["expiresOnUtc"]).replace(tzinfo=UTC)
+    times = iter((expiry - timedelta(seconds=1), expiry))
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            assert tz == UTC
+            return next(times)
+
+    monkeypatch.setattr(evaluation, "datetime", Clock)
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--verify-retained",
+                                      "--approval", str(tmp_path / "approval.json")])
+    assert evaluation.main() == 1
+    result = capsys.readouterr()
+    assert not result.out and result.err == "Export approval has expired\n"
 
 
 @pytest.mark.parametrize("mode", ["--verify-retained", "--audit-retention"])

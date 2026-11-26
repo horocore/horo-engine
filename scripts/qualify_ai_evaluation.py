@@ -242,11 +242,18 @@ def verify_replay_bytes(record: dict, data: bytes, source_digest: str) -> None:
     require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
 
 
-def retention_identity(info: os.stat_result) -> tuple[int, ...]:
+def is_plain_file(info: os.stat_result) -> bool:
     reparse = getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
-    require(stat.S_ISREG(info.st_mode) and not reparse and info.st_nlink == 1,
-            "Retention requires independent regular files")
+    return stat.S_ISREG(info.st_mode) and not reparse
+
+
+def file_identity(info: os.stat_result) -> tuple[int, ...]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def retention_identity(info: os.stat_result) -> tuple[int, ...]:
+    require(is_plain_file(info) and info.st_nlink == 1, "Retention requires independent regular files")
+    return file_identity(info)
 
 
 def read_retention_file(path: Path, limit: int) -> tuple[bytes, tuple[int, ...]]:
@@ -297,6 +304,32 @@ def purge_expired_manifest(path: Path, replay: Path, approval: object, today: da
     return {"schemaVersion": 1, "status": "purged", "expiresOnUtc": expiry, "sourceRemoved": source_removed}
 
 
+def artifact_identity(info: os.stat_result, label: str) -> tuple[int, ...]:
+    require(is_plain_file(info), f"{label} is missing or is not a regular file")
+    return file_identity(info)
+
+
+def hash_qualification_artifact(path: Path, label: str) -> str:
+    try:
+        before = path.lstat()
+        identity = artifact_identity(before, label)
+        require(0 < before.st_size <= MAX_QUALIFICATION_ARTIFACT_BYTES, f"{label} exceeds the size limit or is empty")
+        inspection_flags = getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        observed = hashlib.sha256()
+        size = 0
+        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | inspection_flags)) as stream:
+            require(artifact_identity(os.fstat(stream.fileno()), label) == identity, f"{label} changed before reading")
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                require(size <= MAX_QUALIFICATION_ARTIFACT_BYTES, f"{label} exceeds the size limit")
+                observed.update(chunk)
+            require(artifact_identity(os.fstat(stream.fileno()), label) == identity, f"{label} changed while reading")
+        require(size == before.st_size and artifact_identity(path.lstat(), label) == identity, f"{label} changed while reading")
+        return observed.hexdigest()
+    except OSError:
+        raise _EvidenceError(f"{label} could not be read as a regular file") from None
+
+
 def verify_qualification_artifacts(qualification: dict, root: Path) -> None:
     """Check the approved provider, optional model and workload bytes without exporting them."""
     for name in ("provider", "model", "workload"):
@@ -304,17 +337,8 @@ def verify_qualification_artifacts(qualification: dict, root: Path) -> None:
         if component is None:
             continue
         expected = component["sha256"]
-        path = root / expected
         label = f"Qualification {name} artifact"
-        require(path.is_file() and not path.is_symlink(), f"{label} is missing or is not a regular file")
-        observed = hashlib.sha256()
-        size = 0
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                size += len(chunk)
-                require(size <= MAX_QUALIFICATION_ARTIFACT_BYTES, f"{label} exceeds the size limit")
-                observed.update(chunk)
-        require(size > 0 and observed.hexdigest() == expected, f"{label} does not match its approved digest")
+        require(hash_qualification_artifact(root / expected, label) == expected, f"{label} does not match its approved digest")
 
 
 def json_line(value: dict) -> str:
@@ -389,7 +413,7 @@ def main() -> int:
                 verify_source_evidence(record, args.source_replay)
                 if args.qualification_artifacts is not None:
                     verify_qualification_artifacts(record["qualification"], args.qualification_artifacts)
-                require_current_expiry(record["expiresOnUtc"])
+            require_current_expiry(record["expiresOnUtc"])
             if args.read_retained:
                 emit_json(record)
             return 0

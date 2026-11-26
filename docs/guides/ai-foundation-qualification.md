@@ -137,8 +137,9 @@ file at that path. Omit `--output` to stream the redacted manifest to stdout.
 Pass `--qualification-artifacts <directory>` to also check the provider, model
 and workload files against the approved SHA-256 values. Store each file under
 its lowercase digest, without an extension. A null `model` needs no file. The
-checker rejects missing, empty, symlinked, mismatched or oversized files. The limit
-is 512 MiB per file. The manifest still records operator-declared versions.
+checker rejects missing, empty, symlinked, mismatched or oversized files, and
+files replaced during verification. The limit is 512 MiB per file. The manifest
+still records operator-declared versions.
 
 Before admitting a stored manifest for evaluation, check it against the
 original approval using the current UTC date.
@@ -147,7 +148,8 @@ original approval using the current UTC date.
 python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --verify-retained
 ```
 
-The check returns zero for a current, schema-valid manifest. It rejects expired
+The check returns zero for a schema-valid manifest whose approval remains
+current through verification. It rejects expired
 approvals, mismatched replay digests or qualification tuples, and extra fields
 outside the redacted schema.
 When using a manifest as reproducible evidence, also pass `--source-replay evidence.json`.
