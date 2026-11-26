@@ -141,6 +141,7 @@
     "workspace.local_agent.endpoint": {"text": "Loopback service address"},
     "workspace.local_agent.cloud_use": {"text": "Use a cloud model"},
     "workspace.local_agent.cloud_use_local": {"text": "Use a local model"},
+    "workspace.local_agent.local_only": {"text": "Local-only AI mode. Cloud models are disabled for this session."},
     "workspace.local_agent.cloud_endpoint": {"text": "OpenAI-compatible service base URL (HTTPS)"},
     "workspace.local_agent.cloud_key_enroll": {"text": "Save access key from clipboard"},
     "workspace.local_agent.cloud_profile_working": {"text": "Updating cloud connection…"},

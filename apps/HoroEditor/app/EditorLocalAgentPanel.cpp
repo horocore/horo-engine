@@ -275,9 +275,10 @@ namespace Horo::Editor {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background,
                             std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles, IExternalProcessRunner *processes,
-                            [[maybe_unused]] EditorImmersiveListening *listening, const EditorModelOperationLimits limits)
-                : IWorkspacePanel("workspace.local_agent"), cloudProfiles_(std::move(cloudProfiles)), background_(std::move(background)),
-                  modelLimits_(limits), history_(jobs, files), files_(files), processes_(processes) {
+                            [[maybe_unused]] EditorImmersiveListening *listening, const EditorModelProviderOptions options)
+                : IWorkspacePanel("workspace.local_agent"),
+                  cloudProfiles_(options.policy == EditorModelProviderPolicy::AllowCloud ? std::move(cloudProfiles) : nullptr),
+                  background_(std::move(background)), modelOptions_(options), history_(jobs, files), files_(files), processes_(processes) {
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 listening_ = listening;
 #endif
@@ -894,6 +895,10 @@ namespace Horo::Editor {
 
             /** @brief Switches the selected provider only when the local composer holds no active review. */
             void DrawProviderSelection(const ILocalizationService &locale) {
+                if (modelOptions_.policy == EditorModelProviderPolicy::LocalOnly) {
+                    ImGui::TextWrapped("%s", LocalizedText(locale, "local_only").c_str());
+                    return;
+                }
                 if (!cloudProfiles_)
                     return;
                 const bool canSwitch = !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !ContextLocksComposer() &&
@@ -2080,17 +2085,18 @@ namespace Horo::Editor {
 
             /** @brief Charges admitted provider work once even if a failure or cancellation suppresses its result. */
             const char *StartModelOperation(BackgroundTurn::Operation task) {
-                if (modelLimits_.session && sessionOperations_ >= *modelLimits_.session)
+                const auto &limits = modelOptions_.limits;
+                if (limits.session && sessionOperations_ >= *limits.session)
                     return "session_model_budget_exceeded";
                 std::uint32_t *projectOperations = nullptr;
-                if (modelLimits_.project) {
+                if (limits.project) {
                     projectOperations = &projectOperations_[contextProject_];
-                    if (*projectOperations >= *modelLimits_.project)
+                    if (*projectOperations >= *limits.project)
                         return "project_model_budget_exceeded";
                 }
                 if (!background_->Start(std::move(task)))
                     return "failed";
-                if (modelLimits_.session)
+                if (limits.session)
                     ++sessionOperations_;
                 if (projectOperations)
                     ++*projectOperations;
@@ -2099,15 +2105,16 @@ namespace Horo::Editor {
 
             /** @brief Displays the operation counts for the enabled scopes in either provider mode. */
             void DrawModelOperationUsage(const ILocalizationService &locale) const {
+                const auto &limits = modelOptions_.limits;
                 const auto show = [&](const char *key, const std::uint32_t used, const std::uint32_t limit) {
                     ImGui::TextWrapped("%s %u/%u", LocalizedText(locale, key).c_str(), static_cast<unsigned>(used),
                                        static_cast<unsigned>(limit));
                 };
-                if (modelLimits_.session)
-                    show("session_model_budget_usage", sessionOperations_, *modelLimits_.session);
-                if (modelLimits_.project) {
+                if (limits.session)
+                    show("session_model_budget_usage", sessionOperations_, *limits.session);
+                if (limits.project) {
                     const auto used = projectOperations_.find(contextProject_);
-                    show("project_model_budget_usage", used == projectOperations_.end() ? 0 : used->second, *modelLimits_.project);
+                    show("project_model_budget_usage", used == projectOperations_.end() ? 0 : used->second, *limits.project);
                 }
             }
 
@@ -2330,7 +2337,7 @@ namespace Horo::Editor {
             std::optional<EditorLocalAgentContext> contextPreview_;
             std::optional<SceneQueryReview> sceneQueryReview_;
             std::shared_ptr<BackgroundTurn> background_;
-            EditorModelOperationLimits modelLimits_;
+            const EditorModelProviderOptions modelOptions_;
             std::map<std::string, std::uint32_t> projectOperations_;
             std::uint32_t sessionOperations_{};
             EditorLocalAgentHistory history_;
@@ -2363,9 +2370,9 @@ namespace Horo::Editor {
     EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
                                                         std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles,
                                                         IExternalProcessRunner *processes, EditorImmersiveListening *listening,
-                                                        const EditorModelOperationLimits limits) {
+                                                        const EditorModelProviderOptions options) {
         auto background = std::make_shared<BackgroundTurn>();
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles), processes, listening, limits);
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles), processes, listening, options);
         return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
             if (const auto current = owner.lock()) {
                 current->Poll();

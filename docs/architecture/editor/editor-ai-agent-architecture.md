@@ -1167,6 +1167,12 @@ The active provider is selected in the chat panel header. Per-conversation
 override is supported. System administrators can lock the provider via
 project settings.
 
+Use `--local-agent --ai-local-only` to restrict the editor AI panel to the
+loopback model service and existing on-device speech recognition. The host
+omits the cloud credential backend and the panel displays the active policy.
+Saved cloud profiles remain available in a future session that permits cloud
+models. A local provider failure ends the operation without switching models.
+
 ### Provider Budget And Degraded Operation
 
 Provider selection also resolves a policy-bounded budget for transcription and

@@ -141,6 +141,7 @@
     "workspace.local_agent.endpoint": {"text": "Yerel servis adresi"},
     "workspace.local_agent.cloud_use": {"text": "Bulut modeli kullan"},
     "workspace.local_agent.cloud_use_local": {"text": "Yerel model kullan"},
+    "workspace.local_agent.local_only": {"text": "Yalnızca yerel yapay zekâ modu. Bu oturumda bulut modelleri devre dışı."},
     "workspace.local_agent.cloud_endpoint": {"text": "OpenAI uyumlu hizmetin temel URL’si (HTTPS)"},
     "workspace.local_agent.cloud_key_enroll": {"text": "Panodaki erişim anahtarını kaydet"},
     "workspace.local_agent.cloud_profile_working": {"text": "Bulut bağlantısı güncelleniyor…"},

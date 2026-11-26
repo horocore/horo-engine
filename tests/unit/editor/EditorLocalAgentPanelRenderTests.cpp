@@ -51,8 +51,8 @@ namespace {
         EditorLocalAgentPanelHost agent;
 
         explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {},
-                                   std::shared_ptr<EditorCloudModelProfileStore> profiles = {}, EditorModelOperationLimits limits = {})
-            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(profiles), nullptr, nullptr, limits)) {
+                                   std::shared_ptr<EditorCloudModelProfileStore> profiles = {}, EditorModelProviderOptions options = {})
+            : agent(MakeEditorLocalAgentPanel(jobs.Get(), files, std::move(profiles), nullptr, nullptr, options)) {
             ImGui::GetIO().IniFilename = nullptr;
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
@@ -261,6 +261,15 @@ namespace {
         profile.close();
         CHECK(serialized.find(CloudCredentialProbe::Key) == std::string::npos);
         CHECK(serialized.find(retained.Value()->credential.Value()) != std::string::npos);
+
+        {
+            LocalAgentFixture offline{"en-US", {}, makeStore(), {.policy = EditorModelProviderPolicy::LocalOnly}};
+            const auto text = offline.DrawnText();
+            CHECK(text.find("Local-only AI mode.") != std::string::npos);
+            CHECK(text.find("Loopback service address") != std::string::npos);
+            CHECK(text.find("Use a cloud model") == std::string::npos);
+            CHECK(probe->resolutions == 0);
+        }
 
         LocalAgentFixture fixture{"en-US", {}, makeStore()};
         switchToCloud(fixture);
@@ -775,7 +784,8 @@ namespace {
     TEST_CASE("AI model operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);
-        LocalAgentFixture fixture{"en-US", {}, {}, {.session = 2, .project = 1}};
+        LocalAgentFixture fixture{
+            "en-US", {}, {}, {.limits = {.session = 2, .project = 1}, .policy = EditorModelProviderPolicy::LocalOnly}};
         const auto attach = [&](const std::string_view project) {
             fixture.panels.DetachAll();
             PanelContext context{.dataBus = fixture.gui.editorEvents,
