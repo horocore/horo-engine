@@ -228,6 +228,7 @@
     "workspace.local_agent.xr_reference_mounted": {"text": "Salt okunur yüklü hücre. Konumlar etkin dünya kökenine göredir."},
     "workspace.local_agent.xr_reference_empty": {"text": "Bu kayıt sırasında hiçbir sahne nesnesi seçili değildi."},
     "workspace.local_agent.xr_reference_ambiguous": {"text": "Birden fazla referans kaydedildi. Hangisini kastettiğini belirt."},
+    "workspace.local_agent.xr_reference_mixed_miss": {"text": "Bazı basışlar hedefe isabet etti, bazıları ıskaladı. Hedefi netleştirmek için tekrar işaret et."},
     "workspace.local_agent.xr_reference_available": {"text": "Kullanılabilir"},
     "workspace.local_agent.xr_reference_hidden": {"text": "Gizli"},
     "workspace.local_agent.xr_reference_locked": {"text": "Kilitli"},

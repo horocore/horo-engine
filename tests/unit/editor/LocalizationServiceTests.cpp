@@ -245,6 +245,7 @@ namespace {
             "workspace.local_agent.xr_reference_stale",      "workspace.local_agent.xr_reference_revision",
             "workspace.local_agent.xr_reference_mounted",    "workspace.local_agent.xr_reference_empty",
             "workspace.local_agent.xr_reference_ambiguous",  "workspace.local_agent.xr_reference_available",
+            "workspace.local_agent.xr_reference_mixed_miss",
             "workspace.local_agent.xr_reference_hidden",     "workspace.local_agent.xr_reference_locked",
             "workspace.local_agent.xr_reference_deleted",    "workspace.local_agent.xr_reference_out_of_scope",
         };

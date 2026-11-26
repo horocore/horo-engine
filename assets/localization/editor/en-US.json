@@ -228,6 +228,7 @@
     "workspace.local_agent.xr_reference_mounted": {"text": "Read-only mounted cell. Positions use the active World origin."},
     "workspace.local_agent.xr_reference_empty": {"text": "No scene objects were selected during this recording."},
     "workspace.local_agent.xr_reference_ambiguous": {"text": "Multiple references were captured. Clarify which one you mean."},
+    "workspace.local_agent.xr_reference_mixed_miss": {"text": "Some presses hit a target and others missed. Point again to clarify."},
     "workspace.local_agent.xr_reference_available": {"text": "Available"},
     "workspace.local_agent.xr_reference_hidden": {"text": "Hidden"},
     "workspace.local_agent.xr_reference_locked": {"text": "Locked"},

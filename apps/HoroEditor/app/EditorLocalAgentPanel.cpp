@@ -687,13 +687,13 @@ namespace Horo::Editor {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 const auto &fonts = context.theme.fonts;
                 const bool pointing = source != AgentSceneReferenceSource::Selection;
-                if (!listeningReferences_ || !agentSceneReferencesCurrent_ || !agentSceneReferencesCurrent_(*listeningReferences_)) {
+                if (!listeningReferences_ || !agentSceneReferencesCurrent_ || !agentSceneReferencesCurrent_(listeningReferences_->scene)) {
                     listeningReferences_.reset();
                     Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_unavailable" : "xr_reference_stale"),
                                     Theme::Muted(), fonts);
                     return;
                 }
-                const auto &review = *listeningReferences_;
+                const auto &review = listeningReferences_->scene;
                 if (review.mounted)
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mounted"), Theme::Muted(), fonts);
                 Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
@@ -701,7 +701,9 @@ namespace Horo::Editor {
                 if (review.Candidates().empty())
                     Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_empty" : "xr_reference_empty"), Theme::Muted(),
                                     fonts);
-                if (review.RequiresClarification())
+                else if (listeningReferences_->hasMissedPress)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mixed_miss"), Theme::Text(), fonts);
+                else if (review.RequiresClarification())
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
                 for (const auto &candidate : review.Candidates()) {
                     Ui::WrappedText(width,
@@ -748,7 +750,9 @@ namespace Horo::Editor {
                                     fonts);
                     return;
                 }
-                if (review->count > 1)
+                if (review->hasMissedPress)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mixed_miss"), Theme::Text(), fonts);
+                else if (review->count > 1)
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
                 for (const auto &hit : std::span{review->hits}.first(review->count)) {
                     Ui::WrappedText(width, LocalizedText(locale, SurfaceClassificationKey(hit.classification)), Theme::Text(), fonts);
@@ -762,7 +766,7 @@ namespace Horo::Editor {
             const char *listeningBudgetFailure_{};
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
             std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent_;
-            std::optional<AgentSceneReferenceReview> listeningReferences_;
+            std::optional<EditorImmersiveListening::ReferenceReview> listeningReferences_;
             std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
             bool reviewingSurfaces_{};
 #endif

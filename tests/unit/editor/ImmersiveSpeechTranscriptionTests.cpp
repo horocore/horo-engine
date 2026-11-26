@@ -523,6 +523,33 @@ namespace Horo::Editor {
             CHECK(mounted->mounted);
         }
 
+        TEST_CASE("Pointing review keeps verified misses alongside object and location candidates", "[agent][immersive][speech]") {
+            constexpr std::uint64_t World = 9;
+            using Hit = ImmersivePointingHits::Hit;
+            ImmersiveSpatialObservation press{.controllerPress = ImmersiveControllerPress{},
+                                              .pointing = ImmersivePointingHits{.worldGeneration = World,
+                                                                               .structuralRevision = 1,
+                                                                               .hits = {Hit{{17}, 2, {1, 2, 3}}},
+                                                                               .count = 1}};
+            press.candidate.shape = Math::Ray{};
+            auto miss = press;
+            miss.pointing->count = 0;
+            const std::array mixed{miss, press, press};
+            using enum ImmersivePointingReviewKind;
+            for (const auto kind : {Objects, Locations}) {
+                const auto hits = CollectImmersivePointingHits(mixed, World, kind);
+                REQUIRE(hits);
+                REQUIRE(hits->count == 1);
+                CHECK(hits->hasMissedPress);
+                CHECK(hits->hits[0].object.value == 17);
+
+                const auto empty = CollectImmersivePointingHits(std::span{&miss, 1}, World, kind);
+                REQUIRE(empty);
+                CHECK(empty->count == 0);
+                CHECK(empty->hasMissedPress);
+            }
+        }
+
         TEST_CASE("Pointing review rejects malformed evidence even from a repeated object", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 9;
             constexpr float Invalid = std::numeric_limits<float>::quiet_NaN();
@@ -571,7 +598,19 @@ namespace Horo::Editor {
             const auto candidates = CollectImmersiveSurfaceHits(repeated, World, live.Value());
             REQUIRE(candidates);
             REQUIRE(candidates->count == 1);
+            CHECK_FALSE(candidates->hasMissedPress);
             CHECK(candidates->hits[0].classification == wall.classification);
+            auto miss = press;
+            miss.surfaces->count = 0;
+            const std::array mixedWithMiss{press, miss};
+            const auto mixedCandidates = CollectImmersiveSurfaceHits(mixedWithMiss, World, live.Value());
+            REQUIRE(mixedCandidates);
+            REQUIRE(mixedCandidates->count == 1);
+            CHECK(mixedCandidates->hasMissedPress);
+            const auto empty = CollectImmersiveSurfaceHits(std::span{&miss, 1}, World, live.Value());
+            REQUIRE(empty);
+            CHECK(empty->count == 0);
+            CHECK(empty->hasMissedPress);
             CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World + 1, live.Value()));
             auto foreignRay = press;
             ++foreignRay.candidate.space.id.slot.index;

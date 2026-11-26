@@ -255,6 +255,9 @@ Ownership rules:
   authored geometry on the owner lane and applies a fixed triangle and hit budget.
   The Agent panel can review the same-world hits aligned to the speech interval.
   Incomplete or malformed hit evidence produces an unavailable result.
+  If some presses hit and others miss, the mesh and physical surface reviews
+  keep the candidates visible and ask the user to point again. An utterance
+  with only verified misses has an empty result.
   Location review shows press-time world coordinates in meters for eligible
   objects. Separate points on one object remain separate location candidates.
   Physical surface review uses the separate one-session plane grant. The

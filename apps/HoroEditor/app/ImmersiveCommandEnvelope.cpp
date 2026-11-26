@@ -212,6 +212,7 @@ namespace Horo::Editor {
                 surfaces->scope != result.scope ||
                 surfaces->worldGeneration != worldGeneration || !AppendSurfaceHits(result, *surfaces, current.Planes()))
                 return std::nullopt;
+            result.hasMissedPress |= surfaces->count == 0;
             queried = true;
         }
         return queried ? std::optional{result} : std::nullopt;
@@ -230,6 +231,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             if (!AppendPointingHits(result, *hits, kind))
                 return std::nullopt;
+            result.hasMissedPress |= hits->count == 0;
             result.structuralRevision = hits->structuralRevision;
             result.mounted = hits->mounted;
         }

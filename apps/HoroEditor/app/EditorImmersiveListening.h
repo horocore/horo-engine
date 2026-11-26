@@ -40,8 +40,14 @@ namespace Horo::Editor {
             return failureReason_;
         }
 
+        /** @brief Workspace-validated candidates with the press evidence from this listening capture. */
+        struct ReferenceReview final {
+            AgentSceneReferenceReview scene;
+            bool hasMissedPress{};
+        };
+
         /** @brief Reads the captured selection or aligned pointing candidates on the workspace owner lane. */
-        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewReferences(
+        [[nodiscard]] std::optional<ReferenceReview> ReviewReferences(
             const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
             AgentSceneReferenceSource source) const;
         /** @brief Borrows a fresh plane publication before returning any captured surface coordinates. */

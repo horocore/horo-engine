@@ -45,6 +45,7 @@ namespace Horo::Editor {
         bool mounted{};
         std::array<Hit, MaximumObjects> hits{};
         std::size_t count{};
+        bool hasMissedPress{}; /**< A collected press completed its query with zero hits. */
     };
 
     /** @brief Short-lived surface coordinates tied to the exact press and plane grant. */
@@ -61,6 +62,7 @@ namespace Horo::Editor {
         std::uint64_t worldGeneration{};
         std::array<Hit, MaximumHits> hits{};
         std::size_t count{};
+        bool hasMissedPress{}; /**< A collected press completed its query with zero hits. */
     };
 
     /** @brief Closed interval measured by the host around the exact XR cutoff in the capture clock domain. */

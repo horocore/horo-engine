@@ -8,7 +8,7 @@
 namespace Horo::Editor {
     namespace {
         /** @brief Requests complete point or object evidence from the workspace owning the captured revision. */
-        std::optional<AgentSceneReferenceReview> ReviewPointedReferences(
+        std::optional<EditorImmersiveListening::ReferenceReview> ReviewPointedReferences(
             const ImmersiveCommandEnvelope &preview, const ImmersivePlanningContext &context,
             const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
             const AgentSceneReferenceSource source) {
@@ -25,20 +25,23 @@ namespace Horo::Editor {
                                                .structuralRevision = pointing->structuralRevision,
                                                .mounted = pointing->mounted,
                                                .lifetime = context.SourceLifetime()};
+            std::array<AgentSceneReferencePoint, ImmersivePointingHits::MaximumObjects> locations;
+            std::array<std::uint64_t, ImmersivePointingHits::MaximumObjects> objects;
             if (kind == ImmersivePointingReviewKind::Locations) {
-                std::array<AgentSceneReferencePoint, ImmersivePointingHits::MaximumObjects> locations;
                 auto captured = std::span{locations}.first(pointing->count);
                 for (std::size_t index = 0; index < captured.size(); ++index)
                     captured[index] = {pointing->hits[index].object.value, pointing->hits[index].worldPosition};
                 request.locations = captured;
-                return review(request);
+            } else {
+                auto captured = std::span{objects}.first(pointing->count);
+                for (std::size_t index = 0; index < captured.size(); ++index)
+                    captured[index] = pointing->hits[index].object.value;
+                request.objects = captured;
             }
-            std::array<std::uint64_t, ImmersivePointingHits::MaximumObjects> objects;
-            auto captured = std::span{objects}.first(pointing->count);
-            for (std::size_t index = 0; index < captured.size(); ++index)
-                captured[index] = pointing->hits[index].object.value;
-            request.objects = captured;
-            return review(request);
+            auto scene = review(request);
+            if (!scene)
+                return std::nullopt;
+            return EditorImmersiveListening::ReferenceReview{std::move(*scene), pointing->hasMissedPress};
         }
     }  // namespace
 
@@ -75,7 +78,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorImmersiveListening::ReviewReferences */
-    std::optional<AgentSceneReferenceReview> EditorImmersiveListening::ReviewReferences(
+    std::optional<EditorImmersiveListening::ReferenceReview> EditorImmersiveListening::ReviewReferences(
         const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
         const AgentSceneReferenceSource source) const {
         if (!preview_ || !review)
@@ -94,11 +97,14 @@ namespace Horo::Editor {
 
         for (std::size_t index = 0; index < selection.size(); ++index)
             objects[index] = selection[index].value;
-        return review({.documentEpoch = identity.documentOpening,
-                       .documentRevision = identity.documentRevision,
-                       .worldGeneration = identity.worldGeneration,
-                       .objects = std::span{objects}.first(selection.size()),
-                       .lifetime = context.SourceLifetime()});
+        auto scene = review({.documentEpoch = identity.documentOpening,
+                             .documentRevision = identity.documentRevision,
+                             .worldGeneration = identity.worldGeneration,
+                             .objects = std::span{objects}.first(selection.size()),
+                             .lifetime = context.SourceLifetime()});
+        if (!scene)
+            return std::nullopt;
+        return ReferenceReview{std::move(*scene)};
     }
 
     /** @copydoc EditorImmersiveListening::ReviewSurfaces */
