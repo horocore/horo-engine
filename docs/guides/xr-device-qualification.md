@@ -60,6 +60,12 @@ trailing newline. Retain only the digest in the smoke record.
 | `lifecycle` | Observe ready, focused, hidden or unfocused, resumed and clean shutdown. Confirm provider and swapchain ownership is released. |
 | `recovery` | Exercise the declared loss or runtime replacement procedure. Verify stale input is neutralized and a failed restart or the new session is reported. |
 
+`horo.xr.accepted_projection_interval` reports host elapsed seconds between
+consecutive OpenXR projection acceptances. An empty frame, a native failure,
+or compositor reset ends the interval sequence. The metric uses no device or
+session labels, and measures host submission cadence. Physical display timing
+and missed deadlines still require the observations specified by the test plan.
+
 The record keeps runtime evidence at the level actually observed.
 `StaticContract`, `DeterministicFake` and `SimulatorReplay` may document
 repeatable checks. `RuntimeCompatibility` records a real runtime and host

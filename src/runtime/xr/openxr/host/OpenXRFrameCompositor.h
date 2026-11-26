@@ -241,6 +241,8 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Emits only a closed native result, without session or tracking identifiers. */
         void RecordOutcome(NativeFrameMetricOutcome outcome) const noexcept;
+        /** @brief Observes host projection cadence and clears continuity on an empty frame or failure. */
+        void RecordProjectionInterval(bool acceptedProjection) noexcept;
 
         OpenXRNativeSession *session_;
         XRFrameLifecycle *frames_;
@@ -258,6 +260,7 @@ namespace Horo::XR::OpenXRInternal {
         bool begun_{};
         bool closing_{};
         std::optional<Error> fault_;
+        std::optional<std::chrono::steady_clock::time_point> previousProjectionEnd_;
     };
 
     /** @brief Renderer inputs issued only when both native imports belong to one exact frame attempt. */

@@ -63,6 +63,12 @@ namespace Horo::XR::OpenXRInternal {
                                                    .subsystem = "XR.OpenXR",
                                                    .unit = Telemetry::MetricUnit::Count,
                                                    .description = "Per-compositor native frame depth observed at native transitions"});
+        handles.acceptedProjectionInterval =
+            Telemetry::Runtime::RegisterHistogram({.name = "horo.xr.accepted_projection_interval",
+                                                   .subsystem = "XR.OpenXR",
+                                                   .unit = Telemetry::MetricUnit::Seconds,
+                                                   .description = "Host interval between consecutive accepted native projections",
+                                                   .maxSeries = 1});
         handles.projectionCoverage = Telemetry::Runtime::RegisterHistogram(
             {.name = "horo.xr.projection_color_coverage",
              .subsystem = "XR.OpenXR",

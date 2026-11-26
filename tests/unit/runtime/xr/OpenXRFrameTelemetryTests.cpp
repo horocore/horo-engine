@@ -64,6 +64,45 @@ namespace Horo::Tests::OpenXR {
         CHECK(periodObserved == !waitFailed);
     }
 
+    TEST_CASE("Native XR projection cadence does not bridge an empty frame", "[xr][native][telemetry]") {
+        FrameMetricRecorder metrics;
+        metrics.Start(256);
+        {
+            CompositorFixture fixture;
+            REQUIRE(fixture.compositor.Bind({&FrameScript::GetProc}, {}, NativeCompositorColorSpace::RuntimeDefault, metrics.handles)
+                        .HasValue());
+            const auto project = [&] {
+                const auto frame = fixture.Begin();
+                const auto image = fixture.Acquire(frame);
+                const auto plan = fixture.Plan(frame, image);
+                const std::array submitted{image};
+                REQUIRE(fixture.frames.Submit(frame, submitted) == XRFrameStatus::Ok);
+                fixture.images.complete = true;
+                REQUIRE(fixture.color.PollRelease().Value());
+                REQUIRE(fixture.frames.Release(frame, image) == XRFrameStatus::Ok);
+                const std::array targets{NativeProjectionTarget{&fixture.color, image}};
+                REQUIRE(fixture.compositor.EndProjection(frame, plan, targets).HasValue());
+            };
+            project();
+            fixture.Empty(fixture.Begin());
+            project();
+            project();
+        }
+        metrics.Finish();
+        std::size_t intervals{};
+        for (std::size_t index = 0; index < metrics.sink->descriptors.size(); ++index) {
+            const auto &descriptor = metrics.sink->descriptors[index];
+            if (descriptor.name != "horo.xr.accepted_projection_interval")
+                continue;
+            ++intervals;
+            CHECK(descriptor.unit == Telemetry::MetricUnit::Seconds);
+            CHECK(descriptor.dimensions.empty());
+            CHECK(descriptor.maxSeries == 1);
+            CHECK(metrics.sink->records[index].value >= 0.0);
+        }
+        CHECK(intervals == 1);
+    }
+
     TEST_CASE("Native XR swapchain metrics count timeouts and retries without image identities", "[xr][native][telemetry]") {
         using enum NativeSwapchainMetricOutcome;
         FrameMetricRecorder metrics;

@@ -55,6 +55,7 @@ namespace Horo::XR::OpenXRInternal {
         std::array<Telemetry::Counter, 4> cpuDeadline;
         std::array<Telemetry::Counter, 3> renderCompletion;
         std::array<Telemetry::Counter, 2> projectionComfort;
+        Telemetry::Histogram acceptedProjectionInterval; /**< Host elapsed time between consecutive native projection acceptances. */
 
         /** @brief Records timing at the CPU admission cutoff. */
         void RecordCpuDeadline(std::optional<NativeFrameDeadline> deadline) const noexcept;

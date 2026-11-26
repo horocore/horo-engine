@@ -131,6 +131,18 @@ namespace Horo::XR::OpenXRInternal {
         metrics_.outcomes[static_cast<std::size_t>(outcome)].Add();
     }
 
+    /** @copydoc OpenXRFrameCompositor::RecordProjectionInterval */
+    void OpenXRFrameCompositor::RecordProjectionInterval(const bool acceptedProjection) noexcept {
+        if (!acceptedProjection || !metrics_.acceptedProjectionInterval) {
+            previousProjectionEnd_.reset();
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (previousProjectionEnd_)
+            metrics_.acceptedProjectionInterval.Observe(std::chrono::duration<double>{now - *previousProjectionEnd_}.count());
+        previousProjectionEnd_ = now;
+    }
+
     /** @copydoc OpenXRFrameCompositor::Wait */
     Result<XRFrameWaitOutcome> OpenXRFrameCompositor::Wait() {
         using Outcome = Result<XRFrameWaitOutcome>;
@@ -148,6 +160,7 @@ namespace Horo::XR::OpenXRInternal {
         const XrResult result = wait_(native.Value().session, &info, &state);
         if (XR_FAILED(result)) {
             RecordOutcome(NativeFrameMetricOutcome::WaitFailed);
+            RecordProjectionInterval(false);
             static_cast<void>(frames_->CancelWait());
             return Outcome::Failure(NativeError("wait frame", result));
         }
@@ -190,6 +203,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(native.ErrorValue());
         const XrFrameBeginInfo info{XR_TYPE_FRAME_BEGIN_INFO};
         const XrResult result = begin_(native.Value().session, &info);
+        if (result != XR_SUCCESS)
+            RecordProjectionInterval(false);
         if (XR_FAILED(result)) {
             RecordOutcome(NativeFrameMetricOutcome::BeginFailed);
             fault_ = NativeError("begin frame", result);
@@ -658,6 +673,7 @@ namespace Horo::XR::OpenXRInternal {
         if (dispatched.HasError())
             return Result<void>::Failure(dispatched.ErrorValue());
         const auto result = dispatched.Value();
+        RecordProjectionInterval(projection && result == XR_SUCCESS);
         if (XR_FAILED(result)) {
             RecordOutcome(NativeFrameMetricOutcome::EndFailed);
             fault_ = passthrough && (result == XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB || result == XR_ERROR_PERMISSION_INSUFFICIENT)
@@ -706,6 +722,7 @@ namespace Horo::XR::OpenXRInternal {
         if (nativeFrame_.IsValid())
             metrics_.frameDepth.Observe(0);
         metrics_ = {};
+        previousProjectionEnd_.reset();
         owner_ = {};
         nativeFrame_ = {};
         wait_ = nullptr;
