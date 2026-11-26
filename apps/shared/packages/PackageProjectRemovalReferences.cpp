@@ -8,6 +8,8 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        constexpr std::size_t MaximumImporterDiagnostics = 256;
+
         /** @brief Collects importer evidence from the same bytes as the canonical registry candidate. */
         class ImporterEvidenceSource final : public Assets::IAssetRegistrySource {
         public:
@@ -28,8 +30,14 @@ namespace Horo::Application::Internal {
                 if (bytes.HasError())
                     return bytes;
                 const auto importer = Assets::DecodeAssetImportMetadata(bytes.Value());
-                if (importer.HasError())
-                    return Result<std::string>::Failure(importer.ErrorValue());
+                if (importer.HasError()) {
+                    if (failures_.size() < MaximumImporterDiagnostics)
+                        failures_.emplace_back(DiagnosticCode{importer.ErrorValue().code.Value()}, DiagnosticSeverity::Error,
+                                               importer.ErrorValue().message, SourceLocation{"packages.host"}, std::string{path});
+                    else
+                        truncated_ = true;
+                    return bytes;
+                }
                 if (const auto match = removed_.find(importer.Value().importerPackageId); match != removed_.end()) {
                     const auto asset = path.substr(0, path.size() - std::string_view{".horo"}.size());
                     references_.emplace_back(*match->second, std::string{asset});
@@ -38,29 +46,54 @@ namespace Horo::Application::Internal {
             }
 
             /** @brief Transfers deterministic accumulated observations after canonical inventory validation. */
-            std::vector<PackageImporterReference> TakeReferences() && {
+            std::vector<PackageImporterReference> TakeReferences() {
                 std::ranges::sort(references_, {}, &PackageImporterReference::assetPath);
                 return std::move(references_);
             }
+
+            /** @brief Adds importer failures only for metadata whose asset identity was independently admitted. */
+            void AppendFailures(std::vector<Diagnostic> &diagnostics, const std::set<std::string_view> &admittedMetadata) const {
+                for (const auto &failure : failures_)
+                    if (admittedMetadata.contains(failure.path))
+                        diagnostics.push_back(failure);
+                if (truncated_)
+                    diagnostics.emplace_back(DiagnosticCode{"packages.host.importer_reference_limit"}, DiagnosticSeverity::Error,
+                                             "Additional importer metadata failures were omitted.", SourceLocation{"packages.host"}, "");
+            }
+
+            /** @brief Indicates whether the importer evidence needs to be reconciled with the asset inventory. */
+            [[nodiscard]] bool HasFailures() const { return !failures_.empty(); }
 
         private:
             const Assets::IAssetRegistrySource &source_;
             std::map<std::string_view, const Packages::HoroPackageId *, std::less<>> removed_;
             mutable std::vector<PackageImporterReference> references_; /**< Confined to a single synchronous capture. */
+            mutable std::vector<Diagnostic> failures_;
+            mutable bool truncated_{};
         };
 
-        /** @brief Reports inventory failures alongside importer claims from records admitted by the registry. */
-        Error IncompleteImporterInventory(const Assets::AssetRegistryCandidate &candidate,
-                                          std::vector<PackageImporterReference> references) {
+        /** @brief Reports importer and registry failures alongside claims from admitted assets. */
+        Result<std::vector<PackageImporterReference>> ReviewImporterInventory(const Assets::AssetRegistryCandidate &candidate,
+                                                                              ImporterEvidenceSource &capture) {
+            using Report = Result<std::vector<PackageImporterReference>>;
+            auto references = capture.TakeReferences();
+            if (candidate.status == Assets::AssetRegistryBuildStatus::Complete && !capture.HasFailures())
+                return Report::Success(std::move(references));
             auto error = MakeIncompletePackageInventoryError(candidate);
             std::set<std::string_view> admittedPaths;
-            for (const auto &record : candidate.records)
+            std::set<std::string_view> admittedMetadata;
+            for (const auto &record : candidate.records) {
                 admittedPaths.insert(record.sourcePath.String());
+                admittedMetadata.insert(record.metadataPath.String());
+            }
+            capture.AppendFailures(error.diagnostics, admittedMetadata);
+            if (error.diagnostics.empty() && candidate.status == Assets::AssetRegistryBuildStatus::Complete)
+                return Report::Success(std::move(references));
             std::erase_if(references, [&admittedPaths](const auto &reference) {
                 return !admittedPaths.contains(reference.assetPath);
             });
             AppendPackageImporterDiagnostics(error.diagnostics, references);
-            return error;
+            return Report::Failure(std::move(error));
         }
     }  // namespace
 
@@ -86,11 +119,8 @@ namespace Horo::Application::Internal {
         auto candidate = Assets::PrepareAssetRegistryCandidate(capture);
         if (candidate.HasError())
             return Report::Failure(candidate.ErrorValue());
-        auto references = std::move(capture).TakeReferences();
         auto inventory = std::move(candidate).Value();
-        auto report = inventory.status == Assets::AssetRegistryBuildStatus::Complete
-                          ? Report::Success(std::move(references))
-                          : Report::Failure(IncompleteImporterInventory(inventory, std::move(references)));
+        auto report = ReviewImporterInventory(inventory, capture);
         if (reviewed)
             *reviewed = std::move(inventory);
         return report;

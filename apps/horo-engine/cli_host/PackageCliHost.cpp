@@ -542,6 +542,10 @@ namespace Horo::Application::Internal {
         Result<void> CheckStagedUpdateArchives(const InspectedPackageUpdate &update, const Packages::PackageRestoreGraph &staged,
                                                 const Packages::PackageCacheStore &cache, const Cli::CliExecutionContext &context) {
             std::vector<Diagnostic> diagnostics;
+            const auto blocked = [&diagnostics](Error error) {
+                std::ranges::move(diagnostics, std::back_inserter(error.diagnostics));
+                return Result<void>::Failure(std::move(error));
+            };
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
@@ -552,7 +556,7 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(UpdateNeedsMigration());
                 if (!change.current) {
                     if (auto reviewed = ReviewAddedArchive(next->lock, *next->archive, diagnostics); reviewed.HasError())
-                        return reviewed;
+                        return blocked(std::move(reviewed).ErrorValue());
                     continue;
                 }
                 const auto &old = *change.current;
@@ -560,7 +564,7 @@ namespace Horo::Application::Internal {
                 if (previous.HasError())
                     return Result<void>::Failure(previous.ErrorValue());
                 if (auto reviewed = ReviewAssetFiles(old, previous.Value(), next->lock, *next->archive, diagnostics); reviewed.HasError())
-                    return reviewed;
+                    return blocked(std::move(reviewed).ErrorValue());
             }
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }

@@ -13,6 +13,12 @@ namespace Horo::Application::Internal {
         return std::ranges::equal(package.contributions, std::array<std::string_view, 1>{"assets"});
     }
 
+    /** @brief Binds inventory evidence to all three identities in the reviewed lock entry. */
+    static bool MatchesArchive(const Packages::LockedPackage &package, const Packages::ValidatedPackageArchive &archive) {
+        return package.artifactDigest == archive.Digest() && package.manifestDigest == archive.PackageManifestDigest() &&
+               package.fileManifestDigest == archive.Manifest().Digest();
+    }
+
     /** @brief Admits asset-only version or archive changes for exact inventory review. */
     static bool CanPreserveAssetReferences(const Packages::LockedPackage &current, const Packages::LockedPackage &next) {
         auto compatible = current;
@@ -92,12 +98,13 @@ namespace Horo::Application::Internal {
     /** @copydoc ReviewAddedArchive */
     Result<void> ReviewAddedArchive(const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &archive,
                                     std::vector<Diagnostic> &diagnostics) {
-        if (auto metadata = Packages::ValidatePackageAssetRenameDeclaration(candidate, archive); metadata.HasError())
-            return metadata;
-        for (const auto &file : archive.Manifest().Entries())
-            if (!Packages::IsPackageAssetRenameMetadata(file))
-                ReviewCandidateFile(candidate.package, file, diagnostics);
-        return Result<void>::Success();
+        auto metadata = Packages::ValidatePackageAssetRenameDeclaration(candidate, archive);
+        if (metadata.HasValue() || MatchesArchive(candidate, archive)) {
+            for (const auto &file : archive.Manifest().Entries())
+                if (!Packages::IsPackageAssetRenameMetadata(file))
+                    ReviewCandidateFile(candidate.package, file, diagnostics);
+        }
+        return metadata;
     }
 
     /** @brief Checks the paths that could be visible to existing package consumers. */
@@ -126,12 +133,14 @@ namespace Horo::Application::Internal {
                                   const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &candidateArchive,
                                   std::vector<Diagnostic> &diagnostics) {
         const auto renames = Packages::InspectPackageAssetRenames(previous, previousArchive, candidate, candidateArchive);
-        if (renames.HasError())
-            return Result<void>::Failure(renames.ErrorValue());
-        if (!renames.Value().empty())
+        if (renames.HasValue() && !renames.Value().empty())
             ReportUpdateBlocker(diagnostics, "packages.host.update_migration_execution_required", previous.package,
                                 Packages::PackageAssetRenameDeclarationPath);
-        ReviewInventory(previous.package, previousArchive, candidateArchive, diagnostics);
+        if (renames.HasValue() || (previous.package == candidate.package && MatchesArchive(previous, previousArchive) &&
+                                  MatchesArchive(candidate, candidateArchive)))
+            ReviewInventory(previous.package, previousArchive, candidateArchive, diagnostics);
+        if (renames.HasError())
+            return Result<void>::Failure(renames.ErrorValue());
         for (const auto &rename : renames.Value()) {
             if (diagnostics.size() >= MaximumUpdateDiagnostics)
                 break;
@@ -152,8 +161,7 @@ namespace Horo::Application::Internal {
         if (inspected.HasError())
             return Archive::Failure(inspected.ErrorValue());
         const auto &archive = inspected.Value();
-        if (!archive || archive->PackageManifestDigest() != locked.manifestDigest ||
-            archive->Manifest().Digest() != locked.fileManifestDigest)
+        if (!archive || !MatchesArchive(locked, *archive))
             return Archive::Failure(Error{ErrorCode{"packages.host.update_archive_evidence_unavailable"}, ErrorDomainId{"packages.host"},
                                           ErrorSeverity::Error, locked.package.Value()});
         auto capture = std::move(inspected).Value();

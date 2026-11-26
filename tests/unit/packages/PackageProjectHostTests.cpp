@@ -1048,6 +1048,27 @@ namespace {
         CHECK(fixture.Read("packages.lock") == oldLock);
         CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
 
+        {
+            std::ofstream metadata{policy.projectRoot / "Assets/Scene.horoasset.horo"};
+            metadata << nlohmann::json{{"schemaVersion", 1}, {"assetId", sceneAsset.ToString()}, {"assetType", "core.scene"},
+                                       {"importerPackageId", 42}};
+            REQUIRE(metadata.good());
+        }
+        const auto damagedImporter = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(damagedImporter.HasError());
+        CHECK(damagedImporter.ErrorValue().code.Value() == "packages.host.asset_inventory_incomplete");
+        const auto &importerDetails = damagedImporter.ErrorValue().diagnostics;
+        CHECK(std::ranges::any_of(importerDetails, [](const auto &diagnostic) {
+            return diagnostic.path == "Assets/Scene.horoasset.horo";
+        }));
+        CHECK(std::ranges::any_of(importerDetails, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "packages.host.behavior_in_use" &&
+                   diagnostic.location.source == "Assets/Scene.horoasset" && diagnostic.path == "7/3";
+        }));
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(std::filesystem::exists(policy.projectRoot / ".horo/local/package-metadata.pending"));
+
         auto opaqueScene = nlohmann::json::parse(scene);
         opaqueScene["objects"][0]["components"]["futurePackageComponent"] = {{"unknown", true}};
         writeAsset("Scene.horoasset", sceneAsset, "core.scene", opaqueScene.dump());

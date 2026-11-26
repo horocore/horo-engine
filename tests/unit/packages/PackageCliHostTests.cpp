@@ -753,6 +753,9 @@ namespace {
             const auto result = preview.adapter->Execute(command, context);
             REQUIRE(result.HasError());
             const auto &error = result.ErrorValue();
+            CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_asset_removed" && diagnostic.path == "assets/data.bin";
+            }));
             if (mode == Source::OutsideAssets) {
                 CHECK(error.code.Value() == "packages.migration.invalid_path");
             } else if (mode == Source::MissingTarget || mode == Source::PortableSourceAlias || mode == Source::OwnerChanged) {
