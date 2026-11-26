@@ -204,6 +204,35 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.native.owner.Close().HasValue());
     }
 
+    TEST_CASE("A failed native light startup cannot conceal permission withdrawal", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        const bool query = GENERATE(false, true);
+        if (query) {
+            fixture.native.census.fail = "light-estimation-properties";
+            fixture.native.census.onLightProperties = [&] { fixture.lightPermitted = false; };
+        } else {
+            fixture.script.createResult = XR_ERROR_RUNTIME_FAILURE;
+            fixture.script.onCreate = [&] { fixture.lightPermitted = false; };
+        }
+        const auto denied = fixture.Start(fixture.scope);
+        RequireFailureIdentity(denied, XRErrors::PermissionDenied);
+        CHECK(ErrorChainContains(denied.ErrorValue(), XRErrors::OperationUnavailable.domain, XRErrors::OperationUnavailable.code));
+        CHECK(fixture.script.createCalls == (query ? 0U : 1U));
+        CHECK_FALSE(fixture.script.live);
+
+        fixture.native.census.fail = {};
+        fixture.native.census.onLightProperties = {};
+        fixture.script.createResult = XR_SUCCESS;
+        fixture.script.onCreate = {};
+        fixture.lightPermitted = true;
+        RequireFailureIdentity(fixture.Start(fixture.scope), XRErrors::IdentityStale);
+        fixture.scope.grant = IdentityValue<XRLightEstimateGrant>(2);
+        REQUIRE(fixture.Start(fixture.scope).HasValue());
+        REQUIRE(fixture.native.owner.StopLightEstimation(fixture.scope).HasValue());
+    }
+
     TEST_CASE("Live light consent is checked before native creation and sample publication", "[unit][xr][native][lighting]") {
         LightFixture fixture;
         fixture.native.census.lightEstimationSupport = XR_TRUE;

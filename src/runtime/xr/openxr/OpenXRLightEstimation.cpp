@@ -157,51 +157,68 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const LightOperation operation{lightCall_};
         light_.withdrawn = false;
-        const auto stillAllowed = [&] { return AllowsLight(authorization, scope) && !light_.withdrawn; };
+        const auto checkPermission = [&](Result<void> step) {
+            const auto &denied = XRErrors::PermissionDenied;
+            const bool nativeDenial = step.HasError() && ErrorChainContains(step.ErrorValue(), denied.domain, denied.code);
+            const bool allowed = AllowsLight(authorization, scope) && !light_.withdrawn;
+            if (allowed && !nativeDenial)
+                return step;
+            lastLightGrant_ = scope.grant;
+            RevokeLightEstimation();
+            if (nativeDenial)
+                return step;
+            auto failure = MakeError(denied);
+            if (step.HasError())
+                failure = WithCause(std::move(failure), std::move(step).ErrorValue());
+            return Result<void>::Failure(std::move(failure));
+        };
         const auto admission = ReadExtensionAdmission(scope.session, Extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
-        if (const auto enabled = CheckLightExtension(admission.Value()); enabled.HasError())
+        if (auto enabled = CheckLightExtension(admission.Value()); enabled.HasError()) {
+            if (admission.Value().state == NativeExtensionState::Denied)
+                lastLightGrant_ = scope.grant;
             return enabled;
+        }
         const auto native = Borrow(scope.session);
-        if (native.HasError())
-            return Result<void>::Failure(native.ErrorValue());
-        if (!stillAllowed())
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        if (auto permitted = checkPermission(native.HasError() ? Result<void>::Failure(native.ErrorValue()) : Result<void>::Success());
+            permitted.HasError())
+            return permitted;
 
         const auto functions = ResolveLightDispatch(dispatch_.getProc, native.Value().instance);
-        if (functions.HasError())
-            return Result<void>::Failure(functions.ErrorValue());
-        if (!stillAllowed())
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
-        if (auto supported = CheckLightSystem(functions.Value().query, native.Value()); supported.HasError())
+        if (auto bound = checkPermission(functions.HasError() ? Result<void>::Failure(functions.ErrorValue()) : Result<void>::Success());
+            bound.HasError())
+            return bound;
+        if (auto supported = checkPermission(CheckLightSystem(functions.Value().query, native.Value())); supported.HasError())
             return supported;
-        if (const auto current = Borrow(scope.session); current.HasError())
-            return Result<void>::Failure(current.ErrorValue());
-        if (!stillAllowed())
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        const auto current = Borrow(scope.session);
+        if (auto permitted = checkPermission(current.HasError() ? Result<void>::Failure(current.ErrorValue()) : Result<void>::Success());
+            permitted.HasError())
+            return permitted;
 
         LightEstimator candidate{.destroy = functions.Value().destroy, .get = functions.Value().sample, .scope = scope, .limits = limits};
         lastLightGrant_ = scope.grant;
         XrLightEstimatorCreateInfoANDROID info{XR_TYPE_LIGHT_ESTIMATOR_CREATE_INFO_ANDROID};
         const auto created = functions.Value().create(native.Value().session, &info, &candidate.handle);
         if (created != XR_SUCCESS) {
+            auto failure = checkPermission(Result<void>::Failure(MakeError(LightFailure(created), "xrCreateLightEstimatorANDROID")));
             if (XR_SUCCEEDED(created) && candidate.handle != XR_NULL_HANDLE) {
                 light_ = candidate;
                 if (auto retired = RetireLightEstimation(); retired.HasError())
-                    return retired;
+                    return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), std::move(failure).ErrorValue()));
             }
-            return Result<void>::Failure(MakeError(LightFailure(created), "xrCreateLightEstimatorANDROID"));
+            return failure;
         }
         if (candidate.handle == XR_NULL_HANDLE)
-            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Native light estimator returned no handle"));
+            return checkPermission(Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Native light estimator returned no handle")));
         candidate.withdrawn = light_.withdrawn;
         light_ = candidate;
-        if (const auto current = Borrow(scope.session); current.HasError() || !stillAllowed()) {
-            const auto failure = current.HasError() ? current.ErrorValue() : MakeError(XRErrors::PermissionDenied);
+        const auto owner = Borrow(scope.session);
+        if (auto verified = checkPermission(owner.HasError() ? Result<void>::Failure(owner.ErrorValue()) : Result<void>::Success());
+            verified.HasError()) {
             if (auto retired = RetireLightEstimation(); retired.HasError())
-                return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), failure));
-            return Result<void>::Failure(failure);
+                return Result<void>::Failure(WithCause(std::move(retired).ErrorValue(), std::move(verified).ErrorValue()));
+            return verified;
         }
         light_.active = true;
         return Result<void>::Success();

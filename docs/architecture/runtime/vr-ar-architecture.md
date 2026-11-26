@@ -1150,7 +1150,9 @@ UI/gameplay/editor actions, and light estimates cannot rewrite authored lights/e
 The Android OpenXR light estimator can be created only on the exact session
 that enabled the light-estimation extension, after application consent and
 platform scene-understanding permission. The native session owner retires the
-estimator before destroying its parent session. It publishes at most one ambient
+estimator before destroying its parent session. A denial observed during
+startup invalidates that exact grant, including when the native capability
+query or estimator creation also fails. It publishes at most one ambient
 and one directional observation, with validity, the provider's update time
 and the exact World origin. Repeated samples do not extend their lifetime.
 Native intensity channels are provider-relative. Renderer admission requires

@@ -45,9 +45,9 @@ namespace Horo::Tests::OpenXR {
                 CHECK_FALSE(active->live);
                 active->live = true;
                 *handle = NativeHandle<XrLightEstimatorANDROID>(73);
-                if (active->onCreate)
-                    active->onCreate();
             }
+            if (active->onCreate)
+                active->onCreate();
             return active->createResult;
         }
 
