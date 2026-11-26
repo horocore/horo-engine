@@ -139,8 +139,10 @@ namespace Horo::Editor {
 
         /** @brief Checks the copied press-time coordinates and classification against the current plane inventory. */
         bool ValidSurfaceHit(const ImmersiveSurfaceHits::Hit &hit, std::span<const XR::XRPlaneObservation> current) noexcept {
-            return Math::IsFinite(hit.worldPosition) && hit.classification < XR::XRPlaneClassification::Count &&
-                   std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id) != current.end();
+            if (!Math::IsFinite(hit.worldPosition) || hit.classification >= XR::XRPlaneClassification::Count)
+                return false;
+            const auto plane = std::ranges::find(current, hit.plane, &XR::XRPlaneObservation::id);
+            return plane != current.end() && plane->classification == hit.classification;
         }
 
         /** @brief Copies distinct current surface candidates or rejects the entire incomplete review. */

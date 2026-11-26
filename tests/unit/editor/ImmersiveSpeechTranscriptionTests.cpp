@@ -334,7 +334,7 @@ namespace Horo::Editor {
             }
         }
 
-        TEST_CASE("Physical surface review requires its original grant and complete live plane identities", "[agent][immersive][speech]") {
+        TEST_CASE("Physical surface review requires its original grant and current plane classification", "[agent][immersive][speech]") {
             constexpr std::uint64_t World = 7;
             SpeechFixture fixture;
             const auto context = fixture.Context();
@@ -372,7 +372,20 @@ namespace Horo::Editor {
             hit.classification = XR::XRPlaneClassification::Count;
             CHECK_FALSE(CollectImmersiveSurfaceHits(malformed, World, live.Value()));
 
-            const auto later = XR::XRRuntimeTime::Create(101).Value();
+            const auto correctedAt = XR::XRRuntimeTime::Create(101).Value();
+            auto floor = wall;
+            floor.classification = XR::XRPlaneClassification::Floor;
+            REQUIRE(publication.Publish(scope, correctedAt, std::span{&floor, 1}).HasValue());
+            const auto corrected = publication.Read(scope, correctedAt);
+            REQUIRE(corrected.HasValue());
+            CHECK_FALSE(CollectImmersiveSurfaceHits(repeated, World, corrected.Value()));
+            auto fresh = press;
+            fresh.surfaces->hits[0].classification = floor.classification;
+            const auto freshReview = CollectImmersiveSurfaceHits(std::span{&fresh, 1}, World, corrected.Value());
+            REQUIRE(freshReview);
+            CHECK(freshReview->hits[0].classification == floor.classification);
+
+            const auto later = XR::XRRuntimeTime::Create(102).Value();
             REQUIRE(publication.Publish(scope, later, {}).HasValue());
             const auto missing = publication.Read(scope, later);
             REQUIRE(missing.HasValue());
