@@ -106,6 +106,38 @@ namespace Horo::Runtime {
             return std::move(snapshot).Value();
         }
 
+        TEST_CASE("Cloud head comparison separates publication history from gameplay equivalence", "[unit][save][cloud-conflict]") {
+            using enum SaveCloudHeadRelation;
+            const auto slot = Id<SaveGameSlotId>(1);
+            const auto common = Id<SlotGenerationId>(8);
+            const SaveCloudPublicationHead local{slot, Id<SlotGenerationId>(9), common, ArchiveContentHash{Digest(1)},
+                                                 CanonicalStateHash{Digest(2)}};
+            CHECK(CompareSaveCloudHeads(local, local) == SamePublication);
+            CHECK(CompareSaveCloudHeads(local, {}) == Unproven);
+
+            auto remote = local;
+            remote.archive = ArchiveContentHash{Digest(3)};
+            CHECK(CompareSaveCloudHeads(local, remote) == IntegrityMismatch);
+            remote.generation = Id<SlotGenerationId>(10);
+            CHECK(CompareSaveCloudHeads(local, remote) == EquivalentState);
+            remote.state = CanonicalStateHash{Digest(4)};
+            CHECK(CompareSaveCloudHeads(local, remote) == Diverged);
+            remote.parent.reset();
+            CHECK(CompareSaveCloudHeads(local, remote) == Unproven);
+            remote.parent = local.generation;
+            CHECK(CompareSaveCloudHeads(local, remote) == RemoteAhead);
+            CHECK(CompareSaveCloudHeads(remote, local) == LocalAhead);
+
+            const SaveCloudDeletionHead deleted{slot, local.generation, local.archive};
+            CHECK(CompareSaveCloudHeads(local, deleted) == RemoteDeleted);
+            CHECK(CompareSaveCloudHeads(deleted, local) == LocalDeleted);
+            CHECK(CompareSaveCloudHeads(deleted, remote) == DeleteEdit);
+            CHECK(CompareSaveCloudHeads(deleted, deleted) == BothDeleted);
+            CHECK(CompareSaveCloudHeads(deleted, {}) == Unproven);
+            remote.slot = Id<SaveGameSlotId>(2);
+            CHECK(CompareSaveCloudHeads(local, remote) == IntegrityMismatch);
+        }
+
         TEST_CASE("Save transport dispatches only typed opaque intents from the bound profile",
                   "[unit][save][cloud-transport][frontend]") {
             auto backend = std::make_shared<Cloud::RoutingBackend>();
@@ -923,6 +955,16 @@ namespace Horo::Runtime {
                                     SaveErrors::SlotCommitGenerationStale);
                 CHECK(fixture.ExportBytes(10) == original);
                 CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == expected.Value().Metadata());
+            }
+            SECTION("Reusing the selected generation for different bytes is an integrity rejection") {
+                auto reused = archive.Header();
+                ++reused.capturedAtUnixMilliseconds;
+                const auto changed = SaveSlotLifecycleTest::RewriteHeader(archive, reused);
+                const auto rejected = complete(changed);
+                Cloud::RequireError(rejected, SaveErrors::CloudArchiveRejected);
+                CHECK(ErrorChainContains(rejected.ErrorValue(), SaveErrors::ArchiveContentHashMismatch.domain,
+                                         SaveErrors::ArchiveContentHashMismatch.code));
+                CHECK(fixture.ExportBytes(10) == original);
             }
             SECTION("A concurrent local save invalidates the earlier selection") {
                 fixture.Import(10);

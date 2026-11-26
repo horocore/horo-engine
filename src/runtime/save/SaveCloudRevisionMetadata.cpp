@@ -10,6 +10,47 @@
 
 namespace Horo::Runtime {
     namespace {
+        /** @brief Rejects inconsistent publication identity before interpreting direct parent edges. */
+        bool ValidCloudPublication(const SaveCloudPublicationHead &head) noexcept {
+            return head.slot.IsValid() && head.generation.IsValid() &&
+                   (!head.parent || (head.parent->IsValid() && head.parent != head.generation));
+        }
+
+        /** @brief Compares verified live heads without consulting timestamps or display data. */
+        SaveCloudHeadRelation ComparePublications(const SaveCloudPublicationHead &local,
+                                                  const SaveCloudPublicationHead &remote) noexcept {
+            using enum SaveCloudHeadRelation;
+            if (!ValidCloudPublication(local) || !ValidCloudPublication(remote) || local.slot != remote.slot)
+                return IntegrityMismatch;
+            if (local.generation == remote.generation)
+                return local.archive == remote.archive && local.state == remote.state ? SamePublication : IntegrityMismatch;
+            if (local.archive == remote.archive)
+                return IntegrityMismatch;
+            const bool localAhead = local.parent == remote.generation;
+            const bool remoteAhead = remote.parent == local.generation;
+            if (localAhead && remoteAhead)
+                return IntegrityMismatch;
+            if (localAhead)
+                return LocalAhead;
+            if (remoteAhead)
+                return RemoteAhead;
+            if (local.state == remote.state)
+                return EquivalentState;
+            return local.parent && local.parent == remote.parent ? Diverged : Unproven;
+        }
+
+        /** @brief Interprets an explicit tombstone only for a matching artifact or a proven edit of it. */
+        SaveCloudHeadRelation CompareDeletion(const SaveCloudDeletionHead &deleted, const SaveCloudPublicationHead &live,
+                                              const SaveCloudHeadRelation exactDeletion) noexcept {
+            using enum SaveCloudHeadRelation;
+            if (!deleted.slot.IsValid() || !deleted.removed.IsValid() || !ValidCloudPublication(live) || deleted.slot != live.slot)
+                return IntegrityMismatch;
+            if (deleted.removed == live.generation)
+                return deleted.archive == live.archive ? exactDeletion : IntegrityMismatch;
+            if (deleted.archive == live.archive)
+                return IntegrityMismatch;
+            return live.parent == deleted.removed ? DeleteEdit : Unproven;
+        }
         [[nodiscard]] bool ValidLimits(const SaveCloudRevisionMetadataLimits &limits) noexcept {
             return limits.maximumRecords != 0 && limits.maximumRecords <= 4'096 && limits.maximumObjectKeyBytes != 0 &&
                    limits.maximumObjectKeyBytes <= 512 && limits.maximumRevisionBytes != 0 && limits.maximumRevisionBytes <= 512;
@@ -100,6 +141,30 @@ namespace Horo::Runtime {
             return Result<SaveCloudRevisionMetadata>::Success(std::move(candidate));
         }
     }  // namespace
+
+    /** @copydoc CompareSaveCloudHeads */
+    SaveCloudHeadRelation CompareSaveCloudHeads(const SaveCloudHead &local, const SaveCloudHead &remote) noexcept {
+        using enum SaveCloudHeadRelation;
+        const auto *localLive = std::get_if<SaveCloudPublicationHead>(&local);
+        const auto *remoteLive = std::get_if<SaveCloudPublicationHead>(&remote);
+        if (localLive && remoteLive)
+            return ComparePublications(*localLive, *remoteLive);
+
+        const auto *localDeleted = std::get_if<SaveCloudDeletionHead>(&local);
+        const auto *remoteDeleted = std::get_if<SaveCloudDeletionHead>(&remote);
+        if (localDeleted && remoteLive)
+            return CompareDeletion(*localDeleted, *remoteLive, LocalDeleted);
+        if (remoteDeleted && localLive)
+            return CompareDeletion(*remoteDeleted, *localLive, RemoteDeleted);
+        if (!localDeleted || !remoteDeleted)
+            return Unproven;
+        if (!localDeleted->slot.IsValid() || !localDeleted->removed.IsValid() || !remoteDeleted->removed.IsValid() ||
+            localDeleted->slot != remoteDeleted->slot)
+            return IntegrityMismatch;
+        if (localDeleted->removed != remoteDeleted->removed)
+            return localDeleted->archive == remoteDeleted->archive ? IntegrityMismatch : Unproven;
+        return localDeleted->archive == remoteDeleted->archive ? BothDeleted : IntegrityMismatch;
+    }
 
     /** @copydoc SaveCloudRevisionMetadataDetail::RebindIndex */
     Result<SaveCloudRevisionMetadata> SaveCloudRevisionMetadataDetail::RebindIndex(const SaveSlotIndex &index,

@@ -54,6 +54,22 @@ namespace Horo::Runtime {
             return !local.object || (local.object->key == remote.key && local.object->revision != remote.revision);
         }
 
+        /** @brief Admits only a verified descendant of the selected publication to the replacement transaction. */
+        Result<void> CheckCloudDescendant(const SaveSlotPublicationMetadata &local, const ValidatedSaveArchive &incoming) {
+            const auto &header = incoming.Header();
+            if (header.slot != local.slot)
+                return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveHeaderInvalid)));
+            const SaveCloudPublicationHead localHead{local.slot, local.generation, {}, local.archiveContent, local.canonicalState};
+            const SaveCloudPublicationHead remoteHead{header.slot, header.slotGeneration, header.parentGeneration,
+                                                      incoming.Integrity().archiveContent, incoming.Manifest().canonicalState};
+            const auto relation = CompareSaveCloudHeads(localHead, remoteHead);
+            if (relation == SaveCloudHeadRelation::IntegrityMismatch)
+                return Result<void>::Failure(WrapError(SaveErrors::CloudArchiveRejected, MakeError(SaveErrors::ArchiveContentHashMismatch)));
+            if (relation != SaveCloudHeadRelation::RemoteAhead)
+                return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+            return Result<void>::Success();
+        }
+
         /** @brief Prepares the catalog and its cloud record for the same visibility transaction. */
         Result<void> RecordCloudDescendant(Catalog &catalog, Record &selected, const SaveSlotCatalogEntry &replacement,
                                            const SaveCloudRevisionMetadata &previous, SaveCloudObjectRef object) {
@@ -174,9 +190,10 @@ namespace Horo::Runtime {
         const auto verified = Admit(*archive.bytes, state_->policy.destination, state_->policy, *state_->host);
         if (verified.HasError())
             return Response::Failure(WrapError(SaveErrors::CloudArchiveRejected, verified.ErrorValue()));
-        const auto &header = verified.Value().Header();
-        if (header.slot != target.address.slot || header.parentGeneration != target.generation || header.slotGeneration == target.generation)
-            return Response::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
+        if (const auto checked = CheckRetentionTarget(operation, target, false); checked.HasError())
+            return Response::Failure(checked.ErrorValue());
+        if (auto compared = CheckCloudDescendant(selected->entry.publication, verified.Value()); compared.HasError())
+            return Response::Failure(compared.ErrorValue());
         if (auto prepared = PrepareRetentionUpdate(operation, target, false); prepared.HasError())
             return Response::Failure(prepared.ErrorValue());
         if (catalog.retired.size() >= state_->policy.maximumSlots)

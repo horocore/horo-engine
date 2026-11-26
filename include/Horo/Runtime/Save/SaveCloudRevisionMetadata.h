@@ -13,9 +13,52 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 namespace Horo::Runtime {
+    /** @brief Verified publication identity and direct lineage, without payload or presentation fields. */
+    struct SaveCloudPublicationHead final {
+        SaveGameSlotId slot;
+        SlotGenerationId generation;
+        std::optional<SlotGenerationId> parent;
+        ArchiveContentHash archive;
+        CanonicalStateHash state;
+    };
+
+    /** @brief Confirmed deletion evidence for one exact former publication. */
+    struct SaveCloudDeletionHead final {
+        SaveGameSlotId slot;
+        SlotGenerationId removed;
+        ArchiveContentHash archive;
+    };
+
+    /** @brief A verified head, an explicit tombstone, or absence without proof. */
+    using SaveCloudHead = std::variant<std::monostate, SaveCloudPublicationHead, SaveCloudDeletionHead>;
+
+    /** @brief Scoped comparison of two observations. Classification grants no publication authority. */
+    enum class SaveCloudHeadRelation : std::uint8_t {
+        Unproven,
+        SamePublication,
+        EquivalentState,
+        LocalAhead,
+        RemoteAhead,
+        Diverged,
+        LocalDeleted,
+        RemoteDeleted,
+        DeleteEdit,
+        BothDeleted,
+        IntegrityMismatch,
+    };
+
+    /** @brief Classifies verified observations in one authenticated logical slot.
+     * @param local Local publication or tombstone evidence.
+     * @param remote Remote publication or tombstone evidence.
+     * @return Relation based on exact identity, hashes and the available direct parent edges.
+     * @details Absence and incomplete ancestry remain unproven. Callers enforce current revision and publication authority.
+     */
+    [[nodiscard]] SaveCloudHeadRelation CompareSaveCloudHeads(const SaveCloudHead &local, const SaveCloudHead &remote) noexcept;
+
     struct SaveCloudProviderIdentityTag;
     struct SaveCloudAccountIdentityTag;
     struct SaveCloudMutationIdentityTag;
